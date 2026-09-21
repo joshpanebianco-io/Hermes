@@ -105,8 +105,8 @@ export function Settings({
   );
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,1fr)] xl:overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="flex min-w-0 flex-col gap-2">
         <Module
           title="Presets"
           sub={active ? active.name : "custom"}
@@ -211,26 +211,6 @@ export function Settings({
           ))}
         </Module>
       </div>
-
-      <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <Module title="Preview" sub="live" bodyClassName="px-0 py-0">
-          <Preview />
-        </Module>
-        <Module title="Where this came from">
-          <p className="text-[10.5px] leading-relaxed text-ink-3">
-            The seventeen hues and twelve presets are GEXYGEN&rsquo;s, imported rather than
-            rebuilt. Each hue carries eight tiers generated as fixed lightness and chroma targets
-            in OKLCH and clamped into sRGB per tier; every one was contrast-checked against this
-            surface before it was written down, and no offered hue lands within 30&deg; of the
-            flip&rsquo;s amber — so a themed wall can never be mistaken for the flip line.
-          </p>
-          <p className="mt-2 text-[10.5px] leading-relaxed text-ink-4">
-            No red-and-green pair is offered, deliberately. It is the obvious trading palette and
-            the one combination that fails for the ~8% of men with deuteranopia or protanopia.
-            Every pair here separates on the blue channel or on luminance as well as on hue.
-          </p>
-        </Module>
-      </div>
     </div>
   );
 }
@@ -304,54 +284,6 @@ function Slot({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-/** Every themed element at once, so a choice can be judged before it is kept. */
-function Preview() {
-  return (
-    <div>
-      <div className="border-b border-ring/40 px-3 py-2">
-        <div className="eyebrow mb-1 text-[9px]">Gamma ladder</div>
-        {[
-          ["Call wall", "29,645", "+0.62%", "var(--call)"],
-          ["Gamma flip", "29,500", "+0.14%", "var(--flip)"],
-          ["Spot", "29,458", "", "var(--spot)"],
-          ["Put wall", "29,433", "-0.08%", "var(--put)"],
-        ].map(([label, px, chg, hue]) => (
-          <div key={label} className="flex items-baseline gap-2 py-[2px]">
-            <span className="fig w-[70px] text-[10.5px]" style={{ color: hue }}>
-              {label}
-            </span>
-            <span className="fig flex-1 text-right text-[11.5px] text-ink">{px}</span>
-            <span
-              className={cn("fig w-[52px] text-right text-[10.5px]", chg.startsWith("+") ? "up" : "down")}
-            >
-              {chg}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-center gap-3 px-3 py-2">
-        <div>
-          <div className="eyebrow text-[9px]">Up</div>
-          <div className="fig up text-[15px]">+1.24%</div>
-        </div>
-        <div>
-          <div className="eyebrow text-[9px]">Down</div>
-          <div className="fig down text-[15px]">-0.87%</div>
-        </div>
-        <div>
-          <div className="eyebrow text-[9px]">Attention</div>
-          <div className="fig text-[15px] text-flip">OPEX</div>
-        </div>
-      </div>
-      <div className="border-t border-ring/40 px-3 py-2">
-        <span className="wordmark fig text-[14px] font-semibold tracking-[0.14em]">
-          HERMESX
-        </span>
-      </div>
     </div>
   );
 }

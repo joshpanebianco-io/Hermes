@@ -199,7 +199,16 @@ export function Report({
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <Module title="Past calls" sub={`${feed?.history?.length ?? 0} kept`} bodyClassName="px-0 py-0">
+        {/* Runs to the foot of the column so it ends level with the report
+            beside it, and the list scrolls INSIDE it — the wire's arrangement.
+            Only at xl, where the two sit side by side; stacked, it is as tall
+            as its rows. */}
+        <Module
+          title="Past calls"
+          sub={`${feed?.history?.length ?? 0} kept`}
+          className="xl:min-h-0 xl:flex-1"
+          bodyClassName="px-0 py-0 xl:min-h-0 xl:overflow-y-auto"
+        >
           {!feed?.history?.length ? (
             <p className="px-3 py-5 text-center text-[11px] text-ink-4">
               Nothing yet. Reports are kept so you can check the calls against how the

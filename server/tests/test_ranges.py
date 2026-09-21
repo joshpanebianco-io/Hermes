@@ -76,6 +76,46 @@ def test_status_tracks_the_clock_not_the_bars() -> None:
     assert during_london["london"]["status"] == "live"
 
 
+def test_a_window_that_has_not_come_round_again_is_the_prior_days() -> None:
+    """Two days of bars, read at three instants of the second day.
+
+    The panel draws every row on one price axis, which reads as a timeline —
+    so a row that is yesterday's has to say so or the staircase lies.
+    """
+    start = datetime(2026, 9, 14, 18, 0, tzinfo=ET)          # Monday's Asia open
+
+    def prior(now: datetime) -> dict[str, bool]:
+        count = int((now - start) / timedelta(minutes=15)) + 1
+        return {k: r["prior_day"] for k, r in rows(now, start, count).items()}
+
+    # 03:00 Wednesday, London trading: Asia and London are this cycle's, and
+    # the three windows still to come are Tuesday's.
+    assert prior(datetime(2026, 9, 16, 3, 0, tzinfo=ET)) == {
+        "asia": False, "london": False, "euro_mid": True, "preny": True, "ny": True,
+    }
+    # 17:00 Wednesday, the post-close lull: one whole day, nothing stale.
+    assert not any(prior(datetime(2026, 9, 16, 17, 0, tzinfo=ET)).values())
+    # 18:15 Wednesday, Asia has reopened: everything else is now the day before.
+    assert prior(datetime(2026, 9, 16, 18, 15, tzinfo=ET)) == {
+        "asia": False, "london": True, "euro_mid": True, "preny": True, "ny": True,
+    }
+
+
+def test_a_live_window_with_no_bar_yet_is_still_last_nights() -> None:
+    """18:05, the clock is in Asia but the 18:00 bar has not printed.
+
+    The row says "live" because the clock says so, and its numbers are last
+    night's. It is the stale one; today's London-to-New-York rows are not.
+    """
+    start = datetime(2026, 9, 14, 18, 0, tzinfo=ET)
+    stamps, highs, lows, closes = bars(start, 184)            # last bar Wed 15:45
+    out = segment(stamps, highs, lows, closes, closes[-1], datetime(2026, 9, 16, 18, 5, tzinfo=ET))
+    r = {x["key"]: x for x in out}
+    assert r["asia"]["status"] == "live" and r["asia"]["date"] == "Tue 15"
+    assert r["asia"]["prior_day"] is True
+    assert not any(r[k]["prior_day"] for k in ("london", "euro_mid", "preny", "ny"))
+
+
 def test_every_row_carries_an_open() -> None:
     """The field whose absence sent a model looking elsewhere for one."""
     r = rows(datetime(2026, 9, 16, 4, 0, tzinfo=ET), datetime(2026, 9, 15, 18, 0, tzinfo=ET), 40)

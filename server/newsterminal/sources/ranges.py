@@ -95,7 +95,9 @@ def segment(
     day's, and with only `%H:%M` on them nothing said so. A model handed a row
     labelled "London 03:00-07:45" at one in the morning reads it as today's and
     writes about a session that has not happened yet. `date` and `status` are
-    what make a stale row admit to being stale.
+    what make a stale row admit to being stale, and `prior_day` is the same
+    admission as one boolean, for the panel that draws every row on a shared
+    axis and would otherwise invite reading yesterday's rows as a timeline.
     """
     now_h = now_et.hour + now_et.minute / 60.0
     out: list[dict[str, Any]] = []
@@ -156,7 +158,19 @@ def segment(
             # "live" while the clock is still inside this window, so a range
             # that is still being built is never read as a finished one.
             "status": "live" if _in_window(now_h, start, end) else "complete",
+            "start_ts": picked[0][0],
         })
+
+    # WHICH ROWS ARE THE PREVIOUS DAY'S. The windows are listed in the order a
+    # Globex day runs them, so anything listed AFTER the newest row has not come
+    # round again yet and is yesterday's. The second clause is the quarter-hour
+    # after a handover: the clock is inside the window but its first bar has
+    # not printed, so the row wearing "live" is still last night's.
+    dated = [i for i, r in enumerate(out) if r["ok"]]
+    if dated:
+        newest = max(dated, key=lambda i: out[i]["start_ts"])
+        for i in dated:
+            out[i]["prior_day"] = i > newest or (out[i]["status"] == "live" and i != newest)
     return out
 
 

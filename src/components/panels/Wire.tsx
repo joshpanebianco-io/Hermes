@@ -5,7 +5,7 @@ import type { Desk, Impact, WireItem } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { ago } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
  * The wire — every desk's headlines on one tape.
@@ -48,29 +48,40 @@ const HUE: Record<Desk, string> = {
 };
 
 /**
- * Impact, as three exclusive filters rather than a cumulative threshold.
+ * Impact, as three TOGGLES rather than a cumulative threshold.
  *
- * "HIGH" MEANS ONLY HIGH. A "high and above" reading would make the top filter
- * identical to the unfiltered tape whenever nothing big is happening, which is
- * precisely when you would be checking it. Exclusive means switching to HIGH
- * either leaves you with six lines or with none, and both are answers.
+ * "HIGH" STILL MEANS ONLY HIGH. A "high and above" reading would make the top
+ * filter identical to the unfiltered tape whenever nothing big is happening,
+ * which is precisely when you would be checking it. Switching to HIGH either
+ * leaves you with six lines or with none, and both are answers.
+ *
+ * BUT THE TIERS COMBINE, because you say so, not because the filter assumes it
+ * (owner, 2026-09-22). They used to be one-at-a-time, and the tape most worth
+ * reading — everything that matters, none of the context — is HIGH and MED
+ * together, which one-at-a-time could not show. Each tier is its own switch;
+ * none lit is the whole tape, which is what ALL means and what it resets to.
+ * Lighting all three is the same tape, so it collapses back to ALL rather than
+ * leaving two different-looking states that mean one thing.
  */
 const IMPACTS: { key: Impact | "all"; label: string; hue: string; title: string }[] = [
-  { key: "all", label: "All", hue: "var(--ink-3)", title: "Every headline on the tape" },
+  { key: "all", label: "All", hue: "var(--ink-3)", title: "Every headline on the tape — clears the tiers" },
   {
     key: "high",
     label: "High",
     hue: "var(--err)",
-    title: "A released number or a decided event — reprices on the spot",
+    title: "A released number or a decided event — reprices on the spot. Combines with the other tiers",
   },
   {
     key: "medium",
     label: "Med",
     hue: "var(--warn)",
-    title: "Moves things over a session: officials, policy, deals, supply",
+    title: "Moves things over a session: officials, policy, deals, supply. Combines with the other tiers",
   },
-  { key: "low", label: "Low", hue: "var(--ink-4)", title: "Context" },
+  { key: "low", label: "Low", hue: "var(--ink-4)", title: "Context. Combines with the other tiers" },
 ];
+
+/** How many tiers there are — lighting every one of them is just ALL. */
+const TIERS = IMPACTS.length - 1;
 
 export function Wire({
   items,
@@ -89,21 +100,30 @@ export function Wire({
     "all",
     oneOf("all", "markets", "corp", "macro", "policy", "geo", "energy"),
   );
-  const [impact, setImpact] = usePersisted<Impact | "all">(
+  // The tiers that are lit. EMPTY IS THE WHOLE TAPE — that is what ALL is. A
+  // build that stored the old single string is rejected by `manyOf` and starts
+  // on ALL once, which is the right place to land.
+  const [impacts, setImpacts] = usePersisted<Impact[]>(
     "wire.impact",
-    "all",
-    oneOf("all", "high", "medium", "low"),
+    [],
+    manyOf("high", "medium", "low"),
   );
+  const toggleImpact = (k: Impact | "all") =>
+    setImpacts((prev) => {
+      if (k === "all") return [];
+      const next = prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k];
+      return next.length === TIERS ? [] : next;
+    });
 
   // Counts are computed against the OTHER filter, so each row of chips shows
   // what you would actually get by clicking it rather than a total that goes
   // stale the moment the other filter moves.
   const deskCounts = useMemo(() => {
-    const pool = impact === "all" ? items : items.filter((i) => i.impact === impact);
+    const pool = impacts.length ? items.filter((i) => impacts.includes(i.impact)) : items;
     const c: Record<string, number> = { all: pool.length };
     for (const i of pool) c[i.category] = (c[i.category] ?? 0) + 1;
     return c;
-  }, [items, impact]);
+  }, [items, impacts]);
 
   const impactCounts = useMemo(() => {
     const pool = desk === "all" ? items : items.filter((i) => i.category === desk);
@@ -114,9 +134,9 @@ export function Wire({
 
   const shown = useMemo(() => {
     let list = desk === "all" ? items : items.filter((i) => i.category === desk);
-    if (impact !== "all") list = list.filter((i) => i.impact === impact);
+    if (impacts.length) list = list.filter((i) => impacts.includes(i.impact));
     return list.slice(0, 150);
-  }, [items, desk, impact]);
+  }, [items, desk, impacts]);
 
   return (
     <Module
@@ -129,13 +149,14 @@ export function Wire({
       right={
         <div className="flex items-center gap-0.5">
           {IMPACTS.map((im) => {
-            const on = impact === im.key;
+            const on = im.key === "all" ? impacts.length === 0 : impacts.includes(im.key);
             const n = impactCounts[im.key] ?? 0;
             return (
               <button
                 key={im.key}
                 type="button"
-                onClick={() => setImpact(im.key)}
+                onClick={() => toggleImpact(im.key)}
+                aria-pressed={on}
                 title={im.title}
                 className={cn(
                   "fig hit rounded px-1.5 py-px text-[9.5px] leading-[14px] tracking-wide uppercase",

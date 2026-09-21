@@ -7,8 +7,9 @@
  * staircases, and traced with potrace — which counts ZEROS as ink, a polarity
  * that cost one debugging round. Two closed curves, normalised into a 512 box.
  *
- * ONE MODULE BECAUSE THE PATH IS 26KB: the header mark and the favicon builder
- * both need it, and pasting it twice would be two chances for them to drift.
+ * ONE MODULE BECAUSE THE PATH IS 26KB: the header mark and the icon builder
+ * (scripts/make-icon.mjs, which makes the desktop and tab icon) both need it,
+ * and pasting it twice would be two chances for them to drift.
  *
  * ORIENTATION: the canonical path faces right as first drawn. The owner saw
  * both in the app and chose the MIRROR (2026-09-01) — use sites apply

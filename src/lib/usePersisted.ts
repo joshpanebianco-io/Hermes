@@ -69,4 +69,10 @@ export function oneOf<T extends string>(...allowed: readonly T[]) {
   return (v: unknown): v is T => typeof v === "string" && set.has(v);
 }
 
+/** `isValid` for a filter that holds SEVERAL of a fixed set — a list of them. */
+export function manyOf<T extends string>(...allowed: readonly T[]) {
+  const one = oneOf(...allowed);
+  return (v: unknown): v is T[] => Array.isArray(v) && v.every(one);
+}
+
 export const isBool = (v: unknown): v is boolean => typeof v === "boolean";

@@ -506,6 +506,58 @@
   }
 
   /*
+   * THE HOVER EXPLANATION — every `title` in the app, drawn by Tooltips.tsx
+   * instead of by the browser.
+   *
+   * IT IS A PANE OF THE INSTRUMENT, NOT A CARD ON TOP OF IT: a step brighter
+   * than a module so it lifts off one, the same hairline ring, the chassis's
+   * own shadow recipe. The body face rather than mono, because these are
+   * sentences — and tabular figures anyway, because half of them quote a price.
+   * The amber rule on the left is the one mark of hue: it is the colour this
+   * terminal already uses for "look here" (the flip, the POC, a taken-out high).
+   *
+   * `pointer-events: none` IS LOAD-BEARING. A box that can be hovered steals
+   * the pointer from the thing it explains, which closes it, which gives the
+   * pointer back, which opens it — a flicker with no way out.
+   */
+  .tip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    max-width: min(340px, calc(100vw - 16px));
+    padding: 6px 9px 6px 10px;
+    border: 1px solid var(--ring-2);
+    border-left: 2px solid color-mix(in oklab, var(--flip) 75%, transparent);
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--surface-3) 96%, transparent);
+    color: var(--ink-2);
+    font-size: 11px;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--void) 60%, transparent),
+      0 14px 34px -14px rgb(0 0 0 / 0.9);
+    backdrop-filter: blur(6px);
+    animation: tip-in 90ms ease-out;
+  }
+
+  @keyframes tip-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tip {
+      animation: none;
+    }
+  }
+
+  /*
    * A FIGURE THAT JUST CHANGED.
    *
    * The only "alive" effect in the product, and it fires when the DATA moves

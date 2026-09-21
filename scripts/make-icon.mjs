@@ -1,10 +1,10 @@
 /**
  * Render the HERMESX mark to a Windows icon: public/hermesx.ico.
  *
- * WHY THIS EXISTS. There is no logo file in this repo. The tab favicon in
- * src/app/layout.tsx is an SVG string built inline from HERMES_MARK_D, and the
- * header's Mark draws the same trace straight from CSS tokens. A desktop
- * shortcut needs an .ico on disk, so this rasterises the mark at the default
+ * WHY THIS EXISTS. There is no logo file in this repo: the header's Mark draws
+ * the trace in HERMES_MARK_D straight from CSS tokens. A desktop shortcut needs
+ * an .ico on disk — and the browser tab points at the same file
+ * (src/app/layout.tsx) — so this rasterises the mark at the default
  * hues (green #00ffb2 -> white sheen -> pink #ff4fa3, see DEFAULT_THEME in
  * src/lib/theme.ts) and packs it. sharp does the rendering — Next already ships
  * it, so no new dependency.
@@ -15,12 +15,12 @@
  * desktop still shows the old picture afterwards that is Explorer's icon cache,
  * not the file — `ie4uinit.exe -show` or a sign-out refreshes it.
  *
- * NOT THE FAVICON'S TREATMENT, ON PURPOSE. The tab icon is a plain black glyph
- * on a transparent tile (owner, 2026-09-01) because a browser tab supplies its
- * own light background. A desktop sits on a wallpaper that supplies nothing, so
- * this carries its own chassis-black tile and the lockup's colours — the same
- * call GEXYGEN's icon makes, which is what lets the two sit side by side and
- * read as a pair.
+ * ONE PICTURE FOR THE DESKTOP AND THE TAB. The tab icon was a plain black glyph
+ * on a transparent tile until the owner asked for this one there too
+ * (2026-09-22). A desktop sits on a wallpaper that supplies nothing, so this
+ * carries its own chassis-black tile and the lockup's colours — the same call
+ * GEXYGEN's icon makes, which is what lets the two sit side by side and read as
+ * a pair — and the tile holds up just as well on a light or dark tab strip.
  *
  * ICO LAYOUT. 16-64 px are stored as classic 32-bit DIBs (readable by every
  * Windows since XP, and what the shell reaches for at desktop sizes); 128 and
@@ -58,9 +58,8 @@ const CHASSIS = "#0a0b10"; // the app's chassis black, same tile as the GEXYGEN 
  * runs `rotate(-10 256 256) translate(512 0) scale(-1 1)` — rotate leftmost so
  * it applies in screen space AFTER the mirror, which is the trap the header's
  * own gradient fell into. Same order here, but the mirror is written about the
- * centre so the 0.86 can ride along with it. Full bleed is right for a 16px
- * browser tab and wrong inside a rounded tile, where the corners would eat the
- * wing tips.
+ * centre so the 0.86 can ride along with it. Full bleed is wrong inside a
+ * rounded tile, where the corners would eat the wing tips.
  */
 const MARK_TRANSFORM =
   "rotate(-10 256 256) translate(256 256) scale(-0.86 0.86) translate(-256 -256)";

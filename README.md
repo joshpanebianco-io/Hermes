@@ -85,9 +85,10 @@ Japan Times, the ECB, the Bank of England, the RBA and more), merged into one ta
 
 The left column's core: three panels, one price ladder each, `NQ / ES / GC` pickers on all.
 
-- **Session ranges** — what Asia, London, pre-NY and New York each traded, and where
-  price sits inside every range. `↑ out` means the session's high has been taken out —
-  the handover read.
+- **Session ranges** — what Asia, London, Europe midday, pre-NY and New York each traded,
+  every bar on one shared price axis with the current price as a single line through all
+  of them. A staircase is a trend, a stack is a range; a high or low printed in amber has
+  been taken out — the handover read. Rows that are still yesterday's are dimmed.
 - **Volume profile** — POC, VAH and VAL for three windows cut the way sessions are
   actually traded: the **previous RTH** (09:30–16:00 ET) as every session's reference,
   the **completed overnight** (18:00–09:30) once New York is trading, and a
@@ -319,8 +320,8 @@ extractor's four observed wrappings.
 ## The mark
 
 The winged helm is my own line art. In the app it lives as a single traced vector
-path (`src/lib/hermesMark.ts`), recoloured live to the terminal's chrome hues — the
-favicon and the header render from the same path, so the tab and the page are one
-identity. The desktop icon reads that same file rather than copying it, and differs
-only where it has to: a browser tab supplies its own background, a wallpaper does
-not, so the shortcut carries the chassis-black tile the tab goes without.
+path (`src/lib/hermesMark.ts`), recoloured live to the terminal's chrome hues. The
+icon reads that same file rather than copying it, and adds only what a wallpaper
+does not supply: a chassis-black tile under the lockup's green-to-pink wash. The
+browser tab and the desktop shortcut share that one `.ico`, so the launcher, the tab
+it opens and the page inside it are one identity.

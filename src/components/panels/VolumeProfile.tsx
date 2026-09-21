@@ -18,10 +18,12 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
  * developing row is anchored 18:00 ET through Asia and London, 09:30 once
  * the cash opens.
  *
- * DRAWN IN SESSION RANGES' OWN GRAMMAR — a track from the window's low to its
- * high, the value area as a filled band, the POC as the bright tick, the live
- * price as the marker — because it sits directly beneath that panel and the
- * reader has already learned the language.
+ * EACH ROW KEEPS ITS OWN TRACK — the window's low to its high, the value area
+ * as a filled band, the POC as the bright tick, the live price as the marker.
+ * This was Session Ranges' grammar too until that panel moved to one shared
+ * price axis (2026-09-22), because its read is sessions AGAINST each other.
+ * This panel's read is where value sits INSIDE a window, which is the one
+ * thing a private scale is good at, so it stays.
  *
  * "≈" IN THE SUB IS A CLAIM, NOT DECORATION: these are built from 5-minute
  * bars with volume spread across each bar's range. Zones, not ticks.

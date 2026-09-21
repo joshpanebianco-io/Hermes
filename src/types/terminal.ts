@@ -225,6 +225,8 @@ export interface SessionRange {
   date?: string | null;
   /** "live" while the clock is still inside this window, else "complete". */
   status?: "live" | "complete";
+  /** This window has not come round again yet, so the row is yesterday's. */
+  prior_day?: boolean;
 }
 
 export interface EarningsRow {

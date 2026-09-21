@@ -494,6 +494,235 @@
     line-height: 1;
   }
 
+  /*
+   * THE LARGE HEADER — Module's `large`, used by the Report tab's two modules.
+   * The min-height is what keeps them LEVEL: one head holds a row of buttons
+   * and the other holds only a title, and side by side their rules would sit
+   * a few pixels apart, which reads as a mistake rather than as two heights.
+   */
+  .module-lg > .module-head {
+    min-height: 36px;
+  }
+
+  /*
+   * 13px AGAINST THE SUB'S 11.5, and they read as the SAME size. The title is
+   * tracked uppercase mono, whose capitals stand shorter than a mixed-case sans
+   * at equal pixels — set equal, the title looked like the smaller of the two
+   * (owner, 2026-09-22). Optical size, not nominal.
+   */
+  .module-lg > .module-head .module-title {
+    font-size: 13px;
+  }
+
+  /*
+   * GENERATE — the one control on the Report tab that makes something, so it
+   * is the one control that is lit.
+   *
+   * THE RING IS THE WORDMARK'S WASH, not a new effect: the same palindromic
+   * gradient routed through the sheen (see `.wordmark` for why the midpoint is
+   * a highlight and not a blend), the same keyframes, the same 5.6s, the same
+   * left-to-right. It is also what the helm does while the report is being
+   * written — so the button, the loader it summons and the lockup above them
+   * are one light moving at one speed, and nothing in the chrome disagrees
+   * about direction.
+   *
+   * THE RING IS PART OF THE BUTTON'S OWN BACKGROUND, not an overlay. It was
+   * first built the way the chassis light is — a pseudo-element masked down to
+   * a ring with `mask-composite: exclude` — and at 1x it looked rough: the
+   * owner saw "black marks" on the curves (2026-09-22). On a 1px ring the outer
+   * clip and the inner cut-out are anti-aliased SEPARATELY, their coverage
+   * multiplies on the diagonals, and the dark fill shows through the corners as
+   * a broken, checkered line. That construction is right for the chassis, where
+   * the ring is 2px on a huge radius, and wrong for a 23px pill.
+   *
+   * So: a transparent border, the wash painted to the `border-box`, and an
+   * OPAQUE fill painted over it to the `padding-box`. One shape, one
+   * anti-aliasing pass, and every edge pixel blends the ring's colour with the
+   * page — never with the dark fill. Only the third layer moves; the first two
+   * are the size of their box, where a position has nothing to slide.
+   *
+   * NOTHING HERE MOVES BY HALF A PIXEL. The hover lift was 0.5px, which puts
+   * every edge between device pixels and blurs the whole control for as long
+   * as the pointer is on it. The spark used to rotate and scale; an 11px glyph
+   * resampled every frame is a smudge, so it now twinkles in opacity and glow
+   * and its geometry never changes.
+   *
+   * THREE STATES THAT LOOK DIFFERENT. Ready is lit. Busy is lit and quicker,
+   * with the spark pulsing — it is `disabled` to the browser but must not look
+   * dead, since it is the one moment it is actually working. No key is the
+   * only state that goes grey, because it is the only one where pressing
+   * would do nothing.
+   */
+  .generate {
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 2px 11px 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 17px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-shadow: 0 0 8px color-mix(in oklab, var(--title-a) 35%, transparent);
+    background:
+      linear-gradient(
+          100deg,
+          color-mix(in oklab, var(--title-a) 16%, transparent),
+          color-mix(in oklab, var(--title-b) 16%, transparent)
+        )
+        padding-box,
+      linear-gradient(var(--surface-2), var(--surface-2)) padding-box,
+      linear-gradient(
+          100deg,
+          var(--title-a) 0%,
+          var(--title-sheen) 12.5%,
+          var(--title-b) 25%,
+          var(--title-sheen) 37.5%,
+          var(--title-a) 50%,
+          var(--title-sheen) 62.5%,
+          var(--title-b) 75%,
+          var(--title-sheen) 87.5%,
+          var(--title-a) 100%
+        )
+        border-box;
+    background-size:
+      auto,
+      auto,
+      200% 100%;
+    background-position:
+      0 0,
+      0 0,
+      100% 0;
+    /* The inset pair is the ring's light falling INWARD, which is what gives a
+       1px line the body of a tube; the outer pair is the same light outward. */
+    box-shadow:
+      inset 0 0 8px -3px color-mix(in oklab, var(--title-a) 55%, transparent),
+      inset 0 0 14px -6px color-mix(in oklab, var(--title-b) 55%, transparent),
+      0 0 12px -4px color-mix(in oklab, var(--title-a) 60%, transparent),
+      0 0 24px -8px color-mix(in oklab, var(--title-b) 60%, transparent);
+    cursor: pointer;
+    animation: generate-wash 5.6s linear infinite;
+    transition:
+      transform 120ms ease,
+      box-shadow 220ms ease,
+      filter 220ms ease;
+  }
+
+  /* The wordmark's wash — 100% to 0%, which runs the colour LEFT TO RIGHT (see
+     `wordmark-wash` for why that is the opposite of the intuition). */
+  @keyframes generate-wash {
+    from {
+      background-position:
+        0 0,
+        0 0,
+        100% 0;
+    }
+    to {
+      background-position:
+        0 0,
+        0 0,
+        0% 0;
+    }
+  }
+
+  /* The sheen that crosses it on hover — under the label, over the fill. */
+  .generate::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(
+      100deg,
+      transparent 30%,
+      color-mix(in oklab, var(--title-sheen) 30%, transparent) 50%,
+      transparent 70%
+    );
+    transform: translateX(-110%);
+    pointer-events: none;
+  }
+
+  .generate:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.12);
+    box-shadow:
+      inset 0 0 10px -3px color-mix(in oklab, var(--title-a) 75%, transparent),
+      inset 0 0 16px -6px color-mix(in oklab, var(--title-b) 75%, transparent),
+      0 0 16px -3px color-mix(in oklab, var(--title-a) 85%, transparent),
+      0 0 34px -8px color-mix(in oklab, var(--title-b) 85%, transparent);
+  }
+
+  .generate:hover:not(:disabled)::after {
+    transform: translateX(110%);
+    transition: transform 650ms ease;
+  }
+
+  .generate:active:not(:disabled) {
+    transform: translateY(0);
+    filter: brightness(0.94);
+  }
+
+  .generate-spark {
+    flex: none;
+    color: var(--title-sheen);
+    animation: generate-twinkle 2.8s ease-in-out infinite;
+  }
+
+  @keyframes generate-twinkle {
+    0%,
+    100% {
+      opacity: 0.55;
+      filter: drop-shadow(0 0 1px color-mix(in oklab, var(--title-b) 50%, transparent));
+    }
+    50% {
+      opacity: 1;
+      filter: drop-shadow(0 0 4px color-mix(in oklab, var(--title-b) 95%, transparent));
+    }
+  }
+
+  .generate[data-busy] {
+    cursor: progress;
+    animation-duration: 1.4s;
+  }
+
+  .generate[data-busy] .generate-spark {
+    animation-duration: 0.9s;
+  }
+
+  .generate:disabled:not([data-busy]) {
+    cursor: not-allowed;
+    border-color: var(--ring-2);
+    color: var(--ink-4);
+    text-shadow: none;
+    background: transparent;
+    box-shadow: none;
+    animation: none;
+  }
+
+  .generate:disabled:not([data-busy]) .generate-spark {
+    animation: none;
+    color: var(--ink-4);
+    opacity: 0.6;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .generate,
+    .generate .generate-spark {
+      animation: none;
+      transition: none;
+    }
+    .generate:hover:not(:disabled)::after {
+      transition: none;
+      transform: translateX(-110%);
+    }
+  }
+
   /* Rows the cursor gets an answer from. */
   .hit {
     transition:

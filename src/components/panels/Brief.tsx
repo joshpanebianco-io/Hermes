@@ -41,7 +41,9 @@ import { bp, dir, num, pct, signed } from "@/lib/format";
  * told by a stylesheet.
  */
 
-const BOOK_NAME: Record<Book, string> = { NQ: "NQ", ES: "ES", GC: "Gold" };
+// The name a reader says, not the ticker they type (owner, 2026-09-22: "Nasdaq",
+// as GC was already "Gold"). The pickers and the terminal panels keep the ticker.
+const BOOK_NAME: Record<Book, string> = { NQ: "Nasdaq", ES: "ES", GC: "Gold" };
 
 const TONE_HUE: Record<Tone, string> = {
   bear: "var(--put)",
@@ -108,11 +110,21 @@ export function Brief({ rep }: { rep: Report }) {
 
   return (
     <article className="w-full px-5 pt-4 pb-6">
-      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <span className="text-[13.5px] font-semibold text-ink">
+      {/*
+        * THE MASTHEAD. This was a 13.5px bold sans label, and it looked wrong
+        * without saying why (owner, 2026-09-22): it is the document's TITLE and
+        * it was set smaller than the document's own section headings, in the
+        * one face no other heading here uses — so it read as a stray caption
+        * floating over the thesis. It is now what it is: the brief's serif, a
+        * step above the sections, on a rule that separates the name of the
+        * document from the first thing the document says. Title case stays —
+        * that was chosen on purpose.
+        */}
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-ring/60 pb-3">
+        <h1 className="font-serif text-[23.5px] leading-tight font-normal text-ink">
           {rep.session_label} Session Brief
-        </span>
-        <span className="fig text-[11px] text-ink-3">{f.as_of}</span>
+        </h1>
+        <span className="fig text-[11.5px] text-ink-3">{f.as_of}</span>
       </header>
 
       {f.partial.length > 0 && (
@@ -124,7 +136,9 @@ export function Brief({ rep }: { rep: Report }) {
         </div>
       )}
 
-      <p className={cn("mt-4 font-serif text-[22px] leading-[1.4] text-ink", MEASURE)}>
+      {/* A clear step under the 23.5px masthead: at 22 against 25 the two read as
+          one size and the title stopped looking like the title. */}
+      <p className={cn("mt-4 font-serif text-[18.5px] leading-[1.45] text-ink", MEASURE)}>
         {b.thesis}
       </p>
 
@@ -215,7 +229,7 @@ function Calls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
             className="border-t-[3px] px-3.5 pt-3 pb-3.5"
             style={{ borderColor: ink, background: tint(ink, 10) }}
           >
-            <div className="text-[13.5px] font-semibold text-ink-3">{BOOK_NAME[c.book]}</div>
+            <div className="text-[16px] font-semibold text-ink-3">{BOOK_NAME[c.book]}</div>
             <div className="mt-0.5 font-serif text-[29px] leading-9" style={{ color: ink }}>
               {biasLabel(c.open_bias)}
             </div>

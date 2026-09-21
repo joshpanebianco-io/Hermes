@@ -106,6 +106,7 @@ export function Report({
       <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
         <Module
           title="Session report"
+          large
           sub={
             rep
               ? [rep.asset_label, rep.session_label, rep.et_label]
@@ -124,7 +125,7 @@ export function Report({
                     onClick={() => setBook(ap.key)}
                     title={ap.title}
                     className={cn(
-                      "fig hit rounded px-1.5 py-px text-[9.5px] leading-[15px] tracking-wide uppercase",
+                      "fig hit rounded px-1.5 py-px text-[11px] leading-[17px] tracking-wide uppercase",
                       book === ap.key ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
                     )}
                   >
@@ -132,7 +133,7 @@ export function Report({
                   </button>
                 ))}
               </div>
-              <span aria-hidden className="h-3 w-px bg-ring" />
+              <span aria-hidden className="h-3.5 w-px bg-ring" />
               <div className="flex items-center gap-0.5">
                 {SESSION_PICKS.map((sp) => (
                   <button
@@ -141,7 +142,7 @@ export function Report({
                     onClick={() => setPick(sp.key)}
                     title={sp.title}
                     className={cn(
-                      "fig hit rounded px-1.5 py-px text-[9.5px] leading-[15px] tracking-wide uppercase",
+                      "fig hit rounded px-1.5 py-px text-[11px] leading-[17px] tracking-wide uppercase",
                       pick === sp.key ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
                     )}
                   >
@@ -149,27 +150,41 @@ export function Report({
                   </button>
                 ))}
               </div>
-              {feed?.config?.model && (
-                <span className="fig hidden text-[9px] text-ink-4 lg:inline">
-                  {feed.config.model}
-                </span>
-              )}
+              {/*
+                * The model's name used to sit here. It is not a control and it
+                * does not change between presses, so it was noise beside the
+                * one button that matters; it is still stated where it is
+                * evidence — under the note it wrote, and on the loader.
+                *
+                * `.generate` (globals.css) is the button's whole look. It stays
+                * `disabled` while busy so a second press cannot queue a second
+                * report, and `data-busy` is what stops that reading as dead.
+                */}
               <button
                 type="button"
                 onClick={generate}
                 disabled={busy || !enabled}
-                className={cn(
-                  "fig hit rounded border px-2 py-px text-[9.5px] leading-[15px] tracking-wide uppercase",
-                  busy || !enabled
-                    ? "cursor-not-allowed border-ring text-ink-4"
-                    : "border-flip/60 bg-flip/15 text-flip hover:bg-flip/25",
-                )}
+                data-busy={busy || undefined}
+                className="generate ml-1"
                 title={
-                  enabled
-                    ? "Read the terminal as it stands now and write a fresh note"
-                    : "Needs OPENROUTER_API_KEY"
+                  !enabled
+                    ? "Needs OPENROUTER_API_KEY"
+                    : busy
+                      ? "Reading the terminal and generating the report — usually one to three minutes"
+                      : "Read the terminal as it stands now and generate a fresh report"
                 }
               >
+                <svg
+                  className="generate-spark"
+                  width="11"
+                  height="11"
+                  viewBox="0 0 11 11"
+                  fill="currentColor"
+                  aria-hidden
+                >
+                  {/* Odd-sized, so the star's centre is a whole pixel. */}
+                  <path d="M5.5 0l1.3 4.2L11 5.5 6.8 6.8 5.5 11 4.2 6.8 0 5.5l4.2-1.3z" />
+                </svg>
                 {busy ? "Reading…" : "Generate"}
               </button>
             </div>
@@ -205,6 +220,7 @@ export function Report({
             as its rows. */}
         <Module
           title="Past calls"
+          large
           sub={`${feed?.history?.length ?? 0} kept`}
           className="xl:min-h-0 xl:flex-1"
           bodyClassName="px-0 py-0 xl:min-h-0 xl:overflow-y-auto"
@@ -227,18 +243,23 @@ export function Report({
                     )}
                   >
                     <div className="flex w-full items-baseline gap-2">
-                      <span className="fig text-[10px] text-ink-3">{h.et_label}</span>
+                      <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
                       {h.asset_label && h.asset !== "all" && h.asset_label !== "All three books" && (
-                        <span className="fig rounded bg-ink/10 px-1 text-[9px] text-ink-3">
+                        <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3">
                           {h.asset_label}
                         </span>
                       )}
+                      {/* The one part of this line that may give way: on a narrow
+                          column the date, the book and the call all matter more
+                          than which session it was, so this is what truncates. */}
                       {h.session_label && (
-                        <span className="fig text-[9px] text-ink-4">{h.session_label}</span>
+                        <span className="fig min-w-0 truncate text-[10px] text-ink-4">
+                          {h.session_label}
+                        </span>
                       )}
                       {h.bias && (
                         <span
-                          className="fig ml-auto shrink-0 rounded px-1 text-[9px]"
+                          className="fig ml-auto shrink-0 rounded px-1 text-[10px]"
                           style={{
                             color: biasHue(h.bias),
                             background: `color-mix(in oklab, ${biasHue(h.bias)} 18%, transparent)`,
@@ -249,7 +270,7 @@ export function Report({
                       )}
                     </div>
                     {h.headline && (
-                      <span className="line-clamp-2 text-[10.5px] leading-snug text-ink-2">
+                      <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">
                         {h.headline}
                       </span>
                     )}
@@ -463,7 +484,7 @@ function Working({ startedAt, model }: { startedAt: number | null; model?: strin
       </div>
       <div className="mt-2 text-[12px] text-ink-2">{stage}…</div>
       <div className="fig mt-4 text-[10px] text-ink-4">
-        {model ? `${model} · ` : ""}usually 1–3 min on the free tier · the note names the
+        {model ? `${model} · ` : ""}usually 1–3 min on the free tier · the report names the
         model that answered
       </div>
     </div>

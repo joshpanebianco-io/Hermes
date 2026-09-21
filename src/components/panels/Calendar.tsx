@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import type { CalendarRow, Impact, Region } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { cn } from "@/lib/cn";
-import { isBool, oneOf, usePersisted } from "@/lib/usePersisted";
+import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
  * The economic calendar.
@@ -36,11 +36,27 @@ function tierOf(score: number): Impact {
   return "low";
 }
 
+/**
+ * THE TIERS ARE TOGGLES THAT COMBINE, exactly as on the wire and for the same
+ * reason (owner, 2026-09-22) — see IMPACTS in Wire.tsx. One vocabulary means one
+ * behaviour too: two rows of identical chips where one row is pick-one and the
+ * other is pick-several would be a trap. None lit is ALL; all three lit is ALL.
+ */
 const TIERS: { key: Impact | "all"; label: string; hue: string; title: string }[] = [
-  { key: "all", label: "All", hue: "var(--ink-3)", title: "Every release on the calendar" },
-  { key: "high", label: "High", hue: "var(--err)", title: "Stops the tape: CPI, PCE, payrolls, FOMC, GDP" },
-  { key: "medium", label: "Med", hue: "var(--warn)", title: "Watched: PMI, ISM, claims, confidence, auctions" },
-  { key: "low", label: "Low", hue: "var(--ink-4)", title: "Context" },
+  { key: "all", label: "All", hue: "var(--ink-3)", title: "Every release on the calendar — clears the tiers" },
+  {
+    key: "high",
+    label: "High",
+    hue: "var(--err)",
+    title: "Stops the tape: CPI, PCE, payrolls, FOMC, GDP. Combines with the other tiers",
+  },
+  {
+    key: "medium",
+    label: "Med",
+    hue: "var(--warn)",
+    title: "Watched: PMI, ISM, claims, confidence, auctions. Combines with the other tiers",
+  },
+  { key: "low", label: "Low", hue: "var(--ink-4)", title: "Context. Combines with the other tiers" },
 ];
 
 /**
@@ -70,11 +86,19 @@ export function Calendar({
   ageMin?: number | null;
   error?: string | null;
 }) {
-  const [tier, setTier] = usePersisted<Impact | "all">(
+  // The tiers that are lit; EMPTY IS THE WHOLE CALENDAR. A stored single string
+  // from before this was a list is rejected by `manyOf` and lands on ALL once.
+  const [tiers, setTiers] = usePersisted<Impact[]>(
     "cal.tier",
-    "all",
-    oneOf("all", "high", "medium", "low"),
+    [],
+    manyOf("high", "medium", "low"),
   );
+  const toggleTier = (k: Impact | "all") =>
+    setTiers((prev) => {
+      if (k === "all") return [];
+      const next = prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k];
+      return next.length === TIERS.length - 1 ? [] : next;
+    });
   /*
    * MINE IS ON BY DEFAULT, and it is the filter that makes this panel usable.
    * The raw calendar is 220 rows a day, most of it Korean industrial
@@ -103,11 +127,12 @@ export function Calendar({
       const t = tierOf(r.score);
       c[t] = (c[t] ?? 0) + 1;
     }
-    const byTier = tier === "all" ? pool : pool.filter((r) => tierOf(r.score) === tier);
+    const lit = (r: CalendarRow) => tiers.length === 0 || tiers.includes(tierOf(r.score));
+    const byTier = pool.filter(lit);
     const rc: Record<string, number> = { all: byTier.length };
     for (const r of byTier) rc[r.region] = (rc[r.region] ?? 0) + 1;
 
-    const keep = byRegion.filter((r) => tier === "all" || tierOf(r.score) === tier);
+    const keep = byRegion.filter(lit);
     return {
       counts: c,
       regionCounts: rc,
@@ -117,7 +142,7 @@ export function Calendar({
         .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
         .slice(0, 8),
     };
-  }, [rows, tier, coreOnly, region]);
+  }, [rows, tiers, coreOnly, region]);
 
   return (
     <Module
@@ -158,12 +183,13 @@ export function Calendar({
             Mine
           </button>
           {TIERS.map((t) => {
-            const on = tier === t.key;
+            const on = t.key === "all" ? tiers.length === 0 : tiers.includes(t.key);
             return (
               <button
                 key={t.key}
                 type="button"
-                onClick={() => setTier(t.key)}
+                onClick={() => toggleTier(t.key)}
+                aria-pressed={on}
                 title={t.title}
                 className={cn(
                   "fig hit rounded px-1.5 py-px text-[9.5px] leading-[14px] tracking-wide uppercase",

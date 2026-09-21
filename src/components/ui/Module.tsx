@@ -26,6 +26,7 @@ export function Module({
   className,
   bodyClassName,
   scroll,
+  large,
   children,
 }: {
   title: string;
@@ -38,13 +39,23 @@ export function Module({
   bodyClassName?: string;
   /** Give the body its own scroll rather than growing the page. */
   scroll?: boolean;
+  /**
+   * A step up in the header's type. The Report tab's two modules are a page
+   * that is read, not a pane that is glanced at, and their header carries the
+   * controls that write the page — so it is set a size larger than a pane's.
+   */
+  large?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section className={cn("module", className)}>
+    <section className={cn("module", large && "module-lg", className)}>
       <div className="module-head">
         <h2 className="module-title">{title}</h2>
-        {sub && <span className="truncate text-[10px] text-ink-4">{sub}</span>}
+        {sub && (
+          <span className={cn("truncate text-ink-4", large ? "text-[11.5px]" : "text-[10px]")}>
+            {sub}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           {right}
           {ageMin !== undefined && ageMin !== null && <AgeChip m={ageMin} />}

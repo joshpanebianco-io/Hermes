@@ -93,7 +93,7 @@ export function Rotation({
       }
     >
       {ranked.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-4">No sector data yet.</p>
+        <p className="px-3 py-6 text-center text-[11px] text-ink-3">No sector data yet.</p>
       ) : (
         <>
           <ul className="py-1">
@@ -103,7 +103,7 @@ export function Rotation({
               return (
                 <li key={r.key} className="hit flex items-center gap-2 px-3 py-[3px]">
                   <span className="fig w-[38px] shrink-0 text-[10.5px] text-ink-2">{r.key}</span>
-                  <span className="hidden w-[104px] shrink-0 truncate text-[10px] text-ink-4 sm:block">
+                  <span className="hidden w-[104px] shrink-0 truncate text-[10px] text-ink-3 sm:block">
                     {r.label}
                   </span>
                   <Bar v={v} max={max} />
@@ -118,7 +118,7 @@ export function Rotation({
                   </span>
                   <Tick
                     value={pct(abs)}
-                    className="fig w-[52px] shrink-0 text-right text-[10px] text-ink-4"
+                    className="fig w-[52px] shrink-0 text-right text-[10px] text-ink-3"
                   />
                 </li>
               );
@@ -126,12 +126,12 @@ export function Rotation({
           </ul>
           <div className="border-t border-ring/40 px-3 py-1.5 text-[10px] leading-relaxed text-ink-3">
             {breadth === null ? (
-              <span className="text-ink-4">Breadth unavailable.</span>
+              <span className="text-ink-3">Breadth unavailable.</span>
             ) : (
               <>
-                <span className="text-ink-4">Breadth </span>
+                <span className="text-ink-3">Breadth </span>
                 <span className={breadth >= 0 ? "up" : "down"}>{pct(breadth)}</span>
-                <span className="text-ink-4">
+                <span className="text-ink-3">
                   {" "}
                   — equal weight {breadth >= 0 ? "beating" : "lagging"} cap weight, so the move is{" "}
                   {breadth >= 0 ? "broad" : "carried by the largest names"}.
@@ -139,7 +139,7 @@ export function Rotation({
               </>
             )}
             {spy && (
-              <span className="text-ink-4">
+              <span className="text-ink-3">
                 {" "}
                 SPY {pct(spy[`${span}_pct` as const])} over the same span.
               </span>

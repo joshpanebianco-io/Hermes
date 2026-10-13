@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ReportFeed } from "@/types/terminal";
+import { failureReason } from "@/lib/offline";
 
 /**
  * One stored report by id, so a past call can be reopened.
@@ -37,7 +38,7 @@ async function proxy(id: string, method: "GET" | "DELETE"): Promise<NextResponse
     if (!r.ok) throw new Error(`collector returned HTTP ${r.status}`);
     return NextResponse.json((await r.json()) as ReportFeed);
   } catch (e) {
-    return offline(e instanceof Error ? e.message : "unknown error");
+    return offline(failureReason(e));
   }
 }
 

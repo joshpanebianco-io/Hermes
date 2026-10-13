@@ -105,7 +105,7 @@ export function Movers({
       }
     >
       {!active || active.members.length === 0 ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           No constituent data yet — weights come from the fund&rsquo;s own holdings file.
         </p>
       ) : (
@@ -188,7 +188,7 @@ function List({ m }: { m: IndexMovers }) {
         return (
           <li key={x.symbol} className="hit flex items-center gap-2 px-3 py-[3px]">
             <span className="fig w-[46px] shrink-0 text-[10.5px] text-ink-2">{x.symbol}</span>
-            <span className="fig w-[38px] shrink-0 text-right text-[9.5px] text-ink-4"
+            <span className="fig w-[38px] shrink-0 text-right text-[9.5px] text-ink-3"
               title="Index weight">
               {x.weight.toFixed(1)}%
             </span>
@@ -233,13 +233,13 @@ function List({ m }: { m: IndexMovers }) {
 function Net({ m }: { m: IndexMovers }) {
   const up = m.net_contribution >= 0;
   return (
-    <div className="border-t border-ring/40 px-3 py-1.5 text-[10px] leading-relaxed text-ink-4">
+    <div className="border-t border-ring/40 px-3 py-1.5 text-[10px] leading-relaxed text-ink-3">
       <span>Top {m.members.length} names are </span>
       <span className="fig text-ink-3">{m.covered_weight}%</span>
       <span> of {m.index} and contributed </span>
       <Tick value={pct(m.net_contribution, 2)} className={cn("fig", up ? "up" : "down")} />
       <span> to it today.</span>
-      {m.as_of && <span className="text-ink-4"> Weights as of {m.as_of}.</span>}
+      {m.as_of && <span className="text-ink-3"> Weights as of {m.as_of}.</span>}
     </div>
   );
 }

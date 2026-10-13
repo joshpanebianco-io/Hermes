@@ -88,7 +88,7 @@ export function Gamma({
       ) : !active.ok ? (
         <Note>
           {active.error ?? "unavailable"}
-          <span className="mt-1 block text-ink-4">
+          <span className="mt-1 block text-ink-3">
             These come from GEXYGEN&rsquo;s compute service. Start it and this fills in.
           </span>
         </Note>
@@ -148,14 +148,17 @@ function Ladder({ a }: { a: GexAsset }) {
         <Tick value={num(spot)} className="fig text-[14px] text-ink" />
         {a.regime && (
           <span
-            className="fig rounded px-1.5 py-px text-[9.5px]"
-            style={{
-              background:
-                a.regime === "POS"
-                  ? "color-mix(in oklab, var(--call) 20%, transparent)"
-                  : "color-mix(in oklab, var(--put) 20%, transparent)",
-              color: a.regime === "POS" ? "var(--call)" : "var(--put)",
-            }}
+            className="fig qt-pill rounded px-1.5 py-px text-[9.5px]"
+            style={
+              {
+                background:
+                  a.regime === "POS"
+                    ? "color-mix(in oklab, var(--call) 20%, transparent)"
+                    : "color-mix(in oklab, var(--put) 20%, transparent)",
+                color: a.regime === "POS" ? "var(--call)" : "var(--put)",
+                "--pill-hue": a.regime === "POS" ? "var(--call-fig)" : "var(--put-fig)",
+              } as React.CSSProperties
+            }
             title={
               a.regime === "POS"
                 ? "Positive gamma: dealer hedging dampens moves"

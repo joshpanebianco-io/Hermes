@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ReportFeed } from "@/types/terminal";
+import { failureReason } from "@/lib/offline";
 
 /**
  * The report proxy — GET reads the last one, POST writes a new one.
@@ -65,18 +66,11 @@ function pickQuery(req: Request): string {
   return out ? `?${out}` : "";
 }
 
-function reason(e: unknown): string {
-  if (e instanceof Error) {
-    return e.name === "TimeoutError" ? "the collector did not answer in time" : e.message;
-  }
-  return "unknown error";
-}
-
 export async function GET() {
   try {
     return NextResponse.json(await call("GET", 10_000));
   } catch (e) {
-    return NextResponse.json(offline(reason(e)));
+    return NextResponse.json(offline(failureReason(e)));
   }
 }
 
@@ -84,6 +78,6 @@ export async function POST(req: Request) {
   try {
     return NextResponse.json(await call("POST", 290_000, pickQuery(req)));
   } catch (e) {
-    return NextResponse.json(offline(reason(e)));
+    return NextResponse.json(offline(failureReason(e)));
   }
 }

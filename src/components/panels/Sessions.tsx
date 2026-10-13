@@ -3,6 +3,8 @@
 import type { Clock } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { inMin } from "@/lib/format";
+import { localClock } from "@/lib/clock";
+import { useNow } from "@/lib/useNow";
 import { cn } from "@/lib/cn";
 
 /**
@@ -19,7 +21,10 @@ import { cn } from "@/lib/cn";
  * day's range is usually set. It is not derivable at a glance from two rows of
  * open/closed, so it is stated.
  */
-export function Sessions({ clock }: { clock: Clock }) {
+export function Sessions({ clock: rawClock }: { clock: Clock }) {
+  // Its own second hand: the countdowns move every second, the shell does not.
+  const now = useNow(1000);
+  const clock = localClock(rawClock, now) ?? rawClock;
   const next = clock.markers?.[0];
 
   return (
@@ -31,7 +36,7 @@ export function Sessions({ clock }: { clock: Clock }) {
           <span className="eyebrow text-[9px]">ET</span>
           {clock.overlap && (
             <span
-              className="fig ml-auto rounded bg-flip/15 px-1.5 py-px text-[9.5px] text-flip"
+              className="fig qt-pill ml-auto rounded bg-flip/15 px-1.5 py-px text-[9.5px] text-flip [--pill-hue:var(--flip-fig)]"
               title="London and New York both open — the deepest liquidity of the day"
             >
               OVERLAP
@@ -39,7 +44,7 @@ export function Sessions({ clock }: { clock: Clock }) {
           )}
         </div>
         <div className="mt-0.5 text-[11px] text-ink-2">{clock.phase.label}</div>
-        <div className="text-[10px] text-ink-4">{clock.phase.note}</div>
+        <div className="text-[10px] text-ink-3">{clock.phase.note}</div>
       </div>
 
       {/* ---- the cities -------------------------------------------------- */}
@@ -56,13 +61,13 @@ export function Sessions({ clock }: { clock: Clock }) {
             <span
               className={cn(
                 "w-[74px] shrink-0 text-[11px]",
-                s.open ? "text-ink" : "text-ink-4",
+                s.open ? "text-ink" : "text-ink-3",
               )}
             >
               {s.label}
             </span>
             <span className="fig w-[42px] shrink-0 text-[10.5px] text-ink-3">{s.local_time}</span>
-            <span className="flex-1 truncate text-[9.5px] text-ink-4">{s.hours}</span>
+            <span className="flex-1 truncate text-[9.5px] text-ink-3">{s.hours}</span>
             <span
               className={cn(
                 "fig shrink-0 text-right text-[10px]",
@@ -83,7 +88,7 @@ export function Sessions({ clock }: { clock: Clock }) {
             <span className="text-[11px] text-ink">{next.label}</span>
             <span className="fig ml-auto text-[10.5px] text-flip">{inMin(next.in_min)}</span>
           </div>
-          <div className="text-[9.5px] text-ink-4">{next.note}</div>
+          <div className="text-[9.5px] text-ink-3">{next.note}</div>
         </div>
       )}
     </Module>

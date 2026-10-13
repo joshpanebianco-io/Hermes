@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Regime, ScanRow, ScannerPayload, Side, Watchlist } from "@/types/scanner";
 import { Tick } from "@/components/ui/Tick";
 import { ScanDetail, levelGlyph, setupLabel, sideHue } from "@/components/panels/ScanDetail";
+import { ScanLog } from "@/components/panels/ScanLog";
 import { age, compact, dir, inMin, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
@@ -66,11 +67,42 @@ const CONFIRM_LABEL: Record<NonNullable<Regime["confirm"]>, string> = {
   chop: "Both flat — chop",
 };
 
-export function Scanner({ now }: { now: number | null }) {
+/**
+ * The page's own clock, at the pace its ages need. A headline's "14m" and a
+ * signal's "fresh" both move in minutes, so this ticks every thirty seconds
+ * rather than taking the shell's second hand — the scanner re-renders when
+ * its data or its minutes change, not sixty times a minute.
+ */
+function useMinuteClock(): number | null {
+  const [t, setT] = useState<number | null>(null);
+  useEffect(() => {
+    setT(Date.now());
+    const id = setInterval(() => setT(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return t;
+}
+
+type View = "setups" | "log";
+
+export function Scanner({ now: shellNow }: { now?: number | null } = {}) {
+  const ownNow = useMinuteClock();
+  const now = shellNow ?? ownNow;
   const [data, setData] = useState<ScannerPayload | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [view, setView] = usePersisted<View>("scan.view", "setups", oneOf("setups", "log"));
+
+  // `?sym=` (an alert's click-through) opens straight onto that name.
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get("sym");
+    if (s) {
+      setSel(s.toUpperCase());
+      setView("setups");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [sideF, setSideF] = usePersisted<SideFilter>("scan.side", "all", oneOf("all", "long", "short"));
   const [bench, setBench] = usePersisted<Bench>("scan.bench", "SPY", oneOf("SPY", "QQQ"));
   const [sort, setSort] = usePersisted<SortKey>("scan.sort", "score", oneOf("score", "rs", "rvol", "chg"));
@@ -116,6 +148,20 @@ export function Scanner({ now }: { now: number | null }) {
   // when the name it pointed at is filtered out or dropped from the list.
   const selected = rows.find((r) => r.sym === sel) ?? rows[0] ?? null;
 
+  /*
+   * THE KEYBOARD WALKS THE LIST. A row is a stop in the tab order, Enter picks
+   * it, and ↑ / ↓ move the selection and the focus together — reading thirty
+   * names is faster as a walk down a column than as thirty clicks.
+   */
+  const tbody = useRef<HTMLTableSectionElement | null>(null);
+  const step = (from: string, delta: number) => {
+    const i = rows.findIndex((r) => r.sym === from);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, i + delta))];
+    if (!next) return;
+    setSel(next.sym);
+    tbody.current?.querySelector<HTMLElement>(`tr[data-sym="${next.sym}"]`)?.focus();
+  };
+
   const counts = useMemo(() => {
     const c = { all: 0, long: 0, short: 0 };
     for (const r of data?.rows ?? []) {
@@ -152,15 +198,29 @@ export function Scanner({ now }: { now: number | null }) {
 
       {data && !data.offline && <RegimeStrip regime={data.regime} />}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1.75fr)_minmax(400px,1fr)] xl:divide-x xl:divide-ring">
+      {/*
+        * BELOW 1600 THE DETAIL PANE NARROWS TO A FIXED 360 and the table drops
+        * its least-read columns, so the four level bars — the Pine's whole
+        * point — stay on screen instead of behind a horizontal scroll at 1280.
+        */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:divide-x xl:divide-ring min-[1280px]:max-[1599px]:grid-cols-[minmax(0,1fr)_360px] min-[1600px]:grid-cols-[minmax(0,1.75fr)_minmax(400px,1fr)]">
         {/* ---- the ranked list -------------------------------------------- */}
         <section aria-label="Ranked setups" className="flex min-h-0 min-w-0 flex-col">
           <div className="flex flex-wrap items-center gap-3 px-6 pt-4 pb-3">
-            <h2 className="text-[13.5px] font-semibold text-ink">Ranked setups</h2>
-            <span className="text-[11.5px] text-ink-3">
-              structure · relative strength · entry · volume · tape
+            <span className="seg">
+              <button type="button" onClick={() => setView("setups")} {...segItem(view === "setups")}>
+                Ranked setups
+              </button>
+              <button type="button" onClick={() => setView("log")} {...segItem(view === "log")}>
+                Signal log
+              </button>
             </span>
-            <div className="ml-auto flex items-center gap-2">
+            <span className="text-[11.5px] text-ink-3 max-[1599px]:hidden">
+              {view === "setups"
+                ? "structure · relative strength · entry · volume · tape"
+                : "every signal, and what it did afterwards"}
+            </span>
+            <div className={cn("ml-auto flex items-center gap-2", view === "log" && "hidden")}>
               <span className="seg">
                 {(["all", "long", "short"] as const).map((k) => (
                   <button key={k} type="button" onClick={() => setSideF(k)} {...segItem(sideF === k)}>
@@ -183,10 +243,15 @@ export function Scanner({ now }: { now: number | null }) {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto px-3">
-            {!data ? (
-              <p className="px-3 py-10 text-center text-[12px] text-ink-4">Loading the scanner…</p>
+            {view === "log" ? (
+              <ScanLog onPick={(s) => {
+                setSel(s);
+                setView("setups");
+              }} />
+            ) : !data ? (
+              <p className="px-3 py-10 text-center text-[12px] text-ink-3">Loading the scanner…</p>
             ) : rows.length === 0 ? (
-              <p className="px-3 py-10 text-center text-[12px] text-ink-4">
+              <p className="px-3 py-10 text-center text-[12px] text-ink-3">
                 {data.offline
                   ? "Nothing to rank until the collector answers."
                   : data.rows.length === 0
@@ -194,7 +259,7 @@ export function Scanner({ now }: { now: number | null }) {
                   : "Nothing on this side right now."}
               </p>
             ) : (
-              <table className="w-full min-w-[980px] border-collapse text-left">
+              <table className="w-full min-w-[900px] border-collapse text-left min-[1600px]:min-w-[980px]">
                 <thead className="sticky top-0 z-10 bg-bg">
                   <tr className="border-b border-ring">
                     <Th className="w-[28px] text-right">#</Th>
@@ -212,7 +277,7 @@ export function Scanner({ now }: { now: number | null }) {
                     <Th sort="chg" cur={sort} onSort={setSort} className="text-right" title="Regular session vs the previous close — before the open, still the previous session's move (as the Pine prints it)">
                       Chg
                     </Th>
-                    <Th className="text-right" title="Pre-market vs the previous close, or post-market vs today's close">
+                    <Th className="text-right max-[1599px]:hidden" title="Pre-market vs the previous close, or post-market vs today's close">
                       Ext
                     </Th>
                     <Th sort="rs" cur={sort} onSort={setSort} className="text-right" title={`Relative strength vs ${bench}: today's move in this name's daily ATRs, minus ${bench}'s in its own`}>
@@ -227,15 +292,17 @@ export function Scanner({ now }: { now: number | null }) {
                     <Th>Catalysts</Th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody ref={tbody}>
                   {rows.map((r, i) => (
                     <Row
                       key={r.sym}
                       r={r}
                       rank={i + 1}
                       bench={bench}
+                      now={now}
                       on={selected?.sym === r.sym}
                       onPick={() => setSel(r.sym)}
+                      onStep={(d) => step(r.sym, d)}
                     />
                   ))}
                 </tbody>
@@ -249,7 +316,7 @@ export function Scanner({ now }: { now: number | null }) {
           {selected ? (
             <ScanDetail r={selected} bench={bench} now={now} />
           ) : (
-            <p className="px-6 py-10 text-center text-[12px] text-ink-4">Pick a row to read it.</p>
+            <p className="px-6 py-10 text-center text-[12px] text-ink-3">Pick a row to read it.</p>
           )}
         </section>
       </div>
@@ -280,7 +347,7 @@ function Masthead({
         <span>break and retest of PDH / PDL and PMH / PML, or VWAP / the 8 EMA when extended</span>
         {data && !data.offline && (
           <>
-            <span aria-hidden className="text-ink-4">•</span>
+            <span aria-hidden className="text-ink-3">•</span>
             <span className="whitespace-nowrap text-ink-2">{SESSION_LABEL[data.session]}</span>
             {data.trading_day && (
               <span className="fig whitespace-nowrap text-ink-3">levels for {dayName(data.trading_day)}</span>
@@ -370,11 +437,11 @@ function RegimeStrip({ regime }: { regime: Regime }) {
               return (
                 <div key={k} className="flex items-baseline gap-2 text-[12px]">
                   <span className="fig w-[30px] text-ink-2">{k}</span>
-                  <span className={cn("w-[12px] text-center", t ? trendHue(t.trend) : "text-ink-4")}>
+                  <span className={cn("w-[12px] text-center", t ? trendHue(t.trend) : "text-ink-3")}>
                     {t ? trendGlyph(t.trend) : "·"}
                   </span>
                   <Tick value={pct(mv)} className={cn("fig text-[11.5px]", dir(mv))} />
-                  {t?.ext_pct != null && <span className="qt-cap text-[9.5px] text-ink-4">ext</span>}
+                  {t?.ext_pct != null && <span className="qt-cap text-[9.5px] text-ink-3">ext</span>}
                 </div>
               );
             })}
@@ -411,7 +478,7 @@ function RegimeStrip({ regime }: { regime: Regime }) {
           ) : (
             <>
               <span className="text-[14px] leading-none text-ink-3">Nothing inside 6h</span>
-              <p className="mt-1.5 text-[11px] text-ink-4">no scheduled US print to wait for</p>
+              <p className="mt-1.5 text-[11px] text-ink-3">no scheduled US print to wait for</p>
             </>
           )}
         </Cell>
@@ -433,7 +500,7 @@ function RegimeStrip({ regime }: { regime: Regime }) {
 function Cell({ label, title, children }: { label: string; title?: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0 px-6 py-3" title={title}>
-      <p className="qt-cap mb-2 text-[10.5px] text-ink-4">{label}</p>
+      <p className="qt-cap mb-2 text-[10.5px] text-ink-3">{label}</p>
       {children}
     </div>
   );
@@ -466,13 +533,13 @@ function Th({
     <th
       scope="col"
       title={title}
-      className={cn("qt-cap px-2.5 py-2 text-[10.5px] font-semibold text-ink-4", className)}
+      className={cn("qt-cap px-2.5 py-2 text-[10.5px] font-semibold text-ink-3", className)}
     >
       {sort && onSort ? (
         <button
           type="button"
           onClick={() => onSort(sort)}
-          className={cn("qt-cap text-[10.5px] hover:text-ink-2", on ? "text-ink" : "text-ink-4")}
+          className={cn("qt-cap text-[10.5px] hover:text-ink-2", on ? "text-ink" : "text-ink-3")}
         >
           {children}
           {on ? " ↓" : ""}
@@ -488,21 +555,25 @@ function Row({
   r,
   rank,
   bench,
+  now,
   on,
   onPick,
+  onStep,
 }: {
   r: ScanRow;
   rank: number;
   bench: Bench;
+  now: number | null;
   on: boolean;
   onPick: () => void;
+  onStep: (delta: number) => void;
 }) {
   if (!r.ok) {
     return (
       <tr className="border-b border-ring/60">
-        <td className="fig px-2.5 py-2 text-right text-[11px] text-ink-4">{rank}</td>
+        <td className="fig px-2.5 py-2 text-right text-[11px] text-ink-3">{rank}</td>
         <td className="px-2.5 py-2 text-[12.5px] font-semibold text-ink-3">{r.sym}</td>
-        <td colSpan={10} className="px-2.5 py-2 text-[11.5px] text-ink-4">
+        <td colSpan={10} className="px-2.5 py-2 text-[11.5px] text-ink-3">
           {r.error ?? "no data yet"}
         </td>
       </tr>
@@ -511,42 +582,65 @@ function Row({
   const side = r.score.side;
   const rs = r.rs[bench];
   const entry = r.setup.entry;
+  const last = lastSignal(r, now);
   return (
     <tr
+      data-sym={r.sym}
+      tabIndex={0}
       onClick={onPick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onPick();
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          onStep(e.key === "ArrowDown" ? 1 : -1);
+        }
+      }}
       aria-selected={on}
       className={cn(
-        "hit cursor-pointer border-b border-ring/60",
+        "hit cursor-pointer border-b border-ring/60 outline-none focus-visible:bg-surface-2 focus-visible:shadow-[inset_2px_0_0_var(--ink-2)]",
         on && "bg-surface-2",
       )}
     >
-      <td className="fig px-2.5 py-2 text-right text-[11px] text-ink-4">{rank}</td>
+      <td className="fig px-2.5 py-2 text-right text-[11px] text-ink-3">{rank}</td>
       <td className="px-2.5 py-2">
         <div className="flex items-baseline gap-1.5">
-          <span className={cn("w-[10px] text-[11px]", side ? sideHue(side) : "text-ink-4")}>
+          <span className={cn("w-[10px] text-[11px]", side ? sideHue(side) : "text-ink-3")}>
             {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
           </span>
           <span className="text-[13px] font-semibold text-ink" title={r.name ?? undefined}>
             {r.sym}
           </span>
-          {r.sector && <span className="qt-cap text-[9.5px] text-ink-4">{r.sector}</span>}
+          {r.sector && <span className="qt-cap text-[9.5px] text-ink-3">{r.sector}</span>}
         </div>
       </td>
       <td className="px-2.5 py-2">
         <ScoreBar v={r.score.total} />
       </td>
-      <td className="px-2.5 py-2 text-[12px]">
+      <td className="px-2.5 py-2 text-[12px] whitespace-nowrap">
         <span className={setupHue(r)}>{setupLabel(r)}</span>
+        {last && (
+          <span
+            className={cn(
+              "fig ml-2 text-[11px]",
+              last.fresh ? cn("font-semibold", sideHue(last.side)) : "text-ink-3",
+            )}
+            title={last.fresh ? "Fired in the last 30 minutes" : "Today's latest signal"}
+          >
+            {last.text}
+          </span>
+        )}
       </td>
       <td className="px-2.5 py-2 text-right">
         {entry ? (
           <span className="fig text-[12px] text-ink-2" title={`${entry.kind} ${num(entry.price)}`}>
-            <span className="qt-cap mr-1 text-[9.5px] text-ink-4">{entry.kind === "EMA8" ? "8 EMA" : entry.kind}</span>
+            <span className="qt-cap mr-1 text-[9.5px] text-ink-3">{entry.kind === "EMA8" ? "8 EMA" : entry.kind}</span>
             {num(entry.price)}
-            <span className="ml-1.5 text-[10.5px] text-ink-4">{entry.dist_atr >= 0 ? "+" : ""}{entry.dist_atr.toFixed(1)}</span>
+            <span className="ml-1.5 text-[10.5px] text-ink-3 max-[1599px]:hidden">{entry.dist_atr >= 0 ? "+" : ""}{entry.dist_atr.toFixed(1)}</span>
           </span>
         ) : (
-          <span className="text-ink-4">—</span>
+          <span className="text-ink-3">—</span>
         )}
       </td>
       <td className="px-2.5 py-2 text-right">
@@ -555,11 +649,11 @@ function Row({
       <td className="px-2.5 py-2 text-right">
         <Tick value={pct(r.chg_pct)} className={cn("fig text-[12px]", dir(r.chg_pct))} />
       </td>
-      <td className="px-2.5 py-2 text-right">
+      <td className="px-2.5 py-2 text-right max-[1599px]:hidden">
         {r.ext_pct != null ? (
           <Tick value={pct(r.ext_pct)} className={cn("fig text-[12px]", dir(r.ext_pct))} />
         ) : (
-          <span className="text-ink-4">—</span>
+          <span className="text-ink-3">—</span>
         )}
       </td>
       <td className="px-2.5 py-2 text-right">
@@ -567,7 +661,7 @@ function Row({
           value={rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}
           className={cn(
             "fig text-[12px]",
-            rs == null ? "text-ink-4" : rs >= 0.05 ? "up" : rs <= -0.05 ? "down" : "text-ink-2",
+            rs == null ? "text-ink-3" : rs >= 0.05 ? "up" : rs <= -0.05 ? "down" : "text-ink-2",
           )}
         />
       </td>
@@ -575,7 +669,7 @@ function Row({
         <span
           className={cn(
             "fig text-[12px]",
-            r.rvol == null ? "text-ink-4" : r.rvol >= 1.5 ? "text-ink" : r.rvol >= 1 ? "text-ink-2" : "text-ink-3",
+            r.rvol == null ? "text-ink-3" : r.rvol >= 1.5 ? "text-ink" : r.rvol >= 1 ? "text-ink-2" : "text-ink-3",
           )}
           title={r.volume != null ? `${compact(r.volume)} shares today incl. pre/post` : undefined}
         >
@@ -638,13 +732,40 @@ function flagShort(kind: ScanRow["flags"][number]["kind"], text: string): string
   }
 }
 
+const ET_NOW = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+const minutesOf = (hhmm: string) => {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+};
+
+/**
+ * Today's latest fired signal, for the setup cell: "(L)▲ 10:40". Fresh — lit
+ * in its side's hue — for thirty minutes after the bar it fired on, which is
+ * the window a retest entry is still a retest entry. A pending (E) candle is
+ * not a signal yet and is left to the detail pane.
+ */
+function lastSignal(r: ScanRow, now: number | null): { text: string; side: Side; fresh: boolean } | null {
+  const fired = r.signals.filter((s) => s.kind !== "E_SETUP");
+  const s = fired[fired.length - 1];
+  if (!s) return null;
+  const glyph = s.kind === "BO" ? "◆" : `(${s.kind})`;
+  const arrow = s.side === "long" ? "▲" : "▼";
+  const age = now == null ? null : minutesOf(ET_NOW.format(new Date(now))) - minutesOf(s.at_et);
+  return { text: `${glyph}${arrow} ${s.at_et}`, side: s.side, fresh: age != null && age >= 0 && age <= 30 };
+}
+
 function setupHue(r: ScanRow): string {
   const s = r.setup.state;
   if (s === "retest") return cn("font-semibold", r.setup.side ? sideHue(r.setup.side) : "text-ink");
   if (s === "pullback") return r.setup.side ? sideHue(r.setup.side) : "text-ink-2";
   if (s === "approaching") return "text-flip-fig";
   if (s === "extended") return "text-ink-2";
-  if (s === "failed") return "text-ink-4 line-through decoration-ink-4/60";
+  if (s === "failed") return "text-ink-3 line-through decoration-ink-4/60";
   return "text-ink-3";
 }
 
@@ -690,7 +811,7 @@ function Prog({
   }`;
   if (!ready) {
     return (
-      <span title={tip} className="fig w-[30px] text-center text-[10px] leading-none text-ink-4">
+      <span title={tip} className="fig w-[30px] text-center text-[10px] leading-none text-ink-3">
         {levelGlyph("forming")}
       </span>
     );
@@ -780,13 +901,16 @@ function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; onCancel:
   return (
     <div className="flex shrink-0 flex-col gap-2 border-b border-ring bg-surface-2/40 px-6 py-3">
       <div className="flex items-baseline gap-3">
-        <p className="qt-cap text-[10.5px] text-ink-3">Watchlist</p>
+        <label htmlFor="scan-watchlist" className="qt-cap text-[10.5px] text-ink-3">
+          Watchlist
+        </label>
         <p className="text-[11.5px] text-ink-3">
           Tickers separated by spaces or commas, up to 40. SPY and QQQ are always fetched as the benchmarks; list
           them to see them as rows. New names appear within a minute or two.
         </p>
       </div>
       <textarea
+        id="scan-watchlist"
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={2}
@@ -794,7 +918,7 @@ function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; onCancel:
         className="fig w-full resize-y rounded-[4px] border border-ring-2 bg-bg px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-ink-3"
       />
       <div className="flex items-center gap-2">
-        <span className="fig text-[11px] text-ink-4">{symbols.length} names</span>
+        <span className="fig text-[11px] text-ink-3">{symbols.length} names</span>
         {err && <span className="text-[11.5px] text-err">{err}</span>}
         <div className="ml-auto flex items-center gap-2">
           {dflt.length > 0 && (
@@ -815,7 +939,7 @@ function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; onCancel:
             type="button"
             disabled={busy || symbols.length === 0}
             onClick={() => void save(symbols)}
-            {...segItem(true, { className: "border border-ring-2" })}
+            {...segItem(true, { className: "border border-ring-2 disabled:cursor-not-allowed disabled:opacity-40" })}
           >
             {busy ? "Saving…" : "Save"}
           </button>

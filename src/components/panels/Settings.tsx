@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_THEME,
   HUES,
@@ -14,6 +14,8 @@ import {
 import { Module } from "@/components/ui/Module";
 import type { FrameFx } from "@/lib/useFrameLight";
 import { UI_COOKIE, type UiMode } from "@/lib/ui";
+import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
+import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 
 /**
@@ -157,6 +159,8 @@ export function Settings({
             </button>
           ))}
         </Module>
+
+        <Alerts />
 
         <Module
           title="Presets"
@@ -336,5 +340,128 @@ function Slot({
         </div>
       )}
     </div>
+  );
+}
+
+/* ---------------------------------------------------------------- alerts */
+
+const KIND_OPTS: { key: AlertKind; label: string; hint: string }[] = [
+  { key: "L", label: "(L) retest", hint: "A broken level retested with the 8 EMA wave at it" },
+  { key: "E", label: "(E) trigger", hint: "The (E) candle's high or low broken in the trend's direction" },
+  { key: "BO", label: "◆ Breakout", hint: "A level broken on a close — not a gap through it" },
+  { key: "NEAR", label: "Near a level", hint: "90% of the way to a level; once per level per name per day" },
+];
+
+/**
+ * Settings → Alerts: what the scanner announces, and how. The alerts
+ * themselves run in the shell (components/shell/ScanAlerts.tsx) on every tab.
+ *
+ * DESKTOP NOTIFICATIONS NEED THE BROWSER'S PERMISSION, which can only be asked
+ * for from a click — so they are off until "Allow" is pressed here, and the
+ * row says plainly when the browser has refused, because a toggle that reads
+ * "on" while the browser blocks it is the one state this must not show.
+ */
+function Alerts() {
+  const p = useAlertPrefs();
+  const [perm, setPerm] = useState<NotificationPermission | "unsupported">("default");
+  useEffect(() => {
+    setPerm(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+  }, []);
+
+  const allow = async () => {
+    if (typeof Notification === "undefined") return;
+    const r = await Notification.requestPermission();
+    setPerm(r);
+    if (r === "granted") setAlertPrefs({ desktop: true });
+  };
+
+  const toggleKind = (k: AlertKind) =>
+    setAlertPrefs({ kinds: p.kinds.includes(k) ? p.kinds.filter((x) => x !== k) : [...p.kinds, k] });
+
+  const row = "flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ring/40 px-3 py-2 last:border-b-0";
+  const label = "w-[150px] shrink-0 text-[11px] text-ink-2 qt:text-[12.5px]";
+  const hint = "min-w-0 flex-1 text-[9.5px] text-ink-3 qt:text-[11.5px]";
+
+  return (
+    <Module title="Alerts" sub="the scanner's signals, raised on every tab" bodyClassName="px-0 py-0">
+      <div className={row}>
+        <span className={label}>Alerts</span>
+        <span className="seg">
+          <button type="button" onClick={() => setAlertPrefs({ on: true })} {...segItem(p.on)}>
+            On
+          </button>
+          <button type="button" onClick={() => setAlertPrefs({ on: false })} {...segItem(!p.on)}>
+            Off
+          </button>
+        </span>
+        <span className={hint}>A toast in the corner when a new signal fires on a confirmed ten-minute bar</span>
+      </div>
+      <div className={row}>
+        <span className={label}>Desktop notifications</span>
+        {perm === "granted" ? (
+          <span className="seg">
+            <button type="button" onClick={() => setAlertPrefs({ desktop: true })} {...segItem(p.desktop)}>
+              On
+            </button>
+            <button type="button" onClick={() => setAlertPrefs({ desktop: false })} {...segItem(!p.desktop)}>
+              Off
+            </button>
+          </span>
+        ) : perm === "denied" ? (
+          <span className="text-[11px] text-warn qt:text-[12px]">Blocked by the browser — allow notifications for localhost:3100 in its site settings</span>
+        ) : perm === "unsupported" ? (
+          <span className="text-[11px] text-ink-3 qt:text-[12px]">This browser has no notifications</span>
+        ) : (
+          <button type="button" onClick={() => void allow()} {...segItem(false, { className: "border border-ring-2" })}>
+            Allow
+          </button>
+        )}
+        <span className={hint}>Reaches you in another window or app, while this page is open in a tab</span>
+      </div>
+      <div className={row}>
+        <span className={label}>Sound</span>
+        <span className="seg">
+          <button type="button" onClick={() => setAlertPrefs({ sound: true })} {...segItem(p.sound)}>
+            On
+          </button>
+          <button type="button" onClick={() => setAlertPrefs({ sound: false })} {...segItem(!p.sound)}>
+            Off
+          </button>
+        </span>
+        <span className={hint}>Rising for a long, falling for a short</span>
+      </div>
+      <div className={row}>
+        <span className={label}>Alert on</span>
+        <span className="seg">
+          {KIND_OPTS.map((k) => (
+            <button key={k.key} type="button" title={k.hint} onClick={() => toggleKind(k.key)} {...segItem(p.kinds.includes(k.key))}>
+              {k.label}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className={row}>
+        <span className={label}>Minimum score</span>
+        <span className="seg">
+          {([0, 40, 60] as const).map((m) => (
+            <button key={m} type="button" onClick={() => setAlertPrefs({ minScore: m })} {...segItem(p.minScore === m)}>
+              {m === 0 ? "Any" : `${m}+`}
+            </button>
+          ))}
+        </span>
+        <span className={hint}>Only names the scanner ranks at least this high</span>
+      </div>
+      <div className={row}>
+        <button type="button" onClick={() => window.dispatchEvent(new Event(TEST_ALERT))} {...segItem(false, { className: "border border-ring-2" })}>
+          Send a test alert
+        </button>
+        <button type="button" onClick={() => setAlertPrefs(DEFAULT_ALERTS)} {...segItem(false, { className: "border border-ring-2" })}>
+          Reset
+        </button>
+        <span className={hint}>
+          In a background tab Chrome checks about once a minute, so an alert can trail its bar by up to a minute
+        </span>
+      </div>
+    </Module>
   );
 }

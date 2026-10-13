@@ -8,6 +8,13 @@ const nextConfig: NextConfig = {
   // machine's private network.
   env: {},
   eslint: { ignoreDuringBuilds: false },
+  // The "N" badge sat over the status rail's first source and the corner of
+  // every pane — and daily use runs `next dev`, so it was on screen all day.
+  devIndicators: false,
+  // A production build gets its own directory (`npm run prod`, `dev.ps1
+  // -Prod`): `next build` into `.next` would rewrite the files a running
+  // `next dev` is serving from and break it mid-session.
+  distDir: process.env.NT_DIST || ".next",
 };
 
 export default nextConfig;

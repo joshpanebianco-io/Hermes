@@ -43,7 +43,7 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 const ASSETS = ["NQ", "ES", "GC"];
 
-const HEAD = "fig shrink-0 text-right text-[8.5px] tracking-wide text-ink-4";
+const HEAD = "fig shrink-0 text-right text-[8.5px] tracking-wide text-ink-3";
 
 // Wide enough for "Europe midday" on one line when the panel has the room; the
 // wrapping 52px it always was when it does not, so the track keeps its width.
@@ -108,7 +108,7 @@ export function SessionRanges({
       }
     >
       {!active || !x ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           No session data yet — the collector segments the last two days of bars.
         </p>
       ) : (
@@ -163,8 +163,8 @@ function Row({
   if (!s.ok || s.low === null || s.high === null) {
     return (
       <li className="flex items-center gap-2 px-3 py-[3px] opacity-45">
-        <span className={cn("fig text-[10.5px] text-ink-4", LABEL)}>{s.label}</span>
-        <span className="flex-1 text-[10px] text-ink-4">not traded yet</span>
+        <span className={cn("fig text-[10.5px] text-ink-3", LABEL)}>{s.label}</span>
+        <span className="flex-1 text-[10px] text-ink-3">not traded yet</span>
       </li>
     );
   }
@@ -217,7 +217,7 @@ ${where}`}
         value={num(s.low, 0)}
         className={cn(
           "fig w-[44px] shrink-0 text-right text-[10px]",
-          beyond === "below" ? "text-flip" : "text-ink-4",
+          beyond === "below" ? "text-flip" : "text-ink-3",
           dim,
         )}
       />
@@ -225,7 +225,7 @@ ${where}`}
         value={num(s.high, 0)}
         className={cn(
           "fig w-[44px] shrink-0 text-right text-[10px]",
-          beyond === "above" ? "text-flip" : "text-ink-4",
+          beyond === "above" ? "text-flip" : "text-ink-3",
           dim,
         )}
       />
@@ -237,7 +237,7 @@ ${where}`}
           dim,
         )}
       />
-      <span className={cn("fig hidden w-[28px] shrink-0 text-right text-[10px] text-ink-4 sm:block", dim)}>
+      <span className={cn("fig hidden w-[28px] shrink-0 text-right text-[10px] text-ink-3 sm:block", dim)}>
         {num(s.range, 0)}
       </span>
     </li>
@@ -257,14 +257,16 @@ function ExpiryLine({ e }: { e: ExpiryState }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 border-t border-ring/40 px-3 py-1.5 text-[10px]">
       {e.opex_week ? (
-        <span className="fig rounded bg-flip/20 px-1.5 py-px text-[9px] text-flip">OPEX WEEK</span>
+        <span className="fig qt-pill rounded bg-flip/20 px-1.5 py-px text-[9px] text-flip [--pill-hue:var(--flip-fig)]">
+          OPEX WEEK
+        </span>
       ) : (
         <span className="eyebrow text-[9px]">Next</span>
       )}
       {next && (
         <>
           <span className="text-ink-2">{next.label}</span>
-          <span className="fig text-ink-4">
+          <span className="fig text-ink-3">
             {next.days === 0 ? "today" : `in ${next.days}d`}
           </span>
         </>

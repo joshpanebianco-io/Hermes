@@ -101,7 +101,7 @@ export function Fed({
       bodyClassName="px-0 py-0"
     >
       {diary.length === 0 ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           Nothing scheduled in the next three weeks.
         </p>
       ) : (
@@ -119,10 +119,10 @@ export function Fed({
                   className="absolute inset-y-0 left-0 w-[2px]"
                   style={{ background: hue, opacity: r.major ? 1 : 0.4 }}
                 />
-                <span className="fig w-[52px] shrink-0 text-[10px] text-ink-4">
+                <span className="fig w-[52px] shrink-0 text-[10px] text-ink-3">
                   {label(r.date, today)}
                 </span>
-                <span className="fig w-[38px] shrink-0 text-[10px] text-ink-4">
+                <span className="fig w-[38px] shrink-0 text-[10px] text-ink-3">
                   {r.et ?? "—"}
                 </span>
                 <span

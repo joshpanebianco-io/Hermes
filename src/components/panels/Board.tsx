@@ -52,14 +52,14 @@ export function Board({
   return (
     <Module title={title} ageMin={ageMin} error={error} bodyClassName="px-0 py-0">
       {quotes.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-4">No quotes yet.</p>
+        <p className="px-3 py-6 text-center text-[11px] text-ink-3">No quotes yet.</p>
       ) : (
         shown.map((g) => {
           const rows = quotes.filter((q) => q.group === g.key);
           if (!rows.length) return null;
           return (
             <div key={g.key}>
-              <div className="border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
+              <div className="qt-band border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
                 <span className="eyebrow text-[9px]">{g.label}</span>
               </div>
               <ul>

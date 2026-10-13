@@ -640,6 +640,12 @@ export interface Report {
   usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
   /** Set when the model answered but ignored the schema. */
   raw?: string;
+  /**
+   * Figures the model printed that the data it was shown does not contain —
+   * checked by the collector after the answer (and re-asked once). Absent on
+   * reports written before the check existed.
+   */
+  unverified?: string[];
 }
 
 export interface ReportStub {

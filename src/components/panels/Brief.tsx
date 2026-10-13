@@ -223,6 +223,30 @@ function BriefBodyView({ rep }: { rep: Report }) {
         </div>
       )}
 
+      {/*
+        * THE CHECK THE DESIGN PROMISED. Every claim is meant to quote a figure
+        * from the digest; the collector now verifies that after the answer and
+        * names what it could not find. Said here rather than hidden, because a
+        * wrong number stated confidently is worse than no number — GEXYGEN's
+        * brief carries the same banner, in the same words.
+        */}
+      {rep.unverified && rep.unverified.length > 0 && (
+        <div
+          className={cn(
+            "mt-3 border-l-[3px] px-3 py-2 leading-relaxed",
+            p.quiet
+              ? "border-put-fig bg-put-fig/[0.07] text-[12px] text-ink-2 [&>strong]:text-put-fig"
+              : "border-err bg-err/10 text-[11.5px] text-ink-2 [&>strong]:text-err",
+          )}
+        >
+          <strong className="font-semibold">Unverified figures.</strong> The model printed{" "}
+          {rep.unverified.length === 1 ? "a number" : "numbers"} the data it was given does not contain —{" "}
+          <span className="fig text-ink">{rep.unverified.join(", ")}</span>. Read the sentences carrying{" "}
+          {rep.unverified.length === 1 ? "it" : "them"} as unchecked; the tables beside the prose are the
+          collector&apos;s and are exact.
+        </div>
+      )}
+
       {/* A clear step under the 23.5px masthead: at 22 against 25 the two read as
           one size and the title stopped looking like the title. */}
       <p
@@ -441,12 +465,12 @@ function QuietCalls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
             )}
             <div className="mt-4 flex flex-col gap-3 text-[13px] leading-[1.5]">
               <div>
-                <p className="qt-cap text-[10.5px] text-ink-4">{live ? "Rest of session" : "Rest of day"}</p>
+                <p className="qt-cap text-[10.5px] text-ink-3">{live ? "Rest of session" : "Rest of day"}</p>
                 <p className="mt-1 text-ink-2">{c.rest_of_day || biasLabel(c.rest_of_day_bias)}</p>
               </div>
               {c.wrong_if && (
                 <div>
-                  <p className="qt-cap text-[10.5px] text-ink-4">Wrong if</p>
+                  <p className="qt-cap text-[10.5px] text-ink-3">Wrong if</p>
                   <p className="mt-1 font-semibold text-ink">{c.wrong_if}</p>
                 </div>
               )}
@@ -566,7 +590,7 @@ function QuietSnapshot({ rows, watch }: { rows: BriefSnapshotRow[]; watch: Map<s
                   )}
                   {row.label}
                 </span>
-                {row.sub && <span className="block text-[11px] leading-snug text-ink-4">{row.sub}</span>}
+                {row.sub && <span className="block text-[11px] leading-snug text-ink-3">{row.sub}</span>}
                 {note && <span className="mt-0.5 block text-[12px] leading-[1.45] text-ink-2">{note}</span>}
               </span>
               <span className="fig text-right text-[13px] whitespace-nowrap text-ink">{value}</span>
@@ -578,7 +602,7 @@ function QuietSnapshot({ rows, watch }: { rows: BriefSnapshotRow[]; watch: Map<s
         })}
       </ul>
       {watch.size > 0 && (
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-ink-4">
+        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-ink-3">
           <span aria-hidden className="h-[6px] w-[6px] rounded-[1px] bg-flip-fig" /> flagged to watch
         </div>
       )}
@@ -755,7 +779,7 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
   const p = usePaint();
   return (
     <div className="pb-3">
-      <div className={p.quiet ? "qt-cap mb-0.5 text-[10.5px] text-ink-4" : "text-[11px] text-ink-3"}>{k}</div>
+      <div className={p.quiet ? "qt-cap mb-0.5 text-[10.5px] text-ink-3" : "text-[11px] text-ink-3"}>{k}</div>
       <div className={cn("fig text-ink", p.quiet ? "text-[14px]" : "text-[15px] font-semibold")}>{v}</div>
       {sub && <div className="text-[11px] text-ink-3">{sub}</div>}
     </div>
@@ -1035,7 +1059,7 @@ function Headlines({ f, b }: { f: BriefFacts; b: BriefBody }) {
             <li key={p.id} className="border-b border-ring/60 py-2.5">
               <div className="flex flex-wrap items-center text-[11px] text-ink-3">
                 <span className="qt:hidden">{[h.publisher, h.time_et].filter(Boolean).join(", ")}</span>
-                <span className="hidden text-ink-4 qt:inline">
+                <span className="hidden text-ink-3 qt:inline">
                   <span className="qt-cap text-[10px] text-ink-3">{h.publisher}</span>
                   {h.time_et ? ` · ${h.time_et}` : ""}
                 </span>
@@ -1085,7 +1109,7 @@ function Label({ children, className }: { children: React.ReactNode; className?:
   return (
     <div
       className={cn(
-        p.quiet ? "qt-cap mt-3 mb-1.5 block text-[10.5px] text-ink-4 first:mt-0" : "mb-1 text-[12px] text-ink-3",
+        p.quiet ? "qt-cap mt-3 mb-1.5 block text-[10.5px] text-ink-3 first:mt-0" : "mb-1 text-[12px] text-ink-3",
         className,
       )}
     >

@@ -69,7 +69,7 @@ export function VolumeProfile({
       }
     >
       {!active ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-4">No bars yet.</p>
+        <p className="px-3 py-5 text-center text-[11px] text-ink-3">No bars yet.</p>
       ) : !active.ok ? (
         <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           {active.error ?? "unavailable"}
@@ -81,19 +81,19 @@ export function VolumeProfile({
             <span className="w-[72px] shrink-0 qt:w-[100px]" />
             <span className="min-w-0 flex-1" />
             <span
-              className="fig w-[56px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-4"
+              className="fig w-[56px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-3"
               title="Value area low — the bottom of the 70% acceptance zone"
             >
               val
             </span>
             <span
-              className="fig w-[60px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-4"
+              className="fig w-[60px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-3"
               title="Point of control — the price with the most traded volume; the magnet"
             >
               poc
             </span>
             <span
-              className="fig w-[56px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-4"
+              className="fig w-[56px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-3"
               title="Value area high — the top of the 70% acceptance zone"
             >
               vah
@@ -133,7 +133,7 @@ ${r.bars} bars · bin ${r.bin}`}
       <span
         className={cn(
           "fig w-[72px] shrink-0 text-[10px] qt:w-[100px] qt:font-sans qt:whitespace-nowrap",
-          live ? "text-ink-2" : "text-ink-4",
+          live ? "text-ink-2" : "text-ink-3",
         )}
       >
         {r.label}

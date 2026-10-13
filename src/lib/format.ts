@@ -104,6 +104,18 @@ export function inMin(m: number | null | undefined): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+/**
+ * An age rounded to what `age()` prints — so a module's props change when its
+ * chip's TEXT would, not every poll as the raw minutes creep up by 0.33. That
+ * is what lets a memoised panel skip a poll that changed nothing it shows.
+ */
+export function ageStep(m: number | null | undefined): number | null | undefined {
+  if (m === null || m === undefined || !Number.isFinite(m)) return m;
+  if (m < 1) return 0;
+  if (m < 60) return Math.round(m);
+  return Math.round(m / 6) * 6;
+}
+
 /** An age in minutes, for the freshness chips on each module. */
 export function age(m: number | null | undefined): string {
   if (m === null || m === undefined || !Number.isFinite(m)) return "—";

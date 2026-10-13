@@ -7,16 +7,26 @@ import { useEffect, type RefObject } from "react";
  *
  * PORTED FROM GEXYGEN, which is where the geometry was worked out. Kept as a
  * copy rather than shared because the two projects are separate repos and the
- * only thing that differs is RADIUS — a dependency between them for one
+ * only thing that differs is the corner radius — a dependency between them for one
  * constant would cost more than it saves.
  *
- * THE PAINT IS STILL CSS — the masked conic ring in `.app-frame::after`, which
- * is what makes it look like light: a conic gradient interpolates per pixel, so
- * the head-to-tail fade is genuinely smooth. An SVG stroked-dash version was
- * tried and reverted for exactly that reason. It had perfect uniform speed, but
- * SVG gradients are spatial rather than along-path, so its fade had to be built
- * from stacked dashes — and five discrete opacity steps with a hard edge where
- * each dash ends is banding, not a fade.
+ * THE PAINT IS STILL CSS — a conic gradient behind the masked ring
+ * (`.frame-light` in globals.css), which is what makes it look like light: a
+ * conic gradient interpolates per pixel, so the head-to-tail fade is genuinely
+ * smooth. An SVG stroked-dash version was tried and reverted for exactly that
+ * reason. It had perfect uniform speed, but SVG gradients are spatial rather
+ * than along-path, so its fade had to be built from stacked dashes — and five
+ * discrete opacity steps with a hard edge where each dash ends is banding, not
+ * a fade.
+ *
+ * WHAT IS ANIMATED IS A ROTATION, NOT AN ANGLE (2026-10-13). This used to
+ * drive a registered `--border-angle` on `::after`, and a custom property is
+ * main-thread work: every frame re-rasterised a full-window masked gradient
+ * through two drop-shadows, ~690ms of main thread a second on an idle tab.
+ * Turning the gradient's element by `transform` instead is compositor work,
+ * and a conic gradient rotated about its centre is the same picture as one
+ * started from a later angle — so the keyframes below are the same angles,
+ * written as `rotate()`.
  *
  * ONLY THE TIMING MOVED HERE. A conic gradient sweeps at a constant ANGULAR
  * rate, and a rectangle's perimeter is not equidistant from its centre: the
@@ -48,14 +58,12 @@ const LAP_MS = 10_000;
 const SAMPLES = 180;
 
 /**
- * `.app-frame`'s border-radius. The ring rides the border box, so this is it.
- *
- * 14 here against GEXYGEN's 16 — this chassis is a slightly tighter corner.
- * It has to match `globals.css` or the generated curve corrects for a corner
- * the frame does not have, which shows up as the light easing at the wrong
- * moment rather than as anything obviously broken.
+ * The smallest frame side worth animating round. The corner radius itself is
+ * READ from the frame now rather than kept here: Quiet squares the chassis
+ * off (0) while classic keeps 14, and a curve generated for the wrong corner
+ * eases the light at the wrong moment rather than looking obviously broken.
  */
-const RADIUS = 14;
+const MIN_SIDE = 14;
 
 /** A point on the rounded rectangle at arc length `s`, in centre-origin coords. */
 function pointAt(
@@ -91,7 +99,8 @@ function pointAt(
   s -= arc;
   if (s < sy) return [-a, b - r - s]; // left, bottom to top
   s -= sy;
-  const t = (s / arc) * q; // top-left corner, back to the start
+  // A square chassis (Quiet) has no corner arc; the walk ends on the corner.
+  const t = arc > 0 ? (s / arc) * q : 0; // top-left corner, back to the start
   return [-a + r - r * Math.cos(t), -b + r - r * Math.sin(t)];
 }
 
@@ -121,10 +130,7 @@ function arcLengthKeyframes(w: number, h: number, r: number): Keyframe[] {
     // backwards each time the angle crosses due north.
     if (last !== null && deg < last) turns += 1;
     last = deg;
-    out.push({
-      offset: i / SAMPLES,
-      "--border-angle": `${(deg + turns * 360).toFixed(3)}deg`,
-    } as Keyframe);
+    out.push({ offset: i / SAMPLES, transform: `rotate(${(deg + turns * 360).toFixed(3)}deg)` });
   }
   return out;
 }
@@ -146,6 +152,9 @@ export function useFrameLight(
     const el = ref.current;
     if (!el) return;
     if (mode !== "travel") return;
+    // The element that turns — Terminal.tsx mounts it as the frame's first child.
+    const spin = el.querySelector<HTMLElement>(":scope > .frame-light > .frame-light__spin");
+    if (!spin) return;
     /*
      * The global `prefers-reduced-motion` block in globals.css collapses CSS
      * animation durations and cannot touch a WAAPI animation, so honouring it is
@@ -162,16 +171,18 @@ export function useFrameLight(
       // rebuild restarts the lap from the top.
       const key = `${Math.round(width)}x${Math.round(height)}`;
       if (key === last) return;
-      if (width < 2 * RADIUS || height < 2 * RADIUS) return;
+      if (width < 2 * MIN_SIDE || height < 2 * MIN_SIDE) return;
       last = key;
       anim?.cancel();
-      anim = el.animate(arcLengthKeyframes(width, height, RADIUS), {
+      // As wide as the diagonal, so the turning square covers every corner.
+      spin.style.setProperty("--frame-d", `${Math.ceil(Math.hypot(width, height)) + 4}px`);
+      // The corner the ring actually has — 14px classic, square under Quiet —
+      // or the curve corrects for a corner that is not there.
+      const radius = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
+      anim = spin.animate(arcLengthKeyframes(width, height, radius), {
         duration: LAP_MS,
         iterations: Infinity,
         easing: "linear",
-        // The gradient lives on the pseudo-element, so the property has to be
-        // animated there — it is declared `inherits: false`.
-        pseudoElement: "::after",
       });
     };
 

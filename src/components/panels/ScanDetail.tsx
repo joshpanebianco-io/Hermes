@@ -2,6 +2,7 @@
 
 import type { ScanRow, Side } from "@/types/scanner";
 import { Tick } from "@/components/ui/Tick";
+import { ScanChart } from "@/components/panels/ScanChart";
 import { ago, compact, dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -64,6 +65,9 @@ export function ScanDetail({ r, bench, now }: { r: ScanRow; bench: "SPY" | "QQQ"
   return (
     <div className="flex flex-col divide-y divide-ring">
       <Head r={r} bench={bench} side={side} />
+      <section aria-label={`${r.sym} chart`} className="px-6 pt-3 pb-2">
+        <ScanChart sym={r.sym} state={r.lvl_state} />
+      </section>
       <Setup r={r} side={side} />
       <Score r={r} />
       <Ladder r={r} />
@@ -80,14 +84,23 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
   return (
     <div className="px-6 pt-5 pb-4">
       <div className="flex items-baseline gap-2.5">
-        <span className={cn("text-[14px]", side ? sideHue(side) : "text-ink-4")}>
+        <span className={cn("text-[14px]", side ? sideHue(side) : "text-ink-3")}>
           {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
         </span>
         <span className="text-[21px] leading-none font-semibold text-ink">{r.sym}</span>
-        {r.name && <span className="truncate text-[12.5px] text-ink-3">{r.name}</span>}
+        {r.name && <span className="min-w-0 truncate text-[12.5px] text-ink-3">{r.name}</span>}
+        <a
+          href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.sym)}`}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="hit ml-auto shrink-0 rounded-[3px] border border-ring-2 px-2 py-[3px] text-[11.5px] text-ink-3 hover:text-ink"
+          title="Open this name on TradingView, where the LE Model runs"
+        >
+          TradingView ↗
+        </a>
         {r.sector && (
           <span
-            className="ml-auto shrink-0 text-[11.5px] text-ink-3"
+            className="shrink-0 text-[11.5px] text-ink-3"
             title="The name's sector SPDR against SPY today, in percentage points"
           >
             <span className="qt-cap text-[10.5px] text-ink-3">{r.sector}</span>{" "}
@@ -98,7 +111,10 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
           </span>
         )}
       </div>
-      <div className="mt-3.5 grid grid-cols-3 gap-x-4 gap-y-3 sm:grid-cols-6">
+      {/* Six across only where the PANE has room for six — a window breakpoint
+          lied whenever the pane was the narrow one. */}
+      <div className="@container">
+      <div className="mt-3.5 grid grid-cols-3 gap-x-4 gap-y-3 @min-[600px]:grid-cols-6">
         <Fig label="Last">
           <Tick value={num(r.last)} className="fig text-[16px] text-ink" />
         </Fig>
@@ -106,21 +122,21 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
           <Tick value={pct(r.chg_pct)} className={cn("fig text-[14px]", dir(r.chg_pct))} />
         </Fig>
         <Fig label="Pre / post">
-          <span className={cn("fig text-[14px]", r.ext_pct == null ? "text-ink-4" : dir(r.ext_pct))}>
+          <span className={cn("fig text-[14px]", r.ext_pct == null ? "text-ink-3" : dir(r.ext_pct))}>
             {r.ext_pct == null ? "—" : pct(r.ext_pct)}
           </span>
         </Fig>
         <Fig label={`RS ${bench}`} title={`Today · last hour (six ten-minute bars), each in ATRs, minus ${bench}'s`}>
-          <span className={cn("fig text-[14px]", rs == null ? "text-ink-4" : dir(rs))}>
+          <span className={cn("fig text-[14px]", rs == null ? "text-ink-3" : dir(rs))}>
             {rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}
           </span>
-          <span className="fig ml-1.5 text-[11px] text-ink-4">
+          <span className="fig ml-1.5 text-[11px] text-ink-3">
             1h {rs1h == null ? "—" : `${rs1h >= 0 ? "+" : ""}${rs1h.toFixed(2)}`}
           </span>
         </Fig>
         <Fig label="RVol" title={r.volume != null ? `${compact(r.volume)} shares today incl. pre/post` : undefined}>
           <span className="fig text-[14px] text-ink">{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</span>
-          <span className="fig ml-1.5 text-[11px] text-ink-4">{compact(r.volume)}</span>
+          <span className="fig ml-1.5 text-[11px] text-ink-3">{compact(r.volume)}</span>
         </Fig>
         <Fig
           label="Range used"
@@ -129,13 +145,14 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
           <span
             className={cn(
               "fig text-[14px]",
-              r.range_used == null ? "text-ink-4" : r.range_used >= 1.2 ? "text-flip-fig" : "text-ink",
+              r.range_used == null ? "text-ink-3" : r.range_used >= 1.2 ? "text-flip-fig" : "text-ink",
             )}
           >
             {r.range_used != null ? `${Math.round(r.range_used * 100)}%` : "—"}
           </span>
-          <span className="fig ml-1.5 text-[11px] text-ink-4">ATR {num(r.atr_d)}</span>
+          <span className="fig ml-1.5 text-[11px] text-ink-3">ATR {num(r.atr_d)}</span>
         </Fig>
+      </div>
       </div>
     </div>
   );
@@ -144,7 +161,7 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
 function Fig({ label, title, children }: { label: string; title?: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0" title={title}>
-      <p className="qt-cap mb-1 text-[10px] text-ink-4">{label}</p>
+      <p className="qt-cap mb-1 text-[10px] text-ink-3">{label}</p>
       <div className="flex items-baseline whitespace-nowrap">{children}</div>
     </div>
   );
@@ -153,7 +170,7 @@ function Fig({ label, title, children }: { label: string; title?: string; childr
 const Cap = ({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) => (
   <div className="mb-2.5 flex items-baseline gap-2">
     <h3 className="text-[13.5px] font-semibold text-ink">{children}</h3>
-    {right && <div className="ml-auto text-[11px] text-ink-4">{right}</div>}
+    {right && <div className="ml-auto text-[11px] text-ink-3">{right}</div>}
   </div>
 );
 
@@ -177,7 +194,7 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
       {r.setup.note && <p className="mt-1.5 text-[12.5px] leading-[1.5] text-ink-2">{r.setup.note}</p>}
       {e && (
         <p className="mt-2.5 text-[12px] text-ink-3">
-          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-4">Entry reference</span>
+          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">Entry reference</span>
           <span className="text-ink-2">{e.kind === "EMA8" ? "8 EMA wave" : e.kind}</span>{" "}
           <span className="fig text-ink">{num(e.price)}</span>
           <span className="fig ml-1.5 text-ink-3">
@@ -188,9 +205,9 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
       )}
 
       <div className="mt-3.5">
-        <p className="qt-cap mb-1.5 text-[10.5px] text-ink-4">Signals today · confirmed 10-minute bars</p>
+        <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">Signals today · confirmed 10-minute bars</p>
         {r.signals.length === 0 ? (
-          <p className="text-[12px] text-ink-4">None yet.</p>
+          <p className="text-[12px] text-ink-3">None yet.</p>
         ) : (
           <ul className="flex flex-col">
             {r.signals.map((s, i) => (
@@ -245,7 +262,7 @@ function Score({ r }: { r: ScanRow }) {
                 {penalty ? Math.round(p.pts) : `${Math.round(p.pts)}/${p.max}`}
               </span>
               {!penalty && p.max > 0 && p.note && (
-                <span className="col-start-2 col-end-4 text-[11px] leading-[1.4] text-ink-4">{p.note}</span>
+                <span className="col-start-2 col-end-4 text-[11px] leading-[1.4] text-ink-3">{p.note}</span>
               )}
             </li>
           );
@@ -331,13 +348,13 @@ function Ladder({ r }: { r: ScanRow }) {
                 )}
                 {g.label}
                 {(g.tone === "broken-hi" || g.tone === "broken-lo") && (
-                  <span className="qt-cap ml-1.5 text-[9.5px] text-ink-4">broken</span>
+                  <span className="qt-cap ml-1.5 text-[9.5px] text-ink-3">broken</span>
                 )}
               </span>
               <span className={cn("fig text-right text-[12.5px]", spot ? "text-ink" : "text-ink-2")}>
                 {num(g.price)}
               </span>
-              <span className="fig text-right text-[11px] text-ink-4">
+              <span className="fig text-right text-[11px] text-ink-3">
                 {spot || d == null ? "" : `${d >= 0 ? "+" : ""}${d.toFixed(1)} ATR`}
               </span>
             </li>
@@ -365,7 +382,7 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
 
       <div className="flex flex-col gap-1.5">
         <p className="text-[12px] text-ink-2">
-          <span className="qt-cap mr-2 text-[10.5px] text-ink-4">Earnings</span>
+          <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Earnings</span>
           {e ? (
             <>
               <span className="text-ink">{earnDay(e.date, e.days)}</span>{" "}
@@ -387,7 +404,7 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
               ) : null}
             </>
           ) : (
-            <span className="text-ink-4">none in the window the calendar covers</span>
+            <span className="text-ink-3">none in the window the calendar covers</span>
           )}
         </p>
         {r.flags.length > 0 && (
@@ -410,7 +427,7 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
 
       {r.filings.length > 0 && (
         <div className="mt-3.5">
-          <p className="qt-cap mb-1.5 text-[10.5px] text-ink-4">SEC filings · last 3 days</p>
+          <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">SEC filings · last 3 days</p>
           <ul className="flex flex-col">
             {r.filings.map((f) => (
               <li key={`${f.form}-${f.filed}-${f.url}`}>
@@ -431,16 +448,16 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
       )}
 
       <div className="mt-3.5">
-        <p className="qt-cap mb-1.5 text-[10.5px] text-ink-4">Headlines · last 3 days</p>
+        <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">Headlines · last 3 days</p>
         {r.news.length === 0 ? (
-          <p className="text-[12px] text-ink-4">No headlines found for this name.</p>
+          <p className="text-[12px] text-ink-3">No headlines found for this name.</p>
         ) : (
           <ul className="flex flex-col divide-y divide-ring/60">
             {r.news.map((n) => (
               <li key={n.url}>
                 <a href={n.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-0.5 py-2">
                   <span className="text-[12.5px] leading-[1.4] text-ink">{n.title}</span>
-                  <span className="flex items-baseline gap-2 text-[11px] text-ink-4">
+                  <span className="flex items-baseline gap-2 text-[11px] text-ink-3">
                     {n.kind !== "news" && (
                       <span className={cn("qt-cap text-[9.5px]", n.kind === "rating" ? "text-flip-fig" : "text-ink-3")}>
                         {KIND_LABEL[n.kind]}

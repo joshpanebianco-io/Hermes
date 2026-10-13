@@ -6,6 +6,7 @@
 #   .\dev.ps1 -CollectorOnly  just the feeds — no Next.js, no browser
 #   .\dev.ps1 -NoBrowser      start everything, but leave the browser alone
 #   .\dev.ps1 -NoGexygen      skip the borrowed gamma levels entirely
+#   .\dev.ps1 -Prod           the web half as a production build, not `next dev`
 #
 # It ends by opening http://localhost:3100, because starting servers and
 # stopping there is not "running the app" — it is running the services. The
@@ -29,12 +30,25 @@
 #
 # PORTS ARE 8100/3100, NOT 8000/3000. GEXYGEN owns those, this terminal reads
 # GEXYGEN's gamma levels, and the two are expected to be up at the same time.
+#
+# -PROD IS FOR READING, THE DEFAULT IS FOR CHANGING. `next dev` runs React's
+# development build — every render checked twice over, every module compiled on
+# first request — and a terminal left open all day pays for that all day
+# (measured 2026-10-13: the board's renders cost several times what the same
+# work does in production). -Prod builds once (`npm run prod`: `next build`,
+# then `next start` on the same port) and serves the result. The build goes to
+# `.next-prod`, never `.next`, so it cannot break a `next dev` that is serving
+# from the other directory. The cost is the build itself, a minute or so, and
+# that an edit to the code needs the web half restarted to show. Switching modes
+# means stopping the web half first — like everything here, an already-bound
+# 3100 is left alone.
 param(
     [switch]$Force,
     [switch]$Tabs,
     [switch]$CollectorOnly,
     [switch]$NoBrowser,
-    [switch]$NoGexygen
+    [switch]$NoGexygen,
+    [switch]$Prod
 )
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -278,13 +292,17 @@ if (-not (Test-Path (Join-Path $here "node_modules"))) {
 if ($webUp -and -not $Force) {
     Write-Host "Web app   -> already running on 3100, leaving it alone" -ForegroundColor DarkGray
 } else {
-    Write-Host "Web app   -> http://localhost:3100" -ForegroundColor Green
+    $webCmd = if ($Prod) { "npm run prod" } else { "npm run dev" }
+    $mode = if ($Prod) { "production build - a minute to build first" } else { "next dev" }
+    Write-Host "Web app   -> http://localhost:3100  ($mode)" -ForegroundColor Green
     # A working directory rather than a `-Command "Set-Location X; npm run dev"`
     # chain: neither launcher quotes its array, so that chain reaches
     # powershell.exe unquoted, launches, serves one request and dies. Keeping
     # -Command to a single bare token avoids the whole question — and it has to
     # stay that way for wt too, whose parser would take the `;` for its own.
-    Start-InWindow @("-Command", "npm run dev") -Title "HERMESX web" -WorkDir $here -PinTitle
+    # The build-then-start chain for -Prod lives in package.json for the same
+    # reason.
+    Start-InWindow @("-Command", $webCmd) -Title "HERMESX web" -WorkDir $here -PinTitle
 }
 
 # Open the terminal. This runs whether or not the web half was already up: you
@@ -296,7 +314,9 @@ if ($webUp -and -not $Force) {
 # The ceiling is generous because a cold start after a dependency change is
 # slow; the loop exits the moment the port is listening.
 if (-not $NoBrowser) {
-    for ($i = 0; $i -lt 120 -and -not (Test-Port 3100); $i++) { Start-Sleep -Milliseconds 500 }
+    # -Prod binds only after the build, so it gets four minutes, not one.
+    $waits = if ($Prod) { 480 } else { 120 }
+    for ($i = 0; $i -lt $waits -and -not (Test-Port 3100); $i++) { Start-Sleep -Milliseconds 500 }
     if (Test-Port 3100) {
         # ?tab=terminal RATHER THAN THE BARE URL, and it has to be explicit: the
         # app remembers the tab you were last on, so a bare address reopens the

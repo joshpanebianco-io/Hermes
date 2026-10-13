@@ -19,8 +19,23 @@ import { oneOf, usePersisted } from "./usePersisted";
  * `seq` GUARDS THE LANDING, not the request. An abandoned generation is still
  * spending tokens upstream and its answer is still worth having, so nothing is
  * aborted — but if two are somehow in flight, only the newest is allowed to
- * write. The same rule the terminal poll uses.
+ * write. The same rule the terminal poll uses. Opening a past call has its own
+ * guard (`openSeq`): two quick clicks used to let the slower answer land last,
+ * showing report A under B's highlight.
+ *
+ * AN OFFLINE ANSWER IS NEWS, NOT A FEED (review, 2026-10-13). The proxy turns
+ * a dead or slow collector into a body with `config.enabled: false` and an
+ * empty history, and storing that whole meant the panel announced "no key is
+ * set" and Past calls emptied to "Nothing yet" — for a generation that had
+ * merely timed out. `land` keeps the report and the history the page already
+ * holds and attaches the reason, which the panel prints.
  */
+
+/** Fold an answer into what the page holds; an offline answer only adds its reason. */
+function land(prev: ReportFeed | null, next: ReportFeed): ReportFeed {
+  if (!next.offline || !prev) return next;
+  return { ...prev, offline: next.offline };
+}
 
 export interface ReportController {
   pick: ReportSession | "auto";
@@ -35,6 +50,8 @@ export interface ReportController {
   open: (id: string) => void;
   /** Delete one stored report. Permanent — the panel asks first. */
   discard: (id: string) => void;
+  /** Ask the collector again — the offline state's way back. */
+  retry: () => void;
   /**
    * When the running generation was asked for, as an epoch ms. Owned here and
    * not in the panel's loader for the same reason `busy` is: the panel
@@ -60,11 +77,13 @@ export function useReport(initial: ReportFeed | null): ReportController {
     oneOf("all", "NQ", "ES", "GC"),
   );
   const seq = useRef(0);
+  const openSeq = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
       const r = await fetch("/api/report", { cache: "no-store" });
-      setFeed((await r.json()) as ReportFeed);
+      const next = (await r.json()) as ReportFeed;
+      setFeed((prev) => land(prev, next));
     } catch {
       /* the route handler returns an offline body rather than throwing */
     }
@@ -86,7 +105,16 @@ export function useReport(initial: ReportFeed | null): ReportController {
           cache: "no-store",
         });
         const next = (await r.json()) as ReportFeed;
-        if (mine === seq.current) setFeed(next);
+        if (mine === seq.current) {
+          setFeed((prev) => land(prev, next));
+          if (!next.offline) {
+            // The new report is what is on screen now: drop a past call that
+            // was opened while it was being written, and any open still in
+            // flight, or the highlight and the page would disagree.
+            setViewing(null);
+            openSeq.current += 1;
+          }
+        }
       } catch {
         /* same */
       } finally {
@@ -100,13 +128,15 @@ export function useReport(initial: ReportFeed | null): ReportController {
 
   const open = useCallback((id: string) => {
     setViewing(id);
+    const mine = ++openSeq.current;
     void (async () => {
       try {
         const r = await fetch(`/api/report/${encodeURIComponent(id)}`, {
           cache: "no-store",
         });
         const next = (await r.json()) as ReportFeed;
-        setFeed((f) => (f ? { ...f, latest: next.latest } : next));
+        if (mine !== openSeq.current) return;
+        setFeed((f) => (next.offline ? land(f, next) : f ? { ...f, latest: next.latest, offline: undefined } : next));
       } catch {
         /* same */
       }
@@ -132,6 +162,10 @@ export function useReport(initial: ReportFeed | null): ReportController {
           cache: "no-store",
         });
         const next = (await r.json()) as ReportFeed;
+        if (next.offline) {
+          setFeed((prev) => land(prev, next));
+          return;
+        }
         setViewing((v) => (v === id ? null : v));
         setFeed(next);
       } catch {
@@ -140,5 +174,7 @@ export function useReport(initial: ReportFeed | null): ReportController {
     })();
   }, []);
 
-  return { pick, setPick, book, setBook, feed, busy, viewing, generate, open, discard, startedAt };
+  const retry = useCallback(() => void refresh(), [refresh]);
+
+  return { pick, setPick, book, setBook, feed, busy, viewing, generate, open, discard, retry, startedAt };
 }

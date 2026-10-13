@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { Desk, Impact, WireItem } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
-import { ago } from "@/lib/format";
+import { Ago } from "@/components/ui/Ago";
 import { cn } from "@/lib/cn";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { segItem } from "@/lib/seg";
@@ -86,13 +86,10 @@ const TIERS = IMPACTS.length - 1;
 
 export function Wire({
   items,
-  now,
   ageMin,
   error,
 }: {
   items: WireItem[];
-  /** The live clock. Null until mounted — see `ago`. */
-  now: number | null;
   ageMin?: number | null;
   error?: string | null;
 }) {
@@ -189,7 +186,7 @@ export function Wire({
       </div>
 
       {shown.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-6 text-center text-[11px] text-ink-3">
           {items.length === 0
             ? "No headlines yet — the collector polls the wire every two minutes."
             : "Nothing on this desk right now."}
@@ -197,7 +194,7 @@ export function Wire({
       ) : (
         <ul className="divide-y divide-ring/40">
           {shown.map((h) => (
-            <Item key={`${h.url}-${h.ts ?? 0}`} h={h} now={now} />
+            <Item key={`${h.url}-${h.ts ?? 0}`} h={h} />
           ))}
         </ul>
       )}
@@ -205,7 +202,7 @@ export function Wire({
   );
 }
 
-function Item({ h, now }: { h: WireItem; now: number | null }) {
+function Item({ h }: { h: WireItem }) {
   return (
     <li className="wire-in">
       <a
@@ -228,7 +225,7 @@ function Item({ h, now }: { h: WireItem; now: number | null }) {
           {h.impact !== "low" && (
             <span
               className={cn(
-                "fig shrink-0 rounded-sm px-1 text-[9px] leading-[13px]",
+                "fig qt-pill shrink-0 rounded-sm px-1 text-[9px] leading-[13px]",
                 h.impact === "high" ? "bg-err/25 text-err" : "bg-warn/20 text-warn",
               )}
               title={h.impact === "high" ? "High impact" : "Medium impact"}
@@ -237,14 +234,12 @@ function Item({ h, now }: { h: WireItem; now: number | null }) {
             </span>
           )}
           <span className="min-w-0 flex-1 text-[12px] leading-[1.35] text-ink">{h.title}</span>
-          <span className="fig shrink-0 text-[9.5px] text-ink-4 tabular-nums">
-            {ago(h.utc, now)}
-          </span>
+          <Ago utc={h.utc} className="fig shrink-0 text-[9.5px] text-ink-3 tabular-nums" />
         </div>
         {h.summary && (
           <p className="line-clamp-2 pr-6 text-[10.5px] leading-[1.4] text-ink-3">{h.summary}</p>
         )}
-        <div className="flex items-center gap-1.5 text-[9.5px] text-ink-4">
+        <div className="flex items-center gap-1.5 text-[9.5px] text-ink-3">
           <span className="text-ink-3">{h.publisher}</span>
           {h.also && h.also.length > 0 && (
             <span title={`Also filed by ${h.also.join(", ")}`}>+{h.also.length}</span>

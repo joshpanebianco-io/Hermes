@@ -54,7 +54,7 @@ export function Module({
         {sub && (
           <span
             className={cn(
-              "truncate text-ink-4 qt:text-ink-3",
+              "truncate text-ink-3",
               large ? "text-[11.5px] qt:text-[12.5px]" : "text-[10px] qt:text-[11.5px]",
             )}
           >
@@ -95,7 +95,7 @@ export function Module({
  */
 function AgeChip({ m }: { m: number }) {
   const tone =
-    m >= 60 ? "text-err border-err/40" : m >= 10 ? "text-warn border-warn/40" : "text-ink-4 border-ring";
+    m >= 60 ? "text-err border-err/40" : m >= 10 ? "text-warn border-warn/40" : "text-ink-3 border-ring";
   return (
     <span
       className={cn(

@@ -4,6 +4,7 @@ import { failureReason, offlineTerminal } from "@/lib/offline";
 import { cookies } from "next/headers";
 import { THEME_COOKIE, parseTheme } from "@/lib/theme";
 import { UI_COOKIE, parseUi } from "@/lib/ui";
+import { isTab } from "@/lib/tabs";
 
 /**
  * The terminal, server-rendered once and then polled by the client.
@@ -74,8 +75,7 @@ export default async function Page({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  const initialTab =
-    sp.tab === "report" || sp.tab === "settings" || sp.tab === "scanner" ? sp.tab : "terminal";
+  const initialTab = isTab(sp.tab) ? sp.tab : "terminal";
   /*
    * WHETHER THE URL ASKED AT ALL, which is not the same question as which tab
    * it asked for. `?tab=terminal` and a bare `/` both resolve to "terminal"
@@ -85,8 +85,7 @@ export default async function Page({
    * frame: the shortcut says "show me the terminal", and the note is a place
    * you go, not a place you arrive.
    */
-  const initialTabPinned =
-    sp.tab === "terminal" || sp.tab === "scanner" || sp.tab === "report" || sp.tab === "settings";
+  const initialTabPinned = isTab(sp.tab);
   const jar = await cookies();
   const theme = parseTheme(jar.get(THEME_COOKIE)?.value);
   const ui = parseUi(jar.get(UI_COOKIE)?.value);

@@ -41,7 +41,7 @@ export function Volatility({
   if (!vol || vol.points.length === 0) {
     return (
       <Module title="Vol term structure" ageMin={ageMin} bodyClassName="px-0 py-0">
-        <p className="px-3 py-5 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           No volatility quotes yet.
         </p>
       </Module>
@@ -67,8 +67,14 @@ export function Volatility({
       bodyClassName="px-0 py-0"
       right={
         <span
-          className="fig rounded px-1.5 py-px text-[9.5px] uppercase"
-          style={{ color: hue, background: `color-mix(in oklab, ${hue} 18%, transparent)` }}
+          className="fig qt-pill rounded px-1.5 py-px text-[9.5px] uppercase"
+          style={
+            {
+              color: hue,
+              background: `color-mix(in oklab, ${hue} 18%, transparent)`,
+              "--pill-hue": stressed ? "var(--put-fig)" : vol.shape === "flat" ? "var(--flip-fig)" : "var(--call-fig)",
+            } as React.CSSProperties
+          }
         >
           {vol.shape}
         </span>
@@ -117,7 +123,7 @@ export function Volatility({
             {vol.skew != null && (
               <Tick
                 value={num(vol.skew, 1)}
-                className="fig ml-auto text-[10px] text-ink-4"
+                className="fig ml-auto text-[10px] text-ink-3"
                 title="Cost of far out-of-the-money puts against at-the-money — what the market pays for a crash rather than for movement"
               >
                 SKEW {num(vol.skew, 1)}
@@ -136,7 +142,7 @@ export function Volatility({
               style={{ left: `calc(${pos * 100}% - 1px)`, background: hue }}
             />
           </div>
-          <div className="flex justify-between text-[8.5px] text-ink-4">
+          <div className="flex justify-between text-[8.5px] text-ink-3">
             <span>calm</span>
             <span className="fig">1.00</span>
             <span>stressed</span>

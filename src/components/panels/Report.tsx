@@ -95,6 +95,7 @@ export function Report({
   generate,
   open,
   discard,
+  retry,
   startedAt,
 }: ReportController) {
   const quiet = useQuiet();
@@ -118,6 +119,16 @@ export function Report({
               : undefined
           }
           bodyClassName="px-0 py-0"
+          /*
+           * A FAILED TRIP IS STATED, NOT DRESSED AS SOMETHING ELSE. It used to
+           * fall through to the no-key screen. With a report already on the
+           * page, the reason rides above it and the report stays readable.
+           */
+          error={
+            feed?.offline && enabled
+              ? `Collector unreachable — ${feed.offline.reason}. Showing the report this page already holds.`
+              : null
+          }
           right={
             <div className="flex items-center gap-1.5">
               <div className="seg">
@@ -187,7 +198,9 @@ export function Report({
             </div>
           }
         >
-          {!enabled ? (
+          {feed?.offline && !enabled ? (
+            <Offline reason={feed.offline.reason} api={feed.offline.api} onRetry={retry} />
+          ) : !enabled ? (
             <NoKey model={feed?.config?.model} />
           ) : busy ? (
             <Working startedAt={startedAt} model={feed?.config?.model} />
@@ -223,7 +236,7 @@ export function Report({
           bodyClassName="px-0 py-0 xl:min-h-0 xl:overflow-y-auto"
         >
           {!feed?.history?.length ? (
-            <p className="px-3 py-5 text-center text-[11px] text-ink-4">
+            <p className="px-3 py-5 text-center text-[11px] text-ink-3">
               Nothing yet. Reports are kept so you can check the calls against how the
               session actually went.
             </p>
@@ -251,7 +264,7 @@ export function Report({
                           column the date, the book and the call all matter more
                           than which session it was, so this is what truncates. */}
                       {h.session_label && (
-                        <span className="fig min-w-0 truncate text-[10px] text-ink-4">
+                        <span className="fig min-w-0 truncate text-[10px] text-ink-3">
                           {h.session_label}
                         </span>
                       )}
@@ -351,6 +364,29 @@ function quietBias(b: string): string {
 
 /* ---------------------------------------------------------------- states */
 
+/**
+ * The collector could not be reached and the page holds nothing to show. Not
+ * the no-key screen — a key may well be set — and not an empty report: the
+ * reason, where it was looked for, and a way to ask again.
+ */
+function Offline({ reason, api, onRetry }: { reason: string; api: string; onRetry: () => void }) {
+  return (
+    <div className="space-y-3 px-4 py-5 text-[11.5px] leading-relaxed text-ink-3">
+      <p className="text-err">
+        <strong className="font-semibold">Collector unreachable.</strong> {reason} — expected at{" "}
+        <code>{api}</code>.
+      </p>
+      <p>
+        Reports are read from the collector, so there is nothing to show until it answers. Nothing
+        here is cached or invented. Start it with <code className="text-ink-2">.\dev.ps1</code>.
+      </p>
+      <button type="button" onClick={onRetry} {...segItem(false, { className: "border border-ring-2" })}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
 function NoKey({ model }: { model?: string }) {
   return (
     <div className="space-y-3 px-4 py-5 text-[11.5px] leading-relaxed text-ink-3">
@@ -383,7 +419,7 @@ function NoKey({ model }: { model?: string }) {
           Restart the collector — <code className="text-ink-2">.\dev.ps1</code>.
         </li>
       </ol>
-      <p className="text-ink-4">
+      <p className="text-ink-3">
         Model: <span className="fig">{model ?? "z-ai/glm-5.2:free"}</span> — free tier, no card.
         Override with <code>NT_REPORT_MODEL</code>. The free tier allows 50 requests a day, or
         1000 once $10 of credit has ever been bought.
@@ -497,7 +533,7 @@ function Working({ startedAt, model }: { startedAt: number | null; model?: strin
         {mm}:{ss}
       </div>
       <div className="mt-2 text-[12px] text-ink-2">{stage}…</div>
-      <div className="fig mt-4 text-[10px] text-ink-4">
+      <div className="fig mt-4 text-[10px] text-ink-3">
         {model ? `${model} · ` : ""}usually 1–3 min on the free tier · the report names the
         model that answered
       </div>
@@ -518,12 +554,12 @@ function Failed({ rep }: { rep: ReportT }) {
     <div className="space-y-2 px-4 py-4 text-[11.5px] leading-relaxed">
       <p className="text-err">{rep.error}</p>
       {rep.raw && (
-        <details className="text-[10.5px] text-ink-4">
+        <details className="text-[10.5px] text-ink-3">
           <summary className="cursor-pointer text-ink-3">What the model said instead</summary>
           <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap">{rep.raw}</pre>
         </details>
       )}
-      <p className="text-ink-4">
+      <p className="text-ink-3">
         Nothing is shown above because there is no valid report to show — not because the panel
         is empty.
       </p>
@@ -561,7 +597,7 @@ function Body({ rep }: { rep: ReportT }) {
                 style={{ background: i <= r.conviction ? hue : "var(--ring)" }}
               />
             ))}
-            <span className="fig ml-1 text-[10px] text-ink-4">
+            <span className="fig ml-1 text-[10px] text-ink-3">
               {r.conviction}/5 conviction
             </span>
           </span>
@@ -601,7 +637,7 @@ function Body({ rep }: { rep: ReportT }) {
                 }}
               />
               <span className="text-[11.5px] leading-snug text-ink-2">{d.point}</span>
-              <span className="fig ml-1.5 text-[10.5px] text-ink-4">{d.evidence}</span>
+              <span className="fig ml-1.5 text-[10.5px] text-ink-3">{d.evidence}</span>
             </li>
           ))}
         </ul>
@@ -617,7 +653,7 @@ function Body({ rep }: { rep: ReportT }) {
         <ul className="space-y-1">
           {r.levels_to_watch.map((l, i) => (
             <li key={i} className="flex flex-wrap items-baseline gap-x-2">
-              <span className="fig w-[34px] shrink-0 text-[10.5px] text-ink-4">{l.instrument}</span>
+              <span className="fig w-[34px] shrink-0 text-[10.5px] text-ink-3">{l.instrument}</span>
               <span className="fig text-[11.5px] text-ink">{l.level}</span>
               <span className="min-w-0 flex-1 text-[10.5px] text-ink-3">{l.why}</span>
             </li>
@@ -671,7 +707,7 @@ function Provenance({
 }) {
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring/50 bg-surface-2/30 px-4 py-2 text-[9.5px] text-ink-4 qt:mx-3 qt:border-ring qt:bg-transparent qt:px-0 qt:pt-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring/50 bg-surface-2/30 px-4 py-2 text-[9.5px] text-ink-3 qt:mx-3 qt:border-ring qt:bg-transparent qt:px-0 qt:pt-3">
         <span className="fig">{rep.model}</span>
         <span aria-hidden>·</span>
         <span className="fig">{rep.asset_label}</span>

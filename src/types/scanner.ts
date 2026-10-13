@@ -72,6 +72,10 @@ export interface ScanSignal {
   at_et: string;
   price: number;
   note: string;
+  /** The bar's open, epoch seconds — what the chart places it by. */
+  t?: number;
+  /** The Pine's stop idea for an (L) / (E). */
+  stop?: number | null;
 }
 
 export interface ScanFlag {
@@ -184,4 +188,95 @@ export interface Watchlist {
   rejected?: string[];
   /** The collector's reason when a POST was refused. */
   error?: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Round 2: the event feed (alerts and the signal log), and one name's bars    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a signal did afterwards, in R — one unit of the Pine's own "stop idea"
+ * (the signal bar's low for a long, its high for a short). Updated as bars
+ * arrive; `final` once the session has closed.
+ */
+export interface ScanOutcome {
+  r: number | null;
+  mfe_r: number | null;
+  mae_r: number | null;
+  hit_1r: boolean | null;
+  hit_2r: boolean | null;
+  stopped: boolean | null;
+  ret_30m_r: number | null;
+  ret_60m_r: number | null;
+  ret_close_r: number | null;
+  final: boolean;
+}
+
+export interface ScanEvent {
+  id: number;
+  ts: string;
+  bar_ts: string;
+  /** `bar_ts` as epoch seconds. */
+  t?: number;
+  at_et: string;
+  day: string;
+  sym: string;
+  /** (L) retest, (E) trigger, ◆ breakout, or NEAR — 90% of the way to a level. */
+  kind: "L" | "E" | "BO" | "NEAR";
+  side: Side;
+  level: LevelKey | null;
+  price: number;
+  stop: number | null;
+  score: number | null;
+  note: string;
+  /** Seen within two bars of its close. False = found by a replay after a restart — never alerted. */
+  live: boolean;
+  outcome: ScanOutcome | null;
+}
+
+export interface ScanEvents {
+  latest: number;
+  events: ScanEvent[];
+  offline?: { reason: string; api: string };
+}
+
+export interface ScanStatGroup {
+  key: string;
+  n: number;
+  win_1r: number | null;
+  avg_close_r: number | null;
+  avg_mfe_r: number | null;
+  avg_mae_r: number | null;
+}
+
+export interface ScanStats {
+  days: number;
+  from: string;
+  to: string;
+  total: number;
+  groups: ScanStatGroup[];
+  offline?: { reason: string; api: string };
+}
+
+export interface ScanBar {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
+export interface ScanBars {
+  ok: boolean;
+  sym: string;
+  error?: string;
+  bars: ScanBar[];
+  ema8: Array<number | null>;
+  ema9: Array<number | null>;
+  ema10: Array<number | null>;
+  vwap: Array<number | null>;
+  levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pm_done: boolean };
+  sessions: Array<{ kind: "pre" | "rth" | "post"; from: number; to: number }>;
+  signals: Array<{ t: number; kind: "L" | "E" | "BO" | "E_SETUP"; side: Side; price: number }>;
 }

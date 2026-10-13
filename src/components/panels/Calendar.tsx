@@ -164,7 +164,14 @@ export function Calendar({
        * module head, which is outside the scrolling body, so narrowing the list
        * never scrolls out of reach.
        */
-      className="max-h-[340px]"
+      /*
+       * A CONTAINER, so the rows answer to the panel's own width rather than
+       * the window's. Below ~470px of panel (a window under ~1500px) the three
+       * figure columns ate the event name down to "BoE MPC …" (review,
+       * 2026-10-13: 15 of 19 names truncated at 1280); there the figures move
+       * under the name instead and the session column goes.
+       */
+      className="@container max-h-[340px]"
       scroll
       right={
         <div className="flex items-center gap-1.5">
@@ -222,7 +229,7 @@ export function Calendar({
       </div>
 
       {upcoming.length === 0 && recent.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-6 text-center text-[11px] text-ink-3">
           Nothing matches those filters.
         </p>
       ) : (
@@ -273,7 +280,7 @@ function Days({ row, prev }: { row: CalendarRow; prev?: CalendarRow }) {
     <>
       {changed && (
         <li className="flex items-center gap-2 px-3 pt-1.5 pb-0.5">
-          <span className="eyebrow text-[9px] text-ink-4">{day}</span>
+          <span className="eyebrow text-[9px] text-ink-3">{day}</span>
           <span className="h-px flex-1 bg-ring/50" aria-hidden />
         </li>
       )}
@@ -297,12 +304,12 @@ function etDay(r: CalendarRow): string {
 
 function Head({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
+    <div className="qt-band flex items-baseline justify-between border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
       <span className="eyebrow text-[9px]">{children}</span>
       {/* Names the three figure columns once, instead of three tooltips a
           reader has to discover. Order matches the rows: what printed, what
           was expected, what it was last time. */}
-      <span className="fig text-[8.5px] tracking-wide text-ink-4">
+      <span className="fig text-[8.5px] tracking-wide text-ink-3 @max-[470px]:hidden">
         act · cons<span className="hidden md:inline"> · prev</span>
       </span>
     </div>
@@ -321,7 +328,7 @@ function Row({ r }: { r: CalendarRow }) {
 
   return (
     <li className="hit flex items-baseline gap-2 px-3 py-[3px]" title={r.note ?? undefined}>
-      <span className="fig w-[36px] shrink-0 text-[10px] text-ink-4">{r.et ?? "—"}</span>
+      <span className="fig w-[36px] shrink-0 text-[10px] text-ink-3">{r.et ?? "—"}</span>
       <span
         className={cn(
           "w-[6px] shrink-0 self-center rounded-full",
@@ -329,13 +336,28 @@ function Row({ r }: { r: CalendarRow }) {
         )}
         aria-hidden
       />
-      <span className="fig hidden w-[24px] shrink-0 text-[9.5px] text-ink-4 sm:block">
+      <span className="fig hidden w-[24px] shrink-0 text-[9.5px] text-ink-3 sm:block">
         {country(r.country)}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[11px] text-ink-2">{r.event}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[11px] text-ink-2 @max-[470px]:whitespace-normal">{r.event}</span>
+        {/* Narrow panel: the figures under the name, labelled, so the name
+            keeps the width. Only what exists — an unscheduled speech has none. */}
+        {(r.actual_raw || r.consensus_raw || r.previous_raw) && (
+          <span className="fig hidden text-[10px] text-ink-3 @max-[470px]:block">
+            {r.actual_raw && (
+              <span className={r.released ? (surprised ? "text-flip" : "text-ink") : undefined}>act {r.actual_raw}</span>
+            )}
+            {r.actual_raw && (r.consensus_raw || r.previous_raw) && " · "}
+            {r.consensus_raw && <>cons {r.consensus_raw}</>}
+            {r.consensus_raw && r.previous_raw && " · "}
+            {r.previous_raw && <>prev {r.previous_raw}</>}
+          </span>
+        )}
+      </span>
       {r.session && r.session !== "closed" && (
         <span
-          className="fig hidden w-[38px] shrink-0 text-[9px] text-ink-4 md:block"
+          className="fig hidden w-[38px] shrink-0 text-[9px] text-ink-3 md:block @max-[470px]:hidden"
           title={`Prints during the ${r.session} session`}
         >
           {r.session}
@@ -343,15 +365,15 @@ function Row({ r }: { r: CalendarRow }) {
       )}
       <span
         className={cn(
-          "fig w-[46px] shrink-0 text-right text-[10.5px]",
-          r.released ? (surprised ? "text-flip" : "text-ink") : "text-ink-4",
+          "fig w-[46px] shrink-0 text-right text-[10.5px] @max-[470px]:hidden",
+          r.released ? (surprised ? "text-flip" : "text-ink") : "text-ink-3",
         )}
         title={r.released ? "Actual" : "Not printed yet"}
       >
         {r.actual_raw ?? "—"}
       </span>
       <span
-        className="fig w-[42px] shrink-0 text-right text-[10px] text-ink-4"
+        className="fig w-[42px] shrink-0 text-right text-[10px] text-ink-3 @max-[470px]:hidden"
         title="Consensus forecast"
       >
         {r.consensus_raw ?? "—"}
@@ -360,7 +382,7 @@ function Row({ r }: { r: CalendarRow }) {
           narrow screen — a surprise is judged against consensus, and previous
           only says whether the series is turning. */}
       <span
-        className="fig hidden w-[42px] shrink-0 text-right text-[10px] text-ink-4 md:block"
+        className="fig hidden w-[42px] shrink-0 text-right text-[10px] text-ink-3 md:block @max-[470px]:hidden"
         title="Previous reading"
       >
         {r.previous_raw ?? "—"}

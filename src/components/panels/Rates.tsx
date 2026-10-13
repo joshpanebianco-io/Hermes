@@ -83,7 +83,7 @@ export function Rates({
           <div className="mb-0.5 flex items-baseline justify-between">
             <span className="eyebrow text-[9px]">FOMC path</span>
             {pm.anchor != null && (
-              <span className="fig text-[9px] text-ink-4">
+              <span className="fig text-[9px] text-ink-3">
                 from {pm.anchor.toFixed(2)}% {pm.anchor_src}
               </span>
             )}
@@ -102,7 +102,7 @@ export function Rates({
                 value={bp(m.move_bp, 0)}
                 className={cn(
                   "fig w-[48px] shrink-0 text-right text-[10.5px]",
-                  m.stance === "hike" ? "down" : m.stance === "cut" ? "up" : "text-ink-4",
+                  m.stance === "hike" ? "down" : m.stance === "cut" ? "up" : "text-ink-3",
                 )}
               />
               <Tick
@@ -142,7 +142,7 @@ export function Rates({
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-ring/40 px-3 py-1.5">
           {rates.spreads.map((s) => (
             <div key={s.key} className="flex items-baseline gap-1.5">
-              <span className="fig text-[10px] text-ink-4">{s.label}</span>
+              <span className="fig text-[10px] text-ink-3">{s.label}</span>
               <span
                 className={cn(
                   "fig text-[11px]",
@@ -175,7 +175,7 @@ function Stat({
     <div className="min-w-0">
       <div className="eyebrow text-[9px]">{label}</div>
       <div className={cn("fig text-[15px] leading-tight", tone ?? "text-ink")}>{value}</div>
-      {sub && <div className="fig text-[9px] text-ink-4">{sub}</div>}
+      {sub && <div className="fig text-[9px] text-ink-3">{sub}</div>}
     </div>
   );
 }
@@ -228,7 +228,7 @@ function Strip({
           vectorEffect="non-scaling-stroke"
         />
       </svg>
-      <div className="fig shrink-0 text-right text-[9px] leading-tight text-ink-4">
+      <div className="fig shrink-0 text-right text-[9px] leading-tight text-ink-3">
         <div>{strip[0]?.label}</div>
         <div>{strip[strip.length - 1]?.label}</div>
       </div>

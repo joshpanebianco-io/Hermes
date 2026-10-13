@@ -62,20 +62,20 @@ export function Earnings({
       bodyClassName="px-0 py-0"
     >
       {rows.length === 0 ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-4">
+        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           Nothing big enough to move an index in the next few sessions.
         </p>
       ) : (
         byDay.map(([date, list], gi) => (
           <div key={date}>
-            <div className="flex items-baseline gap-2 border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
+            <div className="qt-band flex items-baseline gap-2 border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
               <span className="eyebrow text-[9px]">{label(date, today)}</span>
-              <span className="fig text-[9px] text-ink-4">{list.length}</span>
+              <span className="fig text-[9px] text-ink-3">{list.length}</span>
               {/* The figure columns, named where the calendar names its own —
                  the reader has one place to look on both panels. First group
                  only; four repeats of a legend is noise, not labelling. */}
               {gi === 0 && (
-                <span className="fig ml-auto text-[8.5px] tracking-wide text-ink-4">
+                <span className="fig ml-auto text-[8.5px] tracking-wide text-ink-3">
                   <span title="Earnings per share. A trailing 'e' is the consensus estimate; once reported, the actual prints against the estimate — green beat, red miss.">
                     eps
                   </span>
@@ -92,9 +92,9 @@ export function Earnings({
                     className={cn(
                       "fig w-[34px] shrink-0 rounded-sm px-1 text-center text-[9px] leading-[14px]",
                       r.when === "after"
-                        ? "bg-put/20 text-put"
+                        ? "qt-pill bg-put/20 text-put [--pill-hue:var(--put-fig)]"
                         : r.when === "pre"
-                          ? "bg-call/20 text-call"
+                          ? "qt-pill bg-call/20 text-call [--pill-hue:var(--call-fig)]"
                           : "text-ink-4",
                     )}
                     title={
@@ -115,7 +115,7 @@ export function Earnings({
                   >
                     {r.symbol}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-4">{r.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-3">{r.name}</span>
                   {/*
                     * WHICH NUMBER THIS IS, ALWAYS. This was
                     * `eps_actual ?? eps_forecast` in one undifferentiated cell,
@@ -146,7 +146,7 @@ export function Earnings({
                         {r.eps_actual}
                       </span>
                       {r.eps_forecast != null && (
-                        <span className="text-ink-4"> vs {r.eps_forecast}</span>
+                        <span className="text-ink-3"> vs {r.eps_forecast}</span>
                       )}
                     </span>
                   ) : (
@@ -158,7 +158,7 @@ export function Earnings({
                     </span>
                   )}
                   <span
-                    className="fig hidden w-[44px] shrink-0 text-right text-[9.5px] text-ink-4 sm:block"
+                    className="fig hidden w-[44px] shrink-0 text-right text-[9.5px] text-ink-3 sm:block"
                     title="Market capitalisation"
                   >
                     {r.market_cap ? compact(r.market_cap) : ""}

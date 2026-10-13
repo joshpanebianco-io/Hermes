@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { ReportFeed, Terminal as TerminalData } from "@/types/terminal";
 import { Header } from "@/components/shell/Header";
 import { StatusRail } from "@/components/shell/StatusRail";
@@ -21,6 +21,7 @@ import { Volatility } from "@/components/panels/Volatility";
 import { VolumeProfile } from "@/components/panels/VolumeProfile";
 import { Fed } from "@/components/panels/Fed";
 import { AlertStrip } from "@/components/shell/AlertStrip";
+import { ScanAlerts } from "@/components/shell/ScanAlerts";
 import { DEFAULT_THEME, type ThemeChoice } from "@/lib/theme";
 import { DEFAULT_UI, type UiMode } from "@/lib/ui";
 import { UiProvider } from "@/components/state/UiMode";
@@ -28,6 +29,10 @@ import { cn } from "@/lib/cn";
 import { useReport } from "@/lib/useReport";
 import { useFrameLight, type FrameFx } from "@/lib/useFrameLight";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { TAB_KEYS, type Tab } from "@/lib/tabs";
+import { useNow } from "@/lib/useNow";
+import { shareUnchanged } from "@/lib/share";
+import { ageStep } from "@/lib/format";
 
 /**
  * The terminal.
@@ -52,15 +57,41 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
  * reading position instead of turning the grid into a filing cabinet of
  * independently-lost boxes.
  *
- * THE CLOCK TICKS LOCALLY. Polling at twenty seconds would give a session
- * countdown that jumps in twenty-second steps, which looks broken. The payload
- * carries the collector's ET instant; this advances it locally each second and
- * lets the next poll correct any drift.
+ * THE CLOCK TICKS LOCALLY — but not HERE. It used to: `now` lived in this
+ * component and changed every second, so the whole board re-rendered once a
+ * second to move four clocks. The tick now lives in `useNow`, read only by
+ * the components that print a time (the header, the session table, the ages
+ * on the crawl and the wire), and the panels are memoised so a poll re-renders
+ * only those whose data moved — see `shareUnchanged` and `ageStep`.
  */
 
 const POLL_SEC = Number(process.env.NEXT_PUBLIC_POLL_SEC ?? 20);
 
-type Tab = "terminal" | "scanner" | "report" | "settings";
+/*
+ * The panels, memoised. Their props are the payload's blocks, which a poll
+ * keeps by reference when they did not change (`shareUnchanged`), and ages
+ * rounded to what the chip prints (`ageStep`) — so a twenty-second poll
+ * re-renders the board, not the calendar that refreshes every ten minutes.
+ */
+const MSessionRanges = memo(SessionRanges);
+const MVolumeProfile = memo(VolumeProfile);
+const MGamma = memo(Gamma);
+const MVolatility = memo(Volatility);
+const MRates = memo(Rates);
+const MSessions = memo(Sessions);
+const MWire = memo(Wire);
+const MBoard = memo(Board);
+const MCalendar = memo(Calendar);
+const MMovers = memo(Movers);
+const MRotation = memo(Rotation);
+const MFed = memo(Fed);
+const MEarnings = memo(Earnings);
+const MStatusRail = memo(StatusRail);
+
+// Hoisted: an array literal in JSX is a new prop every render and would defeat
+// the memo above.
+const BOOK_GROUPS: React.ComponentProps<typeof Board>["groups"] = ["core"];
+const MACRO_GROUPS: React.ComponentProps<typeof Board>["groups"] = ["vol", "energy", "rates", "fx", "metals", "global", "crypto"];
 
 export function Terminal({
   initial,
@@ -113,11 +144,7 @@ export function Terminal({
    * only what this browser last looked at, and a deep link that silently landed
    * somewhere else would be worse than not remembering at all.
    */
-  const [storedTab, setStoredTab] = usePersisted<Tab>(
-    "tab",
-    initialTab,
-    oneOf("terminal", "scanner", "report", "settings"),
-  );
+  const [storedTab, setStoredTab] = usePersisted<Tab>("tab", initialTab, oneOf(...TAB_KEYS));
   const [tab, setTabState] = useState<Tab>(initialTab);
   /*
    * INFERRING THIS FROM THE TAB ITSELF IS WHAT BROKE IT. `initialTab !== "terminal"`
@@ -153,20 +180,11 @@ export function Terminal({
   }, [setStoredTab]);
   const [data, setData] = useState<TerminalData>(initial);
   const [lastPoll, setLastPoll] = useState<Date | null>(null);
-  /*
-   * NULL UNTIL MOUNTED, and that is the whole point.
-   *
-   * The server has no business guessing the reader's wall clock: rendering a
-   * locally-computed time during SSR produced a different string on the server
-   * and on the client, which is a hydration mismatch on every single load —
-   * React discards the server subtree and re-renders it, and the dev overlay
-   * counts an issue. Staying null through the first render means the server's
-   * clock is what hydrates, and the local second-hand only starts afterwards.
-   */
-  const [now, setNow] = useState<number | null>(null);
   // Guards against a slow response landing after a newer one — with a fixed
   // interval and a variable round trip this is not hypothetical.
   const seq = useRef(0);
+  // The previous poll's block serialisations — see `shareUnchanged`.
+  const seen = useRef(new Map<string, string>());
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
@@ -174,7 +192,7 @@ export function Terminal({
       const r = await fetch("/api/terminal", { cache: "no-store" });
       const next = (await r.json()) as TerminalData;
       if (mine === seq.current) {
-        setData(next);
+        setData((prev) => shareUnchanged(prev, next, seen.current));
         setLastPoll(new Date());
       }
     } catch {
@@ -189,15 +207,9 @@ export function Terminal({
     return () => clearInterval(id);
   }, [load]);
 
-  useEffect(() => {
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const clock = useMemo(() => localClock(data.clock, now), [data.clock, now]);
   const st = data.status ?? {};
-  const ages = data.age_min ?? {};
+  const raw = data.age_min ?? {};
+  const age = (k: string) => ageStep(raw[k]) ?? undefined;
 
   return (
     <UiProvider value={ui}>
@@ -213,9 +225,14 @@ export function Terminal({
           "fx-glitch-subtle",
         )}
       >
+        {/* The travelling light's ring and the gradient that turns inside it —
+            see `.frame-light` in globals.css and useFrameLight. */}
+        <div className="frame-light" aria-hidden>
+          <div className="frame-light__spin" />
+        </div>
 
         <Header
-          clock={clock}
+          clock={data.clock ?? null}
           quotes={data.quotes ?? []}
           live={!data.offline && data.ok}
           onRefresh={load}
@@ -223,7 +240,9 @@ export function Terminal({
           onTab={setTab}
         />
 
-        <AlertStrip items={data.wire ?? []} now={now} />
+        <AlertStrip items={data.wire ?? NONE} />
+        {/* Raises the scanner's alerts on every tab — see the file. */}
+        <ScanAlerts />
 
         {data.offline && (
           <div className="border-b border-err/40 bg-err/10 px-3 py-2 text-[11px] text-err">
@@ -239,7 +258,7 @@ export function Terminal({
         ) : tab === "report" ? (
           <Report {...report} />
         ) : tab === "scanner" ? (
-          <Scanner now={now} />
+          <ScannerTab />
         ) : (
         <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
           {/* ---- left: the context the news is read against ------------- */}
@@ -265,60 +284,59 @@ export function Terminal({
              * often something can change you is the only ordering that
              * survives contact with a fold, and a clock never changes you.
              */}
-            <SessionRanges
-              assets={data.ranges?.assets ?? {}}
+            <MSessionRanges
+              assets={data.ranges?.assets ?? EMPTY}
               expiry={data.expiry}
-              ageMin={ages.ranges}
+              ageMin={age("ranges")}
               error={st.ranges?.ok === false ? st.ranges.error : null}
             />
-            <VolumeProfile
+            <MVolumeProfile
               data={data.profiles}
-              ageMin={ages.profiles}
+              ageMin={age("profiles")}
               error={st.profiles?.ok === false ? st.profiles.error : null}
             />
-            <Gamma
-              assets={data.gex?.assets ?? {}}
+            <MGamma
+              assets={data.gex?.assets ?? EMPTY}
               enabled={data.gex?.enabled ?? false}
-              ageMin={ages.gex}
+              ageMin={age("gex")}
               error={st.gex?.ok === false ? st.gex.error : null}
             />
-            <Volatility vol={data.volterm} ageMin={ages.quotes} />
-            <Rates
+            <MVolatility vol={data.volterm} ageMin={age("quotes")} />
+            <MRates
               rates={data.rates}
               pm={data.policy_meetings}
-              ageMin={ages.rates}
+              ageMin={age("rates")}
               error={st.rates?.ok === false ? st.rates.error : null}
             />
-            {clock && <Sessions clock={clock} />}
+            {data.clock && <MSessions clock={data.clock} />}
           </div>
 
           {/* ---- middle: the wire --------------------------------------- */}
           <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2">
-            <Wire
-              items={data.wire ?? []}
-              now={now}
-              ageMin={ages.wire}
+            <MWire
+              items={data.wire ?? NONE}
+              ageMin={age("wire")}
               error={st.wire?.ok === false ? st.wire.error : null}
             />
           </div>
 
           {/* ---- right: prices and rotation ----------------------------- */}
           <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-            <Board
+            <MBoard
               title="The book"
-              quotes={data.quotes ?? []}
-              groups={["core"]}
-              ageMin={ages.quotes}
+              quotes={data.quotes ?? NONE}
+              groups={BOOK_GROUPS}
+              ageMin={age("quotes")}
               error={st.quotes?.ok === false ? st.quotes.error : null}
             />
-            <Calendar
-              rows={data.calendar ?? []}
-              ageMin={ages.calendar}
+            <MCalendar
+              rows={data.calendar ?? NONE}
+              ageMin={age("calendar")}
               error={st.calendar?.ok === false ? st.calendar.error : null}
             />
-            <Movers
-              indices={data.constituents?.indices ?? {}}
-              ageMin={ages.constituents}
+            <MMovers
+              indices={data.constituents?.indices ?? EMPTY}
+              ageMin={age("constituents")}
               error={st.constituents?.ok === false ? st.constituents.error : null}
             />
             {/*
@@ -343,27 +361,27 @@ export function Terminal({
              * only because the header strip already carries its headline rows
              * (VIX, US10Y, DXY, WTI). Fed and Earnings are diaries, and go last.
              */}
-            <Rotation
-              rows={data.sectors ?? []}
-              ageMin={ages.sectors}
+            <MRotation
+              rows={data.sectors ?? NONE}
+              ageMin={age("sectors")}
               error={st.sectors?.ok === false ? st.sectors.error : null}
             />
-            <Board
+            <MBoard
               title="Macro board"
-              quotes={data.quotes ?? []}
-              groups={["vol", "energy", "rates", "fx", "metals", "global", "crypto"]}
-              ageMin={ages.quotes}
+              quotes={data.quotes ?? NONE}
+              groups={MACRO_GROUPS}
+              ageMin={age("quotes")}
             />
-            <Fed
-              rows={data.fed ?? []}
-              auctions={data.auctions ?? []}
+            <MFed
+              rows={data.fed ?? NONE}
+              auctions={data.auctions ?? NONE}
               today={data.expiry?.today ?? ""}
               ageMin={
-                ages.fed == null
-                  ? ages.auctions
-                  : ages.auctions == null
-                    ? ages.fed
-                    : Math.max(ages.fed, ages.auctions)
+                raw.fed == null
+                  ? age("auctions")
+                  : raw.auctions == null
+                    ? age("fed")
+                    : (ageStep(Math.max(raw.fed, raw.auctions)) ?? undefined)
               }
               error={
                 st.fed?.ok === false
@@ -373,53 +391,35 @@ export function Terminal({
                     : null
               }
             />
-            <Earnings
-              rows={data.earnings ?? []}
+            <MEarnings
+              rows={data.earnings ?? NONE}
               today={data.expiry?.today ?? ""}
-              ageMin={ages.earnings}
+              ageMin={age("earnings")}
               error={st.earnings?.ok === false ? st.earnings.error : null}
             />
           </div>
         </main>
         )}
 
-        <StatusRail status={st} ages={ages} pollSec={POLL_SEC} lastPoll={lastPoll} />
+        <MStatusRail status={st} ages={raw} pollSec={POLL_SEC} lastPoll={lastPoll} />
       </div>
     </div>
     </UiProvider>
   );
 }
 
-/**
- * The payload's clock, advanced locally between polls.
- *
- * `now === null` means "first render, before mount" and returns the collector's
- * own clock untouched — see the note on the `now` state above.
- *
- * Only the displayed time and the countdowns move; open/closed and the phase
- * stay as the collector computed them, because recomputing a session boundary
- * in the browser would need the whole zone table and would be a second
- * implementation that could disagree with the first.
+/*
+ * Stable empties for a block the payload does not carry yet, so a missing
+ * block is the same prop every render rather than a fresh `[]` or `{}`.
  */
-function localClock(clock: TerminalData["clock"] | undefined, now: number | null) {
-  if (!clock) return null;
-  const base = Date.parse(clock.et);
-  if (now === null || Number.isNaN(base)) return clock;
+const NONE: never[] = [];
+const EMPTY = {} as Record<string, never>;
 
-  const elapsedMin = (now - base) / 60000;
-  return {
-    ...clock,
-    et_time: new Date(now).toLocaleTimeString("en-US", {
-      hour12: false,
-      timeZone: "America/New_York",
-    }),
-    sessions: clock.sessions.map((s) => ({
-      ...s,
-      next_min: Math.max(0, s.next_min - elapsedMin),
-    })),
-    markers: clock.markers.map((m) => ({
-      ...m,
-      in_min: Math.max(0, m.in_min - elapsedMin),
-    })),
-  };
+/**
+ * The Scanner with its own thirty-second clock for the headline ages — the
+ * only time it prints — so its tick re-renders the scanner, not the shell.
+ */
+function ScannerTab() {
+  const now = useNow(30_000);
+  return <Scanner now={now} />;
 }

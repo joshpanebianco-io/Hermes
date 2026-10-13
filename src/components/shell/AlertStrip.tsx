@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WireItem } from "@/types/terminal";
-import { ago } from "@/lib/format";
+import { Ago } from "@/components/ui/Ago";
 
 /**
  * The alert line — high-impact headlines, crawling, on every tab.
@@ -35,11 +35,8 @@ const SPEED_PX_S = 52;
 
 export function AlertStrip({
   items,
-  now,
 }: {
   items: WireItem[];
-  /** The live clock. Null until mounted — see `ago`. */
-  now: number | null;
 }) {
   const runRef = useRef<HTMLDivElement | null>(null);
   const [duration, setDuration] = useState(60);
@@ -74,15 +71,19 @@ export function AlertStrip({
       rel="noreferrer noopener"
       className="inline-flex items-center gap-2 pr-7 pl-1 whitespace-nowrap hover:[&>span:nth-child(2)]:underline hover:[&>span:nth-child(2)]:underline-offset-4"
       title={`${h.publisher} · ${h.category}`}
-      // The second copy exists only for the loop; one link per headline is
-      // enough for a screen reader or the tab key.
-      tabIndex={copy === 0 ? 0 : -1}
+      // OUT OF THE TAB ORDER, BOTH COPIES (review, 2026-10-13: a keyboard had
+      // to walk twenty crawl links before reaching the page). The crawl is a
+      // moving target and a poor keyboard surface, and every one of these
+      // headlines is also a link on the wire, where the tab key can reach it.
+      // The first copy stays readable to a screen reader; the second exists
+      // only for the loop.
+      tabIndex={-1}
       aria-hidden={copy === 1}
     >
       <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full bg-err qt:h-[6px] qt:w-[6px] qt:rounded-[1px]" />
       <span className="text-[12.5px] leading-none text-ink qt:text-[13px]">{h.title}</span>
-      <span className="fig text-[9.5px] leading-none text-ink-4 qt:text-[10.5px] qt:font-semibold qt:tracking-[0.06em] qt:uppercase qt:[font-family:var(--font-cond)]">{h.publisher}</span>
-      <span className="fig text-[9.5px] leading-none text-ink-4 qt:text-[11px]">{ago(h.utc, now)}</span>
+      <span className="fig text-[9.5px] leading-none text-ink-3 qt:text-[10.5px] qt:font-semibold qt:tracking-[0.06em] qt:uppercase qt:[font-family:var(--font-cond)]">{h.publisher}</span>
+      <Ago utc={h.utc} className="fig text-[9.5px] leading-none text-ink-3 qt:text-[11px]" />
     </a>
   );
 
@@ -95,7 +96,7 @@ export function AlertStrip({
       <div className="flex shrink-0 items-center gap-1.5 border-r border-ring/60 px-3 qt:border-ring qt:px-6">
         <span className="h-[6px] w-[6px] rounded-full bg-err live-dot qt:rounded-[1px]" aria-hidden />
         <span className="fig text-[9px] tracking-[0.14em] text-err uppercase qt:text-[11px]">High</span>
-        <span className="fig text-[9px] text-ink-4 qt:text-[11px]">{alerts.length}</span>
+        <span className="fig text-[9px] text-ink-3 qt:text-[11px]">{alerts.length}</span>
       </div>
       <div className="wire-track relative min-w-0 flex-1 overflow-hidden py-2.5">
         <div

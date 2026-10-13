@@ -5,8 +5,9 @@ import { dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Tick } from "@/components/ui/Tick";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
-
-type Tab = "terminal" | "scanner" | "report" | "settings";
+import { TABS, type Tab } from "@/lib/tabs";
+import { useNow } from "@/lib/useNow";
+import { localClock, readerClock } from "@/lib/clock";
 
 /**
  * The header rail — identity on the left, state on the right.
@@ -17,27 +18,20 @@ type Tab = "terminal" | "scanner" | "report" | "settings";
  * an instrument: you cannot glance at a moving target, and the whole value of
  * a header row is that NQ is always in the same six centimetres of glass.
  */
-const TABS = [
-  { key: "terminal" as const, label: "Terminal" },
-  { key: "scanner" as const, label: "Scanner" },
-  { key: "report" as const, label: "Report" },
-  { key: "settings" as const, label: "Settings" },
-];
-
 /** Which strip figures stay in the Quiet band at which window width, by position. */
 const STRIP_FIT = [
   "",
   "",
   "",
   "max-[1379px]:hidden",
-  "max-[1439px]:hidden",
+  "max-[1599px]:hidden",
   "max-[1759px]:hidden",
   "max-[1759px]:hidden",
   "max-[1899px]:hidden",
 ];
 
 export function Header({
-  clock,
+  clock: rawClock,
   quotes,
   live,
   onRefresh,
@@ -51,6 +45,12 @@ export function Header({
   tab: Tab;
   onTab: (t: Tab) => void;
 }) {
+  // The header owns its own second hand — the rest of the shell does not tick.
+  const now = useNow(1000);
+  const clock = localClock(rawClock, now);
+  // The reader's own time beside New York's: the owner trades the NY session
+  // from Australia, where 09:30 ET is past midnight. Null on New York time.
+  const local = readerClock(now);
   // The strip's instruments, in trading order rather than payload order.
   const strip = ["NQ", "ES", "GC", "VIX", "US10Y", "DXY", "WTI", "BTC"]
     .map((k) => quotes.find((q) => q.key === k))
@@ -85,7 +85,7 @@ export function Header({
                 // Quiet: sentence case Plex, the active tab lifted onto the
                 // selection grey — the same key GEXYGEN's rail and segments use.
                 "qt:rounded-[3px] qt:px-2.5 qt:font-sans qt:text-[12.5px] qt:tracking-normal qt:normal-case",
-                tab === t.key ? "text-ink qt:bg-surface-3 qt:font-semibold" : "text-ink-4 hover:text-ink-2 qt:text-ink-3",
+                tab === t.key ? "text-ink qt:bg-surface-3 qt:font-semibold" : "text-ink-3 hover:text-ink-2",
               )}
             >
               {t.label}
@@ -109,7 +109,7 @@ export function Header({
          * wrap or slide under the tabs — measured at 1280, 1440, 1600, 1920.
          */}
         {strip.length > 0 && (
-          <div className="hidden min-w-0 flex-1 items-center justify-end gap-6 overflow-hidden qt:flex">
+          <div className="hidden min-w-0 flex-1 items-center gap-6 overflow-hidden [justify-content:safe_flex-end] qt:flex">
             {strip.map((q, i) => (
               <div key={q.key} className={cn("flex shrink-0 flex-col gap-1", STRIP_FIT[i])}>
                 <span className="qt-cap text-[10.5px] text-ink-3">{q.key}</span>
@@ -130,15 +130,25 @@ export function Header({
           {clock && (
             <div className="mr-2 flex items-baseline gap-2">
               {clock.overlap && (
-                <span className="fig rounded bg-flip/15 px-1.5 py-px text-[9px] text-flip">
+                <span className="fig qt-pill rounded bg-flip/15 px-1.5 py-px text-[9px] text-flip [--pill-hue:var(--flip-fig)] qt:text-[10.5px]">
                   OVERLAP
                 </span>
               )}
-              <span className="hidden text-[10.5px] text-ink-3 sm:inline qt:text-[12px]">
+              {/* Yields first when the band is tight: the session table carries
+                  the phase, and the reader's local time is worth more here. */}
+              <span className="hidden text-[10.5px] text-ink-3 sm:inline qt:text-[12px] qt:max-[1439px]:hidden">
                 {clock.phase.label}
               </span>
               <span className="fig text-[13px] text-ink qt:text-[15px]">{clock.et_time}</span>
               <span className="eyebrow text-[9px]">ET</span>
+              {local && (
+                <span
+                  className="fig ml-1 text-[11px] text-ink-3 qt:text-[12.5px]"
+                  title={`Your local time (${local.zone})`}
+                >
+                  {local.time} <span className="eyebrow text-[9px]">{local.zone}</span>
+                </span>
+              )}
             </div>
           )}
           <span
@@ -148,13 +158,13 @@ export function Header({
             )}
             aria-hidden
           />
-          <span className="fig text-[9.5px] text-ink-4 uppercase qt:text-[10.5px] qt:text-ink-3">
+          <span className="fig text-[9.5px] text-ink-3 uppercase qt:text-[10.5px]">
             {live ? "Live" : "Offline"}
           </span>
           <button
             type="button"
             onClick={onRefresh}
-            className="fig hit rounded border border-ring px-2 py-px text-[9.5px] text-ink-4 uppercase hover:text-ink-2 qt:ml-1 qt:rounded-[4px] qt:border-ring-2 qt:px-2.5 qt:py-0.5 qt:font-sans qt:text-[12px] qt:tracking-normal qt:normal-case qt:text-ink-3"
+            className="fig hit rounded border border-ring px-2 py-px text-[9.5px] text-ink-3 uppercase hover:text-ink-2 qt:ml-1 qt:rounded-[4px] qt:border-ring-2 qt:px-2.5 qt:py-0.5 qt:font-sans qt:text-[12px] qt:tracking-normal qt:normal-case"
           >
             Refresh
           </button>
@@ -165,7 +175,7 @@ export function Header({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ring/60 bg-surface/50 px-3 py-1.5 qt:hidden">
           {strip.map((q) => (
             <div key={q.key} className="flex items-baseline gap-1.5">
-              <span className="fig text-[9.5px] tracking-wider text-ink-4 uppercase">{q.key}</span>
+              <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{q.key}</span>
               <Tick value={num(q.last)} className="fig text-[11.5px] text-ink" />
               <Tick value={pct(q.pct)} className={cn("fig text-[10px]", dir(q.pct))} />
             </div>

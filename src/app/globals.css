@@ -226,17 +226,6 @@
   }
 }
 
-/*
- * The travelling light on the chassis edge. Registered rather than declared,
- * because a plain custom property is an unparsed string to the animation
- * engine and would flip at the halfway point instead of sweeping.
- */
-@property --border-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
 @layer components {
   /*
    * THE CHASSIS.
@@ -290,15 +279,27 @@
    * The head is `--frame-b` and the tail fades through `--frame-a`: the two
    * chrome hues the theme already owns, so this introduces no new colour.
    *
-   * NO `animation` HERE, deliberately. A CSS animation of `--border-angle` is
+   * NO `animation` HERE, deliberately. A CSS animation of an angle is
    * necessarily linear in ANGLE, and a rectangle's perimeter is not
    * equidistant from its centre — a linear angle crawls the edge midpoints and
-   * accelerates through the corners. `useFrameLight.ts` drives the property
+   * accelerates through the corners. `useFrameLight.ts` drives the rotation
    * through the Web Animations API on a curve derived from the frame's
    * measured geometry instead. The paint is here; only the timing is there.
+   *
+   * THE GRADIENT TURNS; IT IS NOT REPAINTED. It used to live on this ring as
+   * `conic-gradient(from var(--border-angle))` with the registered angle
+   * animated — which re-rasterised a full-window masked gradient through two
+   * drop-shadows on every frame, all day: ~690ms of main-thread time a second
+   * on an idle tab (measured 2026-10-13, 815ms/s travel against 160 off). Now
+   * the ring is a real element (`.frame-light`, mounted by Terminal.tsx) whose
+   * one child carries the gradient FROM 0deg and is rotated by a `transform`
+   * animation — compositor work, no paint. A conic gradient turned about its
+   * own centre is the same picture as one started from a later angle, so the
+   * look is unchanged. The pseudo-element below is the shared ring geometry,
+   * and only breathe still paints into it.
    */
-  .app-frame::after {
-    content: "";
+  .app-frame::after,
+  .frame-light {
     position: absolute;
     /* Resolves against the PADDING box, so -1px lands exactly on the 1px
        border — the ring sits ON the boundary rather than inside it. */
@@ -307,16 +308,6 @@
     /* At exactly the border width the light sits *in* the boundary and reads
        as the border changing colour; 2px reads as something travelling. */
     padding: 2px;
-    background: conic-gradient(
-      from var(--border-angle),
-      transparent 0deg,
-      transparent 236deg,
-      color-mix(in oklab, var(--frame-a) 22%, transparent) 272deg,
-      color-mix(in oklab, var(--frame-a) 70%, transparent) 310deg,
-      color-mix(in oklab, var(--frame-b) 85%, transparent) 332deg,
-      color-mix(in oklab, var(--frame-b) 96%, transparent) 352deg,
-      transparent 360deg
-    );
     -webkit-mask:
       linear-gradient(#000 0 0) content-box,
       linear-gradient(#000 0 0);
@@ -341,6 +332,41 @@
     pointer-events: none;
   }
 
+  /* Travel only. Off and breathe have no comet. */
+  .frame-light {
+    display: none;
+    overflow: hidden;
+  }
+  .app-frame.fx-travel > .frame-light {
+    display: block;
+  }
+
+  /*
+   * The comet itself: a square as wide as the frame's diagonal, centred on
+   * it, so the gradient covers every corner at any rotation. `--frame-d` is
+   * set by the hook from the measured box. Clockwise from twelve at rest; the
+   * hook's keyframes turn it.
+   */
+  .frame-light__spin {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: var(--frame-d, 200vmax);
+    height: var(--frame-d, 200vmax);
+    margin: calc(var(--frame-d, 200vmax) / -2) 0 0 calc(var(--frame-d, 200vmax) / -2);
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 236deg,
+      color-mix(in oklab, var(--frame-a) 22%, transparent) 272deg,
+      color-mix(in oklab, var(--frame-a) 70%, transparent) 310deg,
+      color-mix(in oklab, var(--frame-b) 85%, transparent) 332deg,
+      color-mix(in oklab, var(--frame-b) 96%, transparent) 352deg,
+      transparent 360deg
+    );
+    will-change: transform;
+  }
+
   /*
    * THE BREATHING VARIANT — same ring, different life.
    *
@@ -357,6 +383,7 @@
    * to them.
    */
   .app-frame.fx-breathe::after {
+    content: "";
     background: color-mix(in oklab, var(--frame-a) 70%, transparent);
     animation: frame-breathe 12s ease-in-out infinite;
   }
@@ -1652,4 +1679,44 @@
 }
 .ui-qt .module .text-\[12\.5px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
   font-size: 13.5px;
+}
+
+/*
+ * QUIET'S PILLS AND BANDS (2026-10-13 review: "Quiet still has tinted pills
+ * and filled bands"). A status word on a tinted capsule — CONTANGO, NEGATIVE
+ * γ, OPEX WEEK, OVERLAP, BMO / AMC, the wire's H / M — becomes what Quiet
+ * makes every chip: caps in its hue with a square marker, no fill (GEXYGEN's
+ * LumChip under .ui-qt; the brief's Chip does the same). A group heading on
+ * a filled grey band becomes a hairline and a caps label. Classic ignores
+ * both classes. `!important` only where the classic pill sets its tint
+ * inline, which no stylesheet rule can otherwise reach. `--pill-hue` names
+ * the figure tier where the classic pill used the mark tier.
+ */
+.ui-qt .qt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--pill-hue, currentColor) !important;
+  font-family: var(--font-cond);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.ui-qt .qt-pill::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+.ui-qt .qt-band {
+  background: transparent;
+  border-bottom-width: 0;
+  border-top-color: var(--ring);
+  padding-top: 10px;
+}
+.ui-qt .qt-band:first-child {
+  border-top-width: 0;
 }

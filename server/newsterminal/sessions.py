@@ -21,11 +21,14 @@ glance from two rows of open/closed.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .holidays import REGULAR_CLOSE, close_minute, close_time, holiday_name, is_trading_day
+
 ET = ZoneInfo("America/New_York")
+LONDON = ZoneInfo("Europe/London")
 
 # key, label, city zone, local open, local close, weight
 #
@@ -42,20 +45,40 @@ SESSIONS: list[tuple[str, str, str, time, time, int]] = [
     ("newyork", "New York", "America/New_York", time(9, 30), time(16, 0), 5),
 ]
 
-# The moments inside a US session that reprice things, in ET. Not a calendar —
-# these recur every session and are what the next-event countdown runs on.
-MARKERS: list[tuple[time, str, str]] = [
-    (time(18, 0), "Globex open", "Futures reopen; the new session's first print"),
-    (time(2, 0), "London pre-open", "European desks arrive; overnight range often breaks"),
-    (time(3, 0), "London open", "Cash equities open in London"),
-    (time(8, 0), "London/NY overlap", "Both major pools open — the day's deepest liquidity"),
-    (time(8, 30), "US data window", "CPI, PCE, payrolls and claims print at this minute"),
-    (time(9, 30), "NYSE open", "US cash equities open"),
-    (time(10, 0), "Late data window", "ISM, consumer confidence, JOLTS print at this minute"),
-    (time(11, 30), "London close approach", "European desks begin squaring"),
-    (time(15, 0), "Final hour", "Closing imbalances begin building"),
-    (time(16, 0), "NYSE close", "US cash close; futures continue"),
-    (time(17, 0), "CME settlement", "Daily settlement; the futures day rolls"),
+# The moments inside a session that reprice things, each on the clock that
+# DEFINES it. Not a calendar — these recur and are what the next-event
+# countdown runs on.
+#
+# EACH ONE KEEPS ITS OWN CITY'S CLOCK (review, 2026-10-13). These used to be
+# ET constants — "London open 03:00" — which is right only while London and
+# New York are on the same side of daylight saving. For the week between the
+# UK's change and the US's (and three weeks every March) London's 08:00 is
+# 04:00 ET, and the countdown said "London open in 5m" an hour early beside a
+# London row that said 65. So the London moments are London times, the NYSE
+# ones New York times (moved by the half-day table), and the CME ones the
+# futures week's.
+#
+#   kind      zone              which days
+#   globex    New York          Sun–Thu evenings (the reopen for the next session)
+#   london    London            UK weekdays
+#   nyse      New York          NYSE trading days (holidays skipped)
+#   cme       New York          NYSE trading days
+MARKERS: list[tuple[str, time, str, str]] = [
+    ("globex", time(18, 0), "Globex open", "Futures reopen; the new session's first print"),
+    ("london", time(7, 0), "London pre-open",
+     "European desks arrive; overnight range often breaks"),
+    ("london", time(8, 0), "London open", "Cash equities open in London"),
+    ("nyse", time(8, 0), "London/NY overlap",
+     "Both major pools open — the day's deepest liquidity"),
+    ("nyse", time(8, 30), "US data window", "CPI, PCE, payrolls and claims print at this minute"),
+    ("nyse", time(9, 30), "NYSE open", "US cash equities open"),
+    ("nyse", time(10, 0), "Late data window",
+     "ISM, consumer confidence, JOLTS print at this minute"),
+    ("london", time(16, 30), "London close",
+     "The LSE's closing auction; European desks square up"),
+    ("nyse", time(15, 0), "Final hour", "Closing imbalances begin building"),
+    ("nyse", time(16, 0), "NYSE close", "US cash close; futures continue"),
+    ("cme", time(17, 0), "CME settlement", "Daily settlement; the futures day rolls"),
 ]
 
 
@@ -83,9 +106,16 @@ def session_state(
     for key, label, zone, o, c, weight in SESSIONS:
         tz = ZoneInfo(zone)
         local = now.astimezone(tz)
+        ny = key == "newyork"
+        # NEW YORK KEEPS THE NYSE'S CALENDAR: shut on its holidays, and shut at
+        # 13:00 on its half days. The row read OPEN on Thanksgiving before
+        # (review, 2026-10-13). The other cities' own holidays are not modelled.
+        if ny:
+            c = close_time(local.date())
         start, end = _local_window(now, zone, o, c)
         weekend = local.weekday() >= 5
-        open_now = (not weekend) and start <= now < end
+        trading = is_trading_day(local.date()) if ny else not weekend
+        open_now = trading and start <= now < end
 
         if open_now:
             nxt, mins = "closes", (end - now).total_seconds() / 60.0
@@ -95,10 +125,11 @@ def session_state(
             # arithmetic on weekday numbers, because that walk is obviously
             # correct and the arithmetic is obviously not.
             probe = local
-            for _ in range(5):
+            for _ in range(10):
                 cand = probe.replace(hour=o.hour, minute=o.minute, second=0, microsecond=0)
                 cand_utc = cand.astimezone(UTC)
-                if cand_utc > now and cand.weekday() < 5:
+                day_ok = is_trading_day(cand.date()) if ny else cand.weekday() < 5
+                if cand_utc > now and day_ok:
                     break
                 probe = probe + timedelta(days=1)
             else:
@@ -114,7 +145,9 @@ def session_state(
                 "weekend": weekend,
                 "local_time": local.strftime("%H:%M"),
                 "local_date": local.strftime("%a %d %b"),
-                "hours": f"{o.strftime('%H:%M')}–{c.strftime('%H:%M')} local",
+                "hours": f"{o.strftime('%H:%M')}–{c.strftime('%H:%M')} local"
+                + (" (early close)" if ny and c != REGULAR_CLOSE else ""),
+                "holiday": holiday_name(local.date()) if ny else None,
                 "next": nxt,
                 "next_min": round(mins),
                 "weight": weight,
@@ -128,7 +161,7 @@ def session_state(
     # because the two cities' DST transitions are three weeks apart and the
     # window genuinely moves during those weeks — a derived value would be
     # right, but nobody could check it.
-    overlap = (not _is_weekend(et)) and (8 * 60) <= et_min < (11 * 60 + 30)
+    overlap = is_trading_day(et.date()) and (8 * 60) <= et_min < (11 * 60 + 30)
 
     return {
         "et": et.isoformat(),
@@ -140,7 +173,7 @@ def session_state(
         "open_count": sum(1 for r in rows if r["open"]),
         "overlap": overlap,
         "phase": _phase(et, rows),
-        "markers": _markers(et, fed),
+        "markers": _markers(now, fed),
     }
 
 
@@ -189,17 +222,40 @@ def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
     if wd == 5 or (wd == 6 and m < 18 * 60) or (wd == 4 and m >= 17 * 60):
         return {"key": "weekend", "label": "Weekend", "note": "Futures reopen Sunday 18:00 ET"}
 
-    # New York, in New York's own clock.
+    # A NYSE HOLIDAY IS NOT A NEW YORK SESSION. It read "NY morning" on
+    # Thanksgiving (review, 2026-10-13) beside a New York row that was open.
+    # The cash market is closed all day; the index and metal futures run a
+    # shortened session and halt at 13:00 ET.
+    d = et.date()
+    if wd < 5 and not is_trading_day(d) and 8 * 60 <= m < 18 * 60:
+        return {
+            "key": "holiday",
+            "label": "US market holiday",
+            "note": f"{holiday_name(d) or 'NYSE closed'} — cash shut; futures halt early",
+        }
+
+    # New York, in New York's own clock — shortened on a half day.
+    close_m = close_minute(d)
+    half = close_m < 16 * 60
     if 8 * 60 <= m < 9 * 60 + 30:
         return {"key": "preopen", "label": "US pre-open", "note": "Data window and the overlap"}
-    if 9 * 60 + 30 <= m < 11 * 60 + 30:
+    if 9 * 60 + 30 <= m < min(11 * 60 + 30, close_m):
         return {"key": "open", "label": "NY morning", "note": "Deepest liquidity of the day"}
-    if 11 * 60 + 30 <= m < 14 * 60:
+    if 11 * 60 + 30 <= m < min(14 * 60, close_m - 60):
         return {"key": "midday", "label": "NY midday", "note": "Volume typically troughs"}
-    if 14 * 60 <= m < 16 * 60:
-        return {"key": "close", "label": "NY final hours", "note": "Imbalances and positioning"}
-    if 16 * 60 <= m < 18 * 60:
-        return {"key": "post", "label": "Post-close", "note": "Cash shut; settlement at 17:00 ET"}
+    if 11 * 60 + 30 <= m < close_m:
+        return {
+            "key": "close",
+            "label": "NY final hour" if half else "NY final hours",
+            "note": "Early close at 13:00 ET" if half else "Imbalances and positioning",
+        }
+    if close_m <= m < 18 * 60:
+        return {
+            "key": "post",
+            "label": "Post-close",
+            "note": ("Early close today — cash shut at 13:00 ET" if half
+                     else "Cash shut; settlement at 17:00 ET"),
+        }
 
     # Overnight: whoever is actually trading says what this is.
     live = {r["key"] for r in rows if r.get("open")}
@@ -254,7 +310,7 @@ def _fed_markers(et: datetime, fed: list[dict[str, Any]] | None) -> list[dict[st
             cand = datetime.combine(et.date(), time(int(hh), int(mm)), tzinfo=ET)
         except ValueError:
             continue
-        if cand <= et:
+        if cand.timestamp() <= et.timestamp():
             continue  # Already landed. The wire has it now.
         title = str(e.get("title") or e.get("kind") or "").strip()
         out.append(
@@ -262,27 +318,64 @@ def _fed_markers(et: datetime, fed: list[dict[str, Any]] | None) -> list[dict[st
                 "label": title if e.get("kind") == "FOMC" else str(e.get("kind")),
                 "note": note,
                 "et": cand.strftime("%H:%M"),
-                "in_min": round((cand - et).total_seconds() / 60.0),
+                "in_min": round((cand.timestamp() - et.timestamp()) / 60.0),
             }
         )
     return out
 
 
-def _markers(et: datetime, fed: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """The next few session moments, with minutes to each."""
-    today = et.date()
+def _marker_day_ok(kind: str, d: date) -> bool:
+    """Does a marker of this kind happen on its own zone's date `d`?"""
+    if kind == "globex":
+        return d.weekday() in (6, 0, 1, 2, 3)  # Sunday–Thursday evenings
+    if kind == "london":
+        return d.weekday() < 5
+    return is_trading_day(d)  # nyse, cme
+
+
+def _marker_time(kind: str, label: str, t: time, d: date) -> time:
+    """A NYSE moment on a half day: the close moves to 13:00 and the final hour with it."""
+    if kind != "nyse":
+        return t
+    close = close_time(d)
+    if label == "NYSE close":
+        return close
+    if label == "Final hour":
+        return time(close.hour - 1, close.minute)
+    return t
+
+
+def _markers(now: datetime, fed: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """The next few session moments, with minutes to each.
+
+    ELAPSED TIME IS MEASURED ON TIMESTAMPS. Subtracting two datetimes that share
+    a tzinfo is wall-clock arithmetic in Python, so across the night the clocks
+    change it was out by an hour (01:30 on 2026-11-01 counted 90 minutes to a
+    03:00 that was 150 away). And the walk covers the next few days on each
+    marker's own calendar, so a Friday evening no longer counts down to a
+    Saturday-morning "London open".
+    """
+    now_ts = now.timestamp()
+    et = now.astimezone(ET)
     out: list[dict[str, Any]] = _fed_markers(et, fed)
-    for t, label, note in MARKERS:
-        cand = datetime.combine(today, t, tzinfo=ET)
-        if cand <= et:
-            cand += timedelta(days=1)
-        out.append(
-            {
-                "label": label,
-                "note": note,
-                "et": cand.strftime("%H:%M"),
-                "in_min": round((cand - et).total_seconds() / 60.0),
-            }
-        )
+    for kind, t, label, note in MARKERS:
+        zone = LONDON if kind == "london" else ET
+        base = now.astimezone(zone).date()
+        for k in range(0, 8):
+            d = base + timedelta(days=k)
+            if not _marker_day_ok(kind, d):
+                continue
+            cand = datetime.combine(d, _marker_time(kind, label, t, d), tzinfo=zone)
+            if cand.timestamp() <= now_ts:
+                continue
+            out.append(
+                {
+                    "label": label,
+                    "note": note,
+                    "et": cand.astimezone(ET).strftime("%H:%M"),
+                    "in_min": round((cand.timestamp() - now_ts) / 60.0),
+                }
+            )
+            break
     out.sort(key=lambda r: r["in_min"])
     return out[:4]

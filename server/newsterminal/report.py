@@ -994,6 +994,13 @@ def _partial(snap: dict[str, Any], books: list[str]) -> list[str]:
         elif not st.get("ok"):
             err = str(st.get("error") or "").strip()
             out.append(f"{name} unavailable" + (f" ({err[:90]})" if err else "") + ".")
+        elif st.get("source") == "stale" or st.get("stale_age_min") is not None:
+            # A cached copy behind a dead upstream is not "ok" for a brief: the
+            # note would be written on frozen numbers with nothing to say so
+            # (review, 2026-10-13).
+            age = st.get("stale_age_min")
+            when = f" from {float(age):.0f} min ago" if isinstance(age, (int, float)) else ""
+            out.append(f"{name}: upstream unreachable — figures are a cached copy{when}.")
     if (status.get("gex") or {}).get("ok"):
         for b in books:
             g = _gex_asset(snap, b)
@@ -2004,6 +2011,112 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# --------------------------------------------------------------------------
+# The numeral guard — every number the model prints must be one it was shown.
+# --------------------------------------------------------------------------
+#
+# THE RULE THE PROMPT STATES, NOW CHECKED (review, 2026-10-13). "Every claim
+# must quote a figure from the digest" was an instruction and nothing more: a
+# model that rounded 4.96% to 5%, worked out a difference, or invented a level
+# printed it in the same frame as the server's exact tables. Ported from
+# GEXYGEN's brief (lib/brief/schema.ts `numeralGuard`): exact on the VALUE,
+# lenient on the spelling — "30,707", "30707" and "+30,707" are one number,
+# "1.10" and "1.1" are one number. A rounded figure, a computed one and an
+# invented one are exactly what it catches. One corrective re-ask names them;
+# whatever survives is stored on the report as `unverified` for the page to
+# flag — shown and marked, never passed off.
+
+_NUM = re.compile(r"\d+(?:[.,]\d+)*")
+_GROUPED = re.compile(r"^\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
+
+
+def _num_key(tok: str) -> str | None:
+    """A numeral as a comparable key. Pure.
+
+    A comma followed by exactly three digits groups thousands; any other comma
+    is punctuation between two numbers ("3,4" is not three point four).
+    """
+    clean = tok.replace(",", "") if _GROUPED.match(tok) else tok.split(",")[0]
+    try:
+        v = float(clean)
+    except ValueError:
+        return None
+    if not math.isfinite(v):
+        return None
+    return f"{round(v * 10_000) / 10_000:.4f}".rstrip("0").rstrip(".")
+
+
+def numerals_in(text: str) -> list[str]:
+    """Every numeral in a text, as keys, in order. Pure."""
+    out: list[str] = []
+    for m in _NUM.finditer(text or ""):
+        k = _num_key(m.group(0))
+        if k is not None:
+            out.append(k)
+    return out
+
+
+def brief_prose(b: dict[str, Any]) -> list[str]:
+    """Every string the model wrote in a sanitised brief — what the guard reads. Pure."""
+    out: list[str] = [b.get("thesis") or ""]
+    for c in b.get("calls") or []:
+        out += [*c.get("why", []), c.get("rest_of_day") or "", c.get("wrong_if") or ""]
+    out += [x.get("note") or "" for x in b.get("snapshot_watch") or []]
+    out += [b.get("gamma_read") or "", b.get("catalysts_intro") or ""]
+    out += [x.get("note") or "" for x in b.get("catalyst_notes") or []]
+    for r in b.get("reads") or []:
+        out += [r.get("regime") or "", *r.get("chain", []), r.get("at_open") or "",
+                r.get("wrong_if") or "", r.get("rest_of_day") or "", *r.get("flips", [])]
+        for d in r.get("drivers") or []:
+            out += [d.get("label") or "", d.get("text") or ""]
+    out += [b.get("rotation_read") or ""]
+    out += [x.get("read") or "" for x in b.get("ratio_reads") or []]
+    out += list(b.get("rotation_notes") or [])
+    out += [x.get("note") or "" for x in b.get("headlines") or []]
+    out += [b.get("cross_asset") or "", *b.get("risks", [])]
+    return [x for x in out if x]
+
+
+def unverified(b: dict[str, Any], seen: str) -> list[str]:
+    """The numerals in the brief that the text the model was shown does not contain."""
+    known = set(numerals_in(seen))
+    bad: list[str] = []
+    for s in brief_prose(b):
+        for k in numerals_in(s):
+            if k not in known and k not in bad:
+                bad.append(k)
+    return bad
+
+
+def guard_retry(bad: list[str]) -> str:
+    """The corrective re-ask — GEXYGEN's wording."""
+    return (
+        f"Your answer used numbers that do not appear in the data: {', '.join(bad[:12])}. "
+        "Rewrite it using ONLY figures copied exactly from the data — no rounding, no "
+        "arithmetic, no new levels. Where you wanted a number that is not printed there, "
+        "say it in words. Return the whole JSON object again."
+    )
+
+
+def _reask(payload: dict[str, Any], key: str, content: str, bad: list[str],
+           facts: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    """One corrective re-ask on the same model and mode → (brief, doc, outcome)."""
+    retry = dict(payload)
+    retry["messages"] = [*payload["messages"], {"role": "assistant", "content": content},
+                         {"role": "user", "content": guard_retry(bad)}]
+    try:
+        doc = _post(retry, key)
+        msg = doc["choices"][0]["message"]
+        text = msg.get("content") or msg.get("reasoning") or ""
+    except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError, TypeError) as e:
+        return None, None, f"re-ask failed: {e}"
+    obj = extract_json(text if isinstance(text, str) else str(text))
+    fixed = sanitize_brief(obj, facts) if obj is not None else None
+    if fixed is None:
+        return None, None, "re-ask did not return a brief"
+    return fixed, doc, "re-asked"
+
+
 def loose_ask(messages: list[dict[str, str]]) -> dict[str, str]:
     """The user turn, with the schema spelled out for the no-schema pass.
 
@@ -2103,6 +2216,9 @@ def generate(
         "error": None,
         "digest": None,
         "usage": None,
+        # Numerals in the prose the data does not contain, after one re-ask —
+        # the page banners them. Empty when every figure checked out.
+        "unverified": [],
     }
 
     if not key:
@@ -2320,6 +2436,25 @@ def generate(
             })
             base["raw"] = content[:2000]
             continue
+
+        # THE NUMERAL GUARD (see `unverified`). What the model saw is the user
+        # turn — the digest and its framing — so that is what a figure must
+        # come from.
+        seen = messages[-1]["content"]
+        bad = unverified(brief, seen)
+        if bad:
+            note = f"unverified numerals: {', '.join(bad[:8])}"
+            if (time.monotonic() - started) + _ATTEMPT_RESERVE <= BUDGET_SEC:
+                fixed, doc2, outcome = _reask(payload, key, content, bad, facts)
+                if fixed is not None and doc2 is not None:
+                    bad2 = unverified(fixed, seen)
+                    outcome = ("ok after re-ask" if not bad2
+                               else f"re-ask still unverified: {', '.join(bad2[:8])}")
+                    if len(bad2) < len(bad):
+                        brief, bad, doc = fixed, bad2, doc2
+                note += f" · {outcome}"
+            attempts.append({"model": candidate, "mode": mode, "note": note})
+        base["unverified"] = bad
 
         base["ok"] = True
         base["report"] = brief

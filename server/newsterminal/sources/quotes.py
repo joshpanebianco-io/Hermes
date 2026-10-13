@@ -21,12 +21,12 @@ line here and a branch in the UI.
 
 from __future__ import annotations
 
+import hashlib
 import urllib.parse
-from datetime import UTC, datetime
 from typing import Any
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, fetch
+from ..http import SourceStatus, fetch, json_body
 
 SPARK = "https://query1.finance.yahoo.com/v7/finance/spark?symbols={syms}&range={rng}&interval={iv}"
 
@@ -154,15 +154,35 @@ def _chunks(items: list[str], n: int) -> list[list[str]]:
     return [items[i : i + n] for i in range(0, len(items), n)]
 
 
-def _spark(symbols: list[str], rng: str, iv: str, ttl: float) -> tuple[dict[str, Any], str | None]:
-    """One spark request → {yahoo symbol: response}. Never raises."""
+def spark_key(symbols: list[str], rng: str, iv: str) -> str:
+    """The cache key for one spark request. Pure, and STABLE ACROSS PROCESSES.
+
+    It used to be `abs(hash(tuple(symbols)))`, and Python salts str hashes per
+    process — so every restart wrote a fresh set of keys, never read the old
+    ones (no warm start, no stale fallback after a restart), and left them on
+    disk: 957 orphaned spark files, 20MB, by 2026-10-13. A digest of the list
+    is the same every run.
+    """
+    return f"spark_{rng}_{iv}_{hashlib.sha1(','.join(symbols).encode()).hexdigest()[:12]}"
+
+
+def _spark(symbols: list[str], rng: str, iv: str, ttl: float, *,
+           st: SourceStatus | None = None,
+           stale_max: float | None = None) -> tuple[dict[str, Any], str | None]:
+    """One spark request → {yahoo symbol: response}. Never raises.
+
+    `st` absorbs the fetch's provenance, so a collector built on this can say
+    when it is showing a cached copy; `stale_max` caps how old that copy may be.
+    """
     q = urllib.parse.quote(",".join(symbols), safe="")
     url = SPARK.format(syms=q, rng=rng, iv=iv)
     # The cache key must not be the URL: it carries the whole symbol list and
     # would produce a different 400-character filename every time the universe
     # is edited, quietly orphaning the old cache entries.
-    key = f"spark_{rng}_{iv}_{abs(hash(tuple(symbols))) % 10**10}"
-    r = fetch(url, key=key, ttl_sec=ttl, ua=BROWSER_UA, timeout=20)
+    r = fetch(url, key=spark_key(symbols, rng, iv), ttl_sec=ttl, ua=BROWSER_UA, timeout=20,
+              stale_max_sec=stale_max, validate=json_body)
+    if st is not None:
+        st.absorb(r)
     if not r.ok:
         return {}, r.error
     try:
@@ -237,7 +257,10 @@ def collect() -> tuple[list[dict[str, Any]], SourceStatus]:
     by_symbol: dict[str, Any] = {}
 
     for chunk in _chunks([u[1] for u in UNIVERSE], CHUNK):
-        got, err = _spark(chunk, "1d", "5m", ttl=15.0)
+        # Ten minutes is the most a price on the board may lag before it is
+        # called unavailable rather than served — a quote older than that is
+        # not a degraded quote, it is a wrong one.
+        got, err = _spark(chunk, "1d", "5m", ttl=15.0, st=st, stale_max=600.0)
         by_symbol.update(got)
         if err:
             errors.append(err)
@@ -251,9 +274,6 @@ def collect() -> tuple[list[dict[str, Any]], SourceStatus]:
             rows.append(row)
 
     st.items = len(rows)
-    st.ok = len(rows) > 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     if errors:
         st.error = errors[0]
         total = len(_chunks([u[1] for u in UNIVERSE], CHUNK))
@@ -261,8 +281,7 @@ def collect() -> tuple[list[dict[str, Any]], SourceStatus]:
     missing = len(UNIVERSE) - len(rows)
     if missing:
         st.notes.append(f"{missing} instrument(s) did not quote")
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(len(rows) > 0, "chunk")
     return rows, st
 
 
@@ -314,7 +333,7 @@ def collect_context() -> tuple[list[dict[str, Any]], SourceStatus]:
     got: dict[str, Any] = {}
     errors: list[str] = []
     for chunk in _chunks([c[1] for c in CONTEXT], CHUNK):
-        part, err = _spark(chunk, "1mo", "1d", ttl=300.0)
+        part, err = _spark(chunk, "1mo", "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
         got.update(part)
         if err:
             errors.append(err)
@@ -329,16 +348,12 @@ def collect_context() -> tuple[list[dict[str, Any]], SourceStatus]:
         rows.append(row)
 
     st.items = len(rows)
-    st.ok = len(rows) > 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     if errors:
         st.error = errors[0]
     missing = len(CONTEXT) - len(rows)
     if missing:
         st.notes.append(f"{missing} instrument(s) did not quote")
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(len(rows) > 0, "chunk")
     return rows, st
 
 
@@ -354,7 +369,7 @@ def collect_sectors() -> tuple[list[dict[str, Any]], SourceStatus]:
     got: dict[str, Any] = {}
     errors: list[str] = []
     for chunk in _chunks([s[1] for s in SECTORS], CHUNK):
-        part, err = _spark(chunk, "1mo", "1d", ttl=300.0)
+        part, err = _spark(chunk, "1mo", "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
         got.update(part)
         if err:
             errors.append(err)
@@ -379,11 +394,7 @@ def collect_sectors() -> tuple[list[dict[str, Any]], SourceStatus]:
                 r[f"rs_{span}"] = (mine - base) if (mine is not None and base is not None) else None
 
     st.items = len(rows)
-    st.ok = len(rows) > 2
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     if errors:
         st.error = errors[0]
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(len(rows) > 2, "chunk")
     return rows, st

@@ -42,17 +42,32 @@ those changes which bar fires, so they stay in this order.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
+
+from .holidays import close_minute, early_close, is_trading_day, next_trading_day
 
 ET = ZoneInfo("America/New_York")
 
 # Minutes of the ET day. The script's sessions are "0400-0930" and "0930-1600".
+# On the NYSE's half days the regular session ends at 13:00 and the late session
+# at 17:00 — `rth_end` / `post_end` read the holiday table, these are the norm.
 PM_START = 4 * 60
 RTH_START = 9 * 60 + 30
 RTH_END = 16 * 60
 POST_END = 20 * 60
+POST_END_HALF = 17 * 60
+
+
+def rth_end(d: date) -> int:
+    """Minute of the ET day the regular session ends on `d` (13:00 on a half day)."""
+    return close_minute(d)
+
+
+def post_end(d: date) -> int:
+    """Minute the late session ends on `d` — 17:00 on a half day, else 20:00."""
+    return POST_END_HALF if early_close(d) else POST_END
 
 SRC_SEC = 300  # Yahoo's 5-minute bars
 BAR_SEC = 600  # the 10-minute chart the script is built for
@@ -178,48 +193,36 @@ def _mod(dt: datetime) -> int:
     return dt.hour * 60 + dt.minute
 
 
-def _next_weekday(d: date) -> date:
-    d += timedelta(days=1)
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    return d
-
-
-def clock_at(now: datetime, holiday: bool = False) -> Clock:
+def clock_at(now: datetime) -> Clock:
     """Which session it is and which day's levels to show. Pure.
 
-    04:00–20:00 on a weekday is that day. 20:00 onward, weekends and holidays
-    belong to the next weekday; 00:00–03:59 on a weekday already belongs to the
-    session that opens at 04:00. `holiday` is decided from the data by the
-    caller (no SPY bar on a weekday by 04:30), never from a hand-kept table.
+    04:00–20:00 on a trading day is that day (04:00–17:00 on a half day, whose
+    regular session ends at 13:00). After that, weekends and NYSE holidays
+    belong to the next trading day; 00:00–03:59 already belongs to the session
+    that opens at 04:00.
+
+    HOLIDAYS COME FROM THE NYSE'S TABLE (holidays.py), not the tape. This used
+    to infer one from "no SPY print by 04:30", which read the first half hour of
+    every holiday as a pre-market (review, 2026-10-13) — and a published fact
+    has no business being guessed at.
     """
     now = now.astimezone(ET)
     m = _mod(now)
     d = now.date()
-    weekday = now.weekday() < 5 and not holiday
-    if weekday and m < POST_END:
+    if is_trading_day(d) and m < post_end(d):
         td = d
         if m < PM_START:
             session = "closed"
         elif m < RTH_START:
             session = "pre"
-        elif m < RTH_END:
+        elif m < rth_end(d):
             session = "rth"
         else:
             session = "post"
     else:
-        td = _next_weekday(d)
+        td = next_trading_day(d)
         session = "closed"
     return Clock(now, session, td, td == d and m >= RTH_START and session != "closed")
-
-
-def is_holiday(now: datetime, bench: list[Bar]) -> bool:
-    """A weekday with no SPY print by 04:30 is a market holiday. Pure."""
-    now = now.astimezone(ET)
-    if now.weekday() >= 5 or _mod(now) < PM_START + 30 or not bench:
-        return False
-    d = now.date()
-    return not any(datetime.fromtimestamp(b.t, ET).date() == d for b in bench[-120:])
 
 
 # -------------------------------------------------------------------- indicators
@@ -409,9 +412,13 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
     e_stp: dict[str, float] = {"long": 0.0, "short": 0.0}
     e_arm: dict[str, bool] = {"long": False, "short": False}
 
-    def sig(kind: str, side: str, level: str | None, t: int, price: float, note: str) -> None:
+    def sig(kind: str, side: str, level: str | None, t: int, price: float, note: str,
+            stop: float | None = None) -> None:
+        # `t` (the bar's open, epoch) and `stop` (the script's "stop idea") ride
+        # along for the event log and the chart; the row's own readers ignore them.
         out.signals.append({"kind": kind, "side": side, "level": level, "at_et": _hm(t),
-                            "price": round(price, 4), "note": note})
+                            "price": round(price, 4), "note": note, "t": t,
+                            "stop": round(stop, 4) if stop is not None else None})
 
     for n, i in enumerate(rth_ix):
         b = bars10[i]
@@ -438,12 +445,12 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
             lv = "PDH" if res["PDH"][1] else "PMH"
             sig("L", "long", lv, b.t, b.close,
                 f"Retest of {lv} {fmt_px(levels[lv].price)} with the 8 EMA wave at the level"
-                f" · stop idea below {fmt_px(b.low)}")
+                f" · stop idea below {fmt_px(b.low)}", stop=b.low)
         if l_short:
             lv = "PDL" if res["PDL"][1] else "PML"
             sig("L", "short", lv, b.t, b.close,
                 f"Retest of {lv} {fmt_px(levels[lv].price)} with the 8 EMA wave at the level"
-                f" · stop idea above {fmt_px(b.high)}")
+                f" · stop idea above {fmt_px(b.high)}", stop=b.high)
 
         conf = {"long": False, "short": False}
         for side in ("long", "short"):
@@ -457,7 +464,7 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
                 stop = "below" if side == "long" else "above"
                 sig("E", side, None, b.t, e_trg[side],
                     f"Broke {word} the (E) candle {fmt_px(e_trg[side])}"
-                    f" · stop idea {stop} {fmt_px(e_stp[side])}")
+                    f" · stop idea {stop} {fmt_px(e_stp[side])}", stop=e_stp[side])
                 e_bar[side] = None
 
         # ---- the sigBar block ------------------------------------------------
@@ -485,7 +492,8 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
             if hit:
                 word = "above" if side == "long" else "below"
                 sig("E", side, None, b.t, e_trg[side],
-                    f"Broke {word} the (E) candle {fmt_px(e_trg[side])} (bar still open)")
+                    f"Broke {word} the (E) candle {fmt_px(e_trg[side])} (bar still open)",
+                    stop=e_stp[side])
                 e_bar[side] = None
 
     for side in ("long", "short"):
@@ -495,7 +503,7 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
             stop = "below" if side == "long" else "above"
             sig("E_SETUP", side, None, bars10[eb].t, e_trg[side],
                 f"(E) candle set — {side} triggers {word} {fmt_px(e_trg[side])}"
-                f" · stop idea {stop} {fmt_px(e_stp[side])}")
+                f" · stop idea {stop} {fmt_px(e_stp[side])}", stop=e_stp[side])
     return out
 
 
@@ -560,7 +568,7 @@ def official_close(meta: dict[str, Any] | None) -> tuple[date, float] | None:
     if t is None or p is None:
         return None
     dt = datetime.fromtimestamp(int(t), ET)
-    return (dt.date(), float(p)) if _mod(dt) >= RTH_END else None
+    return (dt.date(), float(p)) if _mod(dt) >= rth_end(dt.date()) else None
 
 
 def _vwap(bars: list[Bar]) -> float | None:
@@ -595,7 +603,8 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
         by_day.setdefault(d, []).append(i)
 
     def rth_of(d: date) -> list[int]:
-        return [i for i in by_day.get(d, []) if RTH_START <= mods[i] < RTH_END]
+        end = rth_end(d)
+        return [i for i in by_day.get(d, []) if RTH_START <= mods[i] < end]
 
     # THE CLOSE IS THE OFFICIAL ONE, NOT THE LAST 5-MINUTE BAR'S. Yahoo's 15:55
     # bar ends before the closing auction, so its close missed the official
@@ -633,7 +642,8 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
         tech.pmh = max(bars[i].high for i in pm)
         tech.pml = min(bars[i].low for i in pm)
     tech.pm_done = clock.pm_locked
-    rth = [i for i in today if RTH_START <= mods[i] < RTH_END]
+    td_end = rth_end(td)
+    rth = [i for i in today if RTH_START <= mods[i] < td_end]
     tech.rth_today = bool(rth)
     d_cl: float | None = None
     if rth:
@@ -642,7 +652,7 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
         tech.open = bars[rth[0]].open
         d_cl = bars[rth[-1]].close
         # Once the bell has rung, today's close is the official print too.
-        if _mod(clock.now.astimezone(ET)) >= RTH_END:
+        if _mod(clock.now.astimezone(ET)) >= td_end:
             d_cl = close_of(td, d_cl)
 
     last = bars[-1].close
@@ -656,7 +666,7 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
         tech.chg_pct = (pdc / ppdc - 1.0) * 100.0
     # Pine extChg: nothing during the regular session; pre-market against the
     # previous close, post-market against today's close.
-    last_rth = days[-1] == td and RTH_START <= mods[-1] < RTH_END
+    last_rth = days[-1] == td and RTH_START <= mods[-1] < td_end
     base = d_cl if rth else pdc
     if not last_rth and base:
         tech.ext_pct = (last / base - 1.0) * 100.0
@@ -733,7 +743,7 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     rth10 = [
         k for k, b in enumerate(bars10)
         if datetime.fromtimestamp(b.t, ET).date() == td
-        and RTH_START <= _mod(datetime.fromtimestamp(b.t, ET)) < RTH_END
+        and RTH_START <= _mod(datetime.fromtimestamp(b.t, ET)) < td_end
     ]
     confirmed = [k for k in rth10 if bars10[k].t + BAR_SEC <= now_ts]
     forming = rth10[-1] if rth10 and rth10[-1] not in confirmed else None
@@ -743,6 +753,79 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     tech.levels = levels
     tech.ok = True
     return tech
+
+
+def _session_of(day: date, m: int) -> str | None:
+    """pre / rth / post for minute `m` of a trading day, None outside them."""
+    if PM_START <= m < RTH_START:
+        return "pre"
+    if RTH_START <= m < rth_end(day):
+        return "rth"
+    if rth_end(day) <= m < post_end(day):
+        return "post"
+    return None
+
+
+def chart_series(bars5: list[Bar], clock: Clock, tech: Tech) -> dict[str, Any]:
+    """The Scanner's mini chart for one name: ten-minute bars from the previous
+    session's open, the 8/9/10 EMA wave, today's VWAP, the four levels, the
+    session spans and today's signals. Pure — no fetch, the store's bars.
+
+    THE EMA IS COMPUTED ON EVERY BAR THE STORE HOLDS and then sliced, so the
+    wave at the left edge of the chart is the same wave the signals were read
+    off, not one re-seeded at the first bar shown.
+    """
+    now_ts = int(clock.now.timestamp())
+    bars10 = resample([b for b in bars5 if b.t < now_ts])
+    if not bars10:
+        return {"ok": False, "error": "no bars", "bars": [], "ema8": [], "ema9": [], "ema10": [],
+                "vwap": [], "levels": {}, "sessions": [], "signals": []}
+    closes = [b.close for b in bars10]
+    e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
+
+    # From the previous session's 09:30 (the PDH/PDL day) — or the start of the
+    # download if that day is not in it.
+    start = 0
+    if tech.pdh_day is not None:
+        d = tech.pdh_day
+        t0 = int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
+        start = next((i for i, b in enumerate(bars10) if b.t >= t0), 0)
+
+    td = clock.trading_day
+    vwap: list[float | None] = []
+    pv = vol = 0.0
+    sessions: list[dict[str, Any]] = []
+    for b in bars10[start:]:
+        dt = datetime.fromtimestamp(b.t, ET)
+        m = _mod(dt)
+        kind = _session_of(dt.date(), m)
+        if kind is not None:
+            if sessions and sessions[-1]["kind"] == kind and sessions[-1]["to"] == b.t:
+                sessions[-1]["to"] = b.t + BAR_SEC
+            else:
+                sessions.append({"kind": kind, "from": b.t, "to": b.t + BAR_SEC})
+        if dt.date() == td and kind == "rth" and b.volume > 0:
+            pv += (b.high + b.low + b.close) / 3.0 * b.volume
+            vol += b.volume
+            vwap.append(round(pv / vol, 4))
+        else:
+            vwap.append(None)
+
+    def cut(xs: list[float]) -> list[float | None]:
+        return [round(x, 4) for x in xs[start:]]
+
+    return {
+        "ok": True,
+        "bars": [{"t": b.t, "o": round(b.open, 4), "h": round(b.high, 4), "l": round(b.low, 4),
+                  "c": round(b.close, 4), "v": b.volume} for b in bars10[start:]],
+        "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
+        "vwap": vwap,
+        "levels": {"pdh": _r(tech.pdh), "pdl": _r(tech.pdl), "pmh": _r(tech.pmh),
+                   "pml": _r(tech.pml), "pm_done": tech.pm_done},
+        "sessions": sessions,
+        "signals": [{"t": x["t"], "kind": x["kind"], "side": x["side"], "price": x["price"]}
+                    for x in tech.signals if x.get("t") is not None],
+    }
 
 
 def _pairs(c: float | None, pdh: float | None, pdl: float | None, pmh: float | None,

@@ -67,19 +67,36 @@ def test_clock_boundaries(instant: datetime, session: str, trading_day: date,
     assert (c.session, c.trading_day, c.pm_locked) == (session, trading_day, pm_locked)
 
 
-def test_a_holiday_is_the_next_weekday() -> None:
-    c = scan.clock_at(et(2026, 11, 26, 10, 0), holiday=True)  # Thanksgiving
-    assert (c.session, c.trading_day) == ("closed", date(2026, 11, 27))
+@pytest.mark.parametrize(
+    ("instant", "session", "trading_day", "pm_locked"),
+    [
+        # Thanksgiving is the NEXT trading day from its first minute — 04:00 is
+        # not a pre-market on a day the NYSE never opens (review, 2026-10-13).
+        (et(2026, 11, 26, 4, 0), "closed", date(2026, 11, 27), False),
+        (et(2026, 11, 26, 10, 0), "closed", date(2026, 11, 27), False),
+        # The half day after it: the regular session ends at 13:00, the late
+        # session at 17:00, and 17:00 already belongs to Monday.
+        (et(2026, 11, 27, 12, 59), "rth", date(2026, 11, 27), True),
+        (et(2026, 11, 27, 13, 0), "post", date(2026, 11, 27), True),
+        (et(2026, 11, 27, 16, 59), "post", date(2026, 11, 27), True),
+        (et(2026, 11, 27, 17, 0), "closed", date(2026, 11, 30), False),
+        # Christmas Eve's half day, then Christmas, then the weekend.
+        (et(2026, 12, 24, 20, 0), "closed", date(2026, 12, 28), False),
+    ],
+)
+def test_holidays_and_half_days_come_from_the_table(
+        instant: datetime, session: str, trading_day: date, pm_locked: bool) -> None:
+    c = scan.clock_at(instant)
+    assert (c.session, c.trading_day, c.pm_locked) == (session, trading_day, pm_locked)
 
 
-def test_holiday_is_read_from_the_data() -> None:
-    spy = day_bars(date(2026, 11, 25), [(1, 1, 1, 1)])
-    assert scan.is_holiday(et(2026, 11, 26, 10, 0), spy)
-    # Not before 04:30 — too early to know — and never at a weekend.
-    assert not scan.is_holiday(et(2026, 11, 26, 4, 15), spy)
-    assert not scan.is_holiday(et(2026, 11, 28, 10, 0), spy)
-    today = spy + day_bars(date(2026, 11, 26), [(1, 1, 1, 1)], pm=[(1, 1, 1, 1)])
-    assert not scan.is_holiday(et(2026, 11, 26, 10, 0), today)
+def test_a_half_day_regular_session_stops_at_13_00() -> None:
+    """Bars after 13:00 on a half day are the late session, not the RTH high."""
+    rth = [(10, 11, 9, 10)] * 6
+    spike = bar(et(2026, 11, 27, 13, 30), 10, 50, 10, 20)  # a late-session spike
+    bars = [*day_bars(date(2026, 11, 27), rth), spike]
+    mon = scan.technicals(bars, [], scan.clock_at(et(2026, 11, 30, 8, 0)))
+    assert mon.pdh == 11  # not 50
 
 
 # --- parsing ---------------------------------------------------------------------

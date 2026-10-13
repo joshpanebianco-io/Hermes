@@ -31,11 +31,10 @@ from __future__ import annotations
 import csv
 import io
 import re
-from datetime import UTC, datetime
 from typing import Any
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, fetch
+from ..http import SourceStatus, csv_body, fetch
 from .quotes import CHUNK, _chunks, _spark
 
 # key, label, the index the basket tracks, holdings URL
@@ -44,17 +43,19 @@ FUNDS: list[tuple[str, str, str, str]] = [
         "NQ",
         "Nasdaq 100",
         "NDX",
+        # THE HOLDINGS MOVED (review, 2026-10-13). The old `.ajax?fileType=csv`
+        # address started answering with the fund's ~3MB web page, which parsed
+        # to no rows and left Index movers empty for both indices. This is the
+        # file the page's own download button now links to; same German CSV.
         "https://www.ishares.com/de/privatanleger/de/produkte/253741"
-        "/ishares-nasdaq-100-ucits-etf/1478358465952.ajax"
-        "?fileType=csv&fileName=CNDX_holdings&dataType=fund",
+        "/ishares-nasdaq-100-ucits-etf/latest-holdings.csv",
     ),
     (
         "ES",
         "S&P 500",
         "SPX",
         "https://www.ishares.com/de/privatanleger/de/produkte/253743"
-        "/ishares-sp-500-b-ucits-etf-acc-fund/1478358465952.ajax"
-        "?fileType=csv&fileName=CSPX_holdings&dataType=fund",
+        "/ishares-core-s-p-500-ucits-etf/latest-holdings.csv",
     ),
 ]
 
@@ -138,7 +139,11 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
         # Holdings change once a day at most, so this is cached hard — it is a
         # 17-83 KB download and re-fetching it every minute would be rude for
         # a file that cannot have moved.
-        r = fetch(url, key=f"holdings_{key}", ttl_sec=6 * 3600.0, ua=BROWSER_UA, timeout=40)
+        # `holdings2_`: a fresh key, so the HTML page the old URL left in the
+        # `holdings_` entries is never read again. `csv_body` keeps the next
+        # web page from replacing a good file.
+        r = st.absorb(fetch(url, key=f"holdings2_{key}", ttl_sec=6 * 3600.0, ua=BROWSER_UA,
+                            timeout=40, stale_max_sec=4 * 86400.0, validate=_holdings_body))
         if not r.ok:
             notes.append(f"{key} holdings: {r.error}")
             continue
@@ -161,7 +166,7 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
 
     quotes: dict[str, Any] = {}
     for chunk in _chunks(wanted, CHUNK):
-        got, err = _spark(chunk, "1d", "1d", ttl=45.0)
+        got, err = _spark(chunk, "1d", "1d", ttl=45.0, st=st, stale_max=600.0)
         quotes.update(got)
         if err:
             notes.append(f"quotes: {err}")
@@ -207,12 +212,16 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
         }
 
     st.items = sum(len(v["members"]) for v in out.values())
-    st.ok = st.items > 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     st.notes = notes
-    if notes and not st.ok:
+    if notes and st.items == 0:
         st.error = notes[0]
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(st.items > 0, "request")
     return {"indices": out}, st
+
+
+def _holdings_body(body: bytes) -> str | None:
+    """The holdings CSV, or why not — named for iShares' failure in particular."""
+    h = body[:400].decode("utf-8", errors="replace").lstrip("\ufeff \t\r\n").lower()
+    if h.startswith("<"):
+        return "iShares served a web page, not the CSV"
+    return csv_body(body)

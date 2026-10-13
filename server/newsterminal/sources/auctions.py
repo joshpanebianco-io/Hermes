@@ -34,7 +34,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, fetch
+from ..http import SourceStatus, fetch, json_body
 
 ET = ZoneInfo("America/New_York")
 UPCOMING = "https://www.treasurydirect.gov/TA_WS/securities/upcoming?format=json"
@@ -106,7 +106,9 @@ def collect() -> tuple[list[dict[str, Any]], SourceStatus]:
     st = SourceStatus("Treasury auctions")
     # Six hours. The schedule is set weeks ahead and amended almost never;
     # even the offering amounts only change at the weekly announcement.
-    r = fetch(UPCOMING, key="treasury_upcoming", ttl_sec=6 * 3600.0, ua=BROWSER_UA, timeout=40)
+    r = fetch(UPCOMING, key="treasury_upcoming", ttl_sec=6 * 3600.0, ua=BROWSER_UA, timeout=40,
+              stale_max_sec=7 * 86400.0, validate=json_body)
+    st.absorb(r)
     if not r.ok or r.body is None:
         st.error = r.error or "empty response"
         return [], st
@@ -118,10 +120,7 @@ def collect() -> tuple[list[dict[str, Any]], SourceStatus]:
 
     rows = parse(doc, datetime.now(ET).date())
     st.items = len(rows)
-    st.ok = True
-    st.source = r.source
-    st.age_min = r.age_min
+    st.settle(True, "file")
     if not rows:
         st.notes.append("no coupon auctions in the forward window")
-    st.last_ok_utc = datetime.now(UTC).isoformat()
     return rows, st

@@ -29,7 +29,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, clean_text, fetch, rss_items
+from ..http import SourceStatus, clean_text, feed_body, fetch, rss_items
 
 
 def gnews(query: str, when: str = "1d") -> str:
@@ -440,8 +440,11 @@ CRIME = re.compile(
 # market news — a shot CEO repriced an insurer's whole sector in 2024. If the
 # same headline names one of these, the crime drop stands down and the impact
 # tiers judge it like anything else.
+# `\bCEO\b` — the line was once saved with two literal backspace characters
+# where the word boundaries belong, so "CEO" could never match and "Insurer CEO
+# shot dead" was dropped as a police story (review, 2026-10-13).
 CRIME_GUARD = re.compile(
-    r"CEO|chief executive|executive|founder|chair(?:man|woman)?|banker|"
+    r"\bCEO\b|chief executive|executive|founder|chair(?:man|woman)?|banker|"
     r"fund manager|hedge fund|billionaire|governor|minister|president|"
     r"central bank|trader",
     re.I,
@@ -584,9 +587,16 @@ def collect() -> tuple[list[dict[str, Any]], list[SourceStatus]]:
 
     for default_cat, url, publisher, section, region in FEEDS:
         st = SourceStatus(f"{publisher} · {section}")
-        r = fetch(url, ttl_sec=110.0, ua=BROWSER_UA, timeout=18)
+        # Half an hour is as old as a feed's fallback copy may be: past that, the
+        # publisher's stories are gone from the tape and its row says so,
+        # rather than an old page sitting on it as though it were this morning.
+        r = fetch(url, ttl_sec=110.0, ua=BROWSER_UA, timeout=18, stale_max_sec=1800.0,
+                  validate=feed_body)
+        st.absorb(r)
         st.source = r.source
         st.age_min = r.age_min
+        if r.ok and r.source == "stale":
+            st.error = f"unreachable — showing the copy from {r.age_min or 0:.0f}m ago ({r.error})"
         if not r.ok:
             st.error = r.error
             statuses.append(st)

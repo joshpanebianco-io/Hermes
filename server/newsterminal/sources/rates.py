@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..config import UA
-from ..http import SourceStatus, fetch
+from ..http import SourceStatus, csv_body, fetch, json_body
 from .quotes import _spark
 
 TREASURY = (
@@ -55,7 +55,8 @@ NOMINAL = [("1 Mo", "1M"), ("3 Mo", "3M"), ("6 Mo", "6M"), ("1 Yr", "1Y"),
 CurveResult = tuple[list[dict[str, Any]], str | None, str | None]
 
 
-def _curve(kind: str, key: str, wanted: list[tuple[str, str]]) -> CurveResult:
+def _curve(kind: str, key: str, wanted: list[tuple[str, str]],
+           st: SourceStatus | None = None) -> CurveResult:
     """One Treasury CSV → today's level and yesterday's, per tenor.
 
     The file is the whole year, newest first, so a single request answers both
@@ -64,7 +65,12 @@ def _curve(kind: str, key: str, wanted: list[tuple[str, str]]) -> CurveResult:
     vintage.
     """
     year = datetime.now(UTC).year
-    r = fetch(TREASURY.format(year=year, kind=kind), key=key, ttl_sec=3600.0, ua=UA, timeout=25)
+    # Two days: the curve is a once-a-day print, so a day-old copy is the
+    # latest one there is on a holiday, and anything older is a missed print.
+    r = fetch(TREASURY.format(year=year, kind=kind), key=key, ttl_sec=3600.0, ua=UA, timeout=25,
+              stale_max_sec=2 * 86400.0, validate=csv_body)
+    if st is not None:
+        st.absorb(r)
     if not r.ok or r.body is None:
         return [], None, r.error or "empty response"
     try:
@@ -94,7 +100,8 @@ def _curve(kind: str, key: str, wanted: list[tuple[str, str]]) -> CurveResult:
     return out, today.get("Date"), None
 
 
-def _strip(months: int = 15) -> tuple[list[dict[str, Any]], str | None]:
+def _strip(months: int = 15,
+           st: SourceStatus | None = None) -> tuple[list[dict[str, Any]], str | None]:
     """The fed funds futures strip → the market's expected policy path.
 
     `100 − price` is the contract's implied average fed funds rate for its
@@ -110,7 +117,7 @@ def _strip(months: int = 15) -> tuple[list[dict[str, Any]], str | None]:
         if m > 12:
             m, y = 1, y + 1
 
-    got, err = _spark([c[0] for c in codes], "1d", "1d", ttl=600.0)
+    got, err = _spark([c[0] for c in codes], "1d", "1d", ttl=600.0, st=st, stale_max=86400.0)
     out: list[dict[str, Any]] = []
     for sym, ym, y, m in codes:
         resp = got.get(sym)
@@ -134,10 +141,10 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
     st = SourceStatus("Rates")
     notes: list[str] = []
 
-    nominal, as_of, err_n = _curve("daily_treasury_yield_curve", "ust_nominal", NOMINAL)
+    nominal, as_of, err_n = _curve("daily_treasury_yield_curve", "ust_nominal", NOMINAL, st)
     real, real_as_of, err_r = _curve("daily_treasury_real_yield_curve", "ust_real",
                                      [("5 YR", "5Y real"), ("10 YR", "10Y real"),
-                                      ("30 YR", "30Y real")])
+                                      ("30 YR", "30Y real")], st)
     if err_n:
         notes.append(f"nominal curve: {err_n}")
     if err_r:
@@ -174,7 +181,8 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
 
     # ---- where policy is now ------------------------------------------------
     policy: dict[str, Any] = {}
-    r = fetch(NYFED, key="nyfed_rates", ttl_sec=3600.0, ua=UA, timeout=20)
+    r = st.absorb(fetch(NYFED, key="nyfed_rates", ttl_sec=3600.0, ua=UA, timeout=20,
+                        stale_max_sec=2 * 86400.0, validate=json_body))
     if r.ok:
         try:
             for row in (r.json() or {}).get("refRates") or []:
@@ -187,7 +195,7 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
         notes.append(f"NY Fed: {r.error}")
 
     # ---- where the market thinks it goes ------------------------------------
-    strip, err_s = _strip()
+    strip, err_s = _strip(st=st)
     if err_s:
         notes.append(f"fed funds strip: {err_s}")
 
@@ -212,15 +220,11 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
             path["vs_effr_bp"] = round((last - float(effr)) * 100, 1)
 
     ok = bool(nominal or strip or policy)
-    st.ok = ok
     st.items = len(nominal) + len(strip)
-    st.source = "live" if ok else "unavailable"
-    st.age_min = 0.0 if ok else None
     st.notes = notes
     if notes and not ok:
         st.error = notes[0]
-    if ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(ok, "request")
 
     return {
         "curve": nominal,

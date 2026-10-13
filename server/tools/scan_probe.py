@@ -68,8 +68,7 @@ def main() -> None:
                 print(f"{t:%a %m-%d %H:%M}   (in the future — no bars yet)")
                 continue
             done = [b for b in bars if b.t + scan.SRC_SEC <= t.timestamp()]
-            spy_ref = done  # holiday detection reads the symbol's own tape here
-            clock = scan.clock_at(t, scan.is_holiday(t, spy_ref))
+            clock = scan.clock_at(t)
             tech = scan.technicals(done, daily, clock)
             pdd = tech.pdh_day.strftime("%a %m-%d") if tech.pdh_day else "—"
             print(f"{t:%a %m-%d %H:%M}  {clock.trading_day:%a %m-%d}    {clock.session:<8}"

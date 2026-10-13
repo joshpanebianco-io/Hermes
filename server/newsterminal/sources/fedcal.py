@@ -35,7 +35,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, fetch
+from ..http import SourceStatus, fetch, json_body
 
 ET = ZoneInfo("America/New_York")
 CALENDAR = "https://www.federalreserve.gov/json/calendar.json"
@@ -149,7 +149,9 @@ def collect() -> tuple[list[dict[str, Any]], list[dict[str, Any]], SourceStatus]
     # Half a day. The Board publishes weeks ahead and amends rarely, and the
     # file is ~530 KB — polling it on the wire's cadence would be rude for
     # something that cannot have moved.
-    r = fetch(CALENDAR, key="fed_calendar", ttl_sec=12 * 3600.0, ua=BROWSER_UA, timeout=40)
+    r = fetch(CALENDAR, key="fed_calendar", ttl_sec=12 * 3600.0, ua=BROWSER_UA, timeout=40,
+              stale_max_sec=7 * 86400.0, validate=json_body)
+    st.absorb(r)
     if not r.ok or r.body is None:
         st.error = r.error or "empty response"
         return [], [], st
@@ -164,10 +166,7 @@ def collect() -> tuple[list[dict[str, Any]], list[dict[str, Any]], SourceStatus]
     rows = parse(doc, today)
     fomc = fomc_ahead(doc, today)
     st.items = len(rows)
-    st.ok = True
-    st.source = r.source
-    st.age_min = r.age_min
+    st.settle(True, "file")
     if not rows:
         st.notes.append("nothing scheduled in the next three weeks")
-    st.last_ok_utc = datetime.now(UTC).isoformat()
     return rows, fomc, st

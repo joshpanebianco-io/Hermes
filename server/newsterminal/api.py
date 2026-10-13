@@ -266,6 +266,30 @@ def scanner_watchlist() -> dict[str, Any]:
             "rejected": []}
 
 
+@app.get("/api/scanner/events")
+def scanner_events(
+    since: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+) -> dict[str, Any]:
+    """Events with id > since, oldest first, and the latest id that exists — so a
+    client starting at `since=latest` only ever sees new ones. A `since` past the
+    end is answered with no events, not an error: that is how a page starts."""
+    return COLLECTOR.events.since(since, limit)
+
+
+@app.get("/api/scanner/stats")
+def scanner_stats(days: int = Query(20, ge=1, le=30)) -> dict[str, Any]:
+    """Settled (L)/(E) outcomes over the last `days`, grouped by kind, side and score."""
+    return COLLECTOR.events.stats(days)
+
+
+@app.get("/api/scanner/bars/{sym}")
+def scanner_bars(sym: str) -> dict[str, Any]:
+    """One name's ten-minute chart: bars, the EMA wave, VWAP, levels and signals.
+    Always 200; `ok: false` with an `error` when the name has no bars."""
+    return COLLECTOR.scanner_bars(sym[:12])
+
+
 @app.post("/api/scanner/watchlist")
 def scanner_watchlist_set(body: WatchlistIn) -> dict[str, Any]:
     """Replace the list. Invalid entries come back in `rejected` rather than

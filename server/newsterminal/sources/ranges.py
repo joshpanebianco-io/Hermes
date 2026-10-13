@@ -42,16 +42,27 @@ different spans are never both called London.
 EVERYTHING IN ET, converted from the bar's own epoch. The instruments settle on
 CME's clock, which is New York's; deriving from local time would put every
 boundary an hour out for the weeks the two hemispheres' DST disagree.
+
+TRUE HIGHS AND LOWS, FROM v8 BARS (review, 2026-10-13). This used to read the
+batched spark endpoint, which returns closes only — so every "high" was the
+highest 15-minute CLOSE. Last night's NQ Asia window: true high 30,906.00 vs
+close-high 30,897.75, true low 30,604.75 vs close-low 30,620.00. The panel's
+amber "taken out" marks and the brief's "Asia high taken out" lines rest on
+these figures, so they now come from the 5-minute OHLC bars the volume profile
+already fetches — the SAME request and cache key (`chart5m_*`), read here on a
+one-minute clock, so the profiles' five-minute job mostly finds them cached.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import urllib.parse
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..http import SourceStatus
-from .quotes import _spark
+from ..config import BROWSER_UA
+from ..http import SourceStatus, fetch, json_body
+from .profiles import CHART as V8_CHART
 
 ET = ZoneInfo("America/New_York")
 
@@ -113,8 +124,8 @@ def segment(
             inside = _in_window(h, start, end)
             if inside:
                 hi, lo, cl = highs[i], lows[i], closes[i]
-                # Spark gives closes only; high/low fall back to the close, which
-                # makes the range a close-to-close range and is stated as such.
+                # A bar with a close but no high/low (a hole in a thin futures
+                # minute) falls back to its close rather than being dropped.
                 v = cl if cl is not None else None
                 if v is not None:
                     picked.append((stamps[i], hi if hi is not None else v,
@@ -140,11 +151,11 @@ def segment(
             "key": key,
             "label": label,
             "ok": True,
-            "high": hi,
-            "low": lo,
-            "open": op,
-            "close": cl,
-            "range": rng,
+            "high": round(hi, 4),
+            "low": round(lo, 4),
+            "open": round(op, 4),
+            "close": round(cl, 4),
+            "range": round(rng, 4),
             "chg_pct": ((cl - op) / op * 100.0) if op else None,
             # Where the CURRENT price sits inside that session's range — the
             # figure that answers "have we taken out the Asia high".
@@ -175,17 +186,23 @@ def segment(
 
 
 def collect() -> tuple[dict[str, Any], SourceStatus]:
-    """Session ranges for the three books, in one request."""
+    """Session ranges for the three books, from 5-minute OHLC bars."""
     st = SourceStatus("Session ranges")
     now_et = datetime.now(ET)
-    got, err = _spark([sym for _, sym in ASSETS], "2d", "15m", ttl=60.0)
-    if err:
-        st.error = err
-
     assets: dict[str, Any] = {}
     for key, sym in ASSETS:
-        resp = got.get(sym)
-        if not resp:
+        url = V8_CHART.format(sym=urllib.parse.quote(sym, safe=""))
+        r = st.absorb(fetch(url, key=f"chart5m_{key}", ttl_sec=60.0, ua=BROWSER_UA, timeout=25,
+                            stale_max_sec=600.0, validate=json_body))
+        if not r.ok:
+            st.error = st.error or f"{key}: {r.error}"
+            continue
+        try:
+            resp = ((r.json().get("chart") or {}).get("result") or [None])[0]
+        except (ValueError, TypeError, AttributeError, IndexError) as e:
+            st.error = st.error or f"{key}: parse {e}"
+            continue
+        if not isinstance(resp, dict):
             continue
         meta = resp.get("meta") or {}
         last = meta.get("regularMarketPrice")
@@ -211,10 +228,5 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
         }
 
     st.items = len(assets)
-    st.ok = len(assets) > 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
-        st.notes.append("close-to-close within each window")
+    st.settle(len(assets) > 0, "asset")
     return {"assets": assets}, st

@@ -37,9 +37,11 @@ PURE. Bars in, levels out; the fetch lives in sources/profiles.py.
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from .holidays import close_time, is_trading_day
 
 ET = ZoneInfo("America/New_York")
 
@@ -188,10 +190,21 @@ def value_position(price: float | None, vah: float | None, val: float | None) ->
 
 
 def prev_trading_day(d: datetime) -> datetime:
+    """The NYSE trading day before `d` — holidays skipped (review, 2026-10-13).
+
+    Weekday-only, it made Thanksgiving's thin 09:30-13:00 futures session the
+    "Prev RTH" for the Friday after: the walk-back in `assemble` only fires on
+    a window with NO bars, and the index futures do trade that morning.
+    """
     d = d - timedelta(days=1)
-    while d.weekday() >= 5:
+    while not is_trading_day(d.date()):
         d = d - timedelta(days=1)
     return d
+
+
+def rth_close(day: date) -> time:
+    """16:00, or 13:00 on a half day — where that day's cash profile ends."""
+    return close_time(day)
 
 
 def windows(now_et: datetime) -> list[dict[str, Any]]:
@@ -246,29 +259,30 @@ def windows(now_et: datetime) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
 
-    if RTH_OPEN <= t < RTH_CLOSE and now_et.weekday() < 5:
+    trading = is_trading_day(d)
+    if RTH_OPEN <= t < rth_close(d) and trading:
         # New York is trading: yesterday's cash, the completed overnight, and
         # the live RTH profile off the 09:30 anchor.
         prev = prev_trading_day(now_et)
         out.append({"key": "prev_rth", "label": "Prev RTH", "kind": "done",
-                    "start": at(prev, RTH_OPEN), "end": at(prev, RTH_CLOSE)})
+                    "start": at(prev, RTH_OPEN), "end": at(prev, rth_close(prev.date()))})
         out.append({"key": "overnight", "label": "Recent overnight", "kind": "done",
                     "start": at(prev, GLOBEX_OPEN), "end": at(d, RTH_OPEN)})
         out.append({"key": "dev", "label": "Live · 09:30", "kind": "live",
                     "start": at(d, RTH_OPEN), "end": now_et})
-    elif RTH_CLOSE <= t < GLOBEX_OPEN and now_et.weekday() < 5:
+    elif rth_close(d) <= t < GLOBEX_OPEN and trading:
         # Post-close lull: today's cash just completed; nothing develops
         # until Globex reopens at 18:00.
         prev = prev_trading_day(now_et)
         out.append({"key": "prev_rth", "label": "Recent RTH", "kind": "done",
-                    "start": at(d, RTH_OPEN), "end": at(d, RTH_CLOSE)})
+                    "start": at(d, RTH_OPEN), "end": at(d, rth_close(d))})
         out.append({"key": "overnight", "label": "Recent overnight", "kind": "done",
                     "start": at(prev, GLOBEX_OPEN), "end": at(d, RTH_OPEN)})
     elif t >= GLOBEX_OPEN:
         # Globex evening (Asia). Sunday's reference cash day is Friday.
-        rth_day = d if now_et.weekday() < 5 else prev_trading_day(now_et).date()
+        rth_day = d if trading else prev_trading_day(now_et).date()
         out.append({"key": "prev_rth", "label": "Recent RTH", "kind": "done",
-                    "start": at(rth_day, RTH_OPEN), "end": at(rth_day, RTH_CLOSE)})
+                    "start": at(rth_day, RTH_OPEN), "end": at(rth_day, rth_close(rth_day))})
         out.append(overnight_before(at(rth_day, RTH_OPEN), "Prev overnight"))
         out.append({"key": "dev", "label": "Live · 18:00", "kind": "live",
                     "start": at(d, GLOBEX_OPEN), "end": now_et})
@@ -279,7 +293,7 @@ def windows(now_et: datetime) -> list[dict[str, Any]]:
         anchor_day = d - timedelta(days=1)
         prev = prev_trading_day(now_et)
         out.append({"key": "prev_rth", "label": "Recent RTH", "kind": "done",
-                    "start": at(prev, RTH_OPEN), "end": at(prev, RTH_CLOSE)})
+                    "start": at(prev, RTH_OPEN), "end": at(prev, rth_close(prev.date()))})
         out.append(overnight_before(prev, "Prev overnight"))
         if now_et.weekday() < 5 and anchor_day.weekday() != 5:  # Saturday has no bars
             out.append({"key": "dev", "label": "Live · 18:00", "kind": "live",
@@ -326,9 +340,8 @@ def assemble(
             start = datetime(
                 prev.year, prev.month, prev.day, RTH_OPEN.hour, RTH_OPEN.minute, tzinfo=ET
             )
-            end = datetime(
-                prev.year, prev.month, prev.day, RTH_CLOSE.hour, RTH_CLOSE.minute, tzinfo=ET
-            )
+            close = rth_close(prev.date())
+            end = datetime(prev.year, prev.month, prev.day, close.hour, close.minute, tzinfo=ET)
             tries += 1
         if prof is None:
             continue

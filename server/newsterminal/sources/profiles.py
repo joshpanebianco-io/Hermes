@@ -15,12 +15,12 @@ the odd holiday walk-back. ~55KB per asset.
 from __future__ import annotations
 
 import urllib.parse
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, fetch
+from ..http import SourceStatus, fetch, json_body
 from ..profile import assemble
 
 ET = ZoneInfo("America/New_York")
@@ -47,7 +47,8 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
 
     for key, sym in ASSETS:
         url = CHART.format(sym=urllib.parse.quote(sym, safe=""))
-        r = fetch(url, key=f"chart5m_{key}", ttl_sec=240.0, ua=BROWSER_UA, timeout=25)
+        r = st.absorb(fetch(url, key=f"chart5m_{key}", ttl_sec=240.0, ua=BROWSER_UA, timeout=25,
+                            stale_max_sec=1800.0, validate=json_body))
         if not r.ok or r.body is None:
             errors.append(f"{key}: {r.error or 'empty'}")
             assets[key] = {"ok": False, "error": r.error or "empty response", "rows": []}
@@ -84,14 +85,11 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
 
     ok_count = sum(1 for v in assets.values() if v.get("ok"))
     st.items = ok_count
-    st.ok = ok_count > 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     if errors:
         st.notes.extend(errors[:3])
-    if not st.ok and errors:
+    if ok_count == 0 and errors:
         st.error = "; ".join(errors[:2])
+    st.settle(ok_count > 0, "asset")
     if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
         st.notes.append("approximate: 5m bars, volume spread across each bar's range")
     return {"assets": assets}, st

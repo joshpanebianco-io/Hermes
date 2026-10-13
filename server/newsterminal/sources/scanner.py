@@ -21,10 +21,15 @@ HEADLINES AND FILINGS ROTATE SLOWER. Yahoo's per-ticker RSS, ten minutes a name
 (two a minute) — EDGAR asks for ten requests a second at most and a real
 contact in the User-Agent, and gets two a minute and config.UA.
 
-NOTHING HERE BLOCKS THE BOARD FOR LONG. The collector runs one thread on
-purpose (see collector.py); a tick here is a handful of requests, never the
-whole watchlist, so the quotes job a few seconds behind it is a few seconds
-late at worst.
+NOTHING HERE BLOCKS THE BOARD. These jobs run on the scanner's own thread
+beside the collector's (see collector.py), so a slow tick here delays the
+scanner and nothing else.
+
+A FAILING NAME BACKS OFF, AND A 429 STOPS EVERYTHING (review, 2026-10-13). A
+symbol Yahoo does not know used to fail on every 15-second tick for ever — 8
+dead requests a minute, holding one of the five slots — and a rate limit was
+answered at full rate. Now each failure doubles that name's wait (30 s up to 15
+minutes) and an HTTP 429 pauses the whole fetcher for two minutes.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ from typing import Any
 
 from .. import scan
 from ..config import BROWSER_UA, CACHE_DIR, UA
-from ..http import CACHE, SourceStatus, clean_text, fetch, rss_items
+from ..http import CACHE, SourceStatus, clean_text, feed_body, fetch, json_body, rss_items
 from .wire import gnews
 
 CHART = (
@@ -76,6 +81,14 @@ NEWS_PER_TICK = 3
 SEC_SEC = 1800.0
 SEC_PER_TICK = 2
 FILING_DAYS = 3
+BACKOFF_BASE = 30.0
+BACKOFF_MAX = 15 * 60.0
+RATE_LIMIT_PAUSE = 120.0
+
+
+def backoff(failures: int) -> float:
+    """Seconds to wait after the n-th failure in a row: 30, 60, 120 … 900. Pure."""
+    return min(BACKOFF_MAX, BACKOFF_BASE * 2 ** max(0, failures - 1))
 
 WATCHLIST_FILE = os.path.join(CACHE_DIR, "scanner_watchlist.json")
 
@@ -374,6 +387,11 @@ class ScanStore:
         self.filings_at: dict[str, float] = {}
         self.ciks: dict[str, int] = {}
         self.sec_names: dict[str, str] = {}
+        #: Per-symbol failures in a row and when it may be tried again (epoch).
+        self.fails: dict[str, tuple[int, float]] = {}
+        self.daily_fails: dict[str, tuple[int, float]] = {}
+        #: Yahoo said 429 — nothing is fetched before this (epoch).
+        self.pause_until = 0.0
         self._warm = False
 
     # ---- watchlist ----------------------------------------------------------
@@ -418,10 +436,25 @@ class ScanStore:
                     if days:
                         self.daily[sym], self.daily_at[sym] = days, now - age
 
+    def _failed(self, book: dict[str, tuple[int, float]], sym: str, status: int | None,
+                t: float) -> None:
+        """Count a failure: back the name off, and pause everything on a 429."""
+        n = book.get(sym, (0, 0.0))[0] + 1
+        book[sym] = (n, t + backoff(n))
+        if status == 429:
+            self.pause_until = max(self.pause_until, t + RATE_LIMIT_PAUSE)
+
     def _fetch_bars(self, sym: str) -> str | None:
         url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="5d", iv="5m")
-        r = fetch(url, key=f"scan5m_{sym}", ttl_sec=10.0, ua=BROWSER_UA, timeout=15)
+        r = fetch(url, key=f"scan5m_{sym}", ttl_sec=10.0, ua=BROWSER_UA, timeout=15,
+                  stale_max_sec=900.0, validate=json_body)
+        if not r.ok or r.source == "stale":
+            self._failed(self.fails, sym, r.status, time.time())
+        else:
+            self.fails.pop(sym, None)
         if not r.ok:
+            if r.status == 404:
+                return "Yahoo does not know this symbol (HTTP 404)"
             return r.error or "unavailable"
         try:
             bars, meta = scan.parse_chart(r.json())
@@ -435,9 +468,12 @@ class ScanStore:
 
     def _fetch_daily(self, sym: str) -> str | None:
         url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="3mo", iv="1d")
-        r = fetch(url, key=f"scan1d_{sym}", ttl_sec=DAILY_TTL, ua=BROWSER_UA, timeout=15)
+        r = fetch(url, key=f"scan1d_{sym}", ttl_sec=DAILY_TTL, ua=BROWSER_UA, timeout=15,
+                  stale_max_sec=3 * 86400.0, validate=json_body)
         if not r.ok:
+            self._failed(self.daily_fails, sym, r.status, time.time())
             return r.error or "unavailable"
+        self.daily_fails.pop(sym, None)
         try:
             days = scan.parse_daily(r.json())
         except ValueError as e:
@@ -467,7 +503,13 @@ class ScanStore:
             f = self.fetched.get(s)
             return float("inf") if f is None else (t - f) / target(s)
 
-        due = sorted((s for s in syms if lag(s) >= 1.0), key=lambda s: -lag(s))
+        def waiting(s: str, book: dict[str, tuple[int, float]]) -> bool:
+            return book.get(s, (0, 0.0))[1] > t
+
+        paused = self.pause_until > t
+        due = [] if paused else sorted(
+            (s for s in syms if lag(s) >= 1.0 and not waiting(s, self.fails)),
+            key=lambda s: -lag(s))
         errors: list[str] = []
         for sym in due[:MAX_PER_TICK]:
             err = self._fetch_bars(sym)
@@ -482,9 +524,10 @@ class ScanStore:
         # carries that afternoon's price as the day's close. So they also go
         # stale at the most recent weekday 16:20 ET — after the closing print.
         mark = _last_close_mark(now)
-        stale_daily = [s for s in syms
-                       if t - self.daily_at.get(s, 0.0) >= DAILY_TTL
-                       or self.daily_at.get(s, 0.0) < mark]
+        stale_daily = [] if paused else [
+            s for s in syms
+            if (t - self.daily_at.get(s, 0.0) >= DAILY_TTL or self.daily_at.get(s, 0.0) < mark)
+            and not waiting(s, self.daily_fails)]
         for sym in stale_daily[:DAILY_PER_TICK]:
             err = self._fetch_daily(sym)
             if err:
@@ -501,6 +544,12 @@ class ScanStore:
         missing = len(syms) - len(have)
         if missing:
             st.notes.append(f"{missing} name(s) without bars yet")
+        backing = [s for s in syms if waiting(s, self.fails)]
+        if backing:
+            st.notes.append(f"backing off: {', '.join(backing[:4])}")
+        if paused:
+            until = datetime.fromtimestamp(self.pause_until, scan.ET).strftime("%H:%M:%S")
+            st.notes.append(f"Yahoo rate-limited the scanner (HTTP 429) — paused until {until} ET")
         if errors:
             st.error = errors[0] + (f" (+{len(errors) - 1} more)" if len(errors) > 1 else "")
         if st.ok:
@@ -508,8 +557,7 @@ class ScanStore:
         return st
 
     def clock(self, now: datetime) -> scan.Clock:
-        now_et = now.astimezone(scan.ET)
-        return scan.clock_at(now_et, scan.is_holiday(now_et, self.bars.get("SPY") or []))
+        return scan.clock_at(now.astimezone(scan.ET))
 
     def compute(self, now: datetime | None = None) -> dict[str, Any]:
         """Every name's technicals as of now — the block the read path scores."""
@@ -570,23 +618,30 @@ class ScanStore:
         errors: list[str] = []
         for sym in due[:NEWS_PER_TICK]:
             r = fetch(YAHOO_RSS.format(sym=urllib.parse.quote(_yahoo(sym))),
-                      key=f"scannews_{sym}", ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15)
+                      key=f"scannews_{sym}", ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15,
+                      stale_max_sec=6 * 3600.0, validate=feed_body)
             items = parse_news(_decode(r.body)) if r.ok else []
             if not items:
                 q = (ALIASES.get(sym) or [sym])[0]
                 g = fetch(gnews(f'"{q}" stock', when="3d"), key=f"scangnews_{sym}",
-                          ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15)
+                          ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15,
+                          stale_max_sec=6 * 3600.0, validate=feed_body)
                 items = parse_news(_decode(g.body), publisher="Google News") if g.ok else []
-                if not items:
-                    errors.append(f"{sym}: {r.error or g.error or 'no headlines'}")
-            names = self.own_names(sym)
-            items = [it for it in items if mentions(it["title"], sym, names)]
+                if not items and not (r.ok or g.ok):
+                    errors.append(f"{sym}: {r.error or g.error or 'unreachable'}")
+            # `own`, NOT `names`: reusing the watchlist's name here left the
+            # status below counting one ticker's aliases, so every tick read
+            # "0 items, not ok" with no error (review, 2026-10-13).
+            own = self.own_names(sym)
+            items = [it for it in items if mentions(it["title"], sym, own)]
             for it in items:
                 it["kind"] = None
             self.news[sym] = items
             self.news_at[sym] = t
         st.items = sum(1 for s in names if self.news.get(s))
-        st.ok = st.items > 0 or not names
+        # A tick with nothing due, or names that simply have no headlines, is
+        # healthy; only a tick whose fetches FAILED is not.
+        st.ok = not errors or st.items > 0
         st.source = "live" if st.ok else "unavailable"
         ages = [(t - self.news_at[s]) / 60.0 for s in names if s in self.news_at]
         st.age_min = max(ages) if ages else None
@@ -599,7 +654,8 @@ class ScanStore:
     # ---- filings ------------------------------------------------------------
 
     def _load_ciks(self) -> str | None:
-        r = fetch(SEC_TICKERS, key="sec_company_tickers", ttl_sec=86400.0, ua=UA, timeout=30)
+        r = fetch(SEC_TICKERS, key="sec_company_tickers", ttl_sec=86400.0, ua=UA, timeout=30,
+                  validate=json_body)
         if not r.ok:
             return r.error or "unavailable"
         try:
@@ -628,7 +684,8 @@ class ScanStore:
                 self.filings[sym] = []
                 continue
             r = fetch(SEC_SUBMISSIONS.format(cik=cik), key=f"scansec_{cik}",
-                      ttl_sec=SEC_SEC - 60, ua=UA, timeout=20)
+                      ttl_sec=SEC_SEC - 60, ua=UA, timeout=20, stale_max_sec=86400.0,
+                      validate=json_body)
             if not r.ok:
                 err = err or f"{sym}: {r.error}"
                 continue

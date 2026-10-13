@@ -22,12 +22,12 @@ on every row.
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, clean_text, fetch
+from ..http import SourceStatus, clean_text, fetch, json_body
 
 ET = ZoneInfo("America/New_York")
 NASDAQ = "https://api.nasdaq.com/api/calendar/earnings?date={d}"
@@ -139,7 +139,10 @@ def collect(
             ua=BROWSER_UA,
             timeout=20,
             headers={"Accept": "application/json"},
+            stale_max_sec=7 * 86400.0 if off < 0 else 86400.0,
+            validate=json_body,
         )
+        st.absorb(r)
         if not r.ok:
             failed += 1
             st.error = st.error or r.error
@@ -152,11 +155,7 @@ def collect(
 
     rows.sort(key=lambda r: (r["date"], -(r.get("market_cap") or 0)))
     st.items = len(rows)
-    st.ok = len(rows) > 0 or failed == 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     if failed:
         st.notes.append(f"{failed} of {len(list(span))} days unavailable")
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(len(rows) > 0 or failed == 0, "day")
     return rows, st

@@ -22,7 +22,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, clean_text, fetch
+from ..http import SourceStatus, clean_text, fetch, json_body
 
 ET = ZoneInfo("America/New_York")
 NASDAQ = "https://api.nasdaq.com/api/calendar/economicevents?date={d}"
@@ -307,7 +307,12 @@ def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any
             ua=BROWSER_UA,
             timeout=20,
             headers={"Accept": "application/json"},
+            # A settled day may serve a week-old copy; today's and ahead may
+            # not lag by more than six hours — that is where actuals land.
+            stale_max_sec=7 * 86400.0 if offset < 0 else 6 * 3600.0,
+            validate=json_body,
         )
+        st.absorb(r)
         if not r.ok:
             failed += 1
             st.error = st.error or r.error
@@ -336,11 +341,7 @@ def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any
 
     rows.sort(key=lambda x: (x.get("ts") or 0))
     st.items = len(rows)
-    st.ok = len(rows) > 0
-    st.source = "live" if st.ok else "unavailable"
-    st.age_min = 0.0 if st.ok else None
     if failed:
         st.notes.append(f"{failed} of {len(list(span))} days unavailable")
-    if st.ok:
-        st.last_ok_utc = datetime.now(UTC).isoformat()
+    st.settle(len(rows) > 0, "day")
     return rows, st

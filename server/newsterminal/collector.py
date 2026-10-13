@@ -12,6 +12,21 @@ at any given tick there is usually one source due, occasionally two. A pool
 would buy nothing and would mean the tick log — the thing this window exists to
 show — could interleave two half-written rows.
 
+…EXCEPT THE SCANNER, WHICH GETS ONE OF ITS OWN (review, 2026-10-13). Its three
+jobs add ~20 Yahoo requests a minute, two to eight seconds a tick, and on the
+one shared thread the board's quotes ran up to 47s late against a 20s cadence.
+The scanner's store is written only by its own jobs, so it runs beside the
+board rather than in front of it; the tick log takes a lock so the two never
+interleave a row.
+
+AND THE QUOTES GET ONE TOO. Pre-empting inside the shared loop (one job, then
+back to the top) took the worst lag from 48s to 38s, measured — but a quotes
+tick that falls due DURING a job still waits for it to finish, and the wire's
+forty feeds are one job. The board is the block every panel is read against, so
+it runs alone: its lag is now its own cadence plus its own fetch, and nothing
+else. The rest of the shared loop still runs one due job and starts again from
+the top, so a short job is never stuck behind a pass of long ones.
+
 EVERY SOURCE IS INDEPENDENT. A source that raises is caught, logged on its own
 row, and leaves the previous good data in place with its age climbing. That is
 why `age_min` is on every block: a panel showing eleven-minute-old sector data
@@ -29,9 +44,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import config
+from . import scan as scan_mod
 from .expiry import state as expiry_state
-from .http import SourceStatus
+from .http import CACHE, SourceStatus
 from .policy import meetings_priced
+from .scanlog import EventLog
 from .scanscore import build as scanner_build
 from .sessions import session_state
 from .sources import auctions as auc_src
@@ -86,15 +103,24 @@ class Collector:
             "scanner": {}, "scan_news": {}, "scan_sec": {}, "scan_earn": [],
         }
         self.scan = scan_src.ScanStore()
+        # The scanner's event log (scanlog.py): the alerts' feed and the record
+        # each signal's outcome is kept in. Loaded from disk so ids keep counting.
+        self.events = EventLog()
         self._status: dict[str, SourceStatus] = {}
         self._updated: dict[str, float] = {}
         self._logged_header = False
+        self._log_lock = threading.Lock()
+        self._scan_thread: threading.Thread | None = None
+        self._quotes_thread: threading.Thread | None = None
 
         now = time.monotonic()
-        self._jobs = {
-            # Quotes first: it is the block every other panel is read against,
-            # and a board with no prices is not a terminal.
+        # The board, on a thread of its own (module docstring): it is the block
+        # every other panel is read against, and a board with no prices is not
+        # a terminal.
+        self._quote_jobs: dict[str, tuple[Callable[[], None], float, float]] = {
             "quotes": (self._do_quotes, config.QUOTES_SEC, now),
+        }
+        self._jobs = {
             "gex": (self._do_gex, config.GEX_SEC, now + 0.4),
             "wire": (self._do_wire, config.WIRE_SEC, now + 0.8),
             "sectors": (self._do_sectors, config.QUOTES_SEC * 15, now + 1.2),
@@ -119,9 +145,10 @@ class Collector:
             # Daily bars for the session brief. The sectors' clock, because
             # the week and month changes it feeds move no faster than theirs.
             "context": (self._do_context, config.QUOTES_SEC * 15, now + 4.4),
-            # The scanner rotates its own names inside each tick (see
-            # sources/scanner.py for the request budget); the tick is short so
-            # no single one holds the loop for long.
+        }
+        # The scanner's own thread runs these (see the module docstring). Each
+        # rotates its names inside a tick — sources/scanner.py has the budget.
+        self._scan_jobs: dict[str, tuple[Callable[[], None], float, float]] = {
             "scanner": (self._do_scanner, scan_src.TICK_SEC, now + 1.0),
             "scan_news": (self._do_scan_news, 60.0, now + 6.0),
             "scan_sec": (self._do_scan_sec, 60.0, now + 9.0),
@@ -135,7 +162,10 @@ class Collector:
                 self._state[name] = data
             self._status[name] = st
             if st.ok:
-                self._updated[name] = time.time()
+                # A block served from a stale fallback is as old as those bytes,
+                # not as old as this tick — otherwise every age chip on the board
+                # reads "live" through an outage (review, 2026-10-13).
+                self._updated[name] = time.time() - (st.stale_age_min or 0.0) * 60.0
         self._log(name, st)
 
     def _do_quotes(self) -> None:
@@ -153,17 +183,33 @@ class Collector:
     def _do_wire(self) -> None:
         items, feeds = wire_src.collect()
         st = SourceStatus("wire")
-        live = [f for f in feeds if f.ok]
-        st.ok = bool(items)
+        live = [f for f in feeds if f.ok and f.source != "stale"]
+        stale = [f for f in feeds if f.ok and f.source == "stale"]
         st.items = len(items)
-        st.source = "live" if st.ok else "unavailable"
-        st.age_min = 0.0 if st.ok else None
         st.notes = [f"{len(live)}/{len(feeds)} feeds"]
         dead = [f for f in feeds if not f.ok]
         if dead:
             st.error = f"{len(dead)} feed(s) down: " + ", ".join(f.name for f in dead[:3])
-        if st.ok:
+        if stale:
+            # Some feeds are showing their last copy. The tape is still live
+            # unless they ALL are — but the share is said, and the oldest copy
+            # dates the block.
+            st.notes.append(f"{len(stale)} feed(s) on a cached copy")
+            st.stale = len(stale)
+            st.fetches = len(feeds)
+            st.stale_age_min = max(f.age_min or 0.0 for f in stale)
+        if items and not live and stale:
+            st.source = "stale"
+            st.ok = True
+            st.age_min = st.stale_age_min
+            st.error = st.error or "every feed unreachable — showing cached copies"
             st.last_ok_utc = datetime.now(UTC).isoformat()
+        else:
+            st.ok = bool(items)
+            st.source = "live" if st.ok else "unavailable"
+            st.age_min = 0.0 if st.ok else None
+            if st.ok:
+                st.last_ok_utc = datetime.now(UTC).isoformat()
         with self._lock:
             self._state["wire_feeds"] = [f.as_dict() for f in feeds]
         self._commit("wire", items if st.ok else None, st)
@@ -193,6 +239,32 @@ class Collector:
     def _do_scanner(self) -> None:
         st = self.scan.tick_bars()
         self._commit("scanner", self.scan.compute(), st)
+        # The log reads the SCORED payload, so each event carries the score its
+        # row had at the moment it fired — what the outcomes are judged against.
+        # Its failure is its own: a log that cannot be written must not mark the
+        # scanner itself as down.
+        try:
+            self.events.observe(self.scanner_payload(), dict(self.scan.bars))
+        except Exception as e:  # noqa: BLE001 — see module docstring
+            st_ev = SourceStatus("Scanner events")
+            st_ev.error = f"{e.__class__.__name__}: {e}"
+            self._log("scan_events", st_ev)
+            traceback.print_exc()
+
+    def scanner_bars(self, sym: str) -> dict[str, Any]:
+        """One name's mini-chart series (scan.chart_series) off the bars held."""
+        sym = sym.strip().upper()
+        if sym not in self.scan.symbols():
+            return {"ok": False, "sym": sym, "error": "not on the watchlist"}
+        bars = self.scan.bars.get(sym)
+        if not bars:
+            return {"ok": False, "sym": sym, "error": "no bars yet"}
+        clock = self.scan.clock(datetime.now(UTC))
+        tech = scan_mod.technicals(bars, self.scan.daily.get(sym) or [], clock,
+                                   official=scan_mod.official_close(self.scan.meta.get(sym)))
+        out = scan_mod.chart_series(bars, clock, tech)
+        out["sym"] = sym
+        return out
 
     def _do_scan_news(self) -> None:
         st = self.scan.tick_news()
@@ -211,9 +283,10 @@ class Collector:
         """
         ok, bad = self.scan.set_watchlist(symbols)
         now = time.monotonic()
-        for name in ("scanner", "scan_news", "scan_sec", "earnings"):
-            fn, interval, _due = self._jobs[name]
-            self._jobs[name] = (fn, interval, now)
+        for jobs, name in ((self._scan_jobs, "scanner"), (self._scan_jobs, "scan_news"),
+                           (self._scan_jobs, "scan_sec"), (self._jobs, "earnings")):
+            fn, interval, _due = jobs[name]
+            jobs[name] = (fn, interval, now)
         return ok, bad
 
     def _do_constituents(self) -> None:
@@ -252,36 +325,52 @@ class Collector:
     def _log(self, name: str, st: SourceStatus) -> None:
         if not config.TICK_LOG:
             return
-        if not self._logged_header:
-            print(f"\n{_HEAD}", flush=True)
-            self._logged_header = True
-        t = datetime.now(ET).strftime("%H:%M:%S")
-        age = f"{st.age_min:.1f}m" if st.age_min is not None else "—"
-        state = "ok" if st.ok else "ERR"
-        print(f"{t:<9}{name:<12}{st.items:>6}  {age:>6}  {st.source:<7}{state}", flush=True)
-        # Anything degraded gets its own line underneath, so a dead feed
-        # cannot hide between healthy rows. Straight out of GEXYGEN's window.
-        if st.error:
-            print(f"{'':<9}└─ {st.error}", flush=True)
-        for n in st.notes:
-            if not st.ok or "down" in n or "unavailable" in n or "failed" in n:
-                print(f"{'':<9}└─ {n}", flush=True)
+        # One lock round the row and its └─ lines: two threads now write here.
+        with self._log_lock:
+            if not self._logged_header:
+                print(f"\n{_HEAD}", flush=True)
+                self._logged_header = True
+            t = datetime.now(ET).strftime("%H:%M:%S")
+            age = f"{st.age_min:.1f}m" if st.age_min is not None else "—"
+            state = "ok" if st.ok else "ERR"
+            print(f"{t:<9}{name:<12}{st.items:>6}  {age:>6}  {st.source:<7}{state}", flush=True)
+            # Anything degraded gets its own line underneath, so a dead feed
+            # cannot hide between healthy rows. Straight out of GEXYGEN's window.
+            if st.error:
+                print(f"{'':<9}└─ {st.error}", flush=True)
+            for n in st.notes:
+                if not st.ok or "down" in n or "unavailable" in n or "failed" in n:
+                    print(f"{'':<9}└─ {n}", flush=True)
 
-    def _run(self) -> None:
+    def _run_one(self, jobs: dict[str, tuple[Callable[[], None], float, float]]) -> bool:
+        """Run the FIRST due job in `jobs`, if any. True when one ran.
+
+        One job, then back to the top: the dict is in priority order, so a
+        quotes tick that falls due while the wire is fetching runs next, not
+        after everything else that was due in the same pass.
+        """
+        now = time.monotonic()
+        for name, (fn, interval, due) in list(jobs.items()):
+            if now < due:
+                continue
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001 — see module docstring
+                st = SourceStatus(name)
+                st.error = f"{e.__class__.__name__}: {e}"
+                self._status[name] = st
+                self._log(name, st)
+                traceback.print_exc()
+            jobs[name] = (fn, interval, time.monotonic() + interval)
+            return True
+        return False
+
+    def _run(self, jobs: dict[str, tuple[Callable[[], None], float, float]] | None = None,
+             ) -> None:
+        jobs = self._jobs if jobs is None else jobs
         while not self._stop.is_set():
-            now = time.monotonic()
-            for name, (fn, interval, due) in list(self._jobs.items()):
-                if now < due:
-                    continue
-                try:
-                    fn()
-                except Exception as e:  # noqa: BLE001 — see module docstring
-                    st = SourceStatus(name)
-                    st.error = f"{e.__class__.__name__}: {e}"
-                    self._status[name] = st
-                    self._log(name, st)
-                    traceback.print_exc()
-                self._jobs[name] = (fn, interval, time.monotonic() + interval)
+            if self._run_one(jobs):
+                continue
             # 0.25s rather than a computed sleep-until-next-due: the loop must
             # also notice _stop promptly, and a quarter second of idle polling
             # costs nothing next to forty HTTP requests a minute.
@@ -290,13 +379,25 @@ class Collector:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        # Orphaned cache files go at startup: a removed watchlist name's bars,
+        # a past day's calendar, the spark keys the old per-process hash left.
+        gone = CACHE.prune(7 * 86400.0, keep=("scanner_watchlist.json", "scanner_events.jsonl"))
+        if gone and config.TICK_LOG:
+            print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
         self._thread = threading.Thread(target=self._run, name="collector", daemon=True)
         self._thread.start()
+        self._scan_thread = threading.Thread(
+            target=self._run, args=(self._scan_jobs,), name="scanner", daemon=True)
+        self._scan_thread.start()
+        self._quotes_thread = threading.Thread(
+            target=self._run, args=(self._quote_jobs,), name="quotes", daemon=True)
+        self._quotes_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=3)
+        for th in (self._thread, self._scan_thread, self._quotes_thread):
+            if th:
+                th.join(timeout=3)
 
     # ---------------------------------------------------------------- read
 

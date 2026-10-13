@@ -79,23 +79,23 @@ export function AlertStrip({
       tabIndex={copy === 0 ? 0 : -1}
       aria-hidden={copy === 1}
     >
-      <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full bg-err" />
-      <span className="text-[12.5px] leading-none text-ink">{h.title}</span>
-      <span className="fig text-[9.5px] leading-none text-ink-4">{h.publisher}</span>
-      <span className="fig text-[9.5px] leading-none text-ink-4">{ago(h.utc, now)}</span>
+      <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full bg-err qt:h-[6px] qt:w-[6px] qt:rounded-[1px]" />
+      <span className="text-[12.5px] leading-none text-ink qt:text-[13px]">{h.title}</span>
+      <span className="fig text-[9.5px] leading-none text-ink-4 qt:text-[10.5px] qt:font-semibold qt:tracking-[0.06em] qt:uppercase qt:[font-family:var(--font-cond)]">{h.publisher}</span>
+      <span className="fig text-[9.5px] leading-none text-ink-4 qt:text-[11px]">{ago(h.utc, now)}</span>
     </a>
   );
 
   return (
     <div
-      className="flex items-stretch border-b border-ring bg-err/[0.07]"
+      className="flex items-stretch border-b border-ring bg-err/[0.07] qt:bg-transparent"
       role="region"
       aria-label="High-impact headlines"
     >
-      <div className="flex shrink-0 items-center gap-1.5 border-r border-ring/60 px-3">
-        <span className="h-[6px] w-[6px] rounded-full bg-err live-dot" aria-hidden />
-        <span className="fig text-[9px] tracking-[0.14em] text-err uppercase">High</span>
-        <span className="fig text-[9px] text-ink-4">{alerts.length}</span>
+      <div className="flex shrink-0 items-center gap-1.5 border-r border-ring/60 px-3 qt:border-ring qt:px-6">
+        <span className="h-[6px] w-[6px] rounded-full bg-err live-dot qt:rounded-[1px]" aria-hidden />
+        <span className="fig text-[9px] tracking-[0.14em] text-err uppercase qt:text-[11px]">High</span>
+        <span className="fig text-[9px] text-ink-4 qt:text-[11px]">{alerts.length}</span>
       </div>
       <div className="wire-track relative min-w-0 flex-1 overflow-hidden py-2.5">
         <div

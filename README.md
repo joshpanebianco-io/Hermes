@@ -8,7 +8,8 @@
   S&amp;P 500 and Gold futures across the Asia, London and New York sessions —
   a live news wire, sector rotation, dealer options positioning and gamma levels,
   the economic calendar, earnings, and a Fed &amp; Treasury diary — with
-  <strong>AI-powered session reads</strong> built from facts the engine computed.</p>
+  <strong>AI-powered session reads</strong> built from facts the engine computed, and a
+  <strong>New York stock scanner</strong> that ranks break-and-retest setups.</p>
 
   <p>
     <img alt="Next.js 15" src="https://img.shields.io/badge/Next.js-15-black" />
@@ -16,7 +17,7 @@
     <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6" />
     <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-collector-009688" />
     <img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776ab" />
-    <img alt="Tests" src="https://img.shields.io/badge/tests-135%20passing-2ea44f" />
+    <img alt="Tests" src="https://img.shields.io/badge/tests-217%20passing-2ea44f" />
     <img alt="Personal use" src="https://img.shields.io/badge/data-personal%20use%20only-orange" />
   </p>
 </div>
@@ -159,6 +160,44 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
   tagged, estimates marked with an `e`, and actuals shown against the estimate and
   coloured by the surprise once they print.
 
+### The Scanner — break and retest, ranked
+
+The **Scanner** tab is the `LE_Model.pine` scanner, computed by the engine instead
+of drawn by TradingView, for the New York strategy it was written for: a name
+breaks its **pre-market** or **previous-day** high (low), and the trade is the
+**retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
+far from the level for it to come back.
+
+- **The Pine, ported faithfully** — PDH / PDL from the previous regular session,
+  PMH / PML from 04:00–09:29, break progress toward each level (a bar, or a filled
+  square once broken), the Pine's trend and wave state, the 8/9/10 EMA wave on
+  ten-minute bars, and **relative strength vs SPY and QQQ** with each move scaled by
+  that name's own daily ATR. The `(L)` level-retest and `(E)` 8-EMA signals are
+  replayed on confirmed ten-minute bars, in the script's own order of operations.
+- **The setup, in words** — retest live, pulling back, extended (so the entry
+  reference becomes VWAP or the 8 EMA), near a break, failed, or inside and
+  chopping — with the entry price and price's distance from it in ten-minute ATRs.
+- **The weather strip** — VIX, its curve (VIX/VIX3M) and VVIX, the one-day implied
+  SPY move (VIX ÷ √252), SPY / QQQ / IWM against their *own* levels, the tape's
+  bias (confirmed or contradicted by which way VIX is moving), and the next
+  high-impact US print. **VIX never ranks a name by itself**: it is the weather,
+  and it reaches a score only through the market part.
+- **A ranked list, not a black box** — every score is a sum of named parts
+  (structure 30 · relative strength 25 · entry location 20 · relative volume 10 ·
+  market 15, less penalties for a spent daily range, a print inside 30 minutes, an
+  after-the-close report today, or a failed break), each listed with the points it
+  earned. It orders the list; it is a **heuristic rank, not a measured
+  probability**, and the page never calls it one.
+- **What the chart does not show** — each name's headlines (Yahoo's per-ticker
+  feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
+  AMC and the surprise, and its SEC filings from the last three days (8-K items,
+  offerings, 10-Q / 10-K) straight from EDGAR.
+- **An editable watchlist** — the Pine's 21 names by default, up to 40, kept by the
+  collector; SPY, QQQ and IWM are always fetched as the benchmarks.
+
+Relative volume starts at the open: Yahoo's pre-market bars carry no volume, and
+the column says so rather than guessing.
+
 ### The AI session read
 ![Session report](docs/media/report.png)
 
@@ -217,12 +256,20 @@ against exactly the data it saw.
 
 ### The chassis
 
-Dark terminal aesthetic, three-hue discipline (a colour on a figure means calls,
-puts, or the flip — decoration lives on its own tokens), an animated frame light,
-a wordmark and helm that wash on one shared cycle, and a change-flash on every
-figure that ticks: values glitch briefly in the product's own two hues when the
-data moves. Themes are configurable, per-panel filters persist in `localStorage`,
-and the whole board is keyboard-free by design — it is meant to be *read*.
+**Quiet Terminal is the default interface** — GEXYGEN's flat chassis, carried
+across by copying (never by linkage): one neutral grey ramp, hairlines instead of
+cards, sentence-case section titles, condensed caps labels, square markers, IBM
+Plex Sans / Condensed / Mono, and a header that carries the instrument strip as
+label-over-figure in one band. The data hues are the only colour on the screen.
+**Classic** — the carded, neon, mono-caps chassis this terminal shipped with — is
+one click away in Settings → Interface; everything Quiet changes is scoped under
+`.ui-qt`, so Classic is simply the absence of the class.
+
+Either way: three-hue discipline (a colour on a figure means calls, puts, or the
+flip — decoration lives on its own tokens), an animated frame light, a wordmark
+and helm that wash on one shared cycle, and a change-flash on every figure that
+ticks. Themes are configurable, per-panel filters persist in `localStorage`, and
+the whole board is keyboard-free by design — it is meant to be *read*.
 
 ---
 
@@ -238,6 +285,9 @@ and the whole board is keyboard-free by design — it is meant to be *read*.
 | Federal Reserve (`calendar.json`) | FOMC dates, speeches, testimony, Beige Book | 1 h |
 | TreasuryDirect | Upcoming coupon auctions | 6 h |
 | iShares holdings CSVs | NDX/SPX constituent weights → contribution math | daily |
+| Yahoo Finance (chart, per stock) | 5-minute bars 04:00–20:00 for every watchlist name → the Scanner's levels, wave, VWAP and signals; daily bars for the ATR | ~90 s a name in session (SPY/QQQ/IWM 30 s), 15 min closed; daily 6 h |
+| Yahoo Finance (per-ticker RSS) | Each watchlist name's headlines | 10 min a name |
+| SEC EDGAR | Each watchlist name's filings from the last three days | 30 min a name |
 | A companion options-analytics service | The seven dealer-gamma levels per book, over HTTP | 30 s |
 | OpenRouter | The session-note LLM (configurable model, fallback chain) | on demand |
 
@@ -295,8 +345,9 @@ npm run shortcut               # optional: the same thing, on the desktop
   by `npm run icon` — re-run that only if the mark or its hues change.
 
 Checks: `npm run check` runs TypeScript, ESLint, Ruff, mypy (strict) and the pytest
-suite — 135 tests, most of them regression tests bought with a real observed bug:
-the classifier rules, the FOMC un-mixing, the profile session windows, the JSON
+suite — 217 tests, most of them regression tests bought with a real observed bug:
+the classifier rules, the FOMC un-mixing, the profile session windows, the
+scanner's Pine port and its clock boundaries, the JSON
 extractor's four observed wrappings.
 
 ---

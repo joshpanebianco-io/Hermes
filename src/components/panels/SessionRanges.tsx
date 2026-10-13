@@ -5,6 +5,7 @@ import { Module } from "@/components/ui/Module";
 import { Tick } from "@/components/ui/Tick";
 import { num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
@@ -46,7 +47,7 @@ const HEAD = "fig shrink-0 text-right text-[8.5px] tracking-wide text-ink-4";
 
 // Wide enough for "Europe midday" on one line when the panel has the room; the
 // wrapping 52px it always was when it does not, so the track keeps its width.
-const LABEL = "w-[52px] shrink-0 @min-[400px]:w-[84px] @min-[400px]:whitespace-nowrap";
+const LABEL = "w-[52px] shrink-0 @min-[400px]:w-[84px] @min-[400px]:whitespace-nowrap qt:@min-[400px]:w-[104px]";
 
 /** The one scale every row shares: all five ranges and the current price. */
 function scaleOf(sessions: SessionRange[], last: number | null) {
@@ -91,16 +92,13 @@ export function SessionRanges({
       bodyClassName="px-0 py-0"
       right={
         keys.length > 1 && (
-          <div className="flex gap-0.5">
+          <div className="seg">
             {keys.map((k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setSel(k)}
-                className={cn(
-                  "fig hit rounded px-1.5 py-px text-[10px]",
-                  k === sel ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-                )}
+                {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
               >
                 {k}
               </button>

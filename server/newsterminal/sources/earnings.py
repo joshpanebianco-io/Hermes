@@ -71,8 +71,14 @@ def _when(v: Any) -> str:
     return "unspecified"
 
 
-def parse_day(doc: Any, day: str) -> list[dict[str, Any]]:
-    """One Nasdaq earnings day → the rows big enough to matter. Pure."""
+def parse_day(doc: Any, day: str, keep: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+    """One Nasdaq earnings day → the rows big enough to matter. Pure.
+
+    `keep` is the scanner's watchlist: a name on it is kept whatever its size,
+    because a $20bn stock reporting tonight is the single biggest fact about
+    trading it tomorrow. Those rows carry `watch_only` so the Earnings panel —
+    which is about what moves an INDEX — can leave them out.
+    """
     rows = ((doc or {}).get("data") or {}).get("rows") or []
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -81,7 +87,7 @@ def parse_day(doc: Any, day: str) -> list[dict[str, Any]]:
             continue
         cap = _cap(r.get("marketCap"))
         big = sym in BELLWETHERS or (cap is not None and cap >= MIN_CAP)
-        if not big:
+        if not big and sym not in keep:
             continue
         out.append({
             "symbol": sym,
@@ -96,6 +102,7 @@ def parse_day(doc: Any, day: str) -> list[dict[str, Any]]:
             "surprise_pct": _float(r.get("surprise")),
             "market_cap": cap,
             "bellwether": sym in BELLWETHERS,
+            "watch_only": not big,
         })
     # Biggest first: on a day with eight reports the order the eye wants is by
     # how much of the index each one is.
@@ -111,8 +118,10 @@ def _float(v: object) -> float | None:
         return None
 
 
-def collect(days_ahead: int = 4, days_back: int = 2) -> tuple[list[dict[str, Any]], SourceStatus]:
-    """A few sessions either side of today, big names only."""
+def collect(
+    days_ahead: int = 4, days_back: int = 2, keep: frozenset[str] = frozenset()
+) -> tuple[list[dict[str, Any]], SourceStatus]:
+    """A few sessions either side of today, big names only — plus `keep`."""
     st = SourceStatus("Earnings")
     today = datetime.now(ET).date()
     rows: list[dict[str, Any]] = []
@@ -136,7 +145,7 @@ def collect(days_ahead: int = 4, days_back: int = 2) -> tuple[list[dict[str, Any
             st.error = st.error or r.error
             continue
         try:
-            rows.extend(parse_day(r.json(), d))
+            rows.extend(parse_day(r.json(), d, keep))
         except (ValueError, TypeError, AttributeError) as e:
             failed += 1
             st.error = st.error or f"parse: {e}"

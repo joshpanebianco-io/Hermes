@@ -5,6 +5,7 @@ import { Module } from "@/components/ui/Module";
 import { Tick } from "@/components/ui/Tick";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
@@ -52,16 +53,13 @@ export function VolumeProfile({
       bodyClassName="px-0 py-0"
       right={
         keys.length > 1 && (
-          <div className="flex gap-0.5">
+          <div className="seg">
             {keys.map((k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setSel(k)}
-                className={cn(
-                  "fig hit rounded px-1.5 py-px text-[10px]",
-                  k === sel ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-                )}
+                {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
               >
                 {k}
               </button>
@@ -80,7 +78,7 @@ export function VolumeProfile({
         <div>
           {/* The three column names, once — the calendar's pattern. */}
           <div className="flex items-baseline gap-2 border-b border-ring/40 px-3 pt-1 pb-0.5">
-            <span className="w-[72px] shrink-0" />
+            <span className="w-[72px] shrink-0 qt:w-[100px]" />
             <span className="min-w-0 flex-1" />
             <span
               className="fig w-[56px] shrink-0 text-right text-[8.5px] tracking-wide text-ink-4"
@@ -134,7 +132,7 @@ ${r.bars} bars · bin ${r.bin}`}
     >
       <span
         className={cn(
-          "fig w-[72px] shrink-0 text-[10px]",
+          "fig w-[72px] shrink-0 text-[10px] qt:w-[100px] qt:font-sans qt:whitespace-nowrap",
           live ? "text-ink-2" : "text-ink-4",
         )}
       >

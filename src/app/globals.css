@@ -56,6 +56,11 @@
   --em: #7a8499;
   --call-dte: #0a7d5a;
   --put-dte: #8e2a5e;
+  /* The figure tier — Quiet prints signed numbers in these (theme.ts keeps
+     them in step with the chosen hues). */
+  --call-fig: #19e3a4;
+  --put-fig: #ff6fb4;
+  --flip-fig: #ffc857;
 
   /* State */
   --warn: #d9a13b;
@@ -107,6 +112,9 @@
 
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
+  /* Caps labels. Classic has no condensed face of its own; Quiet points this
+     at Plex Sans Condensed. */
+  --font-cond: system-ui, -apple-system, "Segoe UI", sans-serif;
   /* The session brief's thesis and headings, and nowhere else — see Brief.tsx
      for why one tab of an instrument is set like a document. */
   --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
@@ -132,6 +140,9 @@
   --color-flip: var(--flip);
   --color-spot: var(--spot);
   --color-em: var(--em);
+  --color-call-fig: var(--call-fig);
+  --color-put-fig: var(--put-fig);
+  --color-flip-fig: var(--flip-fig);
 
   --color-warn: var(--warn);
   --color-err: var(--err);
@@ -151,6 +162,7 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
   --font-serif: var(--font-serif);
+  --font-cond: var(--font-cond);
 }
 
 @layer base {
@@ -1304,4 +1316,340 @@
   .rule {
     border-color: color-mix(in oklab, var(--ring) 70%, transparent);
   }
+}
+
+/*
+ * ===========================================================================
+ * THE SEGMENTED CONTROL — every picker and filter chip on the terminal.
+ *
+ * One garment, borrowed from GEXYGEN's lib/seg.ts (owner instruction,
+ * 2026-10-13: the Quiet Terminal aesthetic). The panels each hand-rolled
+ * their own `fig rounded px-1.5` buttons with an inline hue tint, which is
+ * twelve copies of one control and no way to repaint them together. Now they
+ * wear `.seg` / `.seg-item` and Quiet repaints all of them below.
+ *
+ * A CHIP THAT CARRIES A HUE says so through `--seg-hue` (a desk, an impact
+ * tier) and tints to it when on, as before; one that does not tints to ink.
+ * Quiet drops the tint either way — "the data hues are the only colour on
+ * the screen", and a selected filter is not data.
+ * ===========================================================================
+ */
+@layer components {
+  .seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+  }
+  .seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 14px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--ink-4);
+    cursor: pointer;
+    transition:
+      background-color 110ms ease,
+      color 110ms ease;
+  }
+  .seg-item:hover {
+    color: var(--ink-2);
+  }
+  .seg-item[data-on] {
+    color: var(--ink);
+    background: color-mix(in oklab, var(--seg-hue, var(--ink)) var(--seg-pct, 10%), transparent);
+  }
+  .seg-n {
+    color: var(--ink-4);
+  }
+  /* The desk's own swatch inside a chip. */
+  .seg-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--seg-hue, var(--ink-4));
+  }
+}
+
+/*
+ * ===========================================================================
+ * QUIET TERMINAL — the default interface (owner instruction, 2026-10-13).
+ *
+ * GEXYGEN's "Direction A", carried across BY COPYING, never by linkage (the
+ * two projects stay separate): flat chrome on one neutral grey ramp,
+ * hairlines instead of cards, no glass and no glow on the panes — the data
+ * hues are the only colour on the screen, and they reach full strength only
+ * on the marks that carry meaning. IBM Plex Sans, Sans Condensed and Mono.
+ *
+ * Scoped under `.ui-qt`, which the server sets on <html> from the `nt_ui`
+ * cookie (lib/ui.ts). Classic is simply the absence of the class. THE DATA
+ * PALETTE IS UNTOUCHED: calls, puts and the flip keep their hexes and the
+ * theme presets still retint them. Only chrome tokens are redefined.
+ *
+ * The values are GEXYGEN's own, byte for byte, because the two screens sit
+ * open side by side and a ring that is a different grey on each reads as two
+ * products.
+ * ===========================================================================
+ */
+
+/* `qt:` — a Tailwind variant that applies only inside the Quiet interface. */
+@custom-variant qt (&:where(.ui-qt, .ui-qt *));
+
+.ui-qt {
+  --void: #0b0c0e;
+  --bg: #0b0c0e;
+  --surface: #0e0f12;
+  --surface-2: #16181c;
+  --surface-3: #1e2127;
+  --ring: #1c1f24;
+  --ring-2: #2a2e35;
+  --grid: #262a31;
+  --ink: #eceef1; /* 16.8:1 on --bg */
+  --ink-2: #aab0b9; /*  9.0:1 */
+  --ink-3: #7d848f; /*  5.2:1 — body copy clears AA */
+  --ink-4: #656b75; /*  3.6:1 — decoration only, as everywhere */
+  --font-sans: var(--font-plex), "Segoe UI", system-ui, sans-serif;
+  --font-cond: var(--font-plex-cond), "Arial Narrow", "Segoe UI", sans-serif;
+  --font-mono: var(--font-plex-mono), "Cascadia Mono", Consolas, monospace;
+  /* The terminal's own greys: bar tracks and faint markers. */
+  --qt-track: #17191d;
+  --qt-faint: #50565f;
+  /*
+   * The wire's six desks, DULLED — GEXYGEN's `--qt-desk-*` values. A desk rail
+   * is an identity, never data, so at Quiet's lower chrome contrast none of
+   * them may read as a call, a put or the flip at a glance.
+   */
+  --desk-markets: #5b87ad;
+  --desk-corp: #7d848f;
+  --desk-macro: #8a7cc0;
+  --desk-policy: #a8946a;
+  --desk-geo: #a86a60;
+  --desk-energy: #5e968c;
+}
+
+@layer components {
+  /* Micro-labels move to the condensed face, as every label in the shell is. */
+  .ui-qt .eyebrow {
+    font-family: var(--font-cond);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+  }
+  /*
+   * THE PANES' OWN CAPS LABELS FOLLOW. Classic writes a label as tracked
+   * uppercase mono (`fig … uppercase`); Quiet's labels are Plex Sans
+   * Condensed caps. Layered here, under the utilities, so an element that
+   * says otherwise with a `qt:` class still wins.
+   */
+  .ui-qt .fig.uppercase,
+  .ui-qt .uppercase.fig {
+    font-family: var(--font-cond);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+  }
+  /* The condensed caps label, for the shell's own chrome (GEXYGEN's qt-cap). */
+  .qt-cap {
+    font-family: var(--font-cond);
+    font-weight: 600;
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  /* A signed figure prints in the hue's figure tier — GEXYGEN's text-call-fig. */
+  .ui-qt .up {
+    color: var(--call-fig);
+  }
+  .ui-qt .down {
+    color: var(--put-fig);
+  }
+}
+
+/*
+ * UNLAYERED, because these have to beat the panes' own utilities (`gap-2`,
+ * `p-2`, `rounded`) and an unlayered rule outranks every layer — the same
+ * construction GEXYGEN's Quiet uses.
+ */
+
+/* The chassis bleeds to the window: no rounded frame, no shadow, no lift. */
+.ui-qt .app-frame {
+  background: var(--bg);
+  border-color: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/*
+ * A MODULE IS A SECTION OF THE PAGE, NOT A CARD ON IT: no box, no fill, edge
+ * to edge, with a hairline between it and the next (owner instruction for
+ * GEXYGEN's Quiet, 2026-09-22: "just like the map and read sections"). The
+ * gutter is set on the module itself — 12px here plus the panes' own `px-3`
+ * is the 24px Quiet runs its sections at, without editing every row.
+ */
+.ui-qt .module {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0 12px 12px;
+}
+.ui-qt .module-head {
+  background: transparent;
+  border-bottom: 0;
+  min-height: 0;
+  padding: 16px 12px 8px;
+  gap: 2px 10px;
+}
+/* Section titles: sentence case Plex at 13.5, as GEXYGEN's LumCard sets them. */
+.ui-qt .module-title {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  line-height: 20px;
+}
+.ui-qt .module-lg > .module-head .module-title {
+  font-size: 15px;
+}
+
+/* The board: three columns divided by hairlines, sections by hairlines. */
+.ui-qt .qt-board {
+  gap: 0;
+  padding: 0;
+}
+.ui-qt .qt-col {
+  gap: 0;
+}
+.ui-qt .qt-col > * + * {
+  border-top: 1px solid var(--ring);
+}
+@media (min-width: 80rem) {
+  .ui-qt .qt-board > * + * {
+    border-left: 1px solid var(--ring);
+  }
+}
+/* A one-column page (Settings, Report): sections stack on hairlines too. */
+.ui-qt .qt-stack {
+  gap: 0;
+  padding: 0;
+}
+.ui-qt .qt-stack > * + * {
+  border-top: 1px solid var(--ring);
+}
+
+/*
+ * QUIET CORNERS, AND CAPSULES BECOME CHIPS. Quiet's rule is flat bars and
+ * square markers: inside a section a pill becomes a chip, a dot a square
+ * marker and a bar's round end flat (GEXYGEN owner audit, 2026-09-22). A
+ * marker that must stay round says so with `.qt-keep-round`.
+ */
+.ui-qt .module :is(.rounded, .rounded-sm, .rounded-md, .rounded-lg) {
+  border-radius: 2px;
+}
+.ui-qt .module .rounded-full:not(.qt-keep-round),
+.ui-qt .app-frame > header .rounded-full:not(.qt-keep-round),
+.ui-qt footer .rounded-full:not(.qt-keep-round) {
+  border-radius: 1px;
+}
+
+/* The segmented control in Quiet: GEXYGEN's flat segments — a hairline box
+   round the group, sentence case, the active key lifted onto the selection
+   grey with no tint, no ring and no glow. */
+.ui-qt .seg {
+  gap: 1px;
+  border: 1px solid var(--ring-2);
+  border-radius: 5px;
+  padding: 1px;
+}
+.ui-qt .seg.seg-bare {
+  border-color: transparent;
+  padding: 0;
+  gap: 2px;
+}
+.ui-qt .seg-item {
+  height: 22px;
+  border-radius: 3px;
+  padding: 0 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+}
+.ui-qt .seg-item:hover {
+  color: var(--ink-2);
+}
+.ui-qt .seg-item[data-on] {
+  background: var(--surface-3);
+  color: var(--ink);
+  font-weight: 600;
+}
+.ui-qt .seg-n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+.ui-qt .seg-dot {
+  border-radius: 1px;
+  width: 7px;
+  height: 7px;
+}
+
+/* The hover explanation: the same pane, without the amber rule — the
+   pointer is not "look here", and amber means the flip. */
+.ui-qt .tip {
+  border-left-width: 1px;
+  border-left-color: var(--ring-2);
+  border-radius: 4px;
+  background: var(--surface-2);
+  backdrop-filter: none;
+  font-size: 11.5px;
+}
+
+/*
+ * QUIET'S TYPE SCALE. Classic sets its panes at 9-11px in a system mono,
+ * which is dense and legible at that face; Plex at the same pixel sizes reads
+ * a step smaller and greyer, and GEXYGEN's Quiet runs its sections at 11-13.
+ * So every pane size steps up by about one and a half pixels here, in one
+ * table, instead of by hand in nineteen panels. Unlayered so it beats the
+ * panes' own `text-[…]` utilities; an element that sets its own Quiet size
+ * (`qt:text-…`) is left alone, and so is anything under `.qt-noscale` — the
+ * session brief, which is set at GEXYGEN's brief sizes already.
+ */
+.ui-qt .module :is(.text-\[8px\], .text-\[8\.5px\]):not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 10px;
+}
+.ui-qt .module .text-\[9px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 10.5px;
+}
+.ui-qt .module .text-\[9\.5px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 11px;
+}
+.ui-qt .module .text-\[10px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 11.5px;
+}
+.ui-qt .module .text-\[10\.5px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 12px;
+}
+.ui-qt .module .text-\[11px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 12.5px;
+}
+.ui-qt .module .text-\[11\.5px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 12.5px;
+}
+.ui-qt .module .text-\[12px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 13px;
+}
+.ui-qt .module .text-\[12\.5px\]:not([class*="qt:text-"], .seg-item, .qt-noscale *) {
+  font-size: 13.5px;
 }

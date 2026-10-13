@@ -188,6 +188,11 @@ export function themeVars(t: ThemeChoice): Record<string, string> {
     "--spot": neutral.ink,
     "--call-dte": call.dte,
     "--put-dte": put.dte,
+    // The FIGURE tier: what Quiet prints a signed number in. Brighter than
+    // the mark on purpose, as GEXYGEN's Quiet does, since a figure is text.
+    "--call-fig": call.fig,
+    "--put-fig": put.fig,
+    "--flip-fig": flip.fig,
     "--neon-call": call.neon,
     "--neon-put": put.neon,
     "--neon-flip": flip.neon,

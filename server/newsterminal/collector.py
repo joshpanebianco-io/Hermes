@@ -32,6 +32,7 @@ from . import config
 from .expiry import state as expiry_state
 from .http import SourceStatus
 from .policy import meetings_priced
+from .scanscore import build as scanner_build
 from .sessions import session_state
 from .sources import auctions as auc_src
 from .sources import calendar as cal_src
@@ -43,6 +44,7 @@ from .sources import profiles as prof_src
 from .sources import quotes as quotes_src
 from .sources import ranges as ranges_src
 from .sources import rates as rates_src
+from .sources import scanner as scan_src
 from .sources import wire as wire_src
 from .volterm import state as volterm_state
 
@@ -52,6 +54,13 @@ ET = ZoneInfo("America/New_York")
 # four-digit item count are in it. A tick log that reflows is a tick log you
 # stop being able to scan.
 _HEAD = f"{'TIME':<9}{'SOURCE':<12}{'ITEMS':>6}  {'AGE':>6}  {'SRC':<7}STATUS"
+
+# THE SCANNER'S BLOCKS ARE NOT PART OF /api/terminal. The terminal polls every
+# twenty seconds for the whole board; thirty names of bars-derived rows, their
+# headlines and filings would roughly double that payload for a tab that is
+# usually closed. They live in state like everything else and are served only
+# by /api/scanner (see `scanner_payload`).
+_SCANNER_KEYS = frozenset({"scanner", "scan_news", "scan_sec", "scan_earn"})
 
 
 class Collector:
@@ -74,7 +83,9 @@ class Collector:
             "auctions": [],
             "profiles": {"assets": {}},
             "gex": {"assets": {}, "enabled": bool(config.GEXYGEN_API)},
+            "scanner": {}, "scan_news": {}, "scan_sec": {}, "scan_earn": [],
         }
+        self.scan = scan_src.ScanStore()
         self._status: dict[str, SourceStatus] = {}
         self._updated: dict[str, float] = {}
         self._logged_header = False
@@ -108,6 +119,12 @@ class Collector:
             # Daily bars for the session brief. The sectors' clock, because
             # the week and month changes it feeds move no faster than theirs.
             "context": (self._do_context, config.QUOTES_SEC * 15, now + 4.4),
+            # The scanner rotates its own names inside each tick (see
+            # sources/scanner.py for the request budget); the tick is short so
+            # no single one holds the loop for long.
+            "scanner": (self._do_scanner, scan_src.TICK_SEC, now + 1.0),
+            "scan_news": (self._do_scan_news, 60.0, now + 6.0),
+            "scan_sec": (self._do_scan_sec, 60.0, now + 9.0),
         }
 
     # ---------------------------------------------------------------- jobs
@@ -164,8 +181,40 @@ class Collector:
         self._commit("ranges", data if st.ok else None, st)
 
     def _do_earnings(self) -> None:
-        rows, st = earn_src.collect()
-        self._commit("earnings", rows if st.ok else None, st)
+        rows, st = earn_src.collect(keep=frozenset(self.scan.watchlist()))
+        # The panel is about what moves an index; the scanner wants its own
+        # names whatever their size. One fetch, two readers.
+        if st.ok:
+            with self._lock:
+                self._state["scan_earn"] = rows
+        panel = [r for r in rows if not r.get("watch_only")]
+        self._commit("earnings", panel if st.ok else None, st)
+
+    def _do_scanner(self) -> None:
+        st = self.scan.tick_bars()
+        self._commit("scanner", self.scan.compute(), st)
+
+    def _do_scan_news(self) -> None:
+        st = self.scan.tick_news()
+        self._commit("scan_news", dict(self.scan.news), st)
+
+    def _do_scan_sec(self) -> None:
+        st = self.scan.tick_sec()
+        self._commit("scan_sec", dict(self.scan.filings), st)
+
+    def set_watchlist(self, symbols: list[str]) -> tuple[list[str], list[str]]:
+        """Save the scanner's list and make the new names the next thing fetched.
+
+        Called from the API thread. Only the job clocks are touched here — the
+        fetching itself stays on the collector thread, where every other
+        upstream call lives.
+        """
+        ok, bad = self.scan.set_watchlist(symbols)
+        now = time.monotonic()
+        for name in ("scanner", "scan_news", "scan_sec", "earnings"):
+            fn, interval, _due = self._jobs[name]
+            self._jobs[name] = (fn, interval, now)
+        return ok, bad
 
     def _do_constituents(self) -> None:
         data, st = cons_src.collect()
@@ -254,7 +303,7 @@ class Collector:
     def snapshot(self) -> dict[str, Any]:
         """Everything, as one object. Thread-safe."""
         with self._lock:
-            state = {k: v for k, v in self._state.items()}
+            state = {k: v for k, v in self._state.items() if k not in _SCANNER_KEYS}
             status = {k: v.as_dict() for k, v in self._status.items()}
             updated = dict(self._updated)
 
@@ -284,6 +333,31 @@ class Collector:
             "age_min": ages,
             **state,
         }
+
+
+    def scanner_payload(self) -> dict[str, Any]:
+        """The Scanner tab's whole read — technicals joined with the macro now."""
+        with self._lock:
+            scan = self._state.get("scanner") or {}
+            parts = {k: self._state.get(k) for k in
+                     ("quotes", "sectors", "calendar", "scan_earn", "wire", "scan_news",
+                      "scan_sec")}
+            st = self._status.get("scanner")
+        watch = self.scan.watchlist()
+        return scanner_build(
+            scan,
+            quotes=parts["quotes"] or [],
+            sectors=parts["sectors"] or [],
+            calendar=parts["calendar"] or [],
+            earnings=parts["scan_earn"] or [],
+            wire=parts["wire"] or [],
+            news=parts["scan_news"] or {},
+            filings=parts["scan_sec"] or {},
+            aliases={s: self.scan.aliases(s) for s in watch},
+            status=st.as_dict() if st else None,
+            watchlist=watch,
+            clock=self.scan.clock(datetime.now(UTC)),
+        )
 
 
 COLLECTOR = Collector()

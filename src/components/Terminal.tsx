@@ -12,6 +12,7 @@ import { Rotation } from "@/components/panels/Rotation";
 import { Calendar } from "@/components/panels/Calendar";
 import { Sessions } from "@/components/panels/Sessions";
 import { Report } from "@/components/panels/Report";
+import { Scanner } from "@/components/panels/Scanner";
 import { Settings } from "@/components/panels/Settings";
 import { SessionRanges } from "@/components/panels/SessionRanges";
 import { Earnings } from "@/components/panels/Earnings";
@@ -21,6 +22,8 @@ import { VolumeProfile } from "@/components/panels/VolumeProfile";
 import { Fed } from "@/components/panels/Fed";
 import { AlertStrip } from "@/components/shell/AlertStrip";
 import { DEFAULT_THEME, type ThemeChoice } from "@/lib/theme";
+import { DEFAULT_UI, type UiMode } from "@/lib/ui";
+import { UiProvider } from "@/components/state/UiMode";
 import { cn } from "@/lib/cn";
 import { useReport } from "@/lib/useReport";
 import { useFrameLight, type FrameFx } from "@/lib/useFrameLight";
@@ -57,7 +60,7 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 const POLL_SEC = Number(process.env.NEXT_PUBLIC_POLL_SEC ?? 20);
 
-type Tab = "terminal" | "report" | "settings";
+type Tab = "terminal" | "scanner" | "report" | "settings";
 
 export function Terminal({
   initial,
@@ -65,6 +68,7 @@ export function Terminal({
   initialTab = "terminal",
   initialTabPinned,
   initialTheme = DEFAULT_THEME,
+  initialUi = DEFAULT_UI,
 }: {
   initial: TerminalData;
   initialReport: ReportFeed | null;
@@ -72,11 +76,15 @@ export function Terminal({
   /** The URL named a tab — see `urlPinned` below. */
   initialTabPinned?: boolean;
   initialTheme?: ThemeChoice;
+  initialUi?: UiMode;
 }) {
   // Held here rather than in Settings so the tab can be left and returned to
   // without the picker forgetting what is selected. The cookie is the durable
   // copy; this is only what the open page believes.
   const [theme, setTheme] = useState<ThemeChoice>(initialTheme);
+  // The interface, held for the same reason; the cookie and the class on
+  // <html> are the durable copy (Settings writes both).
+  const [ui, setUi] = useState<UiMode>(initialUi);
 
   /*
    * The report's state is owned HERE rather than in its panel, so a generation
@@ -108,7 +116,7 @@ export function Terminal({
   const [storedTab, setStoredTab] = usePersisted<Tab>(
     "tab",
     initialTab,
-    oneOf("terminal", "report", "settings"),
+    oneOf("terminal", "scanner", "report", "settings"),
   );
   const [tab, setTabState] = useState<Tab>(initialTab);
   /*
@@ -192,7 +200,8 @@ export function Terminal({
   const ages = data.age_min ?? {};
 
   return (
-    <div className="h-screen overflow-hidden p-2 sm:p-3">
+    <UiProvider value={ui}>
+    <div className="h-screen overflow-hidden p-2 sm:p-3 qt:p-0 qt:sm:p-0">
       <div
         ref={frameRef}
         className={cn(
@@ -226,13 +235,15 @@ export function Terminal({
         )}
 
         {tab === "settings" ? (
-          <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} />
+          <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
         ) : tab === "report" ? (
           <Report {...report} />
+        ) : tab === "scanner" ? (
+          <Scanner now={now} />
         ) : (
-        <main className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
+        <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
           {/* ---- left: the context the news is read against ------------- */}
-          <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+          <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
             {/*
              * ORDERED BY WHAT YOU ACT ON, not by what orients you. The two
              * panels you trade against lead: where price sits inside each
@@ -282,7 +293,7 @@ export function Terminal({
           </div>
 
           {/* ---- middle: the wire --------------------------------------- */}
-          <div className="flex min-h-0 min-w-0 flex-col gap-2">
+          <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2">
             <Wire
               items={data.wire ?? []}
               now={now}
@@ -292,7 +303,7 @@ export function Terminal({
           </div>
 
           {/* ---- right: prices and rotation ----------------------------- */}
-          <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+          <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
             <Board
               title="The book"
               quotes={data.quotes ?? []}
@@ -375,6 +386,7 @@ export function Terminal({
         <StatusRail status={st} ages={ages} pollSec={POLL_SEC} lastPoll={lastPoll} />
       </div>
     </div>
+    </UiProvider>
   );
 }
 

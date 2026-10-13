@@ -5,6 +5,7 @@ import type { CalendarRow, Impact, Region } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { cn } from "@/lib/cn";
 import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
+import { segItem } from "@/lib/seg";
 
 /**
  * The economic calendar.
@@ -166,7 +167,8 @@ export function Calendar({
       className="max-h-[340px]"
       scroll
       right={
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1.5">
+          <span className="seg">
           <button
             type="button"
             onClick={() => setCoreOnly((v) => !v)}
@@ -175,13 +177,12 @@ export function Calendar({
                 ? "Showing only releases that reach the books you trade. Click for the full calendar."
                 : "Showing the full calendar. Click to narrow to what reaches NQ, ES and GC."
             }
-            className={cn(
-              "fig hit mr-1 rounded px-1.5 py-px text-[9.5px] leading-[14px] tracking-wide uppercase",
-              coreOnly ? "bg-call/20 text-call" : "text-ink-4 hover:text-ink-2",
-            )}
+            {...segItem(coreOnly, { hue: "var(--call)", pct: 20, className: cn(coreOnly && "text-call qt:text-ink") })}
           >
             Mine
           </button>
+          </span>
+          <span className="seg">
           {TIERS.map((t) => {
             const on = t.key === "all" ? tiers.length === 0 : tiers.includes(t.key);
             return (
@@ -191,23 +192,18 @@ export function Calendar({
                 onClick={() => toggleTier(t.key)}
                 aria-pressed={on}
                 title={t.title}
-                className={cn(
-                  "fig hit rounded px-1.5 py-px text-[9.5px] leading-[14px] tracking-wide uppercase",
-                  on ? "text-ink" : "text-ink-4 hover:text-ink-2",
-                )}
-                style={
-                  on ? { background: `color-mix(in oklab, ${t.hue} 26%, transparent)` } : undefined
-                }
+                {...segItem(on, { hue: t.hue, pct: 26 })}
               >
                 {t.label}
-                <span className="ml-1 text-ink-4">{counts[t.key] ?? 0}</span>
+                <span className="seg-n">{counts[t.key] ?? 0}</span>
               </button>
             );
           })}
+          </span>
         </div>
       }
     >
-      <div className="flex flex-wrap items-center gap-1 border-b border-ring/50 px-3 py-1.5">
+      <div className="seg seg-bare flex border-b border-ring/50 px-3 py-1.5 qt:pb-2.5">
         {REGIONS.map((r) => {
           const on = region === r.key;
           return (
@@ -216,13 +212,10 @@ export function Calendar({
               type="button"
               onClick={() => setRegion(r.key)}
               title={r.title}
-              className={cn(
-                "fig hit rounded px-1.5 py-0.5 text-[10px] tracking-wide uppercase",
-                on ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-              )}
+              {...segItem(on, { className: "text-[10px] py-0.5" })}
             >
               {r.label}
-              <span className="ml-1 text-ink-4">{regionCounts[r.key] ?? 0}</span>
+              <span className="seg-n">{regionCounts[r.key] ?? 0}</span>
             </button>
           );
         })}

@@ -11,9 +11,11 @@ import type {
 import type { ReportController } from "@/lib/useReport";
 import { Brief } from "@/components/panels/Brief";
 import { Module } from "@/components/ui/Module";
-import { biasHue } from "@/lib/bias";
+import { biasHue, biasLabel } from "@/lib/bias";
 import { cn } from "@/lib/cn";
+import { segItem } from "@/lib/seg";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
+import { useQuiet } from "@/components/state/UiMode";
 
 /**
  * The session report — a model's read of the whole terminal.
@@ -95,6 +97,7 @@ export function Report({
   discard,
   startedAt,
 }: ReportController) {
+  const quiet = useQuiet();
   const [showDigest, setShowDigest] = useState(false);
   /** Which row is asking "Delete this report?" — one at a time. */
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -102,7 +105,7 @@ export function Report({
   const enabled = feed?.config?.enabled ?? false;
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
+    <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
       <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
         <Module
           title="Session report"
@@ -117,34 +120,28 @@ export function Report({
           bodyClassName="px-0 py-0"
           right={
             <div className="flex items-center gap-1.5">
-              <div className="flex items-center gap-0.5">
+              <div className="seg">
                 {ASSET_PICKS.map((ap) => (
                   <button
                     key={ap.key}
                     type="button"
                     onClick={() => setBook(ap.key)}
                     title={ap.title}
-                    className={cn(
-                      "fig hit rounded px-1.5 py-px text-[11px] leading-[17px] tracking-wide uppercase",
-                      book === ap.key ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-                    )}
+                    {...segItem(book === ap.key, { className: "text-[11px] leading-[17px]" })}
                   >
                     {ap.label}
                   </button>
                 ))}
               </div>
-              <span aria-hidden className="h-3.5 w-px bg-ring" />
-              <div className="flex items-center gap-0.5">
+              <span aria-hidden className="h-3.5 w-px bg-ring qt:hidden" />
+              <div className="seg">
                 {SESSION_PICKS.map((sp) => (
                   <button
                     key={sp.key}
                     type="button"
                     onClick={() => setPick(sp.key)}
                     title={sp.title}
-                    className={cn(
-                      "fig hit rounded px-1.5 py-px text-[11px] leading-[17px] tracking-wide uppercase",
-                      pick === sp.key ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-                    )}
+                    {...segItem(pick === sp.key, { className: "text-[11px] leading-[17px]" })}
                   >
                     {sp.label}
                   </button>
@@ -239,13 +236,14 @@ export function Report({
                     onClick={() => open(h.id)}
                     className={cn(
                       "hit flex w-full flex-col items-start gap-0.5 py-1.5 pr-7 pl-3 text-left",
-                      (viewing ?? rep?.id) === h.id && "bg-ink/[0.06]",
+                      "qt:gap-1 qt:border-b qt:border-ring/60 qt:py-2.5",
+                      (viewing ?? rep?.id) === h.id && "bg-ink/[0.06] qt:bg-surface-2",
                     )}
                   >
                     <div className="flex w-full items-baseline gap-2">
                       <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
                       {h.asset_label && h.asset !== "all" && h.asset_label !== "All three books" && (
-                        <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3">
+                        <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3 qt:border qt:border-ring-2 qt:bg-transparent">
                           {h.asset_label}
                         </span>
                       )}
@@ -257,17 +255,28 @@ export function Report({
                           {h.session_label}
                         </span>
                       )}
-                      {h.bias && (
-                        <span
-                          className="fig ml-auto shrink-0 rounded px-1 text-[10px]"
-                          style={{
-                            color: biasHue(h.bias),
-                            background: `color-mix(in oklab, ${biasHue(h.bias)} 18%, transparent)`,
-                          }}
-                        >
-                          {h.bias}
-                        </span>
-                      )}
+                      {h.bias &&
+                        (quiet ? (
+                          // Quiet: no tinted pill — a square marker and caps in the
+                          // side's figure hue, the call's word as the brief prints it.
+                          <span
+                            className="qt-cap ml-auto inline-flex shrink-0 items-center gap-1 text-[10px]"
+                            style={{ color: quietBias(h.bias) }}
+                          >
+                            <span aria-hidden className="h-[5px] w-[5px] bg-current" />
+                            {biasLabel(h.bias)}
+                          </span>
+                        ) : (
+                          <span
+                            className="fig ml-auto shrink-0 rounded px-1 text-[10px]"
+                            style={{
+                              color: biasHue(h.bias),
+                              background: `color-mix(in oklab, ${biasHue(h.bias)} 18%, transparent)`,
+                            }}
+                          >
+                            {h.bias}
+                          </span>
+                        ))}
                     </div>
                     {h.headline && (
                       <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">
@@ -333,6 +342,11 @@ export function Report({
       </div>
     </div>
   );
+}
+
+/** A bias in Quiet's figure tier — the same hues the brief's call wears. */
+function quietBias(b: string): string {
+  return /bull/.test(b) ? "var(--call-fig)" : /bear/.test(b) ? "var(--put-fig)" : "var(--ink-3)";
 }
 
 /* ---------------------------------------------------------------- states */
@@ -657,7 +671,7 @@ function Provenance({
 }) {
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring/50 bg-surface-2/30 px-4 py-2 text-[9.5px] text-ink-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring/50 bg-surface-2/30 px-4 py-2 text-[9.5px] text-ink-4 qt:mx-3 qt:border-ring qt:bg-transparent qt:px-0 qt:pt-3">
         <span className="fig">{rep.model}</span>
         <span aria-hidden>·</span>
         <span className="fig">{rep.asset_label}</span>
@@ -674,14 +688,14 @@ function Provenance({
         <button
           type="button"
           onClick={onDigest}
-          className="fig ml-auto rounded border border-ring px-1.5 py-px text-[9px] hover:text-ink-2"
+          className="fig ml-auto rounded border border-ring px-1.5 py-px text-[9px] hover:text-ink-2 qt:rounded-[3px] qt:border-ring-2 qt:px-2 qt:py-[3px] qt:font-sans qt:text-[11.5px] qt:text-ink-3"
         >
           {showDigest ? "Hide" : "Show"} the data it saw
         </button>
       </div>
 
       {showDigest && (
-        <pre className="max-h-[420px] overflow-auto border-t border-ring/50 bg-void/50 px-4 py-2 text-[9.5px] leading-relaxed text-ink-3">
+        <pre className="max-h-[420px] overflow-auto border-t border-ring/50 bg-void/50 px-4 py-2 text-[9.5px] leading-relaxed text-ink-3 qt:mx-3 qt:mt-2 qt:rounded-[4px] qt:border qt:border-ring qt:bg-surface-2/60 qt:px-3">
           {JSON.stringify(rep.digest, null, 1)}
         </pre>
       )}

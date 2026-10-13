@@ -22,11 +22,13 @@ from typing import Any
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import config
 from . import report as report_mod
 from .collector import COLLECTOR
 from .sessions import session_state
+from .sources import scanner as scan_src
 
 
 @contextlib.asynccontextmanager
@@ -238,3 +240,35 @@ def earnings() -> dict[str, Any]:
     snap = COLLECTOR.snapshot()
     return {"rows": snap.get("earnings") or [], "status": (snap["status"] or {}).get("earnings"),
             "age_min": (snap["age_min"] or {}).get("earnings")}
+
+
+# ---------------------------------------------------------------- scanner
+#
+# Its own routes rather than more of /api/terminal: the scanner is a tab, read
+# only while it is open, and its rows (bars-derived state, headlines, filings
+# for up to forty names) would otherwise ride along on every twenty-second poll
+# of the board. Same rule as everything else here: a read of what the collector
+# already holds, never a fetch.
+
+
+class WatchlistIn(BaseModel):
+    symbols: list[str]
+
+
+@app.get("/api/scanner")
+def scanner() -> dict[str, Any]:
+    return COLLECTOR.scanner_payload()
+
+
+@app.get("/api/scanner/watchlist")
+def scanner_watchlist() -> dict[str, Any]:
+    return {"symbols": COLLECTOR.scan.watchlist(), "default": list(scan_src.DEFAULT_WATCHLIST),
+            "rejected": []}
+
+
+@app.post("/api/scanner/watchlist")
+def scanner_watchlist_set(body: WatchlistIn) -> dict[str, Any]:
+    """Replace the list. Invalid entries come back in `rejected` rather than
+    failing the whole save; an empty or all-invalid list keeps the old one."""
+    ok, bad = COLLECTOR.set_watchlist(body.symbols)
+    return {"symbols": ok, "default": list(scan_src.DEFAULT_WATCHLIST), "rejected": bad}

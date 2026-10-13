@@ -13,9 +13,11 @@ import type {
   Report,
   Tone,
 } from "@/types/terminal";
+import { createContext, useContext } from "react";
 import { biasInk, biasLabel, convictionWord } from "@/lib/bias";
 import { cn } from "@/lib/cn";
 import { bp, dir, num, pct, signed } from "@/lib/format";
+import { useQuiet } from "@/components/state/UiMode";
 
 /**
  * The session brief — the model's read, laid out like a desk's morning note.
@@ -39,7 +41,38 @@ import { bp, dir, num, pct, signed } from "@/lib/format";
  * the call and put walls, exactly as the Gamma panel and GEXYGEN draw them —
  * a wall that changed colour between two tabs of one product would be a lie
  * told by a stylesheet.
+ *
+ * TWO PAINTS, ONE BRIEF (owner instruction, 2026-10-13: "update the report
+ * section aesthetic to match better" — the Quiet Terminal). Classic is the
+ * document above: serif headings, the call on a tinted card. QUIET is how
+ * GEXYGEN's own SessionBrief renders this same schema: no cards and no tints —
+ * hairlines between sections and between the calls, condensed caps for every
+ * label and section title, Plex throughout (the serif was the one exception
+ * Quiet does not make), square markers, and hue only where it means a side:
+ * the bias word, its pips, a driver's marker, a wall's rail. Same order, same
+ * tables, same words — only the paint differs.
  */
+
+interface Paint {
+  quiet: boolean;
+  /** A bias set as text: the call's word, a read's chip. */
+  ink: (b: string | null | undefined) => string;
+  /** Marker shape: a dot (classic) or a square (Quiet). */
+  mark: string;
+}
+
+const CLASSIC: Paint = { quiet: false, ink: (b) => biasInk(b), mark: "rounded-full" };
+
+/** Quiet prints a side in the hue's figure tier, as GEXYGEN's brief does. */
+const QUIET: Paint = {
+  quiet: true,
+  ink: (b) =>
+    /bull/.test(b ?? "") ? "var(--call-fig)" : /bear/.test(b ?? "") ? "var(--put-fig)" : "var(--ink-2)",
+  mark: "rounded-[1px]",
+};
+
+const PaintCtx = createContext<Paint>(CLASSIC);
+const usePaint = () => useContext(PaintCtx);
 
 // The name a reader says, not the ticker they type (owner, 2026-09-22: "Nasdaq",
 // as GC was already "Gold"). The pickers and the terminal panels keep the ticker.
@@ -52,6 +85,21 @@ const TONE_HUE: Record<Tone, string> = {
   neutral: "var(--ink-3)",
 };
 
+const TONE_HUE_QT: Record<Tone, string> = {
+  bear: "var(--put-fig)",
+  bull: "var(--call-fig)",
+  mixed: "var(--flip-fig)",
+  neutral: "var(--ink-3)",
+};
+
+/** Quiet's words for the four tones, as GEXYGEN's legend reads them. */
+const TONE_WORD: Record<Tone, string> = {
+  bull: "helps the book",
+  bear: "weighs on it",
+  mixed: "cuts both ways",
+  neutral: "no lean",
+};
+
 const KIND_HUE: Record<BriefLadderRow["kind"], string> = {
   flip: "var(--flip)",
   call: "var(--call)",
@@ -60,6 +108,17 @@ const KIND_HUE: Record<BriefLadderRow["kind"], string> = {
   em: "var(--em)",
   ref: "var(--ring-2)",
   last: "var(--spot)",
+};
+
+/** Quiet's rails in the figure tier — GEXYGEN's ladder; spot is ink, not a slab. */
+const KIND_HUE_QT: Record<BriefLadderRow["kind"], string> = {
+  flip: "var(--flip-fig)",
+  call: "var(--call-fig)",
+  put: "var(--put-fig)",
+  range: "var(--ink-2)",
+  em: "var(--em)",
+  ref: "var(--ink-4)",
+  last: "var(--ink)",
 };
 
 const LEGEND: [BriefLadderRow["kind"], string][] = [
@@ -97,6 +156,16 @@ function tint(hue: string, amount: number): string {
 const MEASURE = "max-w-[840px]";
 
 export function Brief({ rep }: { rep: Report }) {
+  const quiet = useQuiet();
+  return (
+    <PaintCtx.Provider value={quiet ? QUIET : CLASSIC}>
+      <BriefBodyView rep={rep} />
+    </PaintCtx.Provider>
+  );
+}
+
+function BriefBodyView({ rep }: { rep: Report }) {
+  const p = usePaint();
   const b = rep.report as BriefBody;
   const f = rep.facts as BriefFacts;
   const watch = new Map(b.snapshot_watch.map((w) => [w.key, w.note]));
@@ -109,7 +178,7 @@ export function Brief({ rep }: { rep: Report }) {
   const live = rep.session_underway === true;
 
   return (
-    <article className="w-full px-5 pt-4 pb-6">
+    <article className={cn("w-full px-5 pt-4 pb-6", p.quiet && "qt-noscale px-3 pt-2 pb-8")}>
       {/*
         * THE MASTHEAD. This was a 13.5px bold sans label, and it looked wrong
         * without saying why (owner, 2026-09-22): it is the document's TITLE and
@@ -120,15 +189,33 @@ export function Brief({ rep }: { rep: Report }) {
         * document from the first thing the document says. Title case stays —
         * that was chosen on purpose.
         */}
-      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-ring/60 pb-3">
-        <h1 className="font-serif text-[23.5px] leading-tight font-normal text-ink">
-          {rep.session_label} Session Brief
-        </h1>
+      <header
+        className={cn(
+          "flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b pb-3",
+          p.quiet ? "border-ring" : "border-ring/60",
+        )}
+      >
+        {p.quiet ? (
+          // GEXYGEN's masthead: the session in weight, the document's name
+          // beside it in grey — one line, Plex, no serif.
+          <h1 className="text-[21px] leading-tight font-semibold text-ink">
+            {rep.session_label} <span className="font-normal text-ink-3">Session Brief</span>
+          </h1>
+        ) : (
+          <h1 className="font-serif text-[23.5px] leading-tight font-normal text-ink">
+            {rep.session_label} Session Brief
+          </h1>
+        )}
         <span className="fig text-[11.5px] text-ink-3">{f.as_of}</span>
       </header>
 
       {f.partial.length > 0 && (
-        <div className="mt-3 border-l-[3px] border-warn bg-warn/10 px-3 py-2 text-[11.5px] leading-relaxed text-warn">
+        <div
+          className={cn(
+            "mt-3 border-l-[3px] border-warn px-3 py-2 leading-relaxed",
+            p.quiet ? "bg-warn/[0.07] text-[12px] text-ink-2 [&>strong]:text-warn" : "bg-warn/10 text-[11.5px] text-warn",
+          )}
+        >
           <strong className="font-semibold">Partial data.</strong>
           {f.partial.map((p, i) => (
             <div key={i}>{p}</div>
@@ -138,7 +225,13 @@ export function Brief({ rep }: { rep: Report }) {
 
       {/* A clear step under the 23.5px masthead: at 22 against 25 the two read as
           one size and the title stopped looking like the title. */}
-      <p className={cn("mt-4 font-serif text-[18.5px] leading-[1.45] text-ink", MEASURE)}>
+      <p
+        className={cn(
+          "text-ink",
+          p.quiet ? "mt-5 text-[18px] leading-[1.5]" : "mt-4 font-serif text-[18.5px] leading-[1.45]",
+          MEASURE,
+        )}
+      >
         {b.thesis}
       </p>
 
@@ -153,7 +246,7 @@ export function Brief({ rep }: { rep: Report }) {
       {f.ladders.length > 0 && (
         <Section title="Levels">
           <Legend />
-          <div className={cn("grid gap-x-8 gap-y-6", f.ladders.length > 1 && "lg:grid-cols-2")}>
+          <div className={cn("grid gap-x-8 gap-y-6", f.ladders.length > 1 && "lg:grid-cols-2", p.quiet && "gap-x-10")}>
             {f.ladders.map((l) => (
               <Ladder key={l.book} l={l} />
             ))}
@@ -163,7 +256,7 @@ export function Brief({ rep }: { rep: Report }) {
 
       {f.gamma.length > 0 && (
         <Section title="Dealer gamma">
-          <div className={cn("grid gap-3", f.gamma.length > 1 && "lg:grid-cols-2")}>
+          <div className={cn("grid gap-3", f.gamma.length > 1 && "lg:grid-cols-2", p.quiet && "gap-x-10 gap-y-5")}>
             {f.gamma.map((g) => (
               <GammaCard key={g.book} g={g} />
             ))}
@@ -188,7 +281,13 @@ export function Brief({ rep }: { rep: Report }) {
       {(b.cross_asset || b.risks.length > 0) && (
         <Section title="Cross-asset">
           {b.cross_asset && (
-            <p className={cn("font-serif text-[16px] leading-relaxed text-ink", MEASURE)}>
+            <p
+              className={cn(
+                "text-ink",
+                p.quiet ? "text-[14px] leading-[1.6]" : "font-serif text-[16px] leading-relaxed",
+                MEASURE,
+              )}
+            >
               {b.cross_asset}
             </p>
           )}
@@ -196,11 +295,18 @@ export function Brief({ rep }: { rep: Report }) {
             <>
               <Label className="mt-4">Risks</Label>
               <ul className="space-y-1">
-                {b.risks.map((x, i) => (
-                  <li key={i} className="text-[12.5px] leading-snug text-ink-2">
-                    · {x}
-                  </li>
-                ))}
+                {b.risks.map((x, i) =>
+                  p.quiet ? (
+                    <li key={i} className="flex gap-2 text-[13px] leading-[1.5] text-ink-2">
+                      <span aria-hidden className="mt-[7px] h-[5px] w-[5px] shrink-0 rounded-[1px] bg-ink-4" />
+                      {x}
+                    </li>
+                  ) : (
+                    <li key={i} className="text-[12.5px] leading-snug text-ink-2">
+                      · {x}
+                    </li>
+                  ),
+                )}
               </ul>
             </>
           )}
@@ -213,6 +319,8 @@ export function Brief({ rep }: { rep: Report }) {
 /* ---------------------------------------------------------------- the calls */
 
 function Calls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
+  const p = usePaint();
+  if (p.quiet) return <QuietCalls calls={calls} live={live} />;
   return (
     <div
       className={cn(
@@ -281,7 +389,90 @@ function Calls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
   );
 }
 
+/**
+ * Quiet's calls: no card and no tint — the calls sit between two hairlines,
+ * divided by hairlines, the bias word in its side's figure hue the only colour
+ * (GEXYGEN's brief sets its call exactly so). Labels go above their text, not
+ * beside it, which GEXYGEN learned reads as one run-on line otherwise.
+ */
+function QuietCalls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
+  const p = usePaint();
+  return (
+    <div
+      className={cn(
+        "mt-6 grid border-t border-ring",
+        calls.length > 1 && "sm:grid-cols-2 sm:divide-x sm:divide-ring",
+        calls.length > 2 && "lg:grid-cols-3",
+      )}
+    >
+      {calls.map((c) => {
+        const hue = p.ink(c.open_bias);
+        return (
+          <div
+            key={c.book}
+            className={cn("min-w-0 py-4", calls.length > 1 ? "sm:px-6 sm:first:pl-0 sm:last:pr-0" : "")}
+          >
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="qt-cap text-[11px] text-ink-3">{BOOK_NAME[c.book]}</span>
+              <span className="text-[27px] leading-none font-semibold" style={{ color: hue }}>
+                {biasLabel(c.open_bias)}
+              </span>
+              <span className="text-[12px] text-ink-3">{live ? "from here" : "at the open"}</span>
+              <span className="ml-auto flex items-center gap-2 text-[11.5px] text-ink-3">
+                {convictionWord(c.conviction)} conviction
+                <Pips n={c.conviction} hue={hue} />
+              </span>
+            </div>
+            {c.why && c.why.length > 0 && (
+              <ul className="mt-3 flex flex-col gap-1.5">
+                {c.why.map((w, i) => (
+                  <li key={i} className="flex gap-2 text-[13px] leading-[1.5] text-ink-2">
+                    <span
+                      aria-hidden
+                      className="mt-[7px] h-[5px] w-[5px] shrink-0 rounded-[1px]"
+                      style={{ background: hue }}
+                    />
+                    <span>
+                      <Layered text={w} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-4 flex flex-col gap-3 text-[13px] leading-[1.5]">
+              <div>
+                <p className="qt-cap text-[10.5px] text-ink-4">{live ? "Rest of session" : "Rest of day"}</p>
+                <p className="mt-1 text-ink-2">{c.rest_of_day || biasLabel(c.rest_of_day_bias)}</p>
+              </div>
+              {c.wrong_if && (
+                <div>
+                  <p className="qt-cap text-[10.5px] text-ink-4">Wrong if</p>
+                  <p className="mt-1 font-semibold text-ink">{c.wrong_if}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A "Macro: …" bullet with its layer set in caps, so the layers read as layers. */
+function Layered({ text }: { text: string }) {
+  const m = text.match(/^(Macro|Structure|Tape|Flow|Session|Positioning|Rates|Dollar|Breadth):\s*(.*)$/i);
+  return m ? (
+    <>
+      <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">{m[1]}</span>
+      {m[2]}
+    </>
+  ) : (
+    <>{text}</>
+  );
+}
+
 function Pips({ n, hue }: { n: number; hue: string }) {
+  const p = usePaint();
   return (
     <span
       className="flex items-center gap-[3px]"
@@ -290,8 +481,8 @@ function Pips({ n, hue }: { n: number; hue: string }) {
       {[1, 2, 3, 4, 5].map((i) => (
         <span
           key={i}
-          className="h-[8px] w-[8px] rounded-full"
-          style={{ background: i <= n ? hue : "var(--ring-2)" }}
+          className={cn(p.quiet ? "h-[7px] w-[7px]" : "h-[8px] w-[8px]", p.mark)}
+          style={{ background: i <= n ? hue : p.quiet ? "var(--qt-track, var(--surface-3))" : "var(--ring-2)" }}
         />
       ))}
     </span>
@@ -301,6 +492,8 @@ function Pips({ n, hue }: { n: number; hue: string }) {
 /* ---------------------------------------------------------------- snapshot */
 
 function Snapshot({ rows, watch }: { rows: BriefSnapshotRow[]; watch: Map<string, string> }) {
+  const p = usePaint();
+  if (p.quiet) return <QuietSnapshot rows={rows} watch={watch} />;
   return (
     <>
       <table className="w-full border-collapse">
@@ -345,6 +538,54 @@ function Snapshot({ rows, watch }: { rows: BriefSnapshotRow[]; watch: Map<string
   );
 }
 
+/**
+ * Quiet's snapshot: two balanced columns across the full width, as GEXYGEN
+ * sets its own — one tall table down the left of a wide column leaves a
+ * screen of empty space beside it. A flagged row wears a square in the flip's
+ * hue, which is what "look here" means everywhere on this terminal.
+ */
+function QuietSnapshot({ rows, watch }: { rows: BriefSnapshotRow[]; watch: Map<string, string> }) {
+  return (
+    <>
+      <ul className="grid gap-x-10 lg:grid-cols-2">
+        {rows.map((row) => {
+          const note = watch.get(row.key);
+          const value =
+            row.last2 !== null && row.last2 !== undefined
+              ? `${num(row.last, row.dp)} / ${num(row.last2, row.dp)}`
+              : `${num(row.last, row.dp)}${row.last !== null ? row.suffix : ""}`;
+          return (
+            <li
+              key={row.key}
+              className="grid grid-cols-[minmax(0,1fr)_auto_104px] items-baseline gap-x-3 border-b border-ring/70 py-[7px]"
+            >
+              <span className="min-w-0">
+                <span className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
+                  {note !== undefined && (
+                    <span aria-hidden className="h-[6px] w-[6px] shrink-0 rounded-[1px] bg-flip-fig" title="Flagged to watch" />
+                  )}
+                  {row.label}
+                </span>
+                {row.sub && <span className="block text-[11px] leading-snug text-ink-4">{row.sub}</span>}
+                {note && <span className="mt-0.5 block text-[12px] leading-[1.45] text-ink-2">{note}</span>}
+              </span>
+              <span className="fig text-right text-[13px] whitespace-nowrap text-ink">{value}</span>
+              <span className="fig text-right text-[12px] whitespace-nowrap">
+                <Change row={row} />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {watch.size > 0 && (
+        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-ink-4">
+          <span aria-hidden className="h-[6px] w-[6px] rounded-[1px] bg-flip-fig" /> flagged to watch
+        </div>
+      )}
+    </>
+  );
+}
+
 function Change({ row }: { row: BriefSnapshotRow }) {
   if (row.chg === null || row.chg === undefined) {
     return <span className="text-ink-3">{row.tag ?? ""}</span>;
@@ -364,11 +605,13 @@ function Change({ row }: { row: BriefSnapshotRow }) {
 /* ---------------------------------------------------------------- levels */
 
 function Legend() {
+  const p = usePaint();
+  const hues = p.quiet ? KIND_HUE_QT : KIND_HUE;
   return (
     <div className="-mt-1 mb-4 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-3">
       {LEGEND.map(([k, label]) => (
         <span key={k} className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <span className="inline-block h-2 w-2" style={{ background: KIND_HUE[k] }} />
+          <span className="inline-block h-2 w-2" style={{ background: hues[k] }} />
           {label}
         </span>
       ))}
@@ -381,10 +624,14 @@ function Legend() {
 }
 
 function Ladder({ l }: { l: BriefLadder }) {
+  const p = usePaint();
+  const hues = p.quiet ? KIND_HUE_QT : KIND_HUE;
   return (
     <div className="min-w-0">
       <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-2">
-        <span className="text-[14px] font-bold text-ink">{l.label}</span>
+        <span className={cn("text-ink", p.quiet ? "text-[13.5px] font-semibold" : "text-[14px] font-bold")}>
+          {l.label}
+        </span>
         <span className="text-[11px] text-ink-3">
           Last <span className="fig">{num(l.last, l.dp)}</span>
           {l.em !== null && (
@@ -400,21 +647,27 @@ function Ladder({ l }: { l: BriefLadder }) {
         <tbody>
           {l.rows.map((r, i) => {
             const last = r.kind === "last";
-            const quiet = r.kind === "em" || r.kind === "ref";
-            const ink = last ? "text-bg" : quiet ? "text-ink-3" : "text-ink";
+            const muted = r.kind === "em" || r.kind === "ref";
+            // Classic inverts the spot row onto a white slab; Quiet lifts it onto
+            // the selection grey instead — a slab of white is a glow by another name.
+            const ink = last ? (p.quiet ? "text-ink" : "text-bg") : muted ? "text-ink-3" : "text-ink";
             return (
               <tr
                 key={i}
                 className="border-b border-ring/60"
                 style={{
                   background: last
-                    ? "var(--spot)"
+                    ? p.quiet
+                      ? "var(--surface-3)"
+                      : "var(--spot)"
                     : r.inside_em
-                      ? "color-mix(in oklab, var(--surface-3) 80%, transparent)"
+                      ? p.quiet
+                        ? "color-mix(in oklab, var(--surface-2) 60%, transparent)"
+                        : "color-mix(in oklab, var(--surface-3) 80%, transparent)"
                       : undefined,
                 }}
               >
-                <td className="w-[4px] p-0" style={{ background: KIND_HUE[r.kind] }} />
+                <td className="w-[4px] p-0" style={{ background: hues[r.kind] }} />
                 <td
                   className={cn(
                     "fig w-[88px] px-2.5 py-1.5 text-right text-[12.5px] whitespace-nowrap",
@@ -437,7 +690,7 @@ function Ladder({ l }: { l: BriefLadder }) {
                 <td
                   className={cn(
                     "fig px-2.5 py-1.5 text-right text-[12px] whitespace-nowrap",
-                    last ? "text-bg" : "text-ink-3",
+                    last ? (p.quiet ? "text-ink-2" : "text-bg") : "text-ink-3",
                   )}
                 >
                   {r.dist === null ? "" : signed(r.dist, l.dp)}
@@ -455,8 +708,9 @@ function Ladder({ l }: { l: BriefLadder }) {
 /* ---------------------------------------------------------------- gamma */
 
 function GammaCard({ g }: { g: BriefGamma }) {
+  const p = usePaint();
   const regime = g.regime === "NEG" ? "Negative gamma" : g.regime === "POS" ? "Positive gamma" : "Gamma";
-  const hue = g.regime === "NEG" ? biasInk("bearish") : g.regime === "POS" ? biasInk("bullish") : "var(--ink-2)";
+  const hue = g.regime === "NEG" ? p.ink("bearish") : g.regime === "POS" ? p.ink("bullish") : "var(--ink-2)";
   // flip_dist is flip minus last: positive means the flip sits overhead.
   const side = g.flip_dist === null ? null : g.flip_dist > 0 ? "above" : "below";
   const flipSub =
@@ -465,14 +719,19 @@ function GammaCard({ g }: { g: BriefGamma }) {
       : `${pct(g.flip_dist_pct, 1)}${g.flip_em !== null && side ? `, ${g.flip_em} EM ${side}` : ""}`;
   return (
     <div
-      className="border-l-[3px] px-4 pt-3 pb-1"
-      style={{ borderColor: "var(--flip)", background: tint("var(--flip)", 7) }}
+      className={cn("border-l-[3px]", p.quiet ? "border-flip-fig/70 py-1 pl-4" : "px-4 pt-3 pb-1")}
+      style={p.quiet ? undefined : { borderColor: "var(--flip)", background: tint("var(--flip)", 7) }}
     >
       <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="font-serif text-[20px]" style={{ color: hue }}>
+        <span
+          className={p.quiet ? "text-[19px] font-semibold" : "font-serif text-[20px]"}
+          style={{ color: hue }}
+        >
           {regime}
         </span>
-        <span className="text-[12px] font-semibold text-ink-3">{g.label}</span>
+        <span className={p.quiet ? "qt-cap text-[11px] text-ink-3" : "text-[12px] font-semibold text-ink-3"}>
+          {g.label}
+        </span>
       </div>
       <div className="grid grid-cols-2 gap-x-4">
         <Stat k="Flip" v={num(g.flip, g.dp)} sub={flipSub} />
@@ -493,10 +752,11 @@ function GammaCard({ g }: { g: BriefGamma }) {
 }
 
 function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
+  const p = usePaint();
   return (
     <div className="pb-3">
-      <div className="text-[11px] text-ink-3">{k}</div>
-      <div className="fig text-[15px] font-semibold text-ink">{v}</div>
+      <div className={p.quiet ? "qt-cap mb-0.5 text-[10.5px] text-ink-4" : "text-[11px] text-ink-3"}>{k}</div>
+      <div className={cn("fig text-ink", p.quiet ? "text-[14px]" : "text-[15px] font-semibold")}>{v}</div>
       {sub && <div className="text-[11px] text-ink-3">{sub}</div>}
     </div>
   );
@@ -527,7 +787,7 @@ function Catalysts({ f, b }: { f: BriefFacts; b: BriefBody }) {
                 <tr key={c.id} className="border-b border-ring/60 align-top">
                   <td
                     className={cn(
-                      "fig w-[136px] py-2 pr-3 text-[11.5px] font-semibold whitespace-nowrap",
+                      "fig w-[136px] py-2 pr-3 text-[11.5px] font-semibold whitespace-nowrap qt:w-[150px] qt:text-[12px]",
                       c.released ? "text-ink-3" : "text-ink",
                     )}
                   >
@@ -540,7 +800,7 @@ function Catalysts({ f, b }: { f: BriefFacts; b: BriefBody }) {
                         <span className="ml-1.5 text-[11px] text-ink-3">{c.country}</span>
                       )}
                       {c.released && c.kind !== "fed" && <Chip>Released</Chip>}
-                      {c.high && <Chip hue="var(--flip)">High impact</Chip>}
+                      {c.high && <Chip hue="var(--flip)" quietHue="var(--warn)">High impact</Chip>}
                     </div>
                     {detail && (
                       <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">
@@ -562,11 +822,15 @@ function Catalysts({ f, b }: { f: BriefFacts; b: BriefBody }) {
 /* ---------------------------------------------------------------- the read */
 
 function Read({ r, call, live }: { r: BriefRead; call?: BriefCall; live?: boolean }) {
-  const ink = biasInk(call?.open_bias);
+  const p = usePaint();
+  const ink = p.ink(call?.open_bias);
+  const tones = p.quiet ? TONE_HUE_QT : TONE_HUE;
   return (
-    <div className="mb-8 last:mb-0">
+    <div className={cn("mb-8 last:mb-0", p.quiet && "mb-10 border-b border-ring/60 pb-8 last:border-b-0 last:pb-0")}>
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-serif text-[21px] text-ink">{BOOK_NAME[r.book]}</span>
+        <span className={p.quiet ? "text-[17px] font-semibold text-ink" : "font-serif text-[21px] text-ink"}>
+          {BOOK_NAME[r.book]}
+        </span>
         {call && (
           <Chip hue={ink}>
             {biasLabel(call.open_bias)} {live ? "from here" : "at the open"}
@@ -576,15 +840,23 @@ function Read({ r, call, live }: { r: BriefRead; call?: BriefCall; live?: boolea
 
       {r.regime && <Label>Regime: {r.regime}</Label>}
       {r.chain.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-x-1.5 gap-y-1.5 text-[12px]">
-          {r.chain.map((link, i) => (
+        <div className={cn("mb-4 flex flex-wrap items-center gap-x-1.5 gap-y-1.5 text-[12px]", p.quiet && "gap-x-2 gap-y-2")}>
+          {(p.quiet ? chainLinks(r.chain) : r.chain).map((link, i) => (
             <span key={i} className="contents">
               {i > 0 && (
-                <span aria-hidden className="text-ink-3">
+                <span aria-hidden className={p.quiet ? "text-ink-4" : "text-ink-3"}>
                   →
                 </span>
               )}
-              <span className="border border-ring bg-surface-2 px-2 py-0.5 text-ink">{link}</span>
+              <span
+                className={
+                  p.quiet
+                    ? "rounded-[3px] border border-ring-2 px-2 py-1 text-ink-2"
+                    : "border border-ring bg-surface-2 px-2 py-0.5 text-ink"
+                }
+              >
+                {link}
+              </span>
             </span>
           ))}
         </div>
@@ -597,17 +869,28 @@ function Read({ r, call, live }: { r: BriefRead; call?: BriefCall; live?: boolea
         </>
       )}
 
-      {r.wrong_if && (
-        <div className="mb-4 border-l-[3px] bg-surface-2 px-3 py-2" style={{ borderColor: ink }}>
-          <Label>Wrong if</Label>
-          <div className="text-[13px] leading-snug text-ink">{r.wrong_if}</div>
-        </div>
-      )}
+      {r.wrong_if &&
+        (p.quiet ? (
+          <>
+            <Label>Wrong if</Label>
+            <p
+              className="mb-4 border-l-[3px] pl-3 text-[13.5px] leading-[1.6] font-semibold text-ink"
+              style={{ borderColor: ink }}
+            >
+              {r.wrong_if}
+            </p>
+          </>
+        ) : (
+          <div className="mb-4 border-l-[3px] bg-surface-2 px-3 py-2" style={{ borderColor: ink }}>
+            <Label>Wrong if</Label>
+            <div className="text-[13px] leading-snug text-ink">{r.wrong_if}</div>
+          </div>
+        ))}
 
       <Label>Rest of day</Label>
       {call?.rest_of_day && (
         <div className="mb-1.5">
-          <Chip hue={biasInk(call.rest_of_day_bias)} className="ml-0">
+          <Chip hue={p.ink(call.rest_of_day_bias)} className="ml-0">
             {call.rest_of_day}
           </Chip>
         </div>
@@ -637,8 +920,8 @@ function Read({ r, call, live }: { r: BriefRead; call?: BriefCall; live?: boolea
             {r.drivers.map((d, i) => (
               <li key={i} className="flex gap-2.5 border-b border-ring/60 py-1.5 text-[12.5px] leading-snug">
                 <span
-                  className="mt-[6px] h-[7px] w-[7px] shrink-0 rounded-full"
-                  style={{ background: TONE_HUE[d.tone] }}
+                  className={cn("mt-[6px] h-[7px] w-[7px] shrink-0", p.mark)}
+                  style={{ background: tones[d.tone] }}
                   title={d.tone}
                 />
                 <span>
@@ -650,9 +933,9 @@ function Read({ r, call, live }: { r: BriefRead; call?: BriefCall; live?: boolea
           </ul>
           <div className="mt-2 flex flex-wrap gap-x-3 text-[11px] text-ink-3">
             {(Object.keys(TONE_HUE) as Tone[]).map((t) => (
-              <span key={t} className="inline-flex items-center gap-1">
-                <span className="h-[7px] w-[7px] rounded-full" style={{ background: TONE_HUE[t] }} />
-                {t}
+              <span key={t} className={cn("inline-flex items-center gap-1", p.quiet && "gap-1.5")}>
+                <span className={cn("h-[7px] w-[7px]", p.mark)} style={{ background: tones[t] }} />
+                {p.quiet ? TONE_WORD[t] : t}
               </span>
             ))}
           </div>
@@ -665,6 +948,7 @@ function Read({ r, call, live }: { r: BriefRead; call?: BriefCall; live?: boolea
 /* ---------------------------------------------------------------- rotation */
 
 function Rotation({ f, b }: { f: BriefFacts; b: BriefBody }) {
+  const p = usePaint();
   const { ratios, megacaps, megacap_index, index_pct } = f.rotation;
   if (ratios.length === 0 && megacaps.length === 0) return null;
   const reads = new Map(b.ratio_reads.map((r) => [r.id, r.read]));
@@ -702,6 +986,18 @@ function Rotation({ f, b }: { f: BriefFacts; b: BriefBody }) {
           <div className="flex flex-wrap gap-1.5">
             {megacaps.map((m) => {
               const hue = m.pct === null ? "var(--ink-3)" : m.pct >= 0 ? "var(--call)" : "var(--put)";
+              if (p.quiet) {
+                // A hairline chip with the move in its hue — no tinted fill.
+                return (
+                  <span
+                    key={m.symbol}
+                    className="fig rounded-[3px] border border-ring-2 px-2 py-[3px] text-[11.5px]"
+                  >
+                    <span className="text-ink">{m.symbol}</span>{" "}
+                    <span className={dir(m.pct)}>{pct(m.pct, 1)}</span>
+                  </span>
+                );
+              }
               return (
                 <span
                   key={m.symbol}
@@ -738,7 +1034,11 @@ function Headlines({ f, b }: { f: BriefFacts; b: BriefBody }) {
           return (
             <li key={p.id} className="border-b border-ring/60 py-2.5">
               <div className="flex flex-wrap items-center text-[11px] text-ink-3">
-                <span>{[h.publisher, h.time_et].filter(Boolean).join(", ")}</span>
+                <span className="qt:hidden">{[h.publisher, h.time_et].filter(Boolean).join(", ")}</span>
+                <span className="hidden text-ink-4 qt:inline">
+                  <span className="qt-cap text-[10px] text-ink-3">{h.publisher}</span>
+                  {h.time_et ? ` · ${h.time_et}` : ""}
+                </span>
                 {p.books.length > 0 && <Chip>{p.books.map((bk) => BOOK_NAME[bk]).join(" + ")}</Chip>}
               </div>
               {h.url ? (
@@ -765,16 +1065,41 @@ function Headlines({ f, b }: { f: BriefFacts; b: BriefBody }) {
 /* ---------------------------------------------------------------- type */
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const p = usePaint();
   return (
-    <section className="mt-6 border-t border-ring/60 pt-5">
-      <h3 className="mb-3 font-serif text-[19px] font-normal text-ink">{title}</h3>
+    <section className={cn("mt-6 border-t pt-5", p.quiet ? "mt-7 border-ring" : "border-ring/60")}>
+      <h3
+        className={
+          p.quiet ? "qt-cap mb-3.5 text-[11.5px] text-ink-3" : "mb-3 font-serif text-[19px] font-normal text-ink"
+        }
+      >
+        {title}
+      </h3>
       {children}
     </section>
   );
 }
 
 function Label({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn("mb-1 text-[12px] text-ink-3", className)}>{children}</div>;
+  const p = usePaint();
+  return (
+    <div
+      className={cn(
+        p.quiet ? "qt-cap mt-3 mb-1.5 block text-[10.5px] text-ink-4 first:mt-0" : "mb-1 text-[12px] text-ink-3",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A chain whose model wrote "A → B" inside one link gets it split — the page draws the arrows. */
+function chainLinks(chain: string[]): string[] {
+  return chain
+    .flatMap((l) => l.split(/\s*(?:→|->)\s*/))
+    .map((l) => l.trim())
+    .filter(Boolean);
 }
 
 function P({
@@ -802,14 +1127,32 @@ function P({
 
 function Chip({
   hue,
+  quietHue,
   className,
   children,
 }: {
   hue?: string;
+  /** The hue in Quiet, when it differs — "high impact" is a warning there, not the flip. */
+  quietHue?: string;
   className?: string;
   children: React.ReactNode;
 }) {
+  const p = usePaint();
   const h = hue ?? "var(--ink-2)";
+  if (p.quiet) {
+    // Quiet drops the box: a toned chip is a square marker and caps in its hue,
+    // a neutral one plain caps (GEXYGEN's LumChip under .ui-qt).
+    const q = quietHue ?? hue;
+    return (
+      <span
+        className={cn("qt-cap ml-2 inline-flex items-center gap-1 align-[1px] text-[9.5px]", className)}
+        style={{ color: q ?? "var(--ink-3)" }}
+      >
+        {q && <span aria-hidden className="h-[5px] w-[5px] shrink-0 bg-current" />}
+        {children}
+      </span>
+    );
+  }
   return (
     <span
       className={cn(

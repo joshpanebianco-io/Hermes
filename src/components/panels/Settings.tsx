@@ -13,6 +13,7 @@ import {
 } from "@/lib/theme";
 import { Module } from "@/components/ui/Module";
 import type { FrameFx } from "@/lib/useFrameLight";
+import { UI_COOKIE, type UiMode } from "@/lib/ui";
 import { cn } from "@/lib/cn";
 
 /**
@@ -67,6 +68,16 @@ const CHROME_SLOTS: { key: keyof ThemeChoice; label: string; hint: string }[] = 
  * whole perimeter glowing in place. Both run on the chrome hues, so whatever
  * the palette is set to, the frame agrees with it.
  */
+/**
+ * The interface — Quiet (GEXYGEN's flat, hairline chassis) or Classic (the
+ * carded neon one this terminal shipped with). Quiet is the default; Classic is
+ * kept because a redesign you cannot step back from is a bet, not a choice.
+ */
+const UIS: { key: UiMode; label: string; hint: string }[] = [
+  { key: "quiet", label: "Quiet", hint: "Flat chrome on one grey ramp, hairlines instead of cards, IBM Plex" },
+  { key: "classic", label: "Classic", hint: "Carded panes, mono caps headers and the neon chrome" },
+];
+
 const FX: { key: FrameFx; label: string; hint: string }[] = [
   { key: "travel", label: "Travel", hint: "A charge running the perimeter, ten seconds a lap" },
   { key: "breathe", label: "Breathe", hint: "The whole frame glowing in place, alternating the two hues" },
@@ -78,11 +89,15 @@ export function Settings({
   onTheme,
   fx,
   onFx,
+  ui,
+  onUi,
 }: {
   theme: ThemeChoice;
   onTheme: (t: ThemeChoice) => void;
   fx: FrameFx;
   onFx: (v: FrameFx) => void;
+  ui: UiMode;
+  onUi: (v: UiMode) => void;
 }) {
   const [open, setOpen] = useState<keyof ThemeChoice | null>(null);
   const active = matchPreset(theme);
@@ -104,9 +119,45 @@ export function Settings({
     [onTheme],
   );
 
+  /*
+   * Live, like the palette: the class goes straight onto <html> and the cookie
+   * makes the server render the next load in the same interface.
+   */
+  const setUi = (m: UiMode) => {
+    onUi(m);
+    document.cookie = `${UI_COOKIE}=${m}; path=/; max-age=31536000; samesite=lax`;
+    document.documentElement.classList.toggle("ui-qt", m === "quiet");
+  };
+
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-2">
-      <div className="flex min-w-0 flex-col gap-2">
+    <div className="min-h-0 flex-1 overflow-y-auto p-2 qt:p-0">
+      <div className="qt-stack flex min-w-0 flex-col gap-2">
+        <Module title="Interface" sub="the chassis the terminal is drawn in" bodyClassName="px-0 py-0">
+          {UIS.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={() => setUi(o.key)}
+              className={cn(
+                "hit flex w-full items-center gap-2 border-b border-ring/40 px-3 py-1.5 text-left last:border-b-0",
+                ui === o.key && "bg-ink/[0.06]",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "h-[13px] w-[13px] shrink-0 rounded-[3px] border",
+                  ui === o.key ? "border-ink bg-ink/20" : "border-ring-2",
+                )}
+              />
+              <span className={cn("w-[70px] shrink-0 text-[11px] qt:text-[12.5px]", ui === o.key ? "text-ink" : "text-ink-2")}>
+                {o.label}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[9.5px] text-ink-4 qt:text-[11.5px] qt:text-ink-3">{o.hint}</span>
+            </button>
+          ))}
+        </Module>
+
         <Module
           title="Presets"
           sub={active ? active.name : "custom"}

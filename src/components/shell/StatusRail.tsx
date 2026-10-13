@@ -31,7 +31,7 @@ export function StatusRail({
   const names = ["quotes", "wire", "gex", "sectors", "calendar", "rates"];
 
   return (
-    <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring bg-surface/40 px-3 py-1.5">
+    <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring bg-surface/40 px-3 py-1.5 qt:gap-x-5 qt:bg-transparent qt:px-6 qt:py-2">
       {names.map((n) => {
         const s = status[n];
         const a = ages[n];
@@ -53,14 +53,14 @@ export function StatusRail({
               )}
               aria-hidden
             />
-            <span className="fig text-[9.5px] tracking-wide text-ink-4 uppercase">{n}</span>
+            <span className="fig text-[9.5px] tracking-wide text-ink-4 uppercase qt:text-[10.5px]">{n}</span>
             {s?.ok && (
-              <span className="fig text-[9.5px] text-ink-3">
+              <span className="fig text-[9.5px] text-ink-3 qt:text-[10.5px]">
                 {s.items}
                 {n === "wire" && s.notes?.[0] ? ` · ${s.notes[0]}` : ""}
               </span>
             )}
-            {a !== undefined && <span className="fig text-[9px] text-ink-4">{age(a)}</span>}
+            {a !== undefined && <span className="fig text-[9px] text-ink-4 qt:text-[10px]">{age(a)}</span>}
             {s && !s.ok && s.error && (
               <span className="fig max-w-[220px] truncate text-[9.5px] text-err">{s.error}</span>
             )}

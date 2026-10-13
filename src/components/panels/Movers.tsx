@@ -6,6 +6,7 @@ import { Module } from "@/components/ui/Module";
 import { Tick } from "@/components/ui/Tick";
 import { pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
@@ -75,32 +76,26 @@ export function Movers({
       right={
         <div className="flex items-center gap-1.5">
           {keys.length > 1 && (
-            <div className="flex gap-0.5">
+            <div className="seg">
               {keys.map((k) => (
                 <button
                   key={k}
                   type="button"
                   onClick={() => setSel(k)}
-                  className={cn(
-                    "fig hit rounded px-1.5 py-px text-[10px]",
-                    k === sel ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-                  )}
+                  {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
                 >
                   {k}
                 </button>
               ))}
             </div>
           )}
-          <div className="flex gap-0.5">
+          <div className="seg">
             {VIEWS.map((v) => (
               <button
                 key={v.key}
                 type="button"
                 onClick={() => setView(v.key)}
-                className={cn(
-                  "fig hit rounded px-1.5 py-px text-[10px]",
-                  v.key === view ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-                )}
+                {...segItem(v.key === view, { className: "text-[10px] normal-case tracking-normal" })}
               >
                 {v.label}
               </button>

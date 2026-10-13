@@ -6,6 +6,7 @@ import { Module } from "@/components/ui/Module";
 import { ago } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
+import { segItem } from "@/lib/seg";
 
 /**
  * The wire — every desk's headlines on one tape.
@@ -147,7 +148,7 @@ export function Wire({
       className="min-h-0 flex-1"
       bodyClassName="min-h-0 overflow-y-auto"
       right={
-        <div className="flex items-center gap-0.5">
+        <div className="seg">
           {IMPACTS.map((im) => {
             const on = im.key === "all" ? impacts.length === 0 : impacts.includes(im.key);
             const n = impactCounts[im.key] ?? 0;
@@ -158,23 +159,17 @@ export function Wire({
                 onClick={() => toggleImpact(im.key)}
                 aria-pressed={on}
                 title={im.title}
-                className={cn(
-                  "fig hit rounded px-1.5 py-px text-[9.5px] leading-[14px] tracking-wide uppercase",
-                  on ? "text-ink" : "text-ink-4 hover:text-ink-2",
-                )}
-                style={
-                  on ? { background: `color-mix(in oklab, ${im.hue} 26%, transparent)` } : undefined
-                }
+                {...segItem(on, { hue: im.hue, pct: 26 })}
               >
                 {im.label}
-                <span className="ml-1 text-ink-4">{n}</span>
+                <span className="seg-n">{n}</span>
               </button>
             );
           })}
         </div>
       }
     >
-      <div className="sticky top-0 z-10 -mx-px flex flex-wrap gap-1 border-b border-ring/60 bg-surface px-3 py-1.5">
+      <div className="seg seg-bare sticky top-0 z-10 -mx-px flex border-b border-ring/60 bg-surface px-3 py-1.5 qt:bg-bg qt:pb-2.5">
         {DESKS.map((d) => {
           const on = desk === d.key;
           const n = deskCounts[d.key] ?? 0;
@@ -183,18 +178,11 @@ export function Wire({
               key={d.key}
               type="button"
               onClick={() => setDesk(d.key)}
-              className={cn(
-                "fig hit rounded px-1.5 py-0.5 text-[10px] tracking-wide uppercase",
-                on ? "text-ink" : "text-ink-4 hover:text-ink-2",
-              )}
-              style={on ? { background: `color-mix(in oklab, ${d.hue} 22%, transparent)` } : undefined}
+              {...segItem(on, { hue: d.hue, pct: 22, className: "text-[10px] py-0.5" })}
             >
-              <span
-                className="mr-1 inline-block h-[6px] w-[6px] rounded-full align-middle"
-                style={{ background: d.hue }}
-              />
+              {d.key !== "all" && <span className="seg-dot" />}
               {d.label}
-              <span className="ml-1 text-ink-4">{n}</span>
+              <span className="seg-n">{n}</span>
             </button>
           );
         })}

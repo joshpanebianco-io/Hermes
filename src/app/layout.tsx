@@ -1,8 +1,37 @@
 import type { Metadata, Viewport } from "next";
+import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Condensed } from "next/font/google";
 import { cookies } from "next/headers";
 import { Tooltips } from "@/components/ui/Tooltips";
 import { THEME_COOKIE, parseTheme, themeStyle } from "@/lib/theme";
+import { UI_COOKIE, parseUi, uiClass } from "@/lib/ui";
+import { cn } from "@/lib/cn";
 import "./globals.css";
+
+/*
+ * QUIET TERMINAL'S TYPEFACES — IBM Plex Sans, Sans Condensed and Mono, as
+ * GEXYGEN's Quiet sets them. Self-hosted by next/font, so no browser request
+ * ever leaves for Google. Exposed as variables only: `.ui-qt` in globals.css is
+ * what points --font-sans / --font-cond / --font-mono at them, so the classic
+ * interface keeps its system faces untouched.
+ */
+const plex = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-plex",
+  display: "swap",
+});
+const plexCond = IBM_Plex_Sans_Condensed({
+  subsets: ["latin"],
+  weight: ["500", "600"],
+  variable: "--font-plex-cond",
+  display: "swap",
+});
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-plex-mono",
+  display: "swap",
+});
 
 /*
  * THE TAB ICON IS THE DESKTOP ICON (owner, 2026-09-22): public/hermesx.ico,
@@ -41,8 +70,13 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const jar = await cookies();
   const theme = parseTheme(jar.get(THEME_COOKIE)?.value);
+  const ui = parseUi(jar.get(UI_COOKIE)?.value);
   return (
-    <html lang="en" style={themeStyle(theme)}>
+    <html
+      lang="en"
+      style={themeStyle(theme)}
+      className={cn(plex.variable, plexCond.variable, plexMono.variable, uiClass(ui))}
+    >
       <body>
         {children}
         {/* Every `title` in the app, drawn in the app's own hand — see the file. */}

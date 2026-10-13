@@ -3,6 +3,7 @@ import type { ReportFeed, Terminal as TerminalData } from "@/types/terminal";
 import { failureReason, offlineTerminal } from "@/lib/offline";
 import { cookies } from "next/headers";
 import { THEME_COOKIE, parseTheme } from "@/lib/theme";
+import { UI_COOKIE, parseUi } from "@/lib/ui";
 
 /**
  * The terminal, server-rendered once and then polled by the client.
@@ -74,7 +75,7 @@ export default async function Page({
 }) {
   const sp = await searchParams;
   const initialTab =
-    sp.tab === "report" ? "report" : sp.tab === "settings" ? "settings" : "terminal";
+    sp.tab === "report" || sp.tab === "settings" || sp.tab === "scanner" ? sp.tab : "terminal";
   /*
    * WHETHER THE URL ASKED AT ALL, which is not the same question as which tab
    * it asked for. `?tab=terminal` and a bare `/` both resolve to "terminal"
@@ -85,8 +86,10 @@ export default async function Page({
    * you go, not a place you arrive.
    */
   const initialTabPinned =
-    sp.tab === "terminal" || sp.tab === "report" || sp.tab === "settings";
-  const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
+    sp.tab === "terminal" || sp.tab === "scanner" || sp.tab === "report" || sp.tab === "settings";
+  const jar = await cookies();
+  const theme = parseTheme(jar.get(THEME_COOKIE)?.value);
+  const ui = parseUi(jar.get(UI_COOKIE)?.value);
   const [initial, initialReport] = await Promise.all([getInitial(), getReport()]);
   return (
     <Terminal
@@ -95,6 +98,7 @@ export default async function Page({
       initialTab={initialTab}
       initialTabPinned={initialTabPinned}
       initialTheme={theme}
+      initialUi={ui}
     />
   );
 }

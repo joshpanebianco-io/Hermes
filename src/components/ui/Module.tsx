@@ -52,7 +52,12 @@ export function Module({
       <div className="module-head">
         <h2 className="module-title">{title}</h2>
         {sub && (
-          <span className={cn("truncate text-ink-4", large ? "text-[11.5px]" : "text-[10px]")}>
+          <span
+            className={cn(
+              "truncate text-ink-4 qt:text-ink-3",
+              large ? "text-[11.5px] qt:text-[12.5px]" : "text-[10px] qt:text-[11.5px]",
+            )}
+          >
             {sub}
           </span>
         )}
@@ -95,6 +100,8 @@ function AgeChip({ m }: { m: number }) {
     <span
       className={cn(
         "fig shrink-0 rounded border px-1.5 py-px text-[9.5px] leading-[14px]",
+        // Quiet: the age is a figure, not a badge — no box round it.
+        "qt:border-0 qt:px-0 qt:text-[11px]",
         tone,
       )}
       title={`Last refreshed ${age(m)} ago`}

@@ -5,6 +5,7 @@ import { Module } from "@/components/ui/Module";
 import { Tick } from "@/components/ui/Tick";
 import { pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
@@ -77,16 +78,13 @@ export function Rotation({
       error={error}
       bodyClassName="px-0 py-0"
       right={
-        <div className="flex gap-0.5">
+        <div className="seg">
           {SPANS.map((s) => (
             <button
               key={s.key}
               type="button"
               onClick={() => setSpan(s.key)}
-              className={cn(
-                "fig hit rounded px-1.5 py-px text-[10px]",
-                s.key === span ? "bg-ink/10 text-ink" : "text-ink-4 hover:text-ink-2",
-              )}
+              {...segItem(s.key === span, { className: "text-[10px] normal-case tracking-normal" })}
             >
               {s.label}
             </button>

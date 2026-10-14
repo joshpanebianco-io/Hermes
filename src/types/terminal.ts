@@ -571,6 +571,8 @@ export interface BriefCatalyst {
   surprise: number | null;
   high: boolean;
   note: string | null;
+  /** The release's other series, its lead being this row (report.py, releases.py). */
+  also?: Array<{ title: string; actual: string | null; consensus: string | null; previous: string | null }>;
 }
 
 export interface BriefRatio {

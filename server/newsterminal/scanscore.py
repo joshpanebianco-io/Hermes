@@ -31,7 +31,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import optcalc
+from . import optcalc, releases
 from .holidays import next_trading_day
 from .scan import Clock
 from .volterm import state as volterm_state
@@ -51,6 +51,42 @@ W_LOCATION = {
     "approaching": 6, "forming": 8, "failed": 0, "chop": 0,
 }
 W_VOLUME = ((2.0, 10), (1.5, 7), (1.0, 4))
+
+# ---- in play: the volume part's stand-in before the bell ----------------------
+# BEFORE 09:30 RVOL DOES NOT EXIST (Yahoo's pre-market bars carry no volume), so
+# the ten volume points were zero for every name and the pre-open rank was RS
+# alone: at 05:22 ET on 2026-10-14 DELL led on RS with nothing broken, while MU
+# — down on ASML's miss, 1.07% of its average day already traded — sat eighth.
+# EllyD picks "what's moving pre-market" (owner, 2026-10-14: "do what you
+# recommend"), so until the open the part is IN PLAY: how far the name has
+# gapped in its own daily ATRs, how much of an average day has traded before
+# the bell (Nasdaq's read, sources/premarket.py), and whether there is a fresh
+# reason. 22 points, because the pre-open location part tops out at 8
+# ("forming"), so structure 30 + RS 25 + location 8 + in play 22 + market 15 is
+# the same 100 the session's parts add to.
+#
+# Worked examples, the live payload at 06:02 ET on 2026-10-14 (the part is
+# rounded once, as a whole):
+#   DELL  gap |556.48 − 572.47| / ATR 26.66 = 0.60 → 8 × (0.60 − 0.10) / 0.65 = 6.15
+#         pre-market 1.07% of ADV → 8 × ln(1.07 / 0.25) / ln(16)            = 4.20
+#         2 headlines since the close                                       = 1
+#                                                               in play 11.35 → 11
+#   SNDK  gap 0.40 ATR → 3.73 · 1.95% of ADV → 5.93 · 2 headlines → 1     → 11
+#   MU    gap 0.28 ATR → 2.21 · 1.25% of ADV → 4.64 · 8 headlines → 2     → 9
+#   GME   gap 0.54 ATR → 5.39 · 0.61% of ADV → 2.57 · 4 headlines → 2     → 10
+#   NVDA  gap 0.10 ATR → 0    · 0.48% of ADV → 1.88 · 2 headlines → 1     → 3
+# Against the RS-only rank those moved DELL 30 → 41, SNDK 25 → 36, MU 22 → 31
+# and NVDA 26 → 29. A name that reported after yesterday's close, gapping
+# three-quarters of an ATR on 4% of its day, earns all 22.
+W_GAP = 8
+GAP_MIN = 0.10  # daily ATRs — below this the "gap" is the overnight drift
+GAP_FULL = 0.75  # daily ATRs for the whole gap part
+W_PMVOL = 8
+PMVOL_MIN = 0.25  # % of ADV — nothing below it (Nasdaq's quiet names sit at 0.1–0.3)
+PMVOL_FULL = 4.0  # % of ADV for the whole part; log-scaled between the two
+W_CATALYST = 6
+CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08:00)
+W_INPLAY = W_GAP + W_PMVOL + W_CATALYST
 W_BIAS = 8
 W_CONFIRM = 4
 W_SECTOR = 3
@@ -119,17 +155,28 @@ def next_event(calendar: list[dict[str, Any]], now: datetime) -> dict[str, Any] 
     """The next US release worth stopping for (score ≥ 4), or one that printed in
     the last quarter hour. Pure."""
     now_ts = now.timestamp()
-    best: dict[str, Any] | None = None
+    near: list[dict[str, Any]] = []
     for r in calendar:
         if r.get("region") != "us" or (r.get("score") or 0) < 4 or r.get("ts") is None:
             continue
         in_min = (float(r["ts"]) - now_ts) / 60.0
         if in_min < -EVENT_RECENT_MIN or in_min > EVENT_HORIZON_MIN:
             continue
-        if best is None or in_min < best["in_min"]:
-            best = {"title": r.get("event") or "", "et": r.get("et") or "",
-                    "in_min": round(in_min, 1), "score": r.get("score") or 0}
-    return best
+        near.append(r)
+    if not near:
+        return None
+    # BY RELEASE (releases.py): 08:30 on CPI day read "CPI, n.s.a" — one of the
+    # release's seven rows, and the one nobody prices. The release's lead names it.
+    rel = min(
+        releases.group(near, event=lambda r: str(r.get("event") or ""), when=lambda r: r["ts"],
+                       country=lambda r: r.get("country"), score=lambda r: int(r.get("score") or 0),
+                       figures=lambda r: (r.get("actual_raw"), r.get("consensus_raw"),
+                                          r.get("previous_raw"))),
+        key=lambda g: float(g.lead["ts"]),
+    )
+    r = rel.lead
+    return {"title": r.get("event") or "", "et": r.get("et") or "",
+            "in_min": round((float(r["ts"]) - now_ts) / 60.0, 1), "score": r.get("score") or 0}
 
 
 def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | None],
@@ -424,10 +471,66 @@ def _part(key: str, label: str, pts: float, mx: int, note: str) -> dict[str, Any
     return {"key": key, "label": label, "pts": round(pts), "max": mx, "note": note}
 
 
+def in_play(row: dict[str, Any], premkt: dict[str, Any] | None,
+            earnings: dict[str, Any] | None,
+            news: list[dict[str, Any]] | None) -> tuple[float, str]:
+    """Before the bell: the gap, the pre-market volume, the catalyst → (points,
+    note). Side-blind on purpose — a name is in play whichever way it gapped,
+    and the side is RS's call. Pure."""
+    bits: list[str] = []
+    pts = 0.0
+
+    # The gap in the name's own daily ATRs: the pre-market (or after-hours) last
+    # against the previous close — the same move RS sets against SPY's.
+    last, atr = row.get("last"), row.get("atr_d")
+    pdc = (row.get("levels") or {}).get("pdc")
+    if isinstance(last, (int, float)) and isinstance(pdc, (int, float)) \
+            and isinstance(atr, (int, float)) and atr > 0:
+        gap = abs(last - pdc) / atr
+        pts += W_GAP * max(0.0, min(1.0, (gap - GAP_MIN) / (GAP_FULL - GAP_MIN)))
+        bits.append(f"gap {gap:.2f} ATR")
+    else:
+        bits.append("no gap read")
+
+    pct = (premkt or {}).get("pct_adv")
+    if isinstance(pct, (int, float)):
+        if pct > PMVOL_MIN:
+            frac = math.log(pct / PMVOL_MIN) / math.log(PMVOL_FULL / PMVOL_MIN)
+            pts += W_PMVOL * min(1.0, frac)
+        bits.append(f"pre-market {pct:.2f}% of ADV")
+    else:
+        bits.append("no pre-market volume yet")
+
+    # The catalyst: a report since yesterday's close is the reason; a report
+    # today at an unconfirmed time half of one. Headlines count by number and
+    # only a little — the classifier's "rating" and "earnings" kinds were 13 of
+    # 31 names on 2026-10-14 (reiterations, and ASML's miss naming every chip
+    # name), so a kind is not a catalyst and the mega caps' constant coverage
+    # earns at most 2.
+    days, when = (earnings or {}).get("days"), (earnings or {}).get("when")
+    fresh = [n for n in news or []
+             if n.get("age_min") is not None and n["age_min"] <= CATALYST_FRESH_MIN]
+    if days == -1 or (days == 0 and when == "pre"):
+        pts += W_CATALYST
+        bits.append("reported since the close")
+    elif days == 0 and when != "after":
+        pts += W_CATALYST / 2
+        bits.append("reports today")
+    elif fresh:
+        pts += 2 if len(fresh) >= 3 else 1
+        bits.append(f"{len(fresh)} headline{'s' if len(fresh) != 1 else ''} since the close")
+    return pts, " · ".join(bits)
+
+
 def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
               earnings: dict[str, Any] | None, event: dict[str, Any] | None,
-              session: str = "rth") -> dict[str, Any]:
-    """The contract's score: five parts and the penalties, every one listed. Pure."""
+              session: str = "rth", premkt: dict[str, Any] | None = None,
+              news: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The contract's score: five parts and the penalties, every one listed. Pure.
+
+    Before the bell (and overnight) the volume part is IN PLAY instead — see
+    W_INPLAY. From 09:30 it is RVOL exactly as before.
+    """
     setup = row.get("setup") or {}
     side = setup.get("side")
     state = setup.get("state") or "chop"
@@ -475,21 +578,20 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         pts, note = 0, "no side"
     parts.append(_part("location", "Location", pts, 20, note))
 
-    # ---- volume --------------------------------------------------------------
+    # ---- volume (in play before the bell) -----------------------------------
     rvol = row.get("rvol")
-    pts = 0
-    if rvol is not None:
-        for floor, p in W_VOLUME:
-            if rvol >= floor:
-                pts = p
-                break
-    if rvol is not None:
-        vnote = f"RVOL {rvol:.2f}"
-    elif session in ("pre", "closed"):
-        vnote = "RVOL starts at the open — Yahoo's pre-market bars carry no volume"
+    if session in ("pre", "closed"):
+        ip, inote = in_play(row, premkt, earnings, news)
+        parts.append(_part("inplay", "In play", ip, W_INPLAY, inote))
     else:
-        vnote = "no RVOL yet"
-    parts.append(_part("volume", "Relative volume", pts, 10, vnote))
+        pts = 0
+        if rvol is not None:
+            for floor, p in W_VOLUME:
+                if rvol >= floor:
+                    pts = p
+                    break
+        vnote = f"RVOL {rvol:.2f}" if rvol is not None else "no RVOL yet"
+        parts.append(_part("volume", "Relative volume", pts, 10, vnote))
 
     # ---- market --------------------------------------------------------------
     pts, bits = 0, []
@@ -637,8 +739,14 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         # are never read for news — the wire covers them — so they count as read.
         row["news_loaded"] = sym in news or sym in _NO_OWN_NEWS
         row["filings"] = fil
+        # The name's average day, and its pre-market against it — context on
+        # every row, and before the bell part of the score (in play).
+        adv = base.get("adv20")
+        row["adv20"] = adv if isinstance(adv, (int, float)) else None
+        row["premkt"] = premkt_for((premkt or {}).get(sym), row["adv20"])
         if row.get("ok"):
-            row["score"] = score_row(row, reg, srs, earn, event, session)
+            row["score"] = score_row(row, reg, srs, earn, event, session,
+                                     premkt=row["premkt"], news=nws)
             row["flags"] = flags_for(row, earn, event, nws, fil, session)
         else:
             row["score"] = {"total": 0, "side": None, "parts": []}
@@ -647,11 +755,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
             row["setup"] = {k: v for k, v in row["setup"].items() if k != "lost_vwap"}
         # After the score: the contract helper trades the row's side.
         row["options"] = options_for(sym, row, options, closes, iv_hist, td, now)
-        # Context, never score: the name's average day, its pre-market against
-        # it, and its sector's big caps reporting this week.
-        adv = base.get("adv20")
-        row["adv20"] = adv if isinstance(adv, (int, float)) else None
-        row["premkt"] = premkt_for((premkt or {}).get(sym), row["adv20"])
+        # Context, never score: its sector's big caps reporting this week.
         row["peers"] = peers_for(sym, sector, earnings, td, sector_map or {})
         pf = peer_flag(row["peers"], td)
         if pf is not None and row.get("ok"):

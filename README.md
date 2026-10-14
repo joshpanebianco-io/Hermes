@@ -56,7 +56,7 @@ job description.
 ## The screen
 
 Two desks behind one switch in the header — **Futures** (Terminal · Report) and
-**Stocks & options** (Market · Scanner · Game plan) — with Settings on both. Each desk
+**Stocks & Options** (Market · Scanner · Game plan) — with Settings on both. Each desk
 remembers the tab you left it on; `1`–`4` move between a desk's tabs and `D` switches
 desk. On the futures Terminal, three columns on one session clock:
 

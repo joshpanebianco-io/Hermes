@@ -13,6 +13,7 @@ import {
   readText,
   sideText,
   printClock,
+  printReleases,
   stateText,
   votesTip,
 } from "@/components/market/shared";
@@ -215,7 +216,9 @@ function FuelLine({ f, sym }: { f: Fuel | null; sym: "SPY" | "QQQ" }) {
  * speaker read as "next" all afternoon (audit, 2026-10-14) — `done` is the clock.
  */
 function nextPrint(prints: Print[]): Print | null {
-  return prints.find((p) => !p.released && !p.done && p.score >= 4) ?? null;
+  // By release, so 08:30 names CPI's lead series rather than whichever of its
+  // seven the feed happened to list first (lib/releases).
+  return printReleases(prints).map((r) => r.lead).find((p) => !p.released && !p.done && p.score >= 4) ?? null;
 }
 
 function StripFrame({ children }: { children: React.ReactNode }) {

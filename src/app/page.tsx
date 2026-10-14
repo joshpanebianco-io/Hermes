@@ -62,7 +62,7 @@ async function getReport(): Promise<ReportFeed | null> {
 
 /**
  * The browser tab's title, named on the server so it is right on the first
- * frame — "HERMESX · Stocks & options · Scanner". The client keeps it in step
+ * frame — "HERMESX · Stocks & Options · Scanner". The client keeps it in step
  * as you move (Terminal.tsx).
  */
 export async function generateMetadata({

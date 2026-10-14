@@ -21,7 +21,7 @@ import { localClock, readerClock } from "@/lib/clock";
  */
 /*
  * EACH DESK READS ITS OWN STRIP. Futures: the three books and the macro that
- * moves them. Stocks & options: the index ETFs the options trade on, the vol
+ * moves them. Stocks & Options: the index ETFs the options trade on, the vol
  * pair that prices them (VIX for the level, VVIX for how fast it can move),
  * and the 10-year that leans on long-duration names — then how long until New
  * York opens or closes, the one clock that desk trades on.

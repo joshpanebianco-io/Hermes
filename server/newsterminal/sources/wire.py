@@ -170,7 +170,12 @@ NOISE = re.compile(
     # names, elects — which is why "John Ternus becomes Apple CEO" survives.
     r"\bappoints?\b|\bnames?\b[^.]{0,40}\b(?:chief|CEO|CFO|CTO|COO|president|chairman)\b|"
     r"\belects?\b[^.]{0,30}\bboard\b|joins? the board|to the board of|"
-    r"board of directors\b|\bboard chair(?:man|woman|person)?\b",
+    r"board of directors\b|\bboard chair(?:man|woman|person)?\b|"
+    # NEWSLETTERS AND QUOTE PAGES. "Before the Bell: What every Canadian
+    # investor needs to know today", "AP top stories October 14" and "Xiaomi
+    # Corporation (1810.HK) stock price, news, quote and history" all reached
+    # the tape on 2026-10-14 — a table of contents and a ticker page, not news.
+    r"needs? to know|\bbefore the bell:|\btop stories\b|stock price, news, quote",
     re.I,
 )
 
@@ -467,6 +472,108 @@ GEO_RELEVANT = re.compile(
 )
 
 
+# ---------------------------------------------------------------- off-market
+#
+# NOT MARKET NEWS, ON FEEDS THAT ARE MOSTLY MARKET NEWS (owner review,
+# 2026-10-14). The morning's tape opened on "'I earn $110,000 a year': I lost
+# my home in the Great Recession…" (MarketWatch) and "PM says housework makes
+# her busier than male predecessors" (Japan Times), and further down carried a
+# sumo retrospective, two NFL injury notes, a Winnie-the-Pooh exhibition and a
+# celebrity's penthouse sale. Two tests, each conservative.
+
+# WHAT A TRADING TAPE NEVER DROPS. A headline naming any of these stays,
+# whatever else it looks like: a central bank, a print, a market or an index, a
+# commodity or a currency, shooting or sanctions, a corporate event, a ticker,
+# or one of the companies that move the indices. "'I'll Be Short Whole Year':
+# Paul Tudor Jones Warns Of … Equity Supply Tsunami" opens on a first-person
+# quote and is a market story — `equity` is what keeps it.
+MARKET_TERMS = re.compile(
+    r"\b(?:Fed|FOMC|Federal Reserve|ECB|BOJ|BoE|PBOC|RBA|RBI|SNB|central banks?|"
+    r"Treasur(?:y|ies)|CPI|PPI|PCE|GDP|payrolls?|jobless claims|PMI|ISM|retail sales|"
+    r"inflation|S&P|Nasdaq|Dow|Nikkei|Hang Seng|FTSE|DAX|Sensex|stocks?|"
+    r"shares?|equit(?:y|ies)|bonds?|yields?|futures|oil|crude|OPEC|gold|silver|copper|"
+    r"natural gas|LNG|wheat|iron ore|dollar|yen|yuan|euro|sterling|rupee|bitcoin|crypto|"
+    r"war|missiles?|invasion|ceasefire|troops|military|sanctions?|tariffs?|embargo|"
+    r"nuclear|earnings|IPO|merger|acquisitions?|bankrupt\w*)\b|"
+    # A ticker in parentheses, "(MLM)" or "(1810.HK)".
+    r"\([A-Z0-9]{1,5}(?:\.[A-Z]{1,2})?\)|"
+    # The names that move NQ / ES / GC by themselves. Case-sensitive, so "shell
+    # company" and "intelligence" are not Shell and Intel.
+    r"(?-i:\b(?:Apple|Microsoft|Nvidia|Amazon|Alphabet|Google|Meta|Tesla|Broadcom|"
+    r"Netflix|Disney|Berkshire|JPMorgan|Goldman|Morgan Stanley|Citigroup|Wells Fargo|"
+    r"Bank of America|BlackRock|Walmart|Exxon|Chevron|Aramco|Shell|BP|BHP|Rio Tinto|"
+    r"Toyota|Sony|SoftBank|Samsung|TSMC|ASML|Alibaba|Tencent|BYD|Xiaomi|Huawei|Boeing|"
+    r"Airbus|Intel|AMD|Micron|Oracle|Salesforce|IBM|OpenAI|Anthropic|SpaceX|Palantir|"
+    r"Uber|Visa|Mastercard|UnitedHealth|Eli Lilly|Novo Nordisk|MUFG|Nomura|HSBC|"
+    r"Barclays|UBS)\b)",
+    re.I,
+)
+
+# THE SHAPES OF A LIFESTYLE PIECE, dropped on any feed unless MARKET_TERMS
+# speaks for the headline. A first-person quote opening the line is the
+# advice column's signature ("'I earn…'", "'I am a pretty cautious person':
+# My financial adviser…", "'I applied for 200 jobs'") — the plain first-person
+# opening is already in NOISE, but a leading quote mark hid these from it.
+OFF_MARKET = re.compile(
+    r"^[\"'‘’“”]\s*(?:I|I['’](?:m|ve|d|ll)|my|we|we['’](?:re|ve)|our)\b|"
+    r"\bmy (?:financial )?(?:adviser|advisor|planner)\b|"
+    r"\b(?:earns?|earning|makes?|making|made)\s+[$£€]\s?\d[\d,.]*\s?k?\s+a\s+year\b|"
+    r"\bselling (?:his|her|their)\b.{0,60}\b(?:home|house|penthouse|mansion|estate|"
+    r"apartment|condo)\b|\bpenthouse\b|\bmansion\b|"
+    r"\bnew episodes?\b|\bseason (?:run|finale|premiere)\b|\bfinale\b|\bdocumentary\b|"
+    r"\bbox office\b|\bexhibition\b|\balbum\b|\bconcert\b|"
+    r"\b(?:NFL|NBA|NHL|MLB|WNBA|NCAA|UEFA|FIFA|Formula One|Grand Prix|sumo|"
+    r"Premier League|Champions League|World Series|Super Bowl)\b|"
+    r"^(?:choosing|picking|finding) (?:a|an|the|your)\b",
+    re.I,
+)
+
+# GENERAL-NEWS FEEDS ON A MARKET DESK, as (publisher, section) in FEEDS. Each
+# is on the tape for the market stories it carries — Japan's and China's
+# economy, Australia's miners, AP's economics desk, ZeroHedge's macro — and
+# each also carries the rest of a newspaper: baseball, pop music, a cop-killer
+# trial, a ferret census. An item on one of these that no desk keyword
+# promoted has to name something economic to stay, the same bar GEO_RELEVANT
+# sets for the world feeds.
+GENERAL_FEEDS: frozenset[tuple[str, str]] = frozenset({
+    ("Japan Times", "Japan"),
+    ("SCMP", "China"),
+    ("AP", "Economy"),
+    ("ZeroHedge", "Markets"),
+    ("ABC", "Australia"),
+})
+
+ECONOMIC = re.compile(
+    r"\b(?:markets?|compan(?:y|ies)|firms?|business|industr(?:y|ial)|banks?|banking|"
+    r"lenders?|investors?|invest\w*|funds?|debt|loans?|credit|prices?|pricing|exports?|"
+    r"imports?|trade|econom(?:y|ies|ic)|tax(?:es)?|budget|fiscal|spending|regulators?|"
+    r"fined?|fines|penalt(?:y|ies)|IMF|World Bank|OECD|G7|G20|APEC|billion|million|jobs|"
+    r"wages?|layoffs?|redundanc(?:y|ies)|unions?|insolven\w*|AI|chips?|semiconductors?|"
+    r"tech|mining|mines?|steel|harvest|rice|carmakers?|automakers?|EVs?|airlines?|"
+    r"property|housing|deals?|ministers?|ministry|government|parliament|election|navy|"
+    r"naval|warships?|aircraft carrier|carrier group|drills|recession|hurricanes?|"
+    r"typhoons?|earthquakes?)\b|[$£€¥]\s?\d",
+    re.I,
+)
+
+
+def is_off_market(title: str, publisher: str, section: str) -> bool:
+    """A lifestyle piece, or a general-news item with nothing economic in it. Pure.
+
+    `publisher` and `section` are the feed's as registered in FEEDS, not the
+    outlet a Google News suffix names.
+    """
+    if MARKET_TERMS.search(title):
+        return False
+    if OFF_MARKET.search(title):
+        return True
+    if (publisher, section) not in GENERAL_FEEDS:
+        return False
+    if any(p.search(title) for _, p in PROMOTE):
+        return False
+    return not (ECONOMIC.search(title) or GEO_RELEVANT.search(title))
+
+
 def classify(default: str, title: str, summary: str = "") -> str:
     """Which desk this headline belongs to. Pure.
 
@@ -520,7 +627,8 @@ def parse_feed(
                 # better attribution than the query's own label.
                 pub = m.group(0).lstrip(" -").strip()
                 title = title[: m.start()].strip()
-        if NOISE.search(title) or is_local_crime(title) or is_section_page(title):
+        if (NOISE.search(title) or is_local_crime(title) or is_section_page(title)
+                or is_off_market(title, publisher, section)):
             continue
         cat = classify(default_cat, title)
         # An item that arrived on a world feed and stayed on the geo desk was

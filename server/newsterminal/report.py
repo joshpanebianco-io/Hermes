@@ -44,9 +44,11 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from datetime import time as dtime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import releases
 from .config import CACHE_DIR, UA
 from .holidays import close_time, cme_closed, is_trading_day
 from .profile import value_position
@@ -958,6 +960,7 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
     lo, hi = now_ts - 12 * 3600, now_ts + 3 * 86400
     items: list[dict[str, Any]] = []
 
+    data: list[dict[str, Any]] = []
     for r in snap.get("calendar") or []:
         ts = r.get("ts")
         if ts is None or not lo <= ts <= hi or (r.get("score") or 0) < 3:
@@ -976,16 +979,34 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
         # actuals already in, which listed yesterday's prints as upcoming.
         if ts > now_ts and r.get("released"):
             continue
+        data.append(r)
+
+    # ONE CATALYST PER RELEASE (see releases.py): the 08:30 CPI was seven
+    # catalysts, seven of the ten "ahead" slots and five near-identical notes.
+    # The lead series is the row; the others ride on it as `also`, and the
+    # index levels and unadjusted twins are left out — no one prices them, and
+    # a figure the model never sees is one it cannot misquote.
+    for rel in releases.group(
+        data, event=lambda r: str(r.get("event") or ""), when=lambda r: r.get("ts"),
+        country=lambda r: r.get("country"), score=lambda r: int(r.get("score") or 0),
+        figures=lambda r: (r.get("actual_raw"), r.get("consensus_raw"), r.get("previous_raw")),
+    ):
+        r = rel.lead
         items.append(_cat(
-            "data", datetime.fromtimestamp(ts, ET), now, r.get("event"),
+            "data", datetime.fromtimestamp(r["ts"], ET), now, r.get("event"),
             country=r.get("country"),
             # Which trading session the print lands in — an Asia note cares
             # about the 21:30 ET GDP in a way a NY note does not.
             lands_in_session=r.get("session"),
-            released=bool(r.get("released")), actual=r.get("actual_raw"),
+            released=any(bool(x.get("released")) for x in rel.rows),
+            actual=r.get("actual_raw"),
             consensus=r.get("consensus_raw"), previous=r.get("previous_raw"),
             surprise=round(r["surprise"], 2) if r.get("surprise") is not None else None,
-            high=(r.get("score") or 0) >= 4,
+            high=any((x.get("score") or 0) >= 4 for x in rel.rows),
+            **({"also": [{"title": x.get("event"), "actual": x.get("actual_raw"),
+                           "consensus": x.get("consensus_raw"),
+                           "previous": x.get("previous_raw")} for x in rel.subs]}
+               if rel.subs else {}),
         ))
 
     # The FOMC a week out is on the brief every day of that week; a speech is
@@ -1995,7 +2016,9 @@ expected move mean for how far today's ranges run.
   catalysts_intro One or two sentences framing the calendar: what today is \
 positioning for.
   catalyst_notes  Notes on the catalyst ids that matter, each saying what the \
-print or event means (a miss, a beat, what is priced). Skip the rest.
+print or event means (a miss, a beat, what is priced). Skip the rest. A data \
+catalyst's `also` lists the other series of the same release (core and \
+headline, monthly and annual): one note covers the release.
   reads           Exactly one per book in scope:
     regime        The regime in a few words ("Hike repricing / inflation \
 scare", "Real-yield primacy").
@@ -2318,9 +2341,30 @@ def brief_prose(b: dict[str, Any]) -> list[str]:
     return [x for x in out if x]
 
 
+def known_numerals(seen: str) -> set[str]:
+    """The keys a note may print: every numeral in what the model saw, plus
+    each one carrying three or more decimals rounded to two. Pure.
+
+    TWO PLACES IS QUOTING, NOT ROUNDING (owner, 2026-10-14: "do what you
+    recommend"). A London brief printed the dollar index 102.228 as "102.23"
+    and the 10Y's 5.217% as "5.22%", and the red banner put both beside an
+    invented level — so the banner taught the reader to skim past it. Dropping
+    a third decimal changes nothing a trader reads; what the guard is for still
+    fails: 4.96 written "5" (rounded further), 15.19 written "15.2" (a figure
+    that already had two places), 4170.5 written "4171" (a level that isn't).
+    """
+    known = set(numerals_in(seen))
+    for k in list(known):
+        if "." in k and len(k.split(".")[1]) >= 3:
+            two = Decimal(k).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if (kk := _num_key(str(two))) is not None:
+                known.add(kk)
+    return known
+
+
 def unverified(b: dict[str, Any], seen: str) -> list[str]:
     """The numerals in the brief that the text the model was shown does not contain."""
-    known = set(numerals_in(seen))
+    known = known_numerals(seen)
     bad: list[str] = []
     for s in brief_prose(b):
         for k in numerals_in(s):

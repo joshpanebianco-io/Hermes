@@ -20,7 +20,7 @@ export type Desk = "futures" | "stocks";
 
 export const DESKS: readonly { key: Desk; label: string; short: string }[] = [
   { key: "futures", label: "Futures", short: "Futures" },
-  { key: "stocks", label: "Stocks & options", short: "Stocks" },
+  { key: "stocks", label: "Stocks & Options", short: "Stocks" },
 ];
 
 // ONE VOCABULARY ACROSS BOTH DESKS (owner instruction, 2026-10-14): each desk
@@ -71,7 +71,7 @@ export function deskLabel(d: Desk): string {
   return DESKS.find((x) => x.key === d)?.label ?? d;
 }
 
-/** The browser tab's title for a tab — "HERMESX · Stocks & options · Scanner". */
+/** The browser tab's title for a tab — "HERMESX · Stocks & Options · Scanner". */
 export function pageTitle(t: Tab, desk: Desk): string {
   return t === "settings" ? "HERMESX · Settings" : `HERMESX · ${deskLabel(desk)} · ${tabLabel(t)}`;
 }

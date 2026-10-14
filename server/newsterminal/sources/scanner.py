@@ -91,10 +91,12 @@ SEC_DOC = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 # of these and kept for that history. GME by name (owner, 2026-10-14: "can we
 # also add gamestop") — under the dollar-volume bar at $27 a share (about
 # $270m a day), but a 4.6% ATR and 130k+ contracts a day near the money,
-# five cents wide.
+# five cents wide. GOOGL for GOOG (same screen): one company, but the class A
+# line lists four expiries inside seven days to GOOG's one and trades about
+# three times the contracts — the weekly and same-day strikes live there.
 DEFAULT_WATCHLIST = [
     "SPY", "QQQ", "IWM", "AMD", "SPCX", "COIN", "PLTR", "HOOD", "DELL", "IBM", "AAPL",
-    "NVDA", "TSLA", "AMZN", "META", "MSFT", "GOOG", "NFLX", "ADBE", "PYPL", "INTC",
+    "NVDA", "TSLA", "AMZN", "META", "MSFT", "GOOGL", "NFLX", "ADBE", "PYPL", "INTC",
     "MU", "AVGO", "ORCL", "MSTR", "MRVL", "SNDK", "CRWV", "NBIS", "SMCI", "GME",
 ]
 # Always fetched: RS is measured against SPY and QQQ, and the tape reads IWM.

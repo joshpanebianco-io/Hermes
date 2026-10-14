@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { segItem } from "@/lib/seg";
 import { isPending } from "@/lib/events";
+import { groupReleases, subLabel, type Release } from "@/lib/releases";
 import { useNow } from "@/lib/useNow";
 
 /**
@@ -147,38 +148,45 @@ export function Calendar({
     oneOf("all", "us", "uk", "eu", "apac", "global", "other"),
   );
 
+  // ONE RELEASE, ONE ROW (lib/releases): the 08:30 CPI's seven series are one
+  // line titled by Core CPI m/m, its other series beneath it. Everything below
+  // — the filters, the counts, Ahead and Just printed — works on releases, so
+  // a count is the number of lines a chip would show, and the lead's tier,
+  // region and `core` speak for the release (its series share all three).
+  const releases = useMemo(() => groupReleases(rows, calFields).map(asCal), [rows]);
+
   // The minute clock, so a passed row leaves Ahead on time rather than when
   // the calendar next refetches (every ten minutes) — see lib/events.
   const nowMs = useNow(60_000);
   const { upcoming, recent, counts, regionCounts } = useMemo(() => {
     const now = (nowMs ?? Date.now()) / 1000;
-    const pool = coreOnly ? rows.filter(mine.keep) : rows;
+    const pool = coreOnly ? releases.filter((x) => mine.keep(x.lead)) : releases;
 
     // Each chip row counts against the OTHER filters, so a count is what you
     // would actually get by clicking it rather than a total that goes stale the
     // moment anything else moves.
-    const byRegion = region === "all" ? pool : pool.filter((r) => r.region === region);
+    const byRegion = region === "all" ? pool : pool.filter((x) => x.lead.region === region);
     const c: Record<string, number> = { all: byRegion.length };
-    for (const r of byRegion) {
-      const t = tierOf(r.score);
+    for (const x of byRegion) {
+      const t = tierOf(x.lead.score);
       c[t] = (c[t] ?? 0) + 1;
     }
-    const lit = (r: CalendarRow) => tiers.length === 0 || tiers.includes(tierOf(r.score));
+    const lit = (x: CalRelease) => tiers.length === 0 || tiers.includes(tierOf(x.lead.score));
     const byTier = pool.filter(lit);
     const rc: Record<string, number> = { all: byTier.length };
-    for (const r of byTier) rc[r.region] = (rc[r.region] ?? 0) + 1;
+    for (const x of byTier) rc[x.lead.region] = (rc[x.lead.region] ?? 0) + 1;
 
     const keep = byRegion.filter(lit);
     return {
       counts: c,
       regionCounts: rc,
-      upcoming: keep.filter((r) => isPending(r, now)).slice(0, 20),
+      upcoming: keep.filter((x) => isPending(x, now)).slice(0, 20),
       recent: keep
-        .filter((r) => r.released)
+        .filter((x) => x.released)
         .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
         .slice(0, 8),
     };
-  }, [rows, tiers, coreOnly, region, mine, nowMs]);
+  }, [releases, tiers, coreOnly, region, mine, nowMs]);
 
   return (
     <Module
@@ -269,8 +277,8 @@ export function Calendar({
             <>
               <Head>Ahead</Head>
               <ul>
-                {upcoming.map((r, i) => (
-                  <Days key={`${r.event}-${r.utc}-${i}`} row={r} prev={upcoming[i - 1]} />
+                {upcoming.map((x, i) => (
+                  <Days key={`${x.lead.event}-${x.lead.utc}-${i}`} rel={x} prev={upcoming[i - 1]?.lead} />
                 ))}
               </ul>
             </>
@@ -279,8 +287,8 @@ export function Calendar({
             <>
               <Head>Just printed</Head>
               <ul>
-                {recent.map((r, i) => (
-                  <Row key={`${r.event}-${r.utc}-p${i}`} r={r} />
+                {recent.map((x, i) => (
+                  <Rows key={`${x.lead.event}-${x.lead.utc}-p${i}`} rel={x} />
                 ))}
               </ul>
             </>
@@ -304,8 +312,8 @@ export function Calendar({
  * calendar's own UTC day, and a 22:00 ET release belongs to the following UTC
  * date, which would put the rule in the wrong place.
  */
-function Days({ row, prev }: { row: CalendarRow; prev?: CalendarRow }) {
-  const day = etDay(row);
+function Days({ rel, prev }: { rel: CalRelease; prev?: CalendarRow }) {
+  const day = etDay(rel.lead);
   const changed = !prev || etDay(prev) !== day;
   return (
     <>
@@ -315,7 +323,45 @@ function Days({ row, prev }: { row: CalendarRow; prev?: CalendarRow }) {
           <span className="h-px flex-1 bg-ring/50" aria-hidden />
         </li>
       )}
-      <Row r={row} />
+      <Rows rel={rel} />
+    </>
+  );
+}
+
+/** A release as the panel reads it: the lead's time, and printed once any series has. */
+type CalRelease = Release<CalendarRow> & { ts: number | null; released: boolean };
+
+function calFields(r: CalendarRow) {
+  return {
+    event: r.event,
+    when: r.ts,
+    country: r.country,
+    score: r.score,
+    figures: [r.actual_raw, r.consensus_raw, r.previous_raw],
+  };
+}
+
+function asCal(rel: Release<CalendarRow>): CalRelease {
+  const all = [rel.lead, ...rel.subs, ...rel.levels];
+  return { ...rel, ts: rel.lead.ts, released: all.some((r) => r.released) };
+}
+
+/**
+ * The lead row, then each other series of the release as a lighter line under
+ * it, its figures in the same three columns. The index levels and unadjusted
+ * twins are named on the hover only — see lib/releases.
+ */
+function Rows({ rel }: { rel: CalRelease }) {
+  const folded = rel.levels.length
+    ? `Also published, not shown: ${rel.levels.map((r) => r.event).join(", ")}`
+    : null;
+  const tip = [rel.lead.note, folded].filter(Boolean).join("\n\n") || undefined;
+  return (
+    <>
+      <Row r={rel.lead} tip={tip} />
+      {rel.subs.map((s) => (
+        <Row key={s.event} r={s} sub={subLabel(s.event, rel.lead.event)} />
+      ))}
     </>
   );
 }
@@ -349,7 +395,13 @@ function Head({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Row({ r }: { r: CalendarRow }) {
+/**
+ * One series. `sub` is set for a release's other series: the time, the dot
+ * and the country are the lead's, so they stay blank, the name is the series
+ * beside its lead ("y/y", "Core y/y") and the line is a size smaller — the
+ * figures keep their columns so they read straight down.
+ */
+function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
   // Amber when the print is meaningfully away from consensus. "Meaningful" is
   // relative to the consensus itself, so a 0.2 miss on a 3.0 CPI counts and a
   // 0.2 miss on a 57.8 PMI does not.
@@ -360,20 +412,27 @@ function Row({ r }: { r: CalendarRow }) {
   const surprised = r.surprise !== null && (rel > 0.05 || Math.abs(r.surprise) >= 0.2);
 
   return (
-    <li className="hit flex items-baseline gap-2 px-3 py-[3px]" title={r.note ?? undefined}>
-      <span className="fig w-[36px] shrink-0 text-[10px] text-ink-3">{r.et ?? "—"}</span>
+    <li
+      className={cn("hit flex items-baseline gap-2 px-3", sub ? "py-[1px]" : "py-[3px]")}
+      title={sub ? (r.event !== sub ? r.event : undefined) : (tip ?? r.note ?? undefined)}
+    >
+      <span className="fig w-[36px] shrink-0 text-[10px] text-ink-3">{sub ? "" : (r.et ?? "—")}</span>
       <span
         className={cn(
           "w-[6px] shrink-0 self-center rounded-full",
-          r.score >= 5 ? "h-[6px] bg-flip" : r.score >= 4 ? "h-[5px] bg-ink-3" : "h-[4px] bg-ink-4",
+          sub ? "h-0" : r.score >= 5 ? "h-[6px] bg-flip" : r.score >= 4 ? "h-[5px] bg-ink-3" : "h-[4px] bg-ink-4",
         )}
         aria-hidden
       />
       <span className="fig hidden w-[24px] shrink-0 text-[9.5px] text-ink-3 sm:block">
-        {country(r.country)}
+        {sub ? "" : country(r.country)}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[11px] text-ink-2 @max-[470px]:whitespace-normal">{r.event}</span>
+        {sub ? (
+          <span className="block truncate pl-2 text-[10px] text-ink-3 @max-[470px]:whitespace-normal">{sub}</span>
+        ) : (
+          <span className="block truncate text-[11px] text-ink-2 @max-[470px]:whitespace-normal">{r.event}</span>
+        )}
         {/* Narrow panel: the figures under the name, labelled, so the name
             keeps the width. Only what exists — an unscheduled speech has none. */}
         {(r.actual_raw || r.consensus_raw || r.previous_raw) && (
@@ -391,9 +450,9 @@ function Row({ r }: { r: CalendarRow }) {
       {r.session && r.session !== "closed" && (
         <span
           className="fig hidden w-[38px] shrink-0 text-[9px] text-ink-3 md:block @max-[470px]:hidden"
-          title={`Prints during the ${r.session} session`}
+          title={sub ? undefined : `Prints during the ${r.session} session`}
         >
-          {r.session}
+          {sub ? "" : r.session}
         </span>
       )}
       <span

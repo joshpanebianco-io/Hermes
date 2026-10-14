@@ -564,7 +564,7 @@ function OptionsPrefsModule() {
 
 const KEYS: { keys: string[]; what: string }[] = [
   { keys: ["1", "2", "3", "4"], what: "The current desk's tabs, in the order the header shows them" },
-  { keys: ["D"], what: "Switch desk — Futures and Stocks & options — back to the tab you left" },
+  { keys: ["D"], what: "Switch desk — Futures and Stocks & Options — back to the tab you left" },
   { keys: ["↑", "↓"], what: "Scanner: walk the list, the selection and the detail pane moving together" },
   { keys: ["Enter"], what: "Scanner: open the focused row" },
 ];

@@ -50,7 +50,7 @@ export interface PlanName {
   ext_pct: number | null;
   rs_spy: number | null;
   rvol: number | null;
-  levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null };
+  levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pdc?: number | null };
   atr_d: number | null;
   atr_b: number | null;
   earnings: { date: string; when: string; days: number } | null;
@@ -61,6 +61,10 @@ export interface PlanName {
     iv_rank: number | null;
     em_front_pct: number | null;
     em_weekly_pct: number | null;
+    /** The front straddle's bounds and days to expiry — today's expected move when 0. */
+    em_front_dte?: number | null;
+    em_front_hi?: number | null;
+    em_front_lo?: number | null;
     liquidity: string | null;
     earnings_in: string | null;
     long: { expiry: string; strike: number; right: string; mid: number; delta: number } | null;
@@ -90,6 +94,15 @@ export interface PlanName {
   peers?: Array<{ sym: string; date: string; when: string; days: number }>;
   /** Twenty-session average daily volume. */
   adv20?: number | null;
+  /**
+   * THE PRE-OPEN MODE (2026-10-14). Whether PMH / PML are still forming; the
+   * final levels a plan may take as its target, nearest first; the strategy's
+   * own invalidation; and, before the open, its trigger as an if/then.
+   */
+  pm_forming?: boolean;
+  targets?: Array<{ label: string; price: number }>;
+  invalid_if?: string | null;
+  open_if?: string | null;
 }
 
 export interface PlanFlowStrike {
@@ -156,6 +169,8 @@ export interface PlanItem {
   capped?: string | null;
   /** The model's own number, kept when a cap lowered it. */
   conviction_model?: number | null;
+  /** Fields the collector replaced because they broke the strategy, with the model's words. */
+  fixes?: Array<{ field: "trigger" | "target" | "invalidation"; was: string; why: string }>;
 }
 
 export interface PlanBody {
@@ -163,7 +178,13 @@ export interface PlanBody {
   market: string;
   plans: PlanItem[];
   avoid: Array<{ sym: string; why: string }>;
+  /** Names the model carded with "no trade" — one line each: what would make it a trade. */
+  watch?: Array<{ sym: string; why: string }>;
+  /** The day's clock. Written by the collector from the calendar since 2026-10-14. */
   timing: string[];
+  /** The day's high-impact releases still to come, as risks — the collector's, from the calendar. */
+  events?: string[];
+  /** The model's own risks: a level, the tape, a name's weak point. */
   risks: string[];
 }
 

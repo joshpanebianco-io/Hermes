@@ -18,6 +18,7 @@ from newsterminal.sources.wire import (
     dedupe,
     impact_of,
     is_local_crime,
+    is_off_market,
     is_section_page,
 )
 
@@ -270,3 +271,89 @@ def test_violence_against_a_market_figure_stays_on_the_tape(title: str) -> None:
 def test_an_actual_invasion_still_ranks_high(title: str) -> None:
     assert not is_local_crime(title)
     assert impact_of(title) == "high"
+
+
+# ---------------------------------------------------------------- off-market
+#
+# Every title below came off the live tape on 2026-10-14; `parse_feed` is
+# handed the feed as registered in FEEDS, so these pass the same pair.
+
+
+@pytest.mark.parametrize(
+    ("title", "publisher", "section"),
+    [
+        # The three the owner saw at the top of the tape.
+        ("‘I earn $110,000 a year’: I lost my home in the Great Recession. I’m renting in "
+         "my 50s. Why is that judged as failure?", "MarketWatch", "Top"),
+        ("PM says housework makes her busier than male predecessors", "Japan Times", "Japan"),
+        # The advice column behind a leading quote mark, which hid it from NOISE.
+        ("‘I am a pretty cautious person’: My financial adviser wants me to invest $350,000 "
+         "in a UAE data center. Is this risky?", "MarketWatch", "Top"),
+        ("'I applied for 200 jobs' - How 'spray and pray' AI job applications can backfire",
+         "BBC", "Business"),
+        ("The Sabrina Carpenter clip that helped a 22-year-old make £120,000 a year",
+         "BBC", "Business"),
+        # Celebrity property, television, sport — on any feed.
+        ("‘Sopranos’ star Steven Van Zandt is selling his Greenwich Village penthouse for "
+         "$19 million", "MarketWatch", "Top"),
+        ("Lena Dunham’s ‘Girls’ to Return to HBO for 5 New Episodes", "NYT", "Business"),
+        ("Choosing a Medicare Advantage Provider for 2027 May Be Easier, but Not Perfect",
+         "NYT", "Business"),
+        ("FIFA will propose $6.3 billion funding for soccer development, AP sources say",
+         "AP", "Economy"),
+        # A general-news feed's paper, with nothing economic in the line.
+        ("Rays punish error to beat Guardians 3-1 and level series", "Japan Times", "Japan"),
+        ("Hakkaku’s complex legacy looms over sumo’s next chapter", "Japan Times", "Japan"),
+        ("Guess Which European Country Is Tolerating Child Marriages?", "ZeroHedge", "Markets"),
+        ("No black-footed ferrets found in Meeteetse, 40 years after a rescue saved the species",
+         "AP", "Economy"),
+    ],
+)
+def test_lifestyle_and_general_news_leave_the_tape(title: str, publisher: str,
+                                                   section: str) -> None:
+    assert is_off_market(title, publisher, section), title
+
+
+def test_newsletters_and_quote_pages_are_noise() -> None:
+    for title in (
+        "Before the Bell: What every Canadian investor needs to know today",
+        "AP top stories October 14",
+        "Xiaomi Corporation (1810.HK) stock price, news, quote and history",
+    ):
+        assert NOISE.search(title), title
+
+
+@pytest.mark.parametrize(
+    ("title", "publisher", "section"),
+    [
+        # Market stories on the same general feeds — each names something economic.
+        ("U.K. and Indian economies set to overtake Japan, IMF says", "Japan Times", "Japan"),
+        ("SoftBank junk bond sale raises stakes for CEO Son’s all-in AI bet",
+         "Japan Times", "Japan"),
+        ("Japan’s 2026 rice harvest projected to fall 1%", "Japan Times", "Japan"),
+        ("MUFG mulling path to majority control of India’s Shriram Finance",
+         "Japan Times", "Japan"),
+        ("China sends aircraft carrier group into western Pacific", "Japan Times", "Japan"),
+        ("Mining giant BHP to cut hundreds of jobs at iron ore mines", "ABC", "Australia"),
+        ("Rex grounds two routes 10 months after $60m rescue package", "ABC", "Australia"),
+        ("Trump Announces Federal Support To Keep Local Energy Provider Online In Ohio",
+         "ZeroHedge", "Markets"),
+        ("More expensive gas, semiconductors likely pushed up inflation last month",
+         "AP", "Economy"),
+        # A first-person quote that IS a market story: `equity` speaks for it.
+        ("\"I'll Be Short Whole Year\": Paul Tudor Jones Warns Of Looming Dot-Com Style "
+         "Equity Supply Tsunami", "ZeroHedge", "Markets"),
+        # A quote that is not first person.
+        ("'A lot of emotion:' First round of redundancies to hit Whyalla steelworks",
+         "ABC", "Australia"),
+        # Not a general feed: the world and market desks keep their own gates.
+        ("Chip stocks suffer worst stretch in 16 months as AI fatigue grips the market",
+         "MarketWatch", "Top"),
+        ("Hundreds of Royal Mail staff quitting each week under new efficiency plans",
+         "BBC", "Business"),
+        ("Six Flags’ stock slumps near 17-year low after fatal incident", "MarketWatch", "Top"),
+    ],
+)
+def test_market_stories_stay_on_the_general_feeds(title: str, publisher: str,
+                                                  section: str) -> None:
+    assert not is_off_market(title, publisher, section), title

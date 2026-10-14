@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { bp } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { Gap, printClock, readText } from "@/components/market/shared";
+import { Gap, PrintSubs, printClock, printReleases, readText } from "@/components/market/shared";
 
 /**
  * What the day is scheduled to throw at a position, and what it leans on:
@@ -41,8 +41,8 @@ export function PrintsFed({
             <Gap>No US print scored 3 or more for the session.</Gap>
           ) : (
             <ul className="py-1">
-              {prints.map((p) => (
-                <PrintRow key={`${p.et}-${p.title}-${p.consensus ?? ""}-${p.previous ?? ""}`} p={p} builtUtc={builtUtc} />
+              {printReleases(prints).map(({ lead: p, subs }) => (
+                <PrintRow key={`${p.et}-${p.title}-${p.consensus ?? ""}-${p.previous ?? ""}`} p={p} subs={subs} builtUtc={builtUtc} />
               ))}
             </ul>
           )}
@@ -53,7 +53,7 @@ export function PrintsFed({
   );
 }
 
-function PrintRow({ p, builtUtc }: { p: Print; builtUtc: string }) {
+function PrintRow({ p, subs, builtUtc }: { p: Print; subs: Print[]; builtUtc: string }) {
   const surprised = p.read === "hot" || p.read === "cold";
   const clock = printClock(p.et, builtUtc);
   return (
@@ -78,6 +78,7 @@ function PrintRow({ p, builtUtc }: { p: Print; builtUtc: string }) {
         )}
         cons <span className="text-ink-2">{p.consensus ?? "—"}</span> · prev <span className="text-ink-2">{p.previous ?? "—"}</span>
       </p>
+      <PrintSubs lead={p} subs={subs} className="mt-0.5 pl-[66px] text-[10px] text-ink-3 qt:pl-[74px]" />
     </li>
   );
 }

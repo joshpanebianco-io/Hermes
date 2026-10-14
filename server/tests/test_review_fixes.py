@@ -134,6 +134,16 @@ def test_numerals_match_on_value_not_spelling() -> None:
     assert report.numerals_in("30,707 and 30707, 1.10 and 1.1") == ["30707", "30707", "1.1", "1.1"]
 
 
+def test_a_third_decimal_dropped_is_quoting_but_rounding_further_is_not() -> None:
+    seen = "DXY 102.228 · 10Y 5.217 · VIX 15.19 · 10Y 4.96 · VAL 4170.5"
+    brief = {"thesis": "Dollar 102.23, yield 5.22%, VIX 15.2, yield 5%, wrong above 4171",
+             "calls": []}
+    # 102.228 → 102.23 and 5.217 → 5.22 pass; the rest are what the guard is for.
+    assert report.unverified(brief, seen) == ["15.2", "5", "4171"]
+    # Half up, as a person rounds: 1.125 → 1.13.
+    assert "1.13" in report.known_numerals("ratio 1.125")
+
+
 def test_an_index_name_is_not_a_figure_but_its_price_still_is() -> None:
     assert report.numerals_in("tech lagging S&P 500 and the Russell 2000") == []
     assert report.numerals_in("Nasdaq-100, Euro Stoxx 50, Nikkei 225") == []

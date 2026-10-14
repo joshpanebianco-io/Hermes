@@ -618,11 +618,19 @@ def test_parts_are_whole_points_that_add_up() -> None:
     assert sc["total"] == sum(p["pts"] for p in sc["parts"])
 
 
-def test_rvol_note_before_the_bell() -> None:
-    sc = scanscore.score_row(_row(rvol=None), {"bias": None, "confirm": None}, None, None,
-                             None, session="pre")
-    vol = next(p for p in sc["parts"] if p["key"] == "volume")
-    assert "starts at the open" in vol["note"]
+def test_before_the_bell_in_play_stands_in_for_rvol() -> None:
+    # No RVOL before 09:30; the slot is in play (test_inplay_score.py), and from
+    # the open it is RVOL again.
+    for session in ("pre", "closed"):
+        sc = scanscore.score_row(_row(rvol=None), {"bias": None, "confirm": None}, None, None,
+                                 None, session=session)
+        keys = [p["key"] for p in sc["parts"]]
+        assert "inplay" in keys and "volume" not in keys
+    for session in ("rth", "post"):
+        sc = scanscore.score_row(_row(), {"bias": None, "confirm": None}, None, None,
+                                 None, session=session)
+        vol = next(p for p in sc["parts"] if p["key"] == "volume")
+        assert (vol["pts"], vol["note"]) == (7, "RVOL 1.60")
 
 
 # --- the live layer and the close read ---------------------------------------------------

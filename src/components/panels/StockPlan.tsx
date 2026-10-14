@@ -15,6 +15,8 @@ import { bp, compact, dir, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { NoteAge } from "@/components/ui/NoteAge";
+import { PrintSubs, printReleases } from "@/components/market/shared";
+import { groupReleases } from "@/lib/releases";
 
 /** The engine's setup state in the words the Scanner prints — never the raw key. */
 const STATE_WORD: Record<string, string> = {
@@ -218,8 +220,10 @@ function PlanView({ p }: { p: Plan }) {
   const b = p.plan!;
   const byName = new Map(f.names.map((n) => [n.sym, n]));
   const planned = new Set(b.plans.map((x) => x.sym));
-  const avoided = new Set(b.avoid.map((x) => x.sym));
+  const watch = b.watch ?? [];
+  const avoided = new Set([...b.avoid, ...watch].map((x) => x.sym));
   const rest = f.names.filter((n) => !planned.has(n.sym) && !avoided.has(n.sym) && n.sym !== "SPY" && n.sym !== "QQQ");
+  const risks = [...(b.events ?? []), ...b.risks];
 
   return (
     <article className={cn("qt-noscale w-full px-5 pt-4 pb-6", quiet && "px-3 pt-2 pb-8")}>
@@ -261,17 +265,20 @@ function PlanView({ p }: { p: Plan }) {
       {f.prints && f.prints.length > 0 ? (
         <Section title="Prints that matter">
           <ul className="grid gap-x-10 lg:grid-cols-2">
-            {f.prints.map((c) => (
-              <PrintItem key={`${c.et}-${c.title}`} c={c} />
+            {printReleases(f.prints).map(({ lead: c, subs }) => (
+              <PrintItem key={`${c.et}-${c.title}`} c={c} subs={subs} />
             ))}
           </ul>
         </Section>
       ) : f.calendar.length > 0 && (
         <Section title="Prints that matter">
           <ul className="grid gap-x-10 lg:grid-cols-2">
-            {f.calendar.map((c) => (
+            {/* A plan written before the prints block carried no figures: one
+                row per release, its other series named on the hover. */}
+            {groupReleases(f.calendar, (c) => ({ event: c.title, when: c.et || null, country: "US", score: c.score, figures: [] })).map(({ lead: c, subs }) => (
               <li
                 key={`${c.et}-${c.title}`}
+                title={subs.length ? `Also: ${subs.map((s) => s.title).join(", ")}` : undefined}
                 className={cn("grid grid-cols-[86px_minmax(0,1fr)] items-baseline gap-3 border-b border-ring/60 py-[6px] text-[12.5px]", c.released && "opacity-70")}
               >
                 <span className="fig text-ink-2">{c.et}</span>
@@ -320,6 +327,22 @@ function PlanView({ p }: { p: Plan }) {
         </Section>
       )}
 
+      {watch.length > 0 && (
+        <Section title="On watch">
+          <ul className="flex flex-col">
+            {watch.map((a) => (
+              <li key={a.sym} className="grid grid-cols-[72px_minmax(0,1fr)] items-baseline gap-3 border-b border-ring/60 py-[6px] text-[12.5px] last:border-b-0">
+                <span className="flex items-center gap-1.5 self-center font-semibold text-ink">
+                  <TickerLogo sym={a.sym} size={14} />
+                  {a.sym}
+                </span>
+                <span className="text-ink-2">{a.why}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       {rest.length > 0 && (
         <Section title="Also scanned">
           <p className="text-[12px] leading-[1.6] text-ink-3">
@@ -339,9 +362,9 @@ function PlanView({ p }: { p: Plan }) {
           <Bullets items={b.timing} />
         </Section>
       )}
-      {b.risks.length > 0 && (
+      {risks.length > 0 && (
         <Section title="Risks">
-          <Bullets items={b.risks} />
+          <Bullets items={risks} />
         </Section>
       )}
     </article>
@@ -362,11 +385,18 @@ function Regime({ r }: { r: PlanRegime }) {
         <span className="fig text-[17px] text-ink">{r.spy_em_pct != null ? `±${r.spy_em_pct.toFixed(2)}%` : "—"}</span>
         <p className="mt-1 text-[11.5px] text-ink-3">one-sigma, from VIX</p>
       </Cell>
-      <Cell label="Bias">
+      {/* NOT THE PLAN'S BIAS (2026-10-14): this is the scanner's index lean —
+          SPY and QQQ against their own levels, with VIX's direction — and it
+          read "Neutral" under a headline of "Long bias prevails", which follows
+          the eleven-read tape count below. Named for what it is. */}
+      <Cell
+        label="Index lean"
+        title="SPY and QQQ against their own levels, with VIX's direction — two votes the same way is a lean. A narrower read than the tape count the plans are capped by."
+      >
         <span className="text-[16px] font-semibold" style={{ color: sideHue(r.bias) }}>
-          {r.bias === "long" ? "▲ Long" : r.bias === "short" ? "▼ Short" : "Neutral"}
+          {r.bias === "long" ? "▲ Long" : r.bias === "short" ? "▼ Short" : "No lean"}
         </span>
-        <p className="mt-1 text-[11.5px] text-ink-3">{r.confirm ? r.confirm.replace(/_/g, "-") : "no read from VIX"}</p>
+        <p className="mt-1 text-[11.5px] text-ink-3">{CONFIRM[r.confirm ?? ""] ?? "VIX not confirming either way"}</p>
       </Cell>
       <Cell label="Tape">
         <ul className="flex flex-col gap-0.5">
@@ -388,6 +418,14 @@ function Regime({ r }: { r: PlanRegime }) {
     </div>
   );
 }
+
+/** VIX against SPY, in words — the scanner's `confirm`. */
+const CONFIRM: Record<string, string> = {
+  confirm: "SPY up, VIX down — confirmed",
+  divergence: "SPY up with VIX up — a hedged rally",
+  risk_off: "SPY down, VIX up — risk-off",
+  chop: "SPY and VIX both flat",
+};
 
 function Cell({ label, title, children }: { label: string; title?: string; children: React.ReactNode }) {
   return (
@@ -505,7 +543,7 @@ function RegimeContext({ f }: { f: PlanFacts }) {
 }
 
 /** One of today's prints, read against consensus — amber when it surprised, either way. */
-function PrintItem({ c }: { c: Print }) {
+function PrintItem({ c, subs }: { c: Print; subs: Print[] }) {
   return (
     <li className="grid grid-cols-[86px_minmax(0,1fr)] items-baseline gap-3 border-b border-ring/60 py-[6px] text-[12.5px]">
       <span className="fig text-ink-2">{c.et}</span>
@@ -530,6 +568,7 @@ function PrintItem({ c }: { c: Print }) {
           )}
           cons <span className="text-ink-2">{c.consensus ?? "—"}</span> · prev <span className="text-ink-2">{c.previous ?? "—"}</span>
         </span>
+        <PrintSubs lead={c} subs={subs} className="mt-0.5 text-[11px] text-ink-3" />
       </span>
     </li>
   );
@@ -610,6 +649,21 @@ function PlanCard({ x, n }: { x: PlanItem; n: PlanName | null }) {
           <Term k="Target" v={x.target} />
           <Term k="Options" v={x.options} />
         </dl>
+        {x.fixes && x.fixes.length > 0 && (
+          <p className="mt-2.5 flex items-baseline gap-1.5 text-[11.5px] leading-[1.5] text-ink-3">
+            <span aria-hidden className="h-[5px] w-[5px] shrink-0 -translate-y-px bg-flip" />
+            <span>
+              Set by the collector —{" "}
+              {x.fixes.map((f, i) => (
+                <span key={f.field} title={`The model wrote: ${f.was || "nothing"}`}>
+                  {i > 0 && "; "}
+                  {f.field}: {f.why}
+                </span>
+              ))}
+              .
+            </span>
+          </p>
+        )}
         {x.why.length > 0 && (
           <ul className="mt-3.5 flex flex-col gap-1.5">
             {x.why.map((w) => (

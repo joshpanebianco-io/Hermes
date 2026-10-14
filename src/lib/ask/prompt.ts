@@ -53,7 +53,7 @@ const PRODUCT = `FUTURES DESK
 
 STOCKS & OPTIONS DESK
 - Market (tab "market") — the macro panels in an options trader's reading order, plus the tape count (how many market reads lean long or short; it caps the Game plan's conviction), breadth, fuel, today's prints, the Fed path, gamma in ETF prices, the index ETFs' options and the sector peers reporting this week.
-- Scanner (tab "scanner") — the break-and-retest scanner on 10-minute bars across the watchlist. Score: a heuristic rank built from structure (levels broken), RS, entry location, volume, the market and the sector, less fuel already used. Setup and entry: the level to retest, or VWAP / the 8 EMA wave when price is extended, with the distance in 10-minute ATRs. RS vs SPY: today's move in the name's daily ATRs minus SPY's in its own. % change (chg_pct) is the regular session against the previous close — before 09:30 it is still YESTERDAY's move; pre/post (ext_pct) is the move outside the session against the previous close (pre-market) or today's close (after hours). Neither is a distance from a level: where price sits against PMH / PML / PDH / PDL is read from the levels and the last price. Before the open nothing has broken yet — PMH / PML are still forming, every setup is a plan, and the ranks lean on relative strength; say so when asked which setup is best. RVOL: volume to now against the same time on prior sessions. PDH / PDL / PMH / PML bars: how far price has travelled toward each level, filled once broken. Trend: ▲ above PDH and PMH, ▼ below PDL and PML, ⚠ inside. Options: IV30 against RV20 read as cheap, fair or rich. The Options view adds IV rank, the expected move from the front and weekly straddles, 25-delta skew, liquidity, flow (put/call volume), the suggested 0.60-delta contract and its debit spread, and the premium at risk per contract to the stock stop. In the regular session prices are seconds old, signals land just after each 10-minute bar closes, and a contract marked "est" is its fifteen-minute-delayed quote moved through delta and gamma to the live stock price. The detail pane shows the selected name's chart, its setup, why it ranks where it does, its signals and its options. The Signal log keeps every signal and its outcome in R.
+- Scanner (tab "scanner") — the break-and-retest scanner on 10-minute bars across the watchlist. Score: a heuristic rank built from structure (levels broken), RS, entry location, volume, the market and the sector, less fuel already used; before 09:30 the volume part is "In play" instead — the gap in daily ATRs, pre-market volume as a share of an average day, and a catalyst (earnings across the open, or headlines since the close). Setup and entry: the level to retest, or VWAP / the 8 EMA wave when price is extended, with the distance in 10-minute ATRs. RS vs SPY: today's move in the name's daily ATRs minus SPY's in its own. % change (chg_pct) is the regular session against the previous close — before 09:30 it is still YESTERDAY's move; pre/post (ext_pct) is the move outside the session against the previous close (pre-market) or today's close (after hours). Neither is a distance from a level: where price sits against PMH / PML / PDH / PDL is read from the levels and the last price. Before the open nothing has broken yet — PMH / PML are still forming, every setup is a plan, and the ranks rest on relative strength and how in play a name is, not on a confirmed break; say so when asked which setup is best. RVOL: volume to now against the same time on prior sessions. PDH / PDL / PMH / PML bars: how far price has travelled toward each level, filled once broken. Trend: ▲ above PDH and PMH, ▼ below PDL and PML, ⚠ inside. Options: IV30 against RV20 read as cheap, fair or rich. The Options view adds IV rank, the expected move from the front and weekly straddles, 25-delta skew, liquidity, flow (put/call volume), the suggested 0.60-delta contract and its debit spread, and the premium at risk per contract to the stock stop. In the regular session prices are seconds old, signals land just after each 10-minute bar closes, and a contract marked "est" is its fifteen-minute-delayed quote moved through delta and gamma to the live stock price. The detail pane shows the selected name's chart, its setup, why it ranks where it does, its signals and its options. The Signal log keeps every signal and its outcome in R.
 - Game plan (tab "plan") — the AI pre-open plan for the top scanner names: the regime, and per name what to watch, the trigger and the invalidation, with conviction capped by the tape count.
 - Settings — the interface (Quiet or Classic), alerts, the options budget and the watchlist.
 
@@ -104,6 +104,16 @@ function numKey(tok: string): string | null {
   return Number.isFinite(v) ? String(Math.round(v * 10_000) / 10_000) : null;
 }
 
+/** A key with three or more decimals rounded half up to two, as a key — on
+ *  the digits, not a float ((1.005).toFixed(2) is "1.00"). Null otherwise. */
+function twoPlaces(k: string): string | null {
+  const m = /^(\d+)\.(\d{3,})$/.exec(k);
+  if (!m) return null;
+  const cents = Number(m[1] + m[2].slice(0, 2)) + (Number(m[2][2]) >= 5 ? 1 : 0);
+  const s = String(cents).padStart(3, "0");
+  return numKey(`${s.slice(0, -2)}.${s.slice(-2)}`);
+}
+
 /** Every numeral in a text, as keys. */
 export function numeralsIn(s: string): string[] {
   const out: string[] = [];
@@ -122,6 +132,12 @@ export function numeralsIn(s: string): string[] {
  */
 export function unverifiedNumerals(answer: string, known: Iterable<string>): string[] {
   const k = new Set(known);
+  // Two places is quoting, not rounding — the notes' rule (report.known_numerals):
+  // 102.228 may be written 102.23; 15.19 written 15.2, or 4.96 written 5, may not.
+  for (const n of [...k]) {
+    const t = twoPlaces(n);
+    if (t != null) k.add(t);
+  }
   const bad = new Set<string>();
   for (const n of numeralsIn(answer)) {
     if (k.has(n)) continue;

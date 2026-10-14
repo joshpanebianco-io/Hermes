@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
 import { nextEvent } from "@/lib/events";
+import { groupReleases } from "@/lib/releases";
 import type { CalendarRow } from "@/types/terminal";
 
 /**
@@ -32,7 +33,8 @@ import type { CalendarRow } from "@/types/terminal";
  * (RS), and where is the entry right now (the setup column).
  *
  * THE RANK IS A HEURISTIC, AND SAYS SO. The score is a sum of named parts —
- * structure, relative strength, entry location, volume, the market — each one
+ * structure, relative strength, entry location, volume (before the bell, how
+ * far the name is in play: gap, pre-market volume, catalyst), the market — each one
  * listed in the detail pane with the points it earned. It orders the list; it
  * is not a measured probability, and nothing on this page calls it one.
  *
@@ -56,8 +58,17 @@ const NO_ROWS: CalendarRow[] = [];
 const POLL_SEC = 20;
 const LIVE_POLL_SEC = 5;
 
-type SideFilter = "all" | Side;
+type SideFilter = "all" | Side | "mag7";
 type Bench = "SPY" | "QQQ";
+
+/**
+ * THE MAGNIFICENT SEVEN, as a filter beside the side filter (owner,
+ * 2026-10-14: "where we have all long short toggles, can we also add one for
+ * MAG7"). Apple, Microsoft, Alphabet, Amazon, Nvidia, Meta and Tesla — either
+ * Alphabet line counts, so the filter still finds it if the list goes back to
+ * GOOG. It picks names, not a side: each keeps its own long or short read.
+ */
+const MAG7: ReadonlySet<string> = new Set(["AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA"]);
 
 const SESSION_LABEL: Record<ScannerPayload["session"], string> = {
   pre: "Pre-market — PMH / PML still forming",
@@ -108,9 +119,22 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
   const [view, setView] = usePersisted<View>("scan.view", "setups", oneOf("setups", "log"));
   // The next US print scored 4+, however far off — shown when none falls
   // inside the six hours the engine prices in (see RegimeStrip).
+  // By release, so 08:30 reads "Core CPI m/m" — CPI's lead series — rather
+  // than whichever of its seven rows the feed listed first (lib/releases).
+  const leads = useMemo(
+    () =>
+      groupReleases(calendar, (r) => ({
+        event: r.event,
+        when: r.ts,
+        country: r.country,
+        score: r.score,
+        figures: [r.actual_raw, r.consensus_raw, r.previous_raw],
+      })).map((x) => x.lead),
+    [calendar],
+  );
   const later = useMemo(
-    () => (now === null ? null : nextEvent(calendar, now / 1000, (r) => r.region === "us" && r.score >= 4)),
-    [calendar, now],
+    () => (now === null ? null : nextEvent(leads, now / 1000, (r) => r.region === "us" && r.score >= 4)),
+    [leads, now],
   );
 
   // `?sym=` (an alert's click-through) opens straight onto that name.
@@ -122,7 +146,7 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [sideF, setSideF] = usePersisted<SideFilter>("scan.side", "all", oneOf("all", "long", "short"));
+  const [sideF, setSideF] = usePersisted<SideFilter>("scan.side", "all", oneOf("all", "long", "short", "mag7"));
   const [bench, setBench] = usePersisted<Bench>("scan.bench", "SPY", oneOf("SPY", "QQQ"));
   const [sort, setSort] = usePersisted<SortKey>(
     "scan.sort",
@@ -156,7 +180,12 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
 
   const rows = useMemo(() => {
     const all = data?.rows ?? [];
-    const kept = sideF === "all" ? all : all.filter((r) => r.score.side === sideF);
+    const kept =
+      sideF === "all"
+        ? all
+        : sideF === "mag7"
+          ? all.filter((r) => MAG7.has(r.sym))
+          : all.filter((r) => r.score.side === sideF);
     if (sort === "score") return kept; // the engine's own order
     // Rows with no figure sink, whichever way the rest sorts. On the short
     // side the strongest is the most NEGATIVE, so the signed columns flip.
@@ -206,10 +235,11 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
   };
 
   const counts = useMemo(() => {
-    const c = { all: 0, long: 0, short: 0 };
+    const c = { all: 0, long: 0, short: 0, mag7: 0 };
     for (const r of data?.rows ?? []) {
       c.all += 1;
       if (r.score.side) c[r.score.side] += 1;
+      if (MAG7.has(r.sym)) c.mag7 += 1;
     }
     return c;
   }, [data]);
@@ -276,13 +306,21 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
                 ? "every signal, and what it did afterwards"
                 : cols === "options"
                   ? "implied vs realised · the straddle's move · liquidity · the contract"
-                  : "the Pine's scanner, ranked by structure · strength · entry · tape"}
+                  : data?.session === "pre" || data?.session === "closed"
+                    ? "the Pine's scanner, ranked by structure · strength · in play · tape"
+                    : "the Pine's scanner, ranked by structure · strength · entry · tape"}
             </span>
             <div className={cn("ml-auto flex items-center gap-2", view === "log" && "hidden")}>
               <span className="seg">
-                {(["all", "long", "short"] as const).map((k) => (
-                  <button key={k} type="button" onClick={() => setSideF(k)} {...segItem(sideF === k)}>
-                    {k === "all" ? "All" : k === "long" ? "Long" : "Short"}
+                {(["all", "long", "short", "mag7"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setSideF(k)}
+                    title={k === "mag7" ? "The Magnificent Seven: Apple, Microsoft, Alphabet, Amazon, Nvidia, Meta, Tesla" : undefined}
+                    {...segItem(sideF === k)}
+                  >
+                    {k === "all" ? "All" : k === "long" ? "Long" : k === "short" ? "Short" : "MAG7"}
                     <span className="seg-n">{counts[k]}</span>
                   </button>
                 ))}

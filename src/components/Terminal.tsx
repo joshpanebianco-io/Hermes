@@ -246,7 +246,7 @@ export function Terminal({
     return () => window.removeEventListener("keydown", onKey);
   }, [desk, setTab, switchDesk]);
 
-  // The browser tab says where you are: "HERMESX · Stocks & options · Scanner".
+  // The browser tab says where you are: "HERMESX · Stocks & Options · Scanner".
   useEffect(() => {
     document.title = pageTitle(tab, desk);
   }, [tab, desk]);

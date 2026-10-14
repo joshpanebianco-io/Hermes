@@ -18,6 +18,7 @@ import { biasInk, biasLabel, convictionWord } from "@/lib/bias";
 import { cn } from "@/lib/cn";
 import { bp, dir, num, pct, signed } from "@/lib/format";
 import { useQuiet } from "@/components/state/UiMode";
+import { subLabel } from "@/lib/releases";
 
 /**
  * The session brief — the model's read, laid out like a desk's morning note.
@@ -831,6 +832,15 @@ function Catalysts({ f, b }: { f: BriefFacts; b: BriefBody }) {
                         {detail.charAt(0).toUpperCase() + detail.slice(1)}
                       </div>
                     )}
+                    {/* The release's other series, one line each (releases.py). */}
+                    {c.also?.map((a) => (
+                      <div key={a.title} className="text-[11.5px] leading-snug text-ink-3">
+                        <span className="text-ink-2">{subLabel(a.title, c.title)}</span>{" "}
+                        {[a.actual && `actual ${a.actual}`, a.consensus && `consensus ${a.consensus}`, a.previous && `prior ${a.previous}`]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    ))}
                     {note && <div className="mt-0.5 text-[12.5px] leading-snug text-ink-2">{note}</div>}
                   </td>
                 </tr>

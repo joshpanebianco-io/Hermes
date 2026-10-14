@@ -1,6 +1,7 @@
 import type { Conviction, Fuel, OptionsFlow, Print, Side } from "@/types/market";
 import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { groupReleases, subLabel, type Release } from "@/lib/releases";
 
 /**
  * The conviction board's small parts, shared by the Market tab and the Game
@@ -181,5 +182,44 @@ export function Stat({
       <p className="qt-cap mb-1 text-[10px] text-ink-3">{label}</p>
       {children}
     </div>
+  );
+}
+
+/**
+ * The session's prints as releases (lib/releases): CPI's core and headline,
+ * monthly and annual, are one row titled by Core CPI m/m. The collector has
+ * already dropped the index levels from these (marketctx.PRINT_NOISE).
+ */
+export function printReleases(prints: readonly Print[]): Release<Print>[] {
+  return groupReleases(prints, (p) => ({
+    event: p.title,
+    when: p.et || null,
+    country: "US",
+    score: p.score,
+    figures: [p.actual, p.consensus, p.previous],
+  }));
+}
+
+/**
+ * A release's other series under its lead, one line each — "y/y act 3.7% ·
+ * cons 3.6% · prev 3.4%" — in the figure line's own type, so they read as the
+ * lead's figures continued rather than as rows of their own.
+ */
+export function PrintSubs({ lead, subs, className }: { lead: Print; subs: Print[]; className?: string }) {
+  if (subs.length === 0) return null;
+  return (
+    <span className={cn("fig block", className)}>
+      {subs.map((s) => (
+        <span key={s.title} className="block" title={s.title}>
+          <span className="text-ink-2">{subLabel(s.title, lead.title)}</span>{" "}
+          {(s.released || s.done) && s.actual != null && (
+            <>
+              act <span className={s.read === "hot" || s.read === "cold" ? "text-flip-fig" : "text-ink"}>{s.actual}</span> ·{" "}
+            </>
+          )}
+          cons {s.consensus ?? "—"} · prev {s.previous ?? "—"}
+        </span>
+      ))}
+    </span>
   );
 }

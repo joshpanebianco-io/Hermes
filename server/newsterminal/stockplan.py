@@ -118,12 +118,18 @@ def _options(row: dict[str, Any]) -> dict[str, Any] | None:
         return next((c for c in mine if c.get("key") == want), mine[0] if mine else None)
 
     lg, sp = pick("long"), pick("spread")
+    front = em.get("front") or {}
     return {
         "iv30": _r(o.get("iv30"), 1),
         "iv_rv": _r(o.get("iv_rv")),
         "premium": o.get("premium") if isinstance(o.get("premium"), str) else None,
         "iv_rank": _r(o.get("iv_rank"), 0),
-        "em_front_pct": _r((em.get("front") or {}).get("pct")),
+        "em_front_pct": _r(front.get("pct")),
+        # The front straddle's own bounds and days to expiry: on a same-day
+        # expiry they are today's expected move in prices, a target candidate.
+        "em_front_dte": _int(front.get("dte")),
+        "em_front_hi": _r(front.get("hi")),
+        "em_front_lo": _r(front.get("lo")),
         "em_weekly_pct": _r((em.get("weekly") or {}).get("pct")),
         "liquidity": liq.get("grade") if isinstance(liq.get("grade"), str) else None,
         "earnings_in": o.get("earnings_in") if isinstance(o.get("earnings_in"), str) else None,
@@ -297,7 +303,8 @@ def macro_headlines(wire: list[dict[str, Any]], now: datetime,
 
 
 def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
-          sectors: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+          sectors: dict[str, dict[str, Any]] | None = None,
+          session: str = "rth") -> dict[str, Any]:
     """One scanner row → the plan's facts for it. Pure."""
     setup = row.get("setup") or {}
     score = row.get("score") or {}
@@ -305,7 +312,7 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
     entry = setup.get("entry") if isinstance(setup.get("entry"), dict) else None
     earn = row.get("earnings") if isinstance(row.get("earnings"), dict) else None
     sym = str(row.get("sym") or "")
-    return {
+    n: dict[str, Any] = {
         "sym": sym,
         "name": row.get("name"),
         "side": score.get("side") or setup.get("side"),
@@ -319,9 +326,14 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
         "last": _r(row.get("last")),
         "chg_pct": _r(row.get("chg_pct")),
         "ext_pct": _r(row.get("ext_pct")),
-        "rs_spy": _r((row.get("rs") or {}).get("SPY")),
+        # SPY against itself is 0.00 by construction — a line, not a reading.
+        "rs_spy": None if sym == "SPY" else _r((row.get("rs") or {}).get("SPY")),
         "rvol": _r(row.get("rvol"), 1),
-        "levels": {k: _r(lv.get(k)) for k in ("pdh", "pdl", "pmh", "pml")},
+        "levels": {k: _r(lv.get(k)) for k in ("pdh", "pdl", "pmh", "pml", "pdc")},
+        # The scanner's own word on whether PMH / PML have locked; without it,
+        # the session says (they lock at 09:30).
+        "pm_forming": (not lv["pm_done"]) if isinstance(lv.get("pm_done"), bool)
+                      else session in OPEN_SESSIONS,
         "atr_d": _r(row.get("atr_d")),
         "atr_b": _r(row.get("atr_b")),
         "earnings": None if earn is None else {
@@ -350,6 +362,10 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
         "macro": macro_for(sym, row.get("sector") if isinstance(row.get("sector"), str) else None,
                            moves or {}),
     }
+    n["targets"] = target_candidates(n)
+    n["invalid_if"] = invalid_if(n)
+    n["open_if"] = open_if(n) if session in OPEN_SESSIONS else None
+    return n
 
 
 def _sector(row: dict[str, Any], sectors: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -374,6 +390,318 @@ def pick_names(rows: list[dict[str, Any]], top: int) -> list[dict[str, Any]]:
         if row is not None and sym not in have:
             ranked.append(row)
     return ranked
+
+
+# --------------------------------------------------------------------------
+# The open — what a plan written before 09:30 may stand on (owner, 2026-10-14:
+# "do what you recommend all at once" — the review's pre-open mode).
+#
+# A plan written at 05:18 ET took the pre-market high as GME's target (27.78,
+# with price at 27.75), and put four "No trade — price has not broken the
+# pre-market low" cards on the page, when before the open nothing can have
+# broken. The prompt already said PMH / PML are provisional; the model wrote
+# them anyway. So the server now enforces it: the targets a plan may take are
+# computed here from levels that are FINAL, the trigger before the open is an
+# if/then the server can write itself, and a target or invalidation that
+# breaks the rules is replaced, with the model's words kept beside it.
+# --------------------------------------------------------------------------
+
+#: Sessions in which the plan is written for an open that has not happened:
+#: the pre-market, and the overnight / weekend "closed" before it.
+OPEN_SESSIONS = ("pre", "closed")
+
+#: A first target must sit at least this many ten-minute ATRs past the entry.
+#: The Pine's stop is beyond the signal bar, about one ten-minute ATR from the
+#: level, so 1.5 is a first target worth a stop and a half before the option's
+#: spread is paid. Worked, from 2026-10-14's 05:18 facts: DELL short at PML
+#: 552.66 with a 3.38 ten-minute ATR needs a target at or below 547.59 — PDL
+#: 548.4 is 4.26 away, 1.26 ATRs, and is not one; GME long at PDH 27.53 with a
+#: 0.12 ATR needs 27.71 or higher.
+MIN_REACH_BARS = 1.5
+#: The same floor from the daily ATR when the ten-minute one is missing — a
+#: ten-minute ATR runs about a tenth of the daily on these names (GME 0.12 of
+#: 0.99, NVDA 0.46 of 5.4), so 1.5 bar-ATRs is about 0.15 of a day.
+MIN_REACH_DAY = 0.15
+
+_LEVEL_WORD = {"PMH": "pre-market high", "PML": "pre-market low",
+               "PDH": "previous day's high", "PDL": "previous day's low"}
+
+
+def _px(v: float) -> str:
+    """A price as the facts print it: two places, trailing zeros dropped. Pure."""
+    return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def min_reach(n: dict[str, Any]) -> float | None:
+    """How far past the entry a first target must sit, in price. Pure."""
+    b, d = n.get("atr_b"), n.get("atr_d")
+    if isinstance(b, (int, float)) and b > 0:
+        return MIN_REACH_BARS * float(b)
+    if isinstance(d, (int, float)) and d > 0:
+        return MIN_REACH_DAY * float(d)
+    return None
+
+
+def _sign(n: dict[str, Any]) -> int:
+    return 1 if n.get("side") == "long" else -1 if n.get("side") == "short" else 0
+
+
+def _entry(n: dict[str, Any]) -> float | None:
+    e = n.get("entry")
+    p = e.get("price") if isinstance(e, dict) else None
+    return float(p) if isinstance(p, (int, float)) else None
+
+
+def _forming(n: dict[str, Any]) -> list[float]:
+    """The pre-market high and low while they are still forming. Pure."""
+    if not n.get("pm_forming"):
+        return []
+    lv = n.get("levels") or {}
+    return [float(v) for k in ("pmh", "pml") if isinstance(v := lv.get(k), (int, float))]
+
+
+def target_candidates(n: dict[str, Any], keep: int = 3) -> list[dict[str, Any]]:
+    """The first targets a plan may take, nearest first. Pure.
+
+    Only levels that are final — PDH, PDL, the previous close, and PMH / PML
+    once they lock — then today's expected move (the same-day straddle's
+    bounds) and a day's average range from the previous close. Each must sit
+    past the entry by `min_reach` and past the last price: a target the stock
+    has already traded through is not one.
+    """
+    sign, e = _sign(n), _entry(n)
+    if not sign or e is None:
+        return []
+    lv = n.get("levels") or {}
+    pool: list[tuple[str, Any]] = [("PDH", lv.get("pdh")), ("PDL", lv.get("pdl")),
+                                   ("previous close", lv.get("pdc"))]
+    if not n.get("pm_forming"):
+        pool += [("PMH", lv.get("pmh")), ("PML", lv.get("pml"))]
+    o = n.get("options") or {}
+    if o.get("em_front_dte") == 0:
+        pool.append(("today's expected-move " + ("high" if sign > 0 else "low"),
+                     o.get("em_front_hi") if sign > 0 else o.get("em_front_lo")))
+    pdc, atr = lv.get("pdc"), n.get("atr_d")
+    if isinstance(pdc, (int, float)) and isinstance(atr, (int, float)) and atr > 0:
+        pool.append(("a day's average range from the close", round(pdc + sign * atr, 2)))
+    reach = min_reach(n) or 0.0
+    last = n.get("last")
+    ref = e if not isinstance(last, (int, float)) else (max(e, last) if sign > 0 else min(e, last))
+    out: list[dict[str, Any]] = []
+    for label, v in pool:
+        if not isinstance(v, (int, float)):
+            continue
+        p = float(v)
+        if sign * (p - e) < reach - 1e-9 or sign * (p - ref) <= 0:
+            continue
+        # A second candidate inside half a reach of one already kept says the
+        # same thing twice (SPY's expected-move high 783.85, its ATR 783.87).
+        if any(abs(c["price"] - p) < max(0.005, 0.5 * reach) for c in out):
+            continue
+        out.append({"label": label, "price": round(p, 2)})
+    out.sort(key=lambda c: sign * (c["price"] - e))
+    return out[:keep]
+
+
+def invalid_if(n: dict[str, Any]) -> str | None:
+    """The plan's invalidation in the strategy's own terms — a ten-minute close
+    back through the level it is built on. Pure."""
+    sign, e = _sign(n), _entry(n)
+    kind = str((n.get("entry") or {}).get("kind") or "")
+    if not sign or e is None:
+        return None
+    way = "below" if sign > 0 else "above"
+    if kind in _LEVEL_WORD:
+        locked = " once it locks" if kind in ("PMH", "PML") and n.get("pm_forming") else ""
+        return f"A 10-minute close back {way} {kind} {_px(e)}{locked}."
+    return f"A 10-minute close back {way} VWAP and the 8 EMA wave."
+
+
+def open_if(n: dict[str, Any]) -> str | None:
+    """Before the open, the trigger as an if/then the open has to answer. Pure."""
+    sign, e = _sign(n), _entry(n)
+    kind = str((n.get("entry") or {}).get("kind") or "")
+    if not sign or e is None:
+        return None
+    way = "above" if sign > 0 else "below"
+    back = "" if sign > 0 else " from below"
+    if kind in ("PMH", "PML"):
+        return (f"Once the {_LEVEL_WORD[kind]} locks at 09:30 ({_px(e)} so far): a 10-minute "
+                f"close {way} it, then the retest{back} that holds.")
+    if kind in ("PDH", "PDL"):
+        other = "below" if sign > 0 else "above"
+        return (f"If it opens {way} {kind} {_px(e)} and the first 10-minute bar closes {way} it: "
+                f"the retest of {kind} {_px(e)}{back} that holds. If it opens {other}, it needs "
+                f"a 10-minute close {way} {kind} {_px(e)} first.")
+    return (f"If it is still extended at the open: the pullback to VWAP or the 8 EMA wave "
+            f"({kind} {_px(e)} now) that holds.")
+
+
+# THE DAY'S RELEASES, ONE LINE EACH. The calendar lists CPI as up to seven rows
+# at 08:30 (core m/m, core y/y, the headline pair, the index levels); a plan's
+# clock printed every one, and a free model added a garbage eighth
+# ("08:30 CPI, n.s.a”,"). A release is grouped by its minute and its family —
+# the keyword it is named for — and the clock and the risks are written here
+# from the groups, never by the model.
+
+#: Keyword in a release's title → the family it is printed under.
+RELEASE_FAMILIES: tuple[tuple[str, str], ...] = (
+    ("CPI", "CPI"), ("PPI", "PPI"), ("PCE", "PCE"), ("Retail Sales", "Retail Sales"),
+    ("GDP", "GDP"), ("Nonfarm", "Jobs report"), ("Unemployment Rate", "Jobs report"),
+    ("Average Hourly Earnings", "Jobs report"), ("Participation Rate", "Jobs report"),
+    ("Jobless Claims", "Jobless Claims"), ("ISM Manufacturing", "ISM Manufacturing"),
+    ("ISM Services", "ISM Services"), ("Durable Goods", "Durable Goods"),
+    ("Housing Starts", "Housing Starts"), ("Building Permits", "Building Permits"),
+    ("Import Prices", "Import Prices"), ("Export Prices", "Export Prices"),
+    ("Industrial Production", "Industrial Production"), ("JOLTS", "JOLTS"),
+    ("Michigan", "Michigan sentiment"), ("Empire State", "Empire State"),
+)
+
+_JUNK = re.compile(r"[\"“”‘’`]+")
+
+
+def _clean(s: Any) -> str:
+    """A calendar title or figure without stray quotes or trailing commas. Pure."""
+    return _JUNK.sub("", str(s or "")).strip(" ,;")
+
+
+def release_family(title: str) -> tuple[str, str]:
+    """(family, the part of the title that says which print) for a release. Pure.
+
+    "Core CPI m/m" → ("CPI", "core m/m"); "CPI y/y" → ("CPI", "y/y"); a title
+    with no known keyword is its own family, and its part is the whole title.
+    """
+    t = _clean(title)
+    for kw, fam in RELEASE_FAMILIES:
+        m = re.search(rf"\b{re.escape(kw)}\b", t, re.I)
+        if m is None:
+            continue
+        if fam != kw:
+            return fam, t
+        part = re.sub(r"\s+", " ", (t[:m.start()] + t[m.end():])).strip(" ,.-")
+        return fam, (part[:1].lower() + part[1:]) if part else "headline"
+    return t, t
+
+
+def group_releases(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The day's releases grouped by minute and family, in time order. Pure."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for x in items:
+        if not isinstance(x, dict) or not x.get("title"):
+            continue
+        et = str(x.get("et") or "untimed")
+        fam, part = release_family(str(x["title"]))
+        g = groups.setdefault((et, fam), {"et": et, "family": fam, "titles": [], "parts": [],
+                                          "score": 0, "done": True, "rates": False})
+        g["titles"].append(_clean(x["title"]))
+        g["parts"].append({"label": part, "actual": x.get("actual"),
+                           "consensus": x.get("consensus"), "previous": x.get("previous")})
+        g["score"] = max(g["score"], int(x.get("score") or 0))
+        g["done"] = g["done"] and bool(x.get("done") or x.get("released"))
+        g["rates"] = g["rates"] or "rates" in (x.get("themes") or [])
+    return sorted(groups.values(), key=lambda g: (g["et"] == "untimed", g["et"]))
+
+
+def _figures(p: dict[str, Any]) -> str:
+    a, c, prev = (_clean(p.get(k)) for k in ("actual", "consensus", "previous"))
+    out = f"{a} vs {c}" if a and c else a or (f"{c} expected" if c else "")
+    if prev:
+        out = f"{out} (prev {prev})" if out else f"prev {prev}"
+    return out
+
+
+def release_line(g: dict[str, Any]) -> str:
+    """One group as one line: "08:30 CPI — core m/m 0.2% expected (prev 0.3%), …". Pure."""
+    et = "" if g["et"] == "untimed" else f"{g['et']} "
+    if len(g["parts"]) == 1:
+        fig = _figures(g["parts"][0])
+        return f"{et}{g['titles'][0]}" + (f" — {fig}" if fig else "")
+    bits = [f"{p['label']} {f}".strip() if (f := _figures(p)) else p["label"]
+            for p in g["parts"]]
+    return f"{et}{g['family']} — " + ", ".join(bits)
+
+
+def _day_prints(prints: list[dict[str, Any]], td: date, today: date) -> list[dict[str, Any]]:
+    """The trading day's own prints, their times without the day. Pure.
+
+    The Market tab's prints label today's "08:30" and any other day's "Thu
+    08:30"; the plan's clock is the trading day's alone.
+    """
+    out: list[dict[str, Any]] = []
+    for x in prints:
+        if not isinstance(x, dict):
+            continue
+        et = str(x.get("et") or "")
+        m = re.fullmatch(r"([A-Z][a-z]{2}) (\d\d:\d\d)", et)
+        if m:
+            if m.group(1) != f"{td:%a}":
+                continue
+            et = m.group(2)
+        elif td != today:
+            continue
+        out.append({**x, "et": et or "untimed"})
+    return out
+
+
+def _speaker(title: str) -> str | None:
+    m = re.search(r"\b(?:Member|Chair|Vice Chair|President|Governor)\s+([A-Z][a-z]+)", title)
+    return m.group(1) if m else None
+
+
+def clock_lines(facts: dict[str, Any]) -> list[str]:
+    """The day's clock — the session's fixed times and the releases still to
+    come before the close, one line each, in time order. The server's, not the
+    model's. Pure."""
+    td = _parse_day(facts.get("trading_day"))
+    if td is None:
+        return []
+    c = _clock(td)
+    rows: list[tuple[str, str]] = [
+        (c["open"], f"{c['open']} the open"),
+        (c["opening_range_end"], f"{c['opening_range_end']} the opening range is set"),
+        (c["lunch"][:5], f"{c['lunch']} the lunch lull"),
+        (c["last_hour"], f"{c['last_hour']} the last hour"),
+        (c["close"], f"{c['close']} the close"),
+    ]
+    for g in facts.get("events") or []:
+        if g["done"] or (g["et"] != "untimed" and g["et"] >= c["close"]):
+            continue
+        rows.append((g["et"] if g["et"] != "untimed" else "99:99", release_line(g)))
+    rows.sort(key=lambda r: r[0])
+    return [r[1] for r in rows][:12]
+
+
+def _risk_groups(facts: dict[str, Any]) -> list[dict[str, Any]]:
+    """The day's release groups that are a risk to the plan: high impact (or a
+    Fed event), still to come, and before the close. Pure."""
+    td = _parse_day(facts.get("trading_day"))
+    close = _clock(td)["close"] if td else "16:00"
+    return [g for g in facts.get("events") or []
+            if not g["done"] and (g["score"] >= 4 or (g["rates"] and g["score"] >= 3))
+            and (g["et"] == "untimed" or g["et"] < close)]
+
+
+def event_risks(facts: dict[str, Any]) -> list[str]:
+    """Those groups as risks — from the calendar, not the model (a CPI
+    morning's plan once listed none). Pure."""
+    out: list[str] = []
+    for g in _risk_groups(facts):
+        # Named, not re-printed: the figures are on the clock just above.
+        name = g["family"] if len(g["parts"]) > 1 else g["titles"][0]
+        et = "" if g["et"] == "untimed" else f"{g['et']} "
+        when = ("before the open: it sets the gap, and levels formed ahead of it are provisional"
+                if g["et"] < "09:30" else "in the session: let it print before taking a level")
+        out.append(f"{et}{name} — {when}.")
+    return out
+
+
+def _covered(text: str, facts: dict[str, Any]) -> bool:
+    """Whether a model risk restates a release `event_risks` already lists. Pure."""
+    for g in _risk_groups(facts):
+        keys = {g["family"]} | {s for t in g["titles"] if (s := _speaker(t))}
+        if any(re.search(rf"\b{re.escape(k)}\b", text, re.I) for k in keys):
+            return True
+    return False
 
 
 def _calendar(rows: list[dict[str, Any]], days: set[date]) -> list[dict[str, Any]]:
@@ -489,7 +817,8 @@ def build_facts(
                 for k in ("SPY", "QQQ", "IWM") if isinstance(t := tape.get(k), dict)
             ],
         },
-        "names": [_name(r, moves, sectors) for r in pick_names(rows, top)],
+        "names": [_name(r, moves, sectors, str(scan.get("session") or "closed"))
+                  for r in pick_names(rows, top)],
         # The day's macro, once for the whole plan: the moves the names' drivers
         # are read from, and the market's high-impact headlines.
         "macro": {
@@ -501,6 +830,9 @@ def build_facts(
         "breadth": ctx["breadth"],
         "fuel": ctx["fuel"],
         "prints": ctx["prints"],
+        # The trading day's releases grouped by minute and family — what the
+        # plan's clock and its release risks are written from (server-side).
+        "events": group_releases(_day_prints(ctx["prints"] or [], td, today)),
         "fed": ctx["fed"],
         "gamma": ctx["gamma"],
         "partial": _partial(snap, rows),
@@ -528,14 +860,22 @@ STRATEGY = (
 
 
 def system_prompt(session: str) -> str:
+    open_mode = (
+        " Nothing has broken yet — the open has not happened — so every plan is an IF/THEN for "
+        "the open: its `trigger` starts with \"If\" or \"Once\" and says what the open must show "
+        "(each name's `open_if` is the strategy's own wording; use it or say the same thing "
+        "better). A name is never \"no trade because it has not broken\": that is every name "
+        "before 09:30."
+    )
     when = {
-        "pre": "It is the pre-market: PMH/PML are still forming and lock at 09:30, so they are "
-               "provisional — not a trigger and not a target until they lock; say \"PMH/PML once "
-               "locked\" where you need them. Write the plan for the open.",
+        "pre": "It is the pre-market: PMH/PML are still forming and lock at 09:30 (a name's "
+               "`pm_forming` is true), so they are provisional — never a target, and a trigger "
+               "only as \"once it locks\"." + open_mode,
         "rth": "The session is underway. Write from the current prices and states, not for the "
                "open — a break that has already happened is a retest to wait for, not a trigger.",
         "post": "The session has closed. Write the plan for the next session (trading_day).",
-        "closed": "The market is closed. Write the plan for the next session (trading_day).",
+        "closed": "The market is closed. Write the plan for the next session (trading_day)."
+                  + open_mode,
     }.get(session, "Write the plan for the next New York session.")
     return f"""\
 You are the head of a New York equities desk writing the morning game plan for one trader who \
@@ -569,15 +909,20 @@ Rules:
 - `headline` is ONE line in your own words: the day's stance and the one or two best names. \
 It is never a news headline.
 - Write plans ONLY for names in the data, and only where the setup is real. A name without a \
-clean setup goes in `avoid` with the reason, or is left out. An empty `plans` list is a valid \
-answer on a day the tape says stand aside — chop, backwardation, a high-impact print about to \
-land — and `market` must then say so plainly.
+clean setup goes in `avoid` with the reason, or is left out — NEVER a plan that says "no trade" \
+or fills its fields with dashes; the server moves those off the page. An empty `plans` list is a \
+valid answer on a day the tape says stand aside — chop, backwardation, a high-impact print about \
+to land — and `market` must then say so plainly.
 - Every number you write must be copied exactly from the data: levels, prices, percentages, \
 strikes, times. No arithmetic, no rounding, no new levels. If a number you want is not printed, \
 say it in words.
 - `trigger` is what must happen first (the break, the retest of the named level, the reclaim of \
-VWAP); `invalidation` is the price or condition that cancels the plan; `target` is the first \
-target from the levels in the data or the expected move.
+VWAP); `invalidation` is the price or condition that cancels the plan (each name's `invalid_if` \
+is the strategy's own); `target` is taken from the name's `targets`, copied as printed — the \
+levels that are final and sit at least a stop and a half past the entry and past the last price, \
+nearest first. When `targets` is empty, say there is no final level beyond the entry and trail \
+the 8 EMA wave. The server replaces a target that is still forming, on the wrong side of the \
+entry or nearer than that, and an invalidation on the wrong side.
 - `options` says how to express it: long option or debit spread, and which expiry (the expiry \
 rule in the strategy — the contract given is its pick), from the premium verdict and the expected \
 move; flag poor liquidity and earnings inside the expiry. If there is no options context for the \
@@ -594,13 +939,14 @@ has no `sector`, so leave the sector out rather than calling it null) and the dr
 in its `macro` list — name the driver, its move as printed, and the verdict (headwind / \
 tailwind / flat). If a high-impact market headline in the top-level `macro.headlines` bears on \
 the name or its sector, say which. If every driver is flat, say the macro is quiet for it.
+- SPY has no relative strength against itself: its plan carries no "RS:" line.
 - "News:" cites the name's own most relevant item — an analyst rating, an earnings item, a \
-filing or a headline — with its publisher (or form), and what it means for the setup. If it \
+filing or a headline — with its publisher (or form), and what it means for the setup. Only an \
+item that names the stock, its company or its sector peers: a market headline (in \
+`macro.headlines`) belongs on the Macro line, and only when it bears on the name. If it \
 has nothing in the last three days, write "News: nothing stock-specific in three days" — but \
 ONLY when its `news_loaded` is true; when it is false, write "News: headlines not loaded yet". \
 Never invent a headline, a rating or a filing.
-- `timing` is the clock for the day: the US prints in the calendar with their times, the open, \
-the opening range, the lunch lull, the last hour — only times printed in the data.
 - `conviction` is 1-5 and must reflect the weather as well as the setup. RANK the names: \
 the strongest relative strength with the cleanest structure gets the highest conviction, and \
 no more than two names may share the top score. Plans that read alike are a sign you have not \
@@ -613,7 +959,9 @@ iv_rv, ext_pct, em_front_pct, pc_vol, pct_adv, adv20, news_loaded, max_convictio
 Say "relative strength against SPY", "N ten-minute ATRs from the entry", "implied volatility N \
 times realised", "the pre-market gap", "put/call volume N", "pre-market volume N% of a normal \
 day" — with the number as printed in place of N.
-- `risks` is two to four concrete ways today's plan fails — a print, a level, the tape turning.
+- `risks` is one to three concrete ways today's plan fails — a level giving way, the tape \
+turning, a name's own weak point. The server lists the day's clock and its releases itself, so \
+leave the calendar out of `risks`.
 - Be concrete. No disclaimers, no position sizes, no mention of being an AI."""
 
 
@@ -640,8 +988,7 @@ def schema(syms: list[str]) -> dict[str, Any]:
         "plans": {"type": "array", "minItems": 0, "maxItems": max(1, len(syms)), "items": plan},
         "avoid": {"type": "array", "minItems": 0, "maxItems": max(1, len(syms)),
                   "items": _obj({"sym": sym, "why": _S})},
-        "timing": {"type": "array", "minItems": 0, "maxItems": 8, "items": _S},
-        "risks": {"type": "array", "minItems": 0, "maxItems": 6, "items": _S},
+        "risks": {"type": "array", "minItems": 0, "maxItems": 4, "items": _S},
     })
 
 
@@ -655,7 +1002,6 @@ SKELETON = """{
                "why": [ "Structure: ...", "RS: ...", "Macro: ...", "News: ...",
                         "Tape: ...", "Options: ... (premium, contract, flow)" ] } ],
   "avoid": [ { "sym": "a name from the data", "why": "..." } ],
-  "timing": [ "..." ],
   "risks": [ "..." ]
 }"""
 
@@ -817,6 +1163,129 @@ def cap_conviction(p: dict[str, Any], tape: dict[str, Any] | None) -> dict[str, 
     return p
 
 
+# A plan that is no plan: "No trade – price has not broken the pre-market low"
+# with a dash in every field (four of seven cards at 05:18 ET, 2026-10-14).
+_NO_TRADE = re.compile(r"^\s*(?:no\s+(?:trade|setup|valid\s+setup|plan)|stand\s+aside|pass)\b",
+                       re.I)
+_BLANK = {"", "-", "–", "—", "n/a", "na", "none", "nil"}
+_NO_TRADE_LEAD = re.compile(r"^\s*no\s+(?:trade|setup|valid\s+setup|plan)\s*[-–—:,.]*\s*", re.I)
+_CONDITIONAL = re.compile(r"^\s*(?:if|once|after|when|should|provided|on\s+a|at\s+the\s+open)\b",
+                          re.I)
+_NUM_TOKEN = re.compile(r"(?<![\d.,:])(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?![\d:])")
+_FORMING_WORD = re.compile(r"\b(?:PMH|PML|pre-?market\s+(?:high|low))\b", re.I)
+
+
+def _is_filler(p: dict[str, Any]) -> bool:
+    """A card that plans nothing — "no trade", or every field a dash. Pure.
+
+    Fields that are simply absent are a malformed answer, not a no-trade one,
+    and are left to the page as before."""
+    fields = [str(p.get(k) or "").strip().lower() for k in ("trigger", "invalidation", "target")]
+    return (bool(_NO_TRADE.match(p.get("plan") or ""))
+            or (any(fields) and all(f in _BLANK for f in fields)))
+
+
+def _prices(text: str, n: dict[str, Any]) -> list[float]:
+    """The numbers in a sentence that read as prices of this name — within half
+    a price of its last — leaving percentages, times and counts alone. Pure."""
+    ref = n.get("last") if isinstance(n.get("last"), (int, float)) else _entry(n)
+    if not isinstance(ref, (int, float)) or ref <= 0:
+        return []
+    out: list[float] = []
+    for m in _NUM_TOKEN.finditer(text or ""):
+        if re.match(r"\s*(?:%|bp\b|x\b|×|ATR|-minute|-min\b|ten-minute)", text[m.end():], re.I):
+            continue
+        v = float(m.group(0).replace(",", ""))
+        if 0.5 * ref <= v <= 1.5 * ref:
+            out.append(v)
+    return out
+
+
+def _target_fault(text: str, n: dict[str, Any]) -> str | None:
+    """Why a written target cannot stand, or None. Pure.
+
+    Forming: it names the pre-market high or low before they lock. Too near or
+    the wrong side: none of its prices sits a stop and a half past the entry
+    and past the last price (`target_candidates`' own test)."""
+    sign, e = _sign(n), _entry(n)
+    if not sign or e is None:
+        return None
+    forming = _forming(n)
+    prices = _prices(text, n)
+    if any(abs(p - f) < 0.005 for p in prices for f in forming):
+        return "the pre-market high/low was still forming"
+    if not prices:
+        return ("the pre-market high/low was still forming"
+                if forming and _FORMING_WORD.search(text or "") else None)
+    reach = min_reach(n) or 0.0
+    last = n.get("last")
+    ref = e if not isinstance(last, (int, float)) else (max(e, last) if sign > 0 else min(e, last))
+    if any(sign * (p - e) >= reach - 1e-9 and sign * (p - ref) > 0 for p in prices):
+        return None
+    return ("it was nearer the entry than a stop and a half, the wrong side of it, or already "
+            "traded through")
+
+
+def _invalid_fault(text: str, n: dict[str, Any]) -> str | None:
+    """Why a written invalidation cannot stand, or None: it rests on a forming
+    level, or sits on the profit side of the entry. Pure."""
+    sign, e = _sign(n), _entry(n)
+    if not sign or e is None:
+        return None
+    prices = _prices(text, n)
+    if any(abs(p - f) < 0.005 for p in prices for f in _forming(n)):
+        return "it rested on the pre-market high/low before they lock"
+    reach = min_reach(n) or 0.0
+    if any(sign * (p - e) > 0.5 * reach for p in prices):
+        return "it sat on the profit side of the entry"
+    return None
+
+
+def _target_text(n: dict[str, Any], open_mode: bool) -> str:
+    """The target the server writes when the model's cannot stand. Pure."""
+    c = n.get("targets") or []
+    if c:
+        said = [f"{x['label']} {_px(x['price'])}" if x["label"] in _LEVEL_WORD
+                else f"{_px(x['price'])} ({x['label']})" for x in c[:2]]
+        return "; then ".join(said)
+    if open_mode:
+        word = "high" if _sign(n) > 0 else "low"
+        return (f"No final level beyond the entry before the open — the locked pre-market {word} "
+                "if it clears a stop and a half, otherwise trail the 8 EMA wave.")
+    return "No level beyond the entry — trail the 8 EMA wave."
+
+
+def enforce(p: dict[str, Any], n: dict[str, Any] | None, open_mode: bool) -> dict[str, Any]:
+    """The server's rules on one plan's trigger, target and invalidation. Pure;
+    returns `p`, updated, with `fixes` naming each replacement and the model's
+    words it replaced."""
+    fixes: list[dict[str, str]] = []
+    if n is not None:
+        if open_mode and n.get("open_if"):
+            if not _CONDITIONAL.match(p["trigger"] or ""):
+                fixes.append({"field": "trigger", "was": p["trigger"],
+                              "why": "before the open the trigger is what the open has to show"})
+            # A conditional one is replaced too, unrecorded: the first replay
+            # copied the if/then and turned its last "PDL 76.12" into "PDH
+            # 76.12" (CRWV, 2026-10-14) — same figure, so the numeral guard
+            # passed it. Before the open the trigger is the rule's, word for word.
+            p["trigger"] = n["open_if"]
+        why = _target_fault(p["target"], n)
+        if why:
+            fixes.append({"field": "target", "was": p["target"], "why": why})
+            p["target"] = _target_text(n, open_mode)
+        why = _invalid_fault(p["invalidation"], n)
+        # Its own words back are not a fix: "…above PML 552.66 once it locks."
+        # names a forming level, and is exactly what invalid_if writes.
+        if why and n.get("invalid_if") and (p["invalidation"] or "").strip() != n["invalid_if"]:
+            fixes.append({"field": "invalidation", "was": p["invalidation"], "why": why})
+            p["invalidation"] = n["invalid_if"]
+    if p["sym"] == "SPY":
+        p["why"] = [w for w in p["why"] if not re.match(r"\s*RS\s*:", w, re.I)]
+    p["fixes"] = fixes
+    return p
+
+
 def sanitize_plan(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     """The model's plan, checked against the names it is allowed to point at. Pure.
 
@@ -825,6 +1294,12 @@ def sanitize_plan(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     the plan. Conviction is clamped to 1-5, then capped by the tape count
     (`cap_conviction`). No headline, no plan — that is the one field without
     which the page has nothing to lead with.
+
+    Then the server's own rules (owner, 2026-10-14): a card that plans nothing
+    goes to `watch`, one line; before the open the trigger is an if/then;
+    a target or invalidation that breaks the strategy is replaced (`enforce`);
+    the clock (`timing`) and the day's release risks (`events`) are written
+    from the calendar, and a model risk that restates one of them is dropped.
     """
     if not isinstance(obj, dict):
         return None
@@ -833,28 +1308,38 @@ def sanitize_plan(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     headline = rp._text(obj.get("headline")) or rp._text(obj.get("title"))
     if not headline:
         return None
-    allowed = {n["sym"] for n in facts.get("names") or []}
-    sides = {n["sym"]: n.get("side") for n in facts.get("names") or []}
+    names = {n["sym"]: n for n in facts.get("names") or []}
+    allowed = set(names)
+    open_mode = facts.get("session") in OPEN_SESSIONS
     plans: list[dict[str, Any]] = []
+    watch: list[dict[str, str]] = []
     seen: set[str] = set()
     for p in rp._dicts(obj.get("plans")):
         sym = p.get("sym")
         if not isinstance(sym, str) or sym not in allowed or sym in seen:
             continue
-        side = p.get("side") if p.get("side") in ("long", "short") else sides.get(sym)
+        side = p.get("side") if p.get("side") in ("long", "short") else names[sym].get("side")
         conv = _conviction(p.get("conviction"))
         text = rp._text(p.get("plan"))
         if side not in ("long", "short") or conv is None or not text:
             continue
         seen.add(sym)
-        plans.append({
+        item = {
             "sym": sym, "side": side, "conviction": conv, "plan": text,
             "trigger": rp._text(p.get("trigger")),
             "invalidation": rp._text(p.get("invalidation")),
             "target": rp._text(p.get("target")),
             "options": rp._text(p.get("options")),
             "why": _why(rp._texts(p.get("why"), 6)),
-        })
+        }
+        if _is_filler(item):
+            # Before the open the line is what would make it a trade; in the
+            # session, the model's own reason.
+            reason = _NO_TRADE_LEAD.sub("", text).strip() or text
+            line = names[sym].get("open_if") if open_mode else None
+            watch.append({"sym": sym, "why": line or reason[:1].upper() + reason[1:]})
+            continue
+        plans.append(enforce(item, names.get(sym), open_mode))
     tape = facts.get("conviction")
     for p in plans:
         cap_conviction(p, tape if isinstance(tape, dict) else None)
@@ -864,30 +1349,40 @@ def sanitize_plan(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(sym, str) and sym in allowed and sym not in seen and why:
             seen.add(sym)
             avoid.append({"sym": sym, "why": why})
+    watch = [w for w in watch if w["sym"] not in {a["sym"] for a in avoid}]
     return {
         "headline": headline,
         "market": rp._text(obj.get("market")),
         "plans": plans,
         "avoid": avoid,
-        "timing": rp._texts(obj.get("timing"), 8),
-        "risks": rp._texts(obj.get("risks"), 6),
+        "watch": watch,
+        "timing": clock_lines(facts),
+        "events": event_risks(facts),
+        "risks": [r for r in rp._texts(obj.get("risks"), 6) if not _covered(r, facts)][:4],
     }
 
 
 def plan_prose(b: dict[str, Any]) -> list[str]:
-    """Every string the model wrote in a sanitised plan — what the guard reads. Pure."""
+    """Every string the model wrote in a sanitised plan — what the guard reads. Pure.
+
+    Not what the server wrote: the clock, the release risks, and any field
+    `enforce` replaced (its `fixes` name them).
+    """
     out = [b.get("headline") or "", b.get("market") or ""]
     for p in b.get("plans") or []:
-        out += [p.get("plan") or "", p.get("trigger") or "", p.get("invalidation") or "",
-                p.get("target") or "", p.get("options") or "", *p.get("why", [])]
+        fixed = {f.get("field") for f in p.get("fixes") or []}
+        out += [p.get(k) or "" for k in ("plan", "trigger", "invalidation", "target", "options")
+                if k not in fixed]
+        out += list(p.get("why", []))
     out += [a.get("why") or "" for a in b.get("avoid") or []]
-    out += [*b.get("timing", []), *b.get("risks", [])]
+    out += [w.get("why") or "" for w in b.get("watch") or []]
+    out += list(b.get("risks", []))
     return [x for x in out if x]
 
 
 def unverified(b: dict[str, Any], seen: str) -> list[str]:
     """Numerals in the plan that the text the model was shown does not contain."""
-    known = set(rp.numerals_in(seen))
+    known = rp.known_numerals(seen)
     bad: list[str] = []
     for s in plan_prose(b):
         for k in rp.numerals_in(s):

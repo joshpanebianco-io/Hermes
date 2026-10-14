@@ -3,6 +3,8 @@
 import { useState } from "react";
 import type { IndexMovers } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { TickerLogo } from "@/components/ui/TickerLogo";
 import { Tick } from "@/components/ui/Tick";
 import { pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -105,9 +107,13 @@ export function Movers({
       }
     >
       {!active || active.members.length === 0 ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
-          No constituent data yet — weights come from the fund&rsquo;s own holdings file.
-        </p>
+        ageMin == null && !error ? (
+          <Skeleton rows={4} label="Loading index movers" />
+        ) : (
+          <p className="px-3 py-5 text-center text-[11px] text-ink-3">
+            No constituent data — weights come from the fund&rsquo;s own holdings file.
+          </p>
+        )
       ) : (
         <>
           {view === "map" ? (
@@ -187,7 +193,10 @@ function List({ m }: { m: IndexMovers }) {
         const up = x.contribution >= 0;
         return (
           <li key={x.symbol} className="hit flex items-center gap-2 px-3 py-[3px]">
-            <span className="fig w-[46px] shrink-0 text-[10.5px] text-ink-2">{x.symbol}</span>
+            <span className="fig flex w-[62px] shrink-0 items-center gap-1.5 text-[10.5px] text-ink-2">
+              <TickerLogo sym={x.symbol} size={13} />
+              {x.symbol}
+            </span>
             <span className="fig w-[38px] shrink-0 text-right text-[9.5px] text-ink-3"
               title="Index weight">
               {x.weight.toFixed(1)}%

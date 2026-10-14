@@ -1,10 +1,11 @@
+import type { Metadata } from "next";
 import { Terminal } from "@/components/Terminal";
 import type { ReportFeed, Terminal as TerminalData } from "@/types/terminal";
 import { failureReason, offlineTerminal } from "@/lib/offline";
 import { cookies } from "next/headers";
 import { THEME_COOKIE, parseTheme } from "@/lib/theme";
 import { UI_COOKIE, parseUi } from "@/lib/ui";
-import { isTab } from "@/lib/tabs";
+import { deskOf, isTab, pageTitle } from "@/lib/tabs";
 
 /**
  * The terminal, server-rendered once and then polled by the client.
@@ -57,6 +58,21 @@ async function getReport(): Promise<ReportFeed | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The browser tab's title, named on the server so it is right on the first
+ * frame — "HERMESX · Stocks & options · Scanner". The client keeps it in step
+ * as you move (Terminal.tsx).
+ */
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}): Promise<Metadata> {
+  const sp = await searchParams;
+  const tab = isTab(sp.tab) ? sp.tab : "terminal";
+  return { title: pageTitle(tab, deskOf(tab) ?? "futures") };
 }
 
 /**

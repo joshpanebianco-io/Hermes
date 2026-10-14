@@ -16,6 +16,7 @@ import type { FrameFx } from "@/lib/useFrameLight";
 import { UI_COOKIE, type UiMode } from "@/lib/ui";
 import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
 import { segItem } from "@/lib/seg";
+import { setOptionsPrefs, useOptionsPrefs } from "@/lib/optionsPrefs";
 import { cn } from "@/lib/cn";
 
 /**
@@ -161,6 +162,10 @@ export function Settings({
         </Module>
 
         <Alerts />
+
+        <OptionsPrefsModule />
+
+        <Keyboard />
 
         <Module
           title="Presets"
@@ -462,6 +467,103 @@ function Alerts() {
           In a background tab Chrome checks about once a minute, so an alert can trail its bar by up to a minute
         </span>
       </div>
+    </Module>
+  );
+}
+
+/* ---------------------------------------------------------------- options */
+
+/**
+ * Settings → Options: the stocks desk's sizing and expiry preferences, read
+ * live by the scanner's contract helper (lib/optionsPrefs.ts).
+ *
+ * THE BUDGET IS TYPED AS DOLLARS OF PREMIUM AT RISK, and blank means "do not
+ * size" — the helper then prints the risk per contract and leaves the count
+ * to you. Nothing here places an order; it is arithmetic on the screen.
+ */
+function OptionsPrefsModule() {
+  const p = useOptionsPrefs();
+  const [draft, setDraft] = useState<string>("");
+  useEffect(() => {
+    setDraft(p.budget != null ? String(p.budget) : "");
+  }, [p.budget]);
+  const commit = () => {
+    const n = Number(draft.replace(/[$,\s]/g, ""));
+    setOptionsPrefs({ budget: draft.trim() === "" || !Number.isFinite(n) || n <= 0 ? null : Math.round(n) });
+  };
+  const row = "flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ring/40 px-3 py-2 last:border-b-0";
+  const label = "w-[150px] shrink-0 text-[11px] text-ink-2 qt:text-[12.5px]";
+  const hint = "min-w-0 flex-1 text-[9.5px] text-ink-3 qt:text-[11.5px]";
+  return (
+    <Module title="Options" sub="the stocks desk's contract helper" bodyClassName="px-0 py-0">
+      <div className={row}>
+        <label htmlFor="opt-budget" className={label}>
+          Risk per trade
+        </label>
+        <span className="flex items-center gap-1.5">
+          <span className="fig text-[12px] text-ink-3">$</span>
+          <input
+            id="opt-budget"
+            inputMode="numeric"
+            value={draft}
+            placeholder="not set"
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+            }}
+            className="fig w-[96px] rounded-[3px] border border-ring-2 bg-bg px-2 py-[3px] text-[12px] text-ink outline-none focus:border-ink-3"
+          />
+        </span>
+        <span className={hint}>
+          Premium you are prepared to lose on one trade — the scanner then says how many contracts that buys. Blank
+          prints the risk per contract only.
+        </span>
+      </div>
+      <div className={row}>
+        <span className={label}>0DTE on SPY · QQQ · IWM</span>
+        <span className="seg">
+          <button type="button" onClick={() => setOptionsPrefs({ zeroDte: true })} {...segItem(p.zeroDte)}>
+            On
+          </button>
+          <button type="button" onClick={() => setOptionsPrefs({ zeroDte: false })} {...segItem(!p.zeroDte)}>
+            Off
+          </button>
+        </span>
+        <span className={hint}>Off, the index ETFs suggest the weekly instead of the same-day expiry</span>
+      </div>
+    </Module>
+  );
+}
+
+/* ---------------------------------------------------------------- keyboard */
+
+const KEYS: { keys: string[]; what: string }[] = [
+  { keys: ["1", "2", "3", "4"], what: "The current desk's tabs, in the order the header shows them" },
+  { keys: ["D"], what: "Switch desk — Futures and Stocks & options — back to the tab you left" },
+  { keys: ["↑", "↓"], what: "Scanner: walk the list, the selection and the detail pane moving together" },
+  { keys: ["Enter"], what: "Scanner: open the focused row" },
+];
+
+/** The shortcuts, written down — the header's hover hints are not where anyone looks for them. */
+function Keyboard() {
+  return (
+    <Module title="Keyboard" sub="ignored while typing in a field" bodyClassName="px-0 py-0">
+      {KEYS.map((k) => (
+        <div key={k.what} className="flex items-center gap-3 border-b border-ring/40 px-3 py-2 last:border-b-0">
+          <span className="flex w-[150px] shrink-0 gap-1">
+            {k.keys.map((x) => (
+              <kbd
+                key={x}
+                className="fig min-w-[22px] rounded-[3px] border border-ring-2 bg-surface-2 px-1.5 py-px text-center text-[11px] text-ink-2"
+              >
+                {x}
+              </kbd>
+            ))}
+          </span>
+          <span className="text-[11px] text-ink-3 qt:text-[12px]">{k.what}</span>
+        </div>
+      ))}
     </Module>
   );
 }

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { Desk, Impact, WireItem } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Ago } from "@/components/ui/Ago";
 import { cn } from "@/lib/cn";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
@@ -186,11 +187,15 @@ export function Wire({
       </div>
 
       {shown.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-3">
-          {items.length === 0
-            ? "No headlines yet — the collector polls the wire every two minutes."
-            : "Nothing on this desk right now."}
-        </p>
+        items.length === 0 && ageMin == null && !error ? (
+          <Skeleton rows={10} label="Loading the wire" />
+        ) : (
+          <p className="px-3 py-6 text-center text-[11px] text-ink-3">
+            {items.length === 0
+              ? "No headlines — the collector polls the wire every two minutes."
+              : "Nothing on this desk right now."}
+          </p>
+        )
       ) : (
         <ul className="divide-y divide-ring/40">
           {shown.map((h) => (

@@ -45,6 +45,9 @@ UNIVERSE: list[tuple[str, str, str, str, str]] = [
     ("GLD", "GLD", "GLD", "core", "px"),
     ("YM", "YM=F", "Dow fut", "core", "px"),
     ("RTY", "RTY=F", "Russell 2000 fut", "core", "px"),
+    # The Russell's ETF beside its future, as QQQ and SPY sit beside theirs —
+    # the stocks desk's header prints SPY, QQQ and IWM (owner, 2026-10-13).
+    ("IWM", "IWM", "IWM", "core", "px"),
     # ---- the world's other sessions -----------------------------------------
     ("N225", "^N225", "Nikkei 225", "global", "px"),
     ("HSI", "^HSI", "Hang Seng", "global", "px"),

@@ -2,6 +2,7 @@
 
 import type { VPAssets } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -69,7 +70,11 @@ export function VolumeProfile({
       }
     >
       {!active ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-3">No bars yet.</p>
+        ageMin == null && !error ? (
+          <Skeleton rows={3} label="Loading the volume profile" />
+        ) : (
+          <p className="px-3 py-5 text-center text-[11px] text-ink-3">No bars for this book yet.</p>
+        )
       ) : !active.ok ? (
         <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           {active.error ?? "unavailable"}

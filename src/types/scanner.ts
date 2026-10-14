@@ -55,6 +55,28 @@ export interface Regime {
   confirm: "confirm" | "divergence" | "risk_off" | "chop" | null;
   event: { title: string; et: string; in_min: number; score: number } | null;
   notes: string[];
+  /** How many independent signals agree with the bias — computed, never the model's. */
+  conviction?: Conviction | null;
+}
+
+/** One signal in the tape's conviction count. */
+export interface ConvictionVote {
+  key: string;
+  label: string;
+  value: string;
+  vote: Side | "neutral";
+  note: string;
+}
+
+export interface Conviction {
+  bias: Side | null;
+  agree: number;
+  against: number;
+  neutral: number;
+  total: number;
+  grade: "strong" | "moderate" | "weak" | "none";
+  max_conviction: 1 | 2 | 3 | 4 | 5;
+  votes: ConvictionVote[];
 }
 
 export interface ScoreRow {
@@ -163,6 +185,116 @@ export interface ScanRow {
   } | null;
   news: ScanNews[];
   filings: ScanFiling[];
+  /** The name's options, from Cboe's delayed chain. Null until the first chain arrives. */
+  options?: OptionsCtx | null;
+  /** Twenty-session average daily volume. */
+  adv20?: number | null;
+  /** Today's pre-market from Nasdaq's extended-trading feed (about fifteen minutes delayed). */
+  premkt?: {
+    volume: number | null;
+    pct_adv: number | null;
+    high: number | null;
+    low: number | null;
+    last: number | null;
+    asof: string | null;
+  } | null;
+  /** Big caps in the same sector reporting from today through three trading days out. */
+  peers?: Array<{ sym: string; date: string; when: string; days: number }>;
+}
+
+/** Today's options volume against open interest, read for which way it leans. */
+export interface OptionsFlow {
+  call_vol: number;
+  put_vol: number;
+  pc_vol: number | null;
+  call_oi: number;
+  put_oi: number;
+  vol_oi: number | null;
+  lean: "calls" | "puts" | "balanced" | null;
+  top: Array<{ strike: number; right: "C" | "P"; expiry: string; volume: number; oi: number }>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Options — the stocks desk trades the options, not the shares                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One suggested contract for the row's side. `front` is 0DTE on SPY / QQQ /
+ * IWM when one is listed today and it is before 15:00 ET, otherwise the
+ * nearest expiry; `weekly` is the nearest with two trading days or more to
+ * run. A `long` is the strike nearest 0.60 delta; a `spread` buys that and
+ * sells the strike nearest 0.30 delta in the same expiry.
+ */
+export interface OptContract {
+  key: "front" | "weekly";
+  kind: "long" | "spread";
+  right: "C" | "P";
+  expiry: string;
+  dte: number;
+  strike: number;
+  short_strike: number | null;
+  symbol: string;
+  short_symbol: string | null;
+  bid: number;
+  ask: number;
+  mid: number;
+  delta: number;
+  theta: number | null;
+  /** The long leg's implied volatility, in percent (as iv30 is). */
+  iv: number | null;
+  spread_pct: number | null;
+  max_value: number | null;
+  /** $ per share to the stop used — the latest signal's stop, else the entry ∓ the Pine buffer, else one ATR. */
+  stock_risk: number | null;
+  /** stock_risk × |delta| × 100, capped at the premium — the estimate's, when there is one. */
+  risk_per_contract: number | null;
+  /**
+   * The contract re-marked to the stock's live price (Cboe's quote is fifteen
+   * minutes old): the quoted mid moved by delta and gamma. Only 09:30 to the
+   * close, on a same-day chain; null otherwise.
+   */
+  est_mid?: number | null;
+  est_delta?: number | null;
+  /** The live stock price the estimate is for, and the price Cboe's quote was taken at. */
+  est_spot?: number | null;
+  quote_spot?: number | null;
+  note: string;
+}
+
+export interface OptExpectedMove {
+  key: "front" | "weekly";
+  expiry: string;
+  dte: number;
+  straddle: number;
+  pct: number;
+  lo: number;
+  hi: number;
+}
+
+export interface OptionsCtx {
+  ok: boolean;
+  error?: string | null;
+  asof: string | null;
+  age_min: number | null;
+  iv30: number | null;
+  rv20: number | null;
+  iv_rv: number | null;
+  premium: "cheap" | "fair" | "rich" | null;
+  iv_rank: number | null;
+  iv_pct: number | null;
+  iv_days: number;
+  skew: number | null;
+  em: OptExpectedMove[];
+  liquidity: {
+    spread_pct: number | null;
+    oi: number | null;
+    volume: number | null;
+    grade: "good" | "ok" | "poor" | null;
+  };
+  zero_dte: boolean;
+  earnings_in: string | null;
+  contracts: OptContract[];
+  flow?: OptionsFlow | null;
 }
 
 export interface ScannerPayload {
@@ -267,9 +399,13 @@ export interface ScanBar {
   v: number;
 }
 
+/** The chart's timeframes — 10m is the one the script's signals are read on. */
+export type ChartTf = "1m" | "3m" | "5m" | "10m" | "D";
+
 export interface ScanBars {
   ok: boolean;
   sym: string;
+  tf?: ChartTf;
   error?: string;
   bars: ScanBar[];
   ema8: Array<number | null>;

@@ -145,6 +145,7 @@ def fetch(
     stale_ok: bool = True,
     stale_max_sec: float | None = None,
     validate: Callable[[bytes], str | None] | None = None,
+    store: bool = True,
 ) -> FetchResult:
     """GET a URL through the disk cache, and never raise.
 
@@ -166,6 +167,10 @@ def fetch(
     to. A body the caller would reject is now never written, a cached body that
     fails is never served, and the failure falls through to the stale path like
     any other.
+
+    `store=False` skips the disk write for a body too big to be worth keeping
+    raw — the options chains (up to 6 MB each, every few minutes) keep a small
+    parsed summary of their own instead (sources/options.py).
     """
     k = key or url
     age = CACHE.age_sec(k)
@@ -194,7 +199,8 @@ def fetch(
             status = getattr(r, "status", 200)
         bad = validate(body) if validate is not None else None
         if bad is None:
-            CACHE.write(k, body)
+            if store:
+                CACHE.write(k, body)
             return FetchResult(True, body, "live", 0.0, None, status)
         msg, code = bad, status
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as e:

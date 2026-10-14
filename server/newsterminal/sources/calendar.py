@@ -288,28 +288,118 @@ def parse_day(doc: Any, day: date) -> list[dict[str, Any]]:
     return out
 
 
+# ----------------------------------------------------------------- the date
+#
+# NASDAQ'S `?date=D` CAN LIST ANOTHER DAY'S RELEASES (found 2026-10-13: every
+# request returned the day BEFORE the one asked for — `?date=2026-10-15` held
+# Wednesday's MBA applications, CPI and Beige Book, and the terminal printed
+# Wednesday's CPI as Thursday's). Nothing in the payload names its day — the
+# `asOf` is the fetch date — so the day is read off the weekly US releases that
+# always print on the same weekday, and each payload is filed under the day
+# its rows are for. Voted across every payload in a pass, so one holiday week
+# moving a release a day cannot flip it; if Nasdaq fixes its end, the vote
+# follows on the next pass with no change here.
+
+#: Weekly US releases and the weekday they print on (Mon = 0).
+ANCHORS: dict[str, int] = {
+    "mba mortgage applications": 2,
+    "initial jobless claims": 3,
+    "continuing jobless claims": 3,
+    "fed's balance sheet": 3,
+    "baker hughes oil rig count": 4,
+}
+#: What Nasdaq was doing when this was written, for a pass with no anchors in
+#: it (a holiday-only window) before any pass has voted.
+DEFAULT_SHIFT = -1
+_last_shift: int | None = None
+
+
+def date_shift(payloads: list[tuple[date, Any]]) -> int | None:
+    """Days between the date requested and the day the payload's rows are for
+    (−1: `?date=D` lists D−1), voted by ANCHORS; None when the vote is thin or
+    split. Pure."""
+    votes = {-1: 0, 0: 0, 1: 0}
+    for d, doc in payloads:
+        rows = ((doc or {}).get("data") or {}).get("rows") or []
+        for r in rows:
+            if clean_text(str(r.get("country") or "")) != "United States":
+                continue
+            wd = ANCHORS.get(clean_text(str(r.get("eventName") or "")).lower())
+            if wd is None:
+                continue
+            for sh in votes:
+                if (d + timedelta(days=sh)).weekday() == wd:
+                    votes[sh] += 1
+    best = max(votes, key=lambda k: votes[k])
+    rest = max(v for k, v in votes.items() if k != best)
+    return best if votes[best] >= 2 and votes[best] > rest else None
+
+
+def _pct_val(r: dict[str, Any]) -> float | None:
+    """The row's figure when it is a percentage — previous first, then the
+    consensus, then the actual — else None."""
+    for k in ("previous", "consensus", "actual"):
+        raw = str(r.get(f"{k}_raw") or "")
+        if raw.endswith("%") and r.get(k) is not None:
+            return abs(float(r[k]))
+    return None
+
+
+def label_variants(rows: list[dict[str, Any]]) -> None:
+    """Name the two halves of a paired release (in place).
+
+    Nasdaq lists CPI twice at 08:30 under one name — the month-on-month and
+    the year-on-year figure — and Existing Home Sales twice at 10:00 — the
+    level and its change; nothing in the row says which is which, so the board
+    showed "Core CPI" twice with different numbers. The figures do say it: of
+    two percentages the smaller is the monthly change (0.2% against 2.5%), and
+    beside a level the percentage is the change. A pair the figures cannot
+    separate is left as it is rather than guessed at.
+    """
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for r in rows:
+        groups.setdefault((r["country"], r["event"], r["utc"], r["date"]), []).append(r)
+    for g in groups.values():
+        if len(g) != 2:
+            continue
+        a, b = (_pct_val(x) for x in g)
+        if a is not None and b is not None and a != b:
+            small, big = (g[0], g[1]) if a < b else (g[1], g[0])
+            small["event"] += " m/m"
+            big["event"] += " y/y"
+        elif (a is None) != (b is None):
+            (g[0] if a is not None else g[1])["event"] += " m/m"
+
+
 def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any]], SourceStatus]:
     """Yesterday through the next few sessions, ranked."""
+    global _last_shift
     st = SourceStatus("Economic calendar")
     today = datetime.now(ET).date()
+    lo, hi = today - timedelta(days=days_back), today + timedelta(days=days_ahead)
     rows: list[dict[str, Any]] = []
     failed = 0
-    span = range(-days_back, days_ahead + 1)
+    # One day wider each side than the window: whichever way the dates run,
+    # every day in it is in some payload.
+    span = range(-days_back - 1, days_ahead + 2)
+    docs: list[tuple[date, Any]] = []
 
     for offset in span:
         d = today + timedelta(days=offset)
         r = fetch(
             NASDAQ.format(d=d.isoformat()),
             key=f"cal_{d.isoformat()}",
-            # Past days are settled and cached hard; today and ahead refresh,
-            # because that is where an `actual` appears the moment it prints.
-            ttl_sec=86400.0 if offset < 0 else 540.0,
+            # Settled days are cached hard; anything that might hold today's
+            # releases refreshes, because that is where an `actual` appears
+            # the moment it prints — and with the dates off by one, the
+            # payload asked for yesterday or tomorrow can be today's.
+            ttl_sec=86400.0 if offset < -1 else 540.0,
             ua=BROWSER_UA,
             timeout=20,
             headers={"Accept": "application/json"},
-            # A settled day may serve a week-old copy; today's and ahead may
-            # not lag by more than six hours — that is where actuals land.
-            stale_max_sec=7 * 86400.0 if offset < 0 else 6 * 3600.0,
+            # A settled day may serve a week-old copy; the rest may not lag by
+            # more than six hours — that is where actuals land.
+            stale_max_sec=7 * 86400.0 if offset < -1 else 6 * 3600.0,
             validate=json_body,
         )
         st.absorb(r)
@@ -318,7 +408,21 @@ def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any
             st.error = st.error or r.error
             continue
         try:
-            rows.extend(parse_day(r.json(), d))
+            docs.append((d, r.json()))
+        except ValueError as e:
+            failed += 1
+            st.error = st.error or f"parse: {e}"
+
+    voted = date_shift(docs)
+    if voted is not None:
+        _last_shift = voted
+    shift = _last_shift if _last_shift is not None else DEFAULT_SHIFT
+    for d, doc in docs:
+        day = d + timedelta(days=shift)
+        if not lo <= day <= hi:
+            continue
+        try:
+            rows.extend(parse_day(doc, day))
         except (ValueError, TypeError, AttributeError) as e:
             failed += 1
             st.error = st.error or f"parse: {e}"
@@ -339,6 +443,7 @@ def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any
         unique.append(row)
     rows = unique
 
+    label_variants(rows)
     rows.sort(key=lambda x: (x.get("ts") or 0))
     st.items = len(rows)
     if failed:

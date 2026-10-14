@@ -2,7 +2,9 @@
 
 import type { ScanRow, Side } from "@/types/scanner";
 import { Tick } from "@/components/ui/Tick";
+import { TickerLogo } from "@/components/ui/TickerLogo";
 import { ScanChart } from "@/components/panels/ScanChart";
+import { ScanOptions } from "@/components/panels/ScanOptions";
 import { ago, compact, dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -23,6 +25,12 @@ export const sideHue = (s: Side) => (s === "long" ? "text-call-fig" : "text-put-
 export const levelGlyph = (k: "forming") => (k === "forming" ? "···" : "");
 
 const LEVEL_FIELD = { PDH: "pdh", PDL: "pdl", PMH: "pmh", PML: "pml" } as const;
+
+/** The front expiry's straddle as a band for the chart — what the options market prices for the move. */
+function emBand(r: ScanRow): { lo: number; hi: number; label: string } | null {
+  const e = r.options?.ok ? r.options.em.find((x) => x.key === "front") : undefined;
+  return e ? { lo: e.lo, hi: e.hi, label: `EM ±${e.pct.toFixed(1)}%` } : null;
+}
 
 /** The setup column's words: the state, and the level or reference it is about. */
 export function setupLabel(r: ScanRow): string {
@@ -66,9 +74,10 @@ export function ScanDetail({ r, bench, now }: { r: ScanRow; bench: "SPY" | "QQQ"
     <div className="flex flex-col divide-y divide-ring">
       <Head r={r} bench={bench} side={side} />
       <section aria-label={`${r.sym} chart`} className="px-6 pt-3 pb-2">
-        <ScanChart sym={r.sym} state={r.lvl_state} />
+        <ScanChart sym={r.sym} state={r.lvl_state} em={emBand(r)} />
       </section>
       <Setup r={r} side={side} />
+      <ScanOptions r={r} />
       <Score r={r} />
       <Ladder r={r} />
       <Catalysts r={r} now={now} />
@@ -87,6 +96,7 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
         <span className={cn("text-[14px]", side ? sideHue(side) : "text-ink-3")}>
           {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
         </span>
+        <TickerLogo sym={r.sym} size={22} className="self-center" />
         <span className="text-[21px] leading-none font-semibold text-ink">{r.sym}</span>
         {r.name && <span className="min-w-0 truncate text-[12.5px] text-ink-3">{r.name}</span>}
         <a
@@ -134,10 +144,20 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
             1h {rs1h == null ? "—" : `${rs1h >= 0 ? "+" : ""}${rs1h.toFixed(2)}`}
           </span>
         </Fig>
-        <Fig label="RVol" title={r.volume != null ? `${compact(r.volume)} shares today incl. pre/post` : undefined}>
-          <span className="fig text-[14px] text-ink">{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</span>
-          <span className="fig ml-1.5 text-[11px] text-ink-3">{compact(r.volume)}</span>
-        </Fig>
+        {r.volume == null && r.premkt?.volume != null ? (
+          // Before the open: the pre-market's volume, against a normal day.
+          <Fig label="Pre-mkt vol" title="Nasdaq's pre-market tally (about fifteen minutes delayed), as a share of the 20-day average day">
+            <span className="fig text-[14px] text-ink">{compact(r.premkt.volume)}</span>
+            {r.premkt.pct_adv != null && (
+              <span className="fig ml-1.5 text-[11px] text-ink-3">{r.premkt.pct_adv.toFixed(1)}% ADV</span>
+            )}
+          </Fig>
+        ) : (
+          <Fig label="RVol" title={r.volume != null ? `${compact(r.volume)} shares today incl. pre/post` : undefined}>
+            <span className="fig text-[14px] text-ink">{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</span>
+            <span className="fig ml-1.5 text-[11px] text-ink-3">{compact(r.volume)}</span>
+          </Fig>
+        )}
         <Fig
           label="Range used"
           title="Today's regular-session high-to-low as a share of the daily ATR. Past about 1.2 the day's fuel is mostly spent."
@@ -407,6 +427,22 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
             <span className="text-ink-3">none in the window the calendar covers</span>
           )}
         </p>
+        {r.peers && r.peers.length > 0 && (
+          <p className="text-[12px] text-ink-2">
+            <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Sector peers</span>
+            {r.peers.map((p, i) => (
+              <span key={`${p.sym}-${p.date}`}>
+                {i > 0 && " · "}
+                <span className="font-semibold text-ink">{p.sym}</span>{" "}
+                <span className="text-ink-3">
+                  {earnDay(p.date, p.days).split(" · ")[0]}
+                  {p.when === "pre" ? " BMO" : p.when === "after" ? " AMC" : ""}
+                </span>
+              </span>
+            ))}
+            <span className="text-ink-3"> — a peer&apos;s report can move the whole sector</span>
+          </p>
+        )}
         {r.flags.length > 0 && (
           <ul className="flex flex-col gap-1">
             {r.flags.map((f) => (

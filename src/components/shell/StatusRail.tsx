@@ -26,12 +26,18 @@ import { cn } from "@/lib/cn";
  * down or serving STALE bytes — a cached copy shown because the upstream
  * failed — opens up with its age and its reason, red for down, amber for
  * stale. A dead feed can no longer look like a quiet one.
+ *
+ * ONE LINE AT EVERY WIDTH. Eighteen names need about 1,600px; below that the
+ * healthy ones fold into a single "17 live" whose hover lists them, and only
+ * what is down or stale keeps its own entry — so the rail never wraps into a
+ * second line, and a problem is never one of the things folded away.
  */
 
 /** Reading order; anything the collector adds later lands after these. */
 const ORDER = [
   "quotes", "wire", "gex", "ranges", "profiles", "sectors", "constituents", "calendar",
-  "earnings", "fed", "auctions", "rates", "context", "scanner", "scan_news", "scan_sec",
+  "earnings", "fed", "auctions", "rates", "context", "scanner", "scan_live", "scan_news", "scan_sec",
+  "options",
 ];
 
 export function StatusRail({
@@ -50,8 +56,21 @@ export function StatusRail({
     ...Object.keys(status).filter((n) => !ORDER.includes(n)).sort(),
   ];
 
+  const healthy = names.filter((n) => status[n].ok && status[n].source !== "stale");
+
   return (
     <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring bg-surface/40 px-3 py-1.5 qt:gap-x-4 qt:bg-transparent qt:px-6 qt:py-2">
+      {healthy.length > 0 && (
+        <div
+          className="flex items-center gap-1.5 min-[1600px]:hidden"
+          title={`Live: ${healthy.map((n) => n.replace(/_/g, " ")).join(", ")}`}
+        >
+          <span className="h-[6px] w-[6px] rounded-full bg-call" aria-hidden />
+          <span className="fig text-[9.5px] tracking-wide text-ink-3 uppercase qt:text-[10.5px]">
+            {healthy.length} of {names.length} live
+          </span>
+        </div>
+      )}
       {names.map((n) => {
         const s = status[n];
         const a = ages[n];
@@ -61,7 +80,7 @@ export function StatusRail({
         return (
           <div
             key={n}
-            className="flex items-center gap-1.5"
+            className={cn("flex items-center gap-1.5", !open && "max-[1599px]:hidden")}
             title={[
               `${label}: ${!s.ok ? "down" : stale ? "serving a stale copy" : "ok"}`,
               s.ok ? `${s.items} items · ${s.source}` : null,

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { EarningsRow } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { TickerLogo } from "@/components/ui/TickerLogo";
 import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -23,13 +24,22 @@ import { cn } from "@/lib/cn";
  * $50bn that is not a bellwether, so this panel renders five or ten names a day
  * instead of three hundred.
  */
+/*
+ * ON THE STOCKS DESK the panel answers a second question — does anything I
+ * trade report soon — so the scanner's watchlist rides along whatever its size
+ * and every name on it is marked. On the futures desk it stays about what
+ * moves an index.
+ */
 export function Earnings({
   rows,
   today,
   ageMin,
   error,
+  watch,
 }: {
   rows: EarningsRow[];
+  /** The scanner's watchlist — marked, and kept regardless of size. Stocks desk only. */
+  watch?: ReadonlySet<string>;
   /**
    * The ET calendar date, from the collector.
    *
@@ -53,17 +63,20 @@ export function Earnings({
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [rows]);
 
+  const mine = watch ? rows.filter((r) => watch.has(r.symbol)).length : 0;
   return (
     <Module
       title="Earnings"
-      sub={`${rows.length} large caps`}
+      sub={watch ? `${rows.length} reports · ${mine} on your watchlist` : `${rows.length} large caps`}
       ageMin={ageMin}
       error={error}
       bodyClassName="px-0 py-0"
     >
       {rows.length === 0 ? (
         <p className="px-3 py-5 text-center text-[11px] text-ink-3">
-          Nothing big enough to move an index in the next few sessions.
+          {watch
+            ? "Nothing on your watchlist or among the large caps reports in the next few sessions."
+            : "Nothing big enough to move an index in the next few sessions."}
         </p>
       ) : (
         byDay.map(([date, list], gi) => (
@@ -109,11 +122,17 @@ export function Earnings({
                   </span>
                   <span
                     className={cn(
-                      "fig w-[48px] shrink-0 text-[11px]",
-                      r.bellwether ? "text-ink" : "text-ink-2",
+                      "fig flex w-[70px] shrink-0 items-center gap-1.5 self-center text-[11px]",
+                      r.bellwether || watch?.has(r.symbol) ? "text-ink" : "text-ink-2",
+                      watch?.has(r.symbol) && "font-semibold",
                     )}
+                    title={watch?.has(r.symbol) ? "On your scanner watchlist" : undefined}
                   >
+                    <TickerLogo sym={r.symbol} size={13} />
                     {r.symbol}
+                    {watch?.has(r.symbol) && (
+                      <span aria-label="on your watchlist" className="h-[5px] w-[5px] shrink-0 rounded-full bg-flip-fig qt:rounded-[1px]" />
+                    )}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-3">{r.name}</span>
                   {/*

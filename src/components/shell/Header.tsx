@@ -1,11 +1,12 @@
 "use client";
 
 import type { Clock, Quote } from "@/types/terminal";
-import { dir, num, pct } from "@/lib/format";
+import { dir, inMin, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Tick } from "@/components/ui/Tick";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
-import { TABS, type Tab } from "@/lib/tabs";
+import { DESKS, tabsFor, type Desk, type Tab } from "@/lib/tabs";
+import { segItem } from "@/lib/seg";
 import { useNow } from "@/lib/useNow";
 import { localClock, readerClock } from "@/lib/clock";
 
@@ -18,17 +19,27 @@ import { localClock, readerClock } from "@/lib/clock";
  * an instrument: you cannot glance at a moving target, and the whole value of
  * a header row is that NQ is always in the same six centimetres of glass.
  */
-/** Which strip figures stay in the Quiet band at which window width, by position. */
-const STRIP_FIT = [
-  "",
-  "",
-  "",
-  "max-[1379px]:hidden",
-  "max-[1599px]:hidden",
-  "max-[1759px]:hidden",
-  "max-[1759px]:hidden",
-  "max-[1899px]:hidden",
-];
+/*
+ * EACH DESK READS ITS OWN STRIP. Futures: the three books and the macro that
+ * moves them. Stocks & options: the index ETFs the options trade on, the vol
+ * pair that prices them (VIX for the level, VVIX for how fast it can move),
+ * and the 10-year that leans on long-duration names — then how long until New
+ * York opens or closes, the one clock that desk trades on.
+ */
+const STRIP: Record<Desk, string[]> = {
+  futures: ["NQ", "ES", "GC", "VIX", "US10Y", "DXY", "WTI", "BTC"],
+  stocks: ["SPY", "QQQ", "IWM", "VIX", "VVIX", "US10Y"],
+};
+
+/** "NYSE opens in 1h 20m" / "closes in 2h 05m" / a holiday — the stocks desk's clock. */
+function nyClock(clock: Clock | null): { label: string; value: string; title: string } | null {
+  const ny = clock?.sessions.find((x) => x.key === "newyork");
+  if (!ny) return null;
+  if (ny.holiday) return { label: "NYSE", value: "Holiday", title: `${ny.holiday} — US markets are closed` };
+  return ny.open
+    ? { label: "NY closes in", value: inMin(ny.next_min), title: "Time to the 16:00 ET close" }
+    : { label: "NY opens in", value: inMin(ny.next_min), title: "Time to the next 09:30 ET open" };
+}
 
 export function Header({
   clock: rawClock,
@@ -37,6 +48,8 @@ export function Header({
   onRefresh,
   tab,
   onTab,
+  desk,
+  onDesk,
 }: {
   clock: Clock | null;
   quotes: Quote[];
@@ -44,6 +57,8 @@ export function Header({
   onRefresh: () => void;
   tab: Tab;
   onTab: (t: Tab) => void;
+  desk: Desk;
+  onDesk: (d: Desk) => void;
 }) {
   // The header owns its own second hand — the rest of the shell does not tick.
   const now = useNow(1000);
@@ -51,20 +66,31 @@ export function Header({
   // The reader's own time beside New York's: the owner trades the NY session
   // from Australia, where 09:30 ET is past midnight. Null on New York time.
   const local = readerClock(now);
-  // The strip's instruments, in trading order rather than payload order.
-  const strip = ["NQ", "ES", "GC", "VIX", "US10Y", "DXY", "WTI", "BTC"]
+  // The strip's instruments, in trading order rather than payload order. A key
+  // the feed does not carry yet is simply not drawn.
+  const strip = STRIP[desk]
     .map((k) => quotes.find((q) => q.key === k))
     .filter((q): q is Quote => Boolean(q));
+  const ny = desk === "stocks" ? nyClock(clock) : null;
+  const tabs = tabsFor(desk);
 
   return (
     <header className="flex flex-col gap-0 border-b border-ring">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 qt:h-[58px] qt:flex-nowrap qt:gap-x-6 qt:px-6 qt:py-0">
-        <div className="flex shrink-0 items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 qt:h-[64px] qt:flex-nowrap qt:gap-x-6 qt:px-6 qt:py-0">
+        {/*
+         * THE LOCKUP, A STEP LARGER (owner, 2026-10-13: "increase the hermesx
+         * and logo slightly more") — the same mono word and the same helm, at
+         * a size that reads as the head of the band rather than a caption.
+         */}
+        <div className="flex shrink-0 items-center gap-2 qt:gap-2.5">
           <Mark />
-          <span className="wordmark fig text-[16px] font-semibold tracking-[0.14em]">
+          <span className="wordmark fig text-[18px] font-semibold tracking-[0.14em] qt:text-[19px]">
             HERMESX
           </span>
         </div>
+        {/* A hairline between the lockup and the controls, as the status group
+            already has on the right — Quiet separates with rules, not space. */}
+        <span aria-hidden className="hidden h-7 w-px shrink-0 bg-ring-2 qt:block" />
 
         {/*
          * THE TABS SIT BESIDE THE WORDMARK, NOT ABOVE THE PANELS. The
@@ -73,12 +99,34 @@ export function Header({
          * beside the clock and the state light rather than in a bar that would
          * push the board down by its own height.
          */}
-        <nav className="flex shrink-0 items-center gap-0.5 qt:gap-1">
-          {TABS.map((t) => (
+        {/*
+         * THE DESK SWITCH LEADS THE TABS — the two desks are two products'
+         * worth of tabs, and which one you are on is the first thing the
+         * chassis should say. It goes to that desk's last tab. `D` flips it.
+         */}
+        <span className="seg shrink-0" role="tablist" aria-label="Desk" title="Switch desk — or press D">
+          {DESKS.map((d) => (
+            <button
+              key={d.key}
+              type="button"
+              role="tab"
+              aria-selected={desk === d.key}
+              onClick={() => onDesk(d.key)}
+              {...segItem(desk === d.key, { className: "text-[10px] tracking-[0.08em] uppercase qt:text-[12.5px]" })}
+            >
+              <span className="max-[1599px]:hidden">{d.label}</span>
+              <span className="min-[1600px]:hidden">{d.short}</span>
+            </button>
+          ))}
+        </span>
+
+        <nav className="flex shrink-0 items-center gap-0.5 qt:gap-1" aria-label="Tabs">
+          {tabs.map((t, i) => (
             <button
               key={t.key}
               type="button"
               onClick={() => onTab(t.key)}
+              title={`${t.label} — press ${i + 1}`}
               aria-current={tab === t.key ? "page" : undefined}
               className={cn(
                 "fig hit relative rounded px-2 py-1 text-[10px] tracking-[0.1em] uppercase",
@@ -104,14 +152,27 @@ export function Header({
          * QUIET CARRIES THE STRIP IN THE BAND — each instrument a caps label
          * over its figure, the way GEXYGEN's Quiet header sets its walls and
          * the flip. One band instead of two rows, so the board starts higher.
-         * The band has room for all eight only at full HD; below that the
-         * strip drops from the right (BTC first, the books last) rather than
-         * wrap or slide under the tabs — measured at 1280, 1440, 1600, 1920.
+         *
+         * IT FITS ITSELF. The figures wrap inside a box one row high that hides
+         * its overflow, so whatever does not fit falls to a second row nobody
+         * sees — the strip drops from the right at any width, on either desk,
+         * with no table of breakpoints to fall out of date when a figure is
+         * added or the desk switch widens the tabs. A figure is shown whole or
+         * not at all; it is never cut through.
+         *
+         * 16px between figures, not 24: at the larger type scale (2026-10-14)
+         * the wider gap cost VVIX at 1920, and a figure beats air.
          */}
-        {strip.length > 0 && (
-          <div className="hidden min-w-0 flex-1 items-center gap-6 overflow-hidden [justify-content:safe_flex-end] qt:flex">
-            {strip.map((q, i) => (
-              <div key={q.key} className={cn("flex shrink-0 flex-col gap-1", STRIP_FIT[i])}>
+        {(strip.length > 0 || ny) && (
+          <div className="hidden h-[36px] min-w-0 flex-1 flex-wrap content-start items-center justify-end gap-x-4 gap-y-4 overflow-hidden qt:flex">
+            {ny && (
+              <div className="flex h-[36px] shrink-0 flex-col justify-center gap-1 border-r border-ring pr-4" title={ny.title}>
+                <span className="qt-cap text-[10.5px] text-ink-3">{ny.label}</span>
+                <span className="fig text-[14.5px] leading-none text-ink">{ny.value}</span>
+              </div>
+            )}
+            {strip.map((q) => (
+              <div key={q.key} className="flex h-[36px] shrink-0 flex-col justify-center gap-1">
                 <span className="qt-cap text-[10.5px] text-ink-3">{q.key}</span>
                 <div className="flex items-baseline gap-1.5">
                   <Tick value={num(q.last)} className="fig text-[14.5px] leading-none text-ink" />
@@ -161,10 +222,11 @@ export function Header({
           <span className="fig text-[9.5px] text-ink-3 uppercase qt:text-[10.5px]">
             {live ? "Live" : "Offline"}
           </span>
+          {/* Quiet: the same key as Generate — one button family across the chrome. */}
           <button
             type="button"
             onClick={onRefresh}
-            className="fig hit rounded border border-ring px-2 py-px text-[9.5px] text-ink-3 uppercase hover:text-ink-2 qt:ml-1 qt:rounded-[4px] qt:border-ring-2 qt:px-2.5 qt:py-0.5 qt:font-sans qt:text-[12px] qt:tracking-normal qt:normal-case"
+            className="fig hit rounded border border-ring px-2 py-px text-[9.5px] text-ink-3 uppercase hover:text-ink-2 qt:ml-1 qt:inline-flex qt:h-[28px] qt:items-center qt:rounded-[4px] qt:border-ring-2 qt:px-3 qt:py-0 qt:font-sans qt:text-[12.5px] qt:font-semibold qt:tracking-normal qt:normal-case qt:hover:border-ink-4 qt:hover:bg-surface-2"
           >
             Refresh
           </button>
@@ -173,6 +235,12 @@ export function Header({
 
       {strip.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ring/60 bg-surface/50 px-3 py-1.5 qt:hidden">
+          {ny && (
+            <div className="flex items-baseline gap-1.5" title={ny.title}>
+              <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{ny.label}</span>
+              <span className="fig text-[11.5px] text-ink">{ny.value}</span>
+            </div>
+          )}
           {strip.map((q) => (
             <div key={q.key} className="flex items-baseline gap-1.5">
               <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{q.key}</span>
@@ -190,11 +258,11 @@ export function Header({
 function Mark() {
   return (
     <svg
-      width="26"
-      height="26"
+      // A step larger with the word (owner, 2026-10-13); sized by class so
+      // Quiet's taller band can take it up a further notch.
+      className="h-[30px] w-[30px] shrink-0 qt:h-[34px] qt:w-[34px]"
       viewBox="0 0 512 512"
       aria-hidden
-      className="shrink-0"
       // The mark glows past the viewBox on the breath; without this the SVG
       // clips its own drop-shadow at the edge.
       style={{ overflow: "visible" }}

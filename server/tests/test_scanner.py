@@ -9,12 +9,16 @@ that is right at 11:00 and wrong at 09:30 is wrong on every trading day.
 
 from __future__ import annotations
 
+import json
+import time
+import urllib.parse
 from datetime import date, datetime
 from typing import Any
 
 import pytest
 
 from newsterminal import scan, scanscore
+from newsterminal.http import FetchResult
 from newsterminal.scan import ET, Bar, Clock, Lvl
 from newsterminal.sources import earnings as earn_src
 from newsterminal.sources import scanner as scan_src
@@ -619,3 +623,166 @@ def test_rvol_note_before_the_bell() -> None:
                              None, session="pre")
     vol = next(p for p in sc["parts"] if p["key"] == "volume")
     assert "starts at the open" in vol["note"]
+
+
+# --- the live layer and the close read ---------------------------------------------------
+
+
+def ets(h: int, mi: int, s: int, d: int = 13, mo: int = 10) -> datetime:
+    return datetime(2026, mo, d, h, mi, s, tzinfo=ET)
+
+
+def test_a_live_trade_moves_the_newest_bar_or_opens_the_next() -> None:
+    bars = [bar(et(2026, 10, 13, 10, 0), 100, 101, 99.5, 100.5),
+            bar(et(2026, 10, 13, 10, 5), 100.5, 100.8, 100.2, 100.6)]
+    inside = scan.with_live(bars, 101.2, int(ets(10, 7, 30).timestamp()))
+    assert inside[0] == bars[0]
+    assert inside[-1] == Bar(bars[-1].t, 100.5, 101.2, 100.2, 101.2, bars[-1].volume)
+    nxt = scan.with_live(bars, 100.0, int(ets(10, 11, 2).timestamp()))
+    assert len(nxt) == 3
+    t10 = int(et(2026, 10, 13, 10, 10).timestamp())
+    assert nxt[-1] == Bar(t10, 100.0, 100.0, 100.0, 100.0, 0.0)
+    # A trade older than the newest bar is already inside it.
+    assert scan.with_live(bars, 50.0, int(ets(10, 2, 0).timestamp())) == bars
+
+
+@pytest.mark.parametrize(("now", "mark"), [
+    (ets(10, 10, 5), ets(10, 0, 10)),  # the 10:10 close's prints are not all in yet
+    (ets(10, 10, 10), ets(10, 10, 10)),
+    (ets(10, 14, 0), ets(10, 10, 10)),
+    (ets(9, 30, 15), ets(9, 30, 10)),  # the pre-market's last bar: PMH / PML final
+    (ets(9, 30, 5), None),  # 09:20 is a pre-market close
+    (ets(16, 0, 30), ets(16, 0, 10)),  # the bell
+    (ets(16, 10, 30), None),  # post-market
+    (ets(10, 15, 0, d=17), None),  # Saturday
+    (ets(13, 0, 30, d=27, mo=11), ets(13, 0, 10, d=27, mo=11)),  # a half day's bell
+    (ets(13, 10, 30, d=27, mo=11), None),
+])
+def test_close_mark(now: datetime, mark: datetime | None) -> None:
+    got = scan_src.close_mark(now)
+    assert got == (mark.timestamp() if mark else None)
+
+
+@pytest.mark.parametrize(("now", "secs"), [
+    (ets(10, 10, 5), 5.0),
+    (ets(10, 10, 10), 600.0),
+    (ets(10, 14, 0), 370.0),
+    (ets(9, 25, 0), 310.0),  # the open's mark
+    (ets(16, 0, 30), None),  # nothing until tomorrow
+])
+def test_next_mark_in(now: datetime, secs: float | None) -> None:
+    assert scan_src.next_mark_in(now) == secs
+
+
+def _spark(rows: list[Any]) -> dict[str, Any]:
+    return {"spark": {"result": rows}}
+
+
+def _resp(sym: str, px: float, at: int) -> dict[str, Any]:
+    return {"symbol": sym, "response": [{"meta": {"regularMarketPrice": px,
+                                                   "regularMarketTime": at}}]}
+
+
+def test_parse_live_keeps_only_this_sessions_trades() -> None:
+    at = int(ets(10, 3, 0).timestamp())
+    doc = _spark([
+        _resp("AAPL", 250.5, at),
+        _resp("BRK-B", 480.0, at),  # Yahoo's spelling comes back as the watchlist's
+        _resp("MSFT", 410.0, int(ets(16, 0, 1).timestamp())),  # the official close
+        _resp("NVDA", 180.0, int(ets(15, 59, 0, d=12).timestamp())),  # yesterday
+        {"symbol": "AMD", "response": [{"meta": {}}]},
+    ])
+    names = {"AAPL": "AAPL", "BRK-B": "BRK.B", "MSFT": "MSFT", "NVDA": "NVDA", "AMD": "AMD"}
+    got = scan_src.parse_live(doc, names, date(2026, 10, 13))
+    assert got == {"AAPL": scan_src.LiveQuote(250.5, at), "BRK.B": scan_src.LiveQuote(480.0, at)}
+    assert scan_src.parse_live({"spark": {"result": None}}, names, date(2026, 10, 13)) == {}
+
+
+def _store(tmp_path: Any, names: list[str]) -> scan_src.ScanStore:
+    s = scan_src.ScanStore(str(tmp_path / "watch.json"))
+    s._watch = names
+    s._warm = True
+    return s
+
+
+def test_live_layer_reads_in_session_and_steps_back_on_failure(
+        monkeypatch: Any, tmp_path: Any) -> None:
+    now = ets(10, 3, 20)
+    at = int(now.timestamp()) - 2
+
+    def ok(url: str, **_kw: Any) -> FetchResult:
+        syms = urllib.parse.unquote(url.split("symbols=")[1].split("&")[0]).split(",")
+        body = json.dumps(_spark([_resp(s, 100.0, at) for s in syms])).encode()
+        return FetchResult(True, body, "live", 0.0, None, 200)
+
+    def refused(url: str, **_kw: Any) -> FetchResult:
+        return FetchResult(False, None, "unavailable", None, "HTTP 429", 429)
+
+    s = _store(tmp_path, ["AAPL"])
+    monkeypatch.setattr(scan_src, "fetch", ok)
+    st, delay = s.tick_live(now)
+    assert st is not None and st.ok and delay == scan_src.LIVE_SEC
+    assert set(s.live) == {"AAPL", "SPY", "QQQ", "IWM"}
+    # Outside the session nothing is read, and nothing is said.
+    assert s.tick_live(ets(16, 1, 0)) == (None, scan_src.LIVE_IDLE_SEC)
+    # Failures step the clock back to 15 s, then 30 s; a good read resets it.
+    monkeypatch.setattr(scan_src, "fetch", refused)
+    assert [s.tick_live(now)[1] for _ in range(3)] == [15.0, 30.0, 30.0]
+    assert s.pause_until == 0.0  # the live layer's 429 is its own, not the bars'
+    monkeypatch.setattr(scan_src, "fetch", ok)
+    assert s.tick_live(now)[1] == scan_src.LIVE_SEC
+    # A 429 on the bars stops it outright.
+    s.pause_until = time.time() + 60.0
+    st, _ = s.tick_live(now)
+    assert st is not None and not st.ok and "429" in (st.error or "")
+
+
+def test_the_live_trade_only_lands_on_bars_read_before_it(tmp_path: Any) -> None:
+    s = _store(tmp_path, ["AAPL"])
+    s.bars["AAPL"] = [bar(et(2026, 10, 13, 10, 0), 100, 101, 99, 100.5)]
+    s.fetched["AAPL"] = ets(10, 4, 0).timestamp()
+    s.live["AAPL"] = scan_src.LiveQuote(102.0, int(ets(10, 5, 10).timestamp()))
+    rth = scan.clock_at(ets(10, 6, 0))
+    got = s.live_bars("AAPL", rth)
+    assert got is not None and len(got) == 2 and got[-1].close == 102.0
+    assert s.compute(ets(10, 6, 0))["rows"]["AAPL"]["last"] == 102.0
+    # Bars read after the trade already hold it.
+    s.fetched["AAPL"] = ets(10, 5, 30).timestamp()
+    assert s.live_bars("AAPL", rth) is s.bars["AAPL"]
+    # And outside the regular session the bars stand alone.
+    s.fetched["AAPL"] = ets(10, 4, 0).timestamp()
+    assert s.live_bars("AAPL", scan.clock_at(ets(16, 30, 0))) is s.bars["AAPL"]
+
+
+def _chart_doc() -> bytes:
+    t = int(et(2026, 10, 13, 10, 0).timestamp())
+    q = {"open": [100.0], "high": [101.0], "low": [99.0], "close": [100.5], "volume": [1000]}
+    return json.dumps({"chart": {"result": [{"timestamp": [t], "meta": {},
+                                             "indicators": {"quote": [q]}}]}}).encode()
+
+
+def test_the_close_read_fetches_everyone_fresh_and_comes_back_soon(
+        monkeypatch: Any, tmp_path: Any) -> None:
+    now = ets(10, 10, 12)
+    monkeypatch.setattr(scan_src.time, "time", lambda: now.timestamp())
+    ttls: dict[str, float] = {}
+
+    def fake(url: str, **kw: Any) -> FetchResult:
+        if "interval=5m" in url:
+            ttls[url.split("/chart/")[1].split("?")[0]] = kw["ttl_sec"]
+        return FetchResult(True, _chart_doc(), "live", 0.0, None, 200)
+
+    monkeypatch.setattr(scan_src, "fetch", fake)
+    s = _store(tmp_path, ["A1", "A2", "A3", "A4", "A5"])  # + SPY, QQQ, IWM: eight names
+    for sym in s.symbols():
+        s.fetched[sym] = now.timestamp() - 20.0  # read 10:09:52 — fresh by the rotation
+        s.daily_at[sym] = now.timestamp()
+    s.tick_bars(now)
+    assert len(ttls) == scan_src.MAX_PER_TICK and set(ttls.values()) == {0.0}
+    assert s.burst_left == 3 and s.wake_in(now) == scan_src.BURST_TICK_SEC
+    s.tick_bars(now)
+    assert len(ttls) == 8 and s.burst_left == 0
+    # Done: back to the usual tick, the next close being ten minutes off.
+    assert s.wake_in(now) == scan_src.TICK_SEC
+    # Five seconds before a mark, the job wakes for it rather than a tick late.
+    assert s.wake_in(ets(10, 20, 5)) == 5.0

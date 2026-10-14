@@ -2,6 +2,8 @@
 
 import type { SectorRow } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { SectorGlyph } from "@/components/ui/SectorGlyph";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -93,7 +95,11 @@ export function Rotation({
       }
     >
       {ranked.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-3">No sector data yet.</p>
+        ageMin == null && !error ? (
+          <Skeleton rows={8} label="Loading sector rotation" />
+        ) : (
+          <p className="px-3 py-6 text-center text-[11px] text-ink-3">The sector feed returned nothing.</p>
+        )
       ) : (
         <>
           <ul className="py-1">
@@ -102,6 +108,7 @@ export function Rotation({
               const abs = r[`${span}_pct` as const];
               return (
                 <li key={r.key} className="hit flex items-center gap-2 px-3 py-[3px]">
+                  <SectorGlyph fund={r.key} className="block shrink-0 text-ink-3" />
                   <span className="fig w-[38px] shrink-0 text-[10.5px] text-ink-2">{r.key}</span>
                   <span className="hidden w-[104px] shrink-0 truncate text-[10px] text-ink-3 sm:block">
                     {r.label}

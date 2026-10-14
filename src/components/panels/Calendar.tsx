@@ -78,19 +78,49 @@ const REGIONS: { key: Region | "all"; label: string; title: string }[] = [
   { key: "other", label: "Other", title: "Everywhere else" },
 ];
 
+/**
+ * WHOSE CALENDAR. The futures desk reads it for what reaches NQ, ES and GC —
+ * the collector's `core` judgement. The stocks desk trades New York only, so
+ * its MINE is the US calendar from medium impact up (score ≥ 2): every US
+ * print moves single names and index ETFs, and nothing printing in Tokyo does
+ * until it has reached SPY. Each desk remembers its own filters.
+ */
+export type CalendarScope = "futures" | "stocks";
+
+const MINE: Record<CalendarScope, { sub: string; on: string; off: string; keep: (r: CalendarRow) => boolean }> = {
+  futures: {
+    sub: "reaches NQ · ES · GC",
+    on: "Showing only releases that reach the books you trade. Click for the full calendar.",
+    off: "Showing the full calendar. Click to narrow to what reaches NQ, ES and GC.",
+    keep: (r) => r.core,
+  },
+  stocks: {
+    sub: "US releases that move stocks",
+    on: "Showing US releases of medium impact and up — what moves the names you trade. Click for the full calendar.",
+    off: "Showing the full calendar. Click to narrow to the US releases that move stocks.",
+    keep: (r) => r.region === "us" && r.score >= 2,
+  },
+};
+
 export function Calendar({
   rows,
   ageMin,
   error,
+  scope = "futures",
 }: {
   rows: CalendarRow[];
   ageMin?: number | null;
   error?: string | null;
+  scope?: CalendarScope;
 }) {
+  // Futures keeps its original keys, so nothing a reader set before the desks
+  // existed is forgotten; the stocks desk gets its own.
+  const key = scope === "stocks" ? "cal.stocks." : "cal.";
+  const mine = MINE[scope];
   // The tiers that are lit; EMPTY IS THE WHOLE CALENDAR. A stored single string
   // from before this was a list is rejected by `manyOf` and lands on ALL once.
   const [tiers, setTiers] = usePersisted<Impact[]>(
-    "cal.tier",
+    `${key}tier`,
     [],
     manyOf("high", "medium", "low"),
   );
@@ -108,16 +138,16 @@ export function Calendar({
    * not country, so a Chinese GDP miss survives and a US housing-starts print
    * does not.
    */
-  const [coreOnly, setCoreOnly] = usePersisted<boolean>("cal.mine", true, isBool);
+  const [coreOnly, setCoreOnly] = usePersisted<boolean>(`${key}mine`, true, isBool);
   const [region, setRegion] = usePersisted<Region | "all">(
-    "cal.region",
+    `${key}region`,
     "all",
     oneOf("all", "us", "uk", "eu", "apac", "global", "other"),
   );
 
   const { upcoming, recent, counts, regionCounts } = useMemo(() => {
     const now = Date.now() / 1000;
-    const pool = coreOnly ? rows.filter((r) => r.core) : rows;
+    const pool = coreOnly ? rows.filter(mine.keep) : rows;
 
     // Each chip row counts against the OTHER filters, so a count is what you
     // would actually get by clicking it rather than a total that goes stale the
@@ -143,12 +173,12 @@ export function Calendar({
         .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
         .slice(0, 8),
     };
-  }, [rows, tiers, coreOnly, region]);
+  }, [rows, tiers, coreOnly, region, mine]);
 
   return (
     <Module
       title="Calendar"
-      sub={coreOnly ? "reaches NQ · ES · GC" : "everything"}
+      sub={coreOnly ? mine.sub : "everything"}
       ageMin={ageMin}
       error={error}
       bodyClassName="px-0 py-0"
@@ -179,11 +209,7 @@ export function Calendar({
           <button
             type="button"
             onClick={() => setCoreOnly((v) => !v)}
-            title={
-              coreOnly
-                ? "Showing only releases that reach the books you trade. Click for the full calendar."
-                : "Showing the full calendar. Click to narrow to what reaches NQ, ES and GC."
-            }
+            title={coreOnly ? mine.on : mine.off}
             {...segItem(coreOnly, { hue: "var(--call)", pct: 20, className: cn(coreOnly && "text-call qt:text-ink") })}
           >
             Mine
@@ -304,7 +330,9 @@ function etDay(r: CalendarRow): string {
 
 function Head({ children }: { children: React.ReactNode }) {
   return (
-    <div className="qt-band flex items-baseline justify-between border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
+    // Sticky inside the panel's own scroll, so the column names stay in view
+    // down a long day.
+    <div className="qt-band qt-sticky sticky top-0 z-[2] flex items-baseline justify-between border-y border-ring/40 bg-surface-2 px-3 py-1 first:border-t-0">
       <span className="eyebrow text-[9px]">{children}</span>
       {/* Names the three figure columns once, instead of three tooltips a
           reader has to discover. Order matches the rows: what printed, what

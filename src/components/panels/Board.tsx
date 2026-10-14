@@ -2,6 +2,7 @@
 
 import type { Quote } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { autoDp, dir, num, pct } from "@/lib/format";
@@ -52,7 +53,11 @@ export function Board({
   return (
     <Module title={title} ageMin={ageMin} error={error} bodyClassName="px-0 py-0">
       {quotes.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[11px] text-ink-3">No quotes yet.</p>
+        ageMin == null && !error ? (
+          <Skeleton rows={6} label={`Loading ${title.toLowerCase()}`} />
+        ) : (
+          <p className="px-3 py-6 text-center text-[11px] text-ink-3">The quote feed returned nothing for these instruments.</p>
+        )
       ) : (
         shown.map((g) => {
           const rows = quotes.filter((q) => q.group === g.key);

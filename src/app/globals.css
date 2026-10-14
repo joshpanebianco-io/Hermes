@@ -28,6 +28,12 @@
  */
 
 :root {
+  /* Every pixel font size in the app is multiplied by this — the stylesheet's
+     and the panes' `text-[…]` alike (scripts/postcss-type-scale.cjs). The
+     owner asked for "very very slightly" larger (2026-10-14, 1.04), then
+     "slightly again" the same day: 1.08, so 11px reads 11.9. */
+  --type-scale: 1.08;
+
   /* Surfaces. --void is outside the chassis, --bg inside it: two steps of the
      same near-black, which is what makes the frame read as an instrument on a
      desk rather than a document with panels on it. */
@@ -1040,7 +1046,8 @@
     .wire-in,
     .live-dot,
     .hermes-mark,
-    .report-loader .hermes-mark {
+    .report-loader .hermes-mark,
+    .helm-loader .hermes-mark {
       animation: none;
     }
     /* The wash is a hue drift with no geometry, but the glitch on the same
@@ -1320,7 +1327,8 @@
       clip-path: none;
     }
   }
-  .report-loader .hermes-mark {
+  .report-loader .hermes-mark,
+  .helm-loader .hermes-mark {
     animation:
       hermes-mark 5.6s ease-in-out infinite,
       hermes-glitch-10s 10s linear infinite;
@@ -1719,4 +1727,116 @@
 }
 .ui-qt .qt-band:first-child {
   border-top-width: 0;
+}
+/* A band that sticks needs a ground, or the rows scroll through it. */
+.ui-qt .qt-band.qt-sticky {
+  background: var(--bg);
+}
+
+/*
+ * THE SKELETON — what a pane shows while its first answer is on the way
+ * (owner instruction, 2026-10-13: "make it look more professional"). A bare
+ * "Loading…" line reads as a page that is not finished; the pane's own shape,
+ * shimmering faintly, reads as an instrument warming up. Neutral greys only,
+ * and still under reduced motion.
+ */
+@layer components {
+  .skel {
+    display: block;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+    background-size: 200% 100%;
+    animation: skel-sweep 1.4s ease-in-out infinite;
+  }
+  @keyframes skel-sweep {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: -100% 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skel {
+      animation: none;
+    }
+  }
+}
+
+/*
+ * GENERATE, IN QUIET (owner, 2026-10-13: "update the generate button to match
+ * the aesthetic a bit better"). Classic keeps its lit wash; in Quiet nothing
+ * glows, so the button becomes the same flat key as the terminal's other
+ * controls — the segments, Refresh — 28px, a hairline, a 4px corner, sentence
+ * case. The four-point star stays as its one mark. While it works, the star
+ * breathes in opacity instead of the ring speeding up, so busy still reads as
+ * busy without a light.
+ */
+.ui-qt .generate {
+  height: 28px;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--ring-2);
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  text-shadow: none;
+  animation: none;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+.ui-qt .generate::after {
+  display: none;
+}
+.ui-qt .generate:hover:not(:disabled) {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+  border-color: var(--ink-4);
+  background: var(--surface-2);
+}
+.ui-qt .generate:active:not(:disabled) {
+  transform: none;
+  filter: none;
+  background: var(--surface-3);
+}
+.ui-qt .generate .generate-spark {
+  animation: none;
+  filter: none;
+  color: var(--ink-2);
+}
+.ui-qt .generate[data-busy] {
+  color: var(--ink-2);
+  background: var(--surface-2);
+}
+.ui-qt .generate[data-busy] .generate-spark {
+  animation: qt-generate-busy 1.4s ease-in-out infinite;
+}
+.ui-qt .generate:disabled:not([data-busy]) {
+  opacity: 0.45;
+  border-color: var(--ring-2);
+  background: transparent;
+  color: var(--ink-3);
+}
+@keyframes qt-generate-busy {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-qt .generate[data-busy] .generate-spark {
+    animation: none;
+  }
 }

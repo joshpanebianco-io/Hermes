@@ -1,0 +1,206 @@
+/**
+ * The Game plan — the stocks desk's pre-open brief (owner instruction,
+ * 2026-10-13: the review's "a pre-open NY game-plan brief built from the
+ * scanner's top names").
+ *
+ * The same two-author split the futures brief keeps: `facts` are tables the
+ * collector computed from the live scanner payload — levels, relative
+ * strength, the options context — and the page prints them; `plan` is the
+ * model's words only, joined to those facts by ticker. A plan for a name the
+ * facts do not carry never arrives here: the server drops it.
+ *
+ * THE CONVICTION ROUND (2026-10-14) adds the tape's count and its context to
+ * the facts, and each name's option flow, pre-market and reporting peers.
+ * Every one of those fields is optional: a plan written before it has none,
+ * and the page prints what a plan carries.
+ */
+
+import type { Breadth, Conviction, FedPath, Fuel, GammaEtf, Print } from "@/types/market";
+
+export type PlanSession = "pre" | "rth" | "post" | "closed";
+
+export interface PlanTape {
+  sym: string;
+  chg_pct: number | null;
+  ext_pct: number | null;
+  trend: -1 | 0 | 1;
+}
+
+export interface PlanRegime {
+  vix: number | null;
+  vix_pct: number | null;
+  band: string | null;
+  shape: string | null;
+  bias: "long" | "short" | null;
+  confirm: string | null;
+  spy_em_pct: number | null;
+  tape: PlanTape[];
+}
+
+export interface PlanName {
+  sym: string;
+  name: string | null;
+  side: "long" | "short" | null;
+  score: number;
+  state: string;
+  level: string | null;
+  entry: { kind: string; price: number; dist_atr: number } | null;
+  last: number | null;
+  chg_pct: number | null;
+  ext_pct: number | null;
+  rs_spy: number | null;
+  rvol: number | null;
+  levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null };
+  atr_d: number | null;
+  atr_b: number | null;
+  earnings: { date: string; when: string; days: number } | null;
+  options: {
+    iv30: number | null;
+    iv_rv: number | null;
+    premium: string | null;
+    iv_rank: number | null;
+    em_front_pct: number | null;
+    em_weekly_pct: number | null;
+    liquidity: string | null;
+    earnings_in: string | null;
+    long: { expiry: string; strike: number; right: string; mid: number; delta: number } | null;
+    spread: { expiry: string; strike: number; short_strike: number; mid: number } | null;
+  } | null;
+  headlines: Array<{
+    id: string;
+    title: string;
+    publisher: string;
+    age_min: number | null;
+    /** rating · earnings · filing · news — plans written before 2026-10-13 have none. */
+    kind?: string;
+    url?: string;
+  }>;
+  /** The name's sector SPDR and its move against SPY today, in percentage points. */
+  sector?: { key: string; label: string | null; rs_day: number | null } | null;
+  /** The macro drivers this name answers to, with today's move and the verdict FOR THE STOCK. */
+  macro?: PlanDriver[];
+  filings?: Array<{ form: string; filed: string; desc: string }>;
+  /** False when the name's news had not been read yet (just after a restart). */
+  news_loaded?: boolean;
+  /** Today's option volume: put ÷ call, which way it leans, and the busiest strike. */
+  flow?: PlanFlow | null;
+  /** Today's pre-market volume, and that as a share of the twenty-session average day. */
+  premkt?: { volume: number | null; pct_adv: number | null } | null;
+  /** Big caps in the same sector reporting from today through three trading days out. */
+  peers?: Array<{ sym: string; date: string; when: string; days: number }>;
+  /** Twenty-session average daily volume. */
+  adv20?: number | null;
+}
+
+export interface PlanFlowStrike {
+  strike: number;
+  right: "C" | "P";
+  expiry: string;
+  volume: number;
+  oi?: number;
+}
+
+export interface PlanFlow {
+  pc_vol: number | null;
+  lean: "calls" | "puts" | "balanced" | null;
+  /** The busiest strike — one, or the chain's top few (the first is the busiest). */
+  top?: PlanFlowStrike | PlanFlowStrike[] | null;
+}
+
+export interface PlanDriver {
+  driver: string;
+  label: string;
+  move: string;
+  effect: "tailwind" | "headwind" | "flat";
+  why: string;
+}
+
+/** The day's macro, once per plan: the moves and the market's high-impact headlines. */
+export interface PlanMacro {
+  moves: Array<{ key: string; label: string; unit: string; move: number; text: string }>;
+  headlines: Array<{ id: string; title: string; publisher: string; desk: string; age_min: number | null }>;
+}
+
+export interface PlanFacts {
+  as_of: string;
+  session: PlanSession;
+  trading_day: string;
+  regime: PlanRegime;
+  names: PlanName[];
+  calendar: Array<{ et: string; title: string; score: number; released: boolean }>;
+  /** Plans written before 2026-10-13 have no macro block. */
+  macro?: PlanMacro;
+  partial: string[];
+  /** The tape's conviction count — what each plan's conviction is capped by. */
+  conviction?: Conviction | null;
+  breadth?: Breadth | null;
+  fuel?: Fuel[];
+  /** Today's prints read against consensus — newer plans' version of `calendar`. */
+  prints?: Print[];
+  fed?: FedPath | null;
+  /** Null when the gamma feed was off or down. */
+  gamma?: GammaEtf[] | null;
+}
+
+export interface PlanItem {
+  sym: string;
+  side: "long" | "short";
+  conviction: 1 | 2 | 3 | 4 | 5;
+  plan: string;
+  trigger: string;
+  invalidation: string;
+  target: string;
+  options: string;
+  why: string[];
+  /** Why the collector lowered the model's conviction — "tape weak — at most 3". */
+  capped?: string | null;
+  /** The model's own number, kept when a cap lowered it. */
+  conviction_model?: number | null;
+}
+
+export interface PlanBody {
+  headline: string;
+  market: string;
+  plans: PlanItem[];
+  avoid: Array<{ sym: string; why: string }>;
+  timing: string[];
+  risks: string[];
+}
+
+export interface Plan {
+  id: string;
+  created_utc: string;
+  et_label: string;
+  model: string;
+  error?: string | null;
+  raw?: string | null;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
+  /** Exactly what the model saw. */
+  digest: unknown;
+  /** Figures the model printed that the facts do not contain — checked by the collector. */
+  unverified?: string[];
+  attempts?: unknown[];
+  facts: PlanFacts;
+  plan: PlanBody | null;
+}
+
+export interface PlanStub {
+  id: string;
+  et_label: string;
+  headline: string | null;
+  model: string;
+  /** How many names it planned. */
+  n: number;
+}
+
+export interface PlanFeed {
+  config: { enabled: boolean; model: string };
+  latest: Plan | null;
+  history: PlanStub[];
+  /** Set by the route handler when the collector could not be reached. */
+  offline?: { reason: string; api: string };
+}
+
+/** How many of the scanner's top names a plan covers. */
+export type PlanTop = 4 | 6 | 8 | 10;
+export const PLAN_TOPS: readonly PlanTop[] = [4, 6, 8, 10];

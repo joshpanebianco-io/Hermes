@@ -180,6 +180,8 @@ export interface SessionRow {
   next: "opens" | "closes";
   next_min: number;
   weight: number;
+  /** The exchange holiday this venue is shut for today, when there is one. */
+  holiday?: string | null;
 }
 
 export interface Clock {

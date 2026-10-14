@@ -2,6 +2,7 @@
 
 import type { VolTerm } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -41,9 +42,13 @@ export function Volatility({
   if (!vol || vol.points.length === 0) {
     return (
       <Module title="Vol term structure" ageMin={ageMin} bodyClassName="px-0 py-0">
-        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
-          No volatility quotes yet.
-        </p>
+        {ageMin == null ? (
+          <Skeleton rows={4} label="Loading the vol curve" />
+        ) : (
+          <p className="px-3 py-5 text-center text-[11px] text-ink-3">
+            The quote feed carries none of the VIX tenors right now.
+          </p>
+        )}
       </Module>
     );
   }

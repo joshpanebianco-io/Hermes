@@ -31,8 +31,13 @@ from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import optcalc
+from .holidays import next_trading_day
 from .scan import Clock
 from .volterm import state as volterm_state
+
+#: Names whose own news feed is never read (the wire covers the index ETFs).
+_NO_OWN_NEWS = frozenset({"SPY", "QQQ", "IWM"})
 
 ET = ZoneInfo("America/New_York")
 
@@ -67,6 +72,16 @@ EVENT_HORIZON_MIN = 6 * 60
 EVENT_RECENT_MIN = 15
 
 NEWS_MAX = 8
+#: Average daily volume: the last ADV_SESSIONS completed sessions; a listing
+#: younger than ADV_MIN sessions has none.
+ADV_SESSIONS = 20
+ADV_MIN = 10
+#: Sector peers' reports, from the trading day through this many trading days on.
+PEER_DAYS = 3
+PEERS_MAX = 6
+#: Share classes of one company — never each other's peer.
+_TWINS = {"GOOG": "GOOGL", "GOOGL": "GOOG", "BRK.B": "BRK-B", "BRK-B": "BRK.B"}
+_WHEN_ORDER = {"pre": 0, "unspecified": 1, "after": 2}
 NEWS_DAYS = 3
 FILINGS_MAX = 5
 
@@ -228,6 +243,89 @@ def _dur(m: float) -> str:
 
 
 # ------------------------------------------------------------------ the joins
+
+
+def adv20(volumes: list[float]) -> float | None:
+    """Average daily volume over the last ADV_SESSIONS completed sessions. Pure.
+
+    `volumes` are the daily bars' volumes BEFORE the trading day, oldest first —
+    today's part-session bar would drag the average down all morning. A zero
+    (a bar Yahoo never filled) is skipped, not averaged in. Fewer than ADV_MIN
+    sessions — a fresh listing — is None, not a guess.
+    """
+    vs = [v for v in volumes if isinstance(v, (int, float)) and v > 0][-ADV_SESSIONS:]
+    if len(vs) < ADV_MIN:
+        return None
+    return float(round(sum(vs) / len(vs)))
+
+
+def premkt_for(read: dict[str, Any] | None, adv: float | None) -> dict[str, Any] | None:
+    """The row's `premkt` from today's Nasdaq read (sources/premarket.py). Pure.
+
+    `pct_adv` is pre-market share volume as a percentage of the twenty-session
+    average day — 5% before the bell is a name in play; 0.3% is not.
+    """
+    if not read:
+        return None
+    vol = read.get("volume")
+    pct = (round(vol / adv * 100.0, 2)
+           if isinstance(vol, (int, float)) and isinstance(adv, (int, float)) and adv > 0
+           else None)
+    return {"volume": vol, "pct_adv": pct, "high": read.get("high"), "low": read.get("low"),
+            "last": read.get("last"), "asof": read.get("asof")}
+
+
+def peers_for(sym: str, sector: str | None, earnings: list[dict[str, Any]],
+              trading_day: date, sector_map: dict[str, str]) -> list[dict[str, Any]]:
+    """Big caps in the row's sector reporting from the trading day through
+    PEER_DAYS trading days on, soonest first. Pure.
+
+    The earnings rows are the calendar's: a big cap (the panel's $50B floor, or a
+    bellwether) or one of the watchlist's own names, tagged `watch_only`. Only
+    the big caps count — a small name on the watchlist moves on its own report,
+    not its sector's — and never the name itself or its other share class. The
+    sector is the scanner's static table (sources/scanner.SECTOR) applied to the
+    reporter's ticker; a reporter the table does not know is nobody's peer. The
+    calendar reads four days ahead, so on a Thursday or Friday the third
+    trading day can fall past what it holds.
+    """
+    if not sector:
+        return []
+    until = trading_day
+    for _ in range(PEER_DAYS):
+        until = next_trading_day(until)
+    me = {sym, _TWINS.get(sym, sym)}
+    found: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
+    for r in earnings:
+        s = str(r.get("symbol") or "").upper()
+        if not s or s in me or r.get("watch_only") or sector_map.get(s) != sector:
+            continue
+        try:
+            d = date.fromisoformat(str(r.get("date")))
+        except ValueError:
+            continue
+        if d < trading_day or d > until:
+            continue
+        when = str(r.get("when") or "unspecified")
+        cap = r.get("market_cap")
+        key = (d, _WHEN_ORDER.get(when, 1), not r.get("bellwether"),
+               -(cap if isinstance(cap, (int, float)) else 0.0), s)
+        if s not in found or key < found[s][0]:
+            found[s] = (key, {"sym": s, "date": d.isoformat(), "when": when,
+                              "days": (d - trading_day).days})
+    return [p for _, p in sorted(found.values(), key=lambda kv: kv[0])][:PEERS_MAX]
+
+
+def peer_flag(peers: list[dict[str, Any]], trading_day: date) -> dict[str, Any] | None:
+    """ "Peer TSM reports Thu" — the soonest peer, and how many more. Pure."""
+    if not peers:
+        return None
+    p = peers[0]
+    d = date.fromisoformat(p["date"])
+    day = ("today" if d == trading_day else "tomorrow" if (d - trading_day).days == 1
+           else d.strftime("%a"))
+    more = f" +{len(peers) - 1}" if len(peers) > 1 else ""
+    return {"kind": "earnings", "tone": "info", "text": f"Peer {p['sym']} reports {day}{more}"}
 
 
 def earnings_for(sym: str, rows: list[dict[str, Any]], trading_day: date) -> dict[str, Any] | None:
@@ -488,7 +586,12 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           earnings: list[dict[str, Any]], wire: list[dict[str, Any]],
           news: dict[str, list[dict[str, Any]]], filings: dict[str, list[dict[str, Any]]],
           aliases: dict[str, list[str]], status: dict[str, Any] | None,
-          watchlist: list[str], clock: Clock, now: datetime | None = None) -> dict[str, Any]:
+          watchlist: list[str], clock: Clock, now: datetime | None = None,
+          options: dict[str, tuple[optcalc.Chain, float]] | None = None,
+          closes: dict[str, list[float]] | None = None,
+          iv_hist: dict[str, list[float]] | None = None,
+          premkt: dict[str, dict[str, Any]] | None = None,
+          sector_map: dict[str, str] | None = None) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
 
     THE SESSION IS THE CLOCK'S, read now — not whatever the last job tick
@@ -526,6 +629,13 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         fil = [f for f in (filings.get(sym) or [])][:FILINGS_MAX]
         row["earnings"] = earn
         row["news"] = nws
+        # WHETHER the name's own feed has been read yet — not the same as having
+        # headlines. After a restart the news job works through the list a few
+        # names a minute, and "no headlines" from a name not yet read is a
+        # gap, not a fact (owner's game plan said "nothing stock-specific" for
+        # names whose news had simply not loaded, 2026-10-13). The index ETFs
+        # are never read for news — the wire covers them — so they count as read.
+        row["news_loaded"] = sym in news or sym in _NO_OWN_NEWS
         row["filings"] = fil
         if row.get("ok"):
             row["score"] = score_row(row, reg, srs, earn, event, session)
@@ -535,6 +645,17 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
             row["flags"] = []
         if isinstance(row.get("setup"), dict):
             row["setup"] = {k: v for k, v in row["setup"].items() if k != "lost_vwap"}
+        # After the score: the contract helper trades the row's side.
+        row["options"] = options_for(sym, row, options, closes, iv_hist, td, now)
+        # Context, never score: the name's average day, its pre-market against
+        # it, and its sector's big caps reporting this week.
+        adv = base.get("adv20")
+        row["adv20"] = adv if isinstance(adv, (int, float)) else None
+        row["premkt"] = premkt_for((premkt or {}).get(sym), row["adv20"])
+        row["peers"] = peers_for(sym, sector, earnings, td, sector_map or {})
+        pf = peer_flag(row["peers"], td)
+        if pf is not None and row.get("ok"):
+            row["flags"].append(pf)
         out_rows.append(row)
 
     out_rows.sort(key=lambda r: (not r.get("ok"), -(r.get("score") or {}).get("total", 0)))
@@ -554,6 +675,27 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
     }
 
 
+def options_for(sym: str, row: dict[str, Any],
+                options: dict[str, tuple[optcalc.Chain, float]] | None,
+                closes: dict[str, list[float]] | None, iv_hist: dict[str, list[float]] | None,
+                trading_day: date, now: datetime) -> dict[str, Any] | None:
+    """The row's OptionsCtx (optcalc.options_ctx), or None before its first chain.
+
+    A failure in the maths costs this one row its options, never the payload:
+    the scanner's rank does not depend on them.
+    """
+    held = (options or {}).get(sym)
+    if held is None:
+        return None
+    chain, fetched = held
+    age = round((now.timestamp() - fetched) / 60.0, 2) if fetched else None
+    try:
+        return optcalc.options_ctx(chain, row, (closes or {}).get(sym) or [],
+                                   (iv_hist or {}).get(sym) or [], trading_day, now, age)
+    except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
+        return optcalc.unavailable(f"options maths failed: {e.__class__.__name__}: {e}", age)
+
+
 def _empty(sym: str, age: float | None, why: str) -> dict[str, Any]:
     return {
         "sym": sym, "name": None, "sector": None, "sector_rs": None, "ok": False, "error": why,
@@ -568,5 +710,6 @@ def _empty(sym: str, age: float | None, why: str) -> dict[str, Any]:
         "lvl_state": 0, "trend": 0, "range_used": None,
         "setup": {"side": None, "state": "chop", "level": None, "entry": None, "note": why},
         "signals": [], "score": {"total": 0, "side": None, "parts": []}, "flags": [],
-        "earnings": None, "news": [], "filings": [],
+        "earnings": None, "news": [], "filings": [], "options": None,
+        "adv20": None, "premkt": None, "peers": [],
     }

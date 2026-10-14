@@ -14,7 +14,7 @@ import { Module } from "@/components/ui/Module";
 import { biasHue, biasLabel } from "@/lib/bias";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
-import { HERMES_MARK_D } from "@/lib/hermesMark";
+import { HelmMark, HelmSweep, useHelmId } from "@/components/ui/HelmLoader";
 import { useQuiet } from "@/components/state/UiMode";
 
 /**
@@ -168,33 +168,13 @@ export function Report({
                 * `disabled` while busy so a second press cannot queue a second
                 * report, and `data-busy` is what stops that reading as dead.
                 */}
-              <button
-                type="button"
+              <GenerateButton
                 onClick={generate}
-                disabled={busy || !enabled}
-                data-busy={busy || undefined}
-                className="generate ml-1"
-                title={
-                  !enabled
-                    ? "Needs OPENROUTER_API_KEY"
-                    : busy
-                      ? "Reading the terminal and generating the report — usually one to three minutes"
-                      : "Read the terminal as it stands now and generate a fresh report"
-                }
-              >
-                <svg
-                  className="generate-spark"
-                  width="11"
-                  height="11"
-                  viewBox="0 0 11 11"
-                  fill="currentColor"
-                  aria-hidden
-                >
-                  {/* Odd-sized, so the star's centre is a whole pixel. */}
-                  <path d="M5.5 0l1.3 4.2L11 5.5 6.8 6.8 5.5 11 4.2 6.8 0 5.5l4.2-1.3z" />
-                </svg>
-                {busy ? "Reading…" : "Generate"}
-              </button>
+                busy={busy}
+                enabled={enabled}
+                busyTitle="Reading the terminal and generating the report — usually one to three minutes"
+                idleTitle="Read the terminal as it stands now and generate a fresh report"
+              />
             </div>
           }
         >
@@ -207,7 +187,7 @@ export function Report({
           ) : !rep ? (
             <Empty />
           ) : rep.error ? (
-            <Failed rep={rep} />
+            <Failed error={rep.error} raw={rep.raw} />
           ) : rep.report ? (
             <>
               {rep.format === "brief" && rep.facts ? <Brief rep={rep} /> : <Body rep={rep} />}
@@ -369,15 +349,29 @@ function quietBias(b: string): string {
  * the no-key screen — a key may well be set — and not an empty report: the
  * reason, where it was looked for, and a way to ask again.
  */
-function Offline({ reason, api, onRetry }: { reason: string; api: string; onRetry: () => void }) {
+export function Offline({
+  reason,
+  api,
+  onRetry,
+  what = "Reports",
+  title = "Collector unreachable.",
+}: {
+  reason: string;
+  api: string;
+  onRetry: () => void;
+  /** What is read from the collector — "Reports", "Plans". */
+  what?: string;
+  /** The state's name — "Collector unreachable." unless the reason says otherwise. */
+  title?: string;
+}) {
   return (
     <div className="space-y-3 px-4 py-5 text-[11.5px] leading-relaxed text-ink-3">
       <p className="text-err">
-        <strong className="font-semibold">Collector unreachable.</strong> {reason} — expected at{" "}
+        <strong className="font-semibold">{title}</strong> {reason} — expected at{" "}
         <code>{api}</code>.
       </p>
       <p>
-        Reports are read from the collector, so there is nothing to show until it answers. Nothing
+        {what} are read from the collector, so there is nothing to show until it answers. Nothing
         here is cached or invented. Start it with <code className="text-ink-2">.\dev.ps1</code>.
       </p>
       <button type="button" onClick={onRetry} {...segItem(false, { className: "border border-ring-2" })}>
@@ -387,11 +381,11 @@ function Offline({ reason, api, onRetry }: { reason: string; api: string; onRetr
   );
 }
 
-function NoKey({ model }: { model?: string }) {
+export function NoKey({ model, what = "report" }: { model?: string; what?: string }) {
   return (
     <div className="space-y-3 px-4 py-5 text-[11.5px] leading-relaxed text-ink-3">
       <p className="text-ink-2">
-        The report is written by a model, and no key is set — so there is nothing to show.
+        The {what} is written by a model, and no key is set — so there is nothing to show.
       </p>
       <p>
         There is deliberately no local fallback. A bias invented by this app and rendered in
@@ -457,7 +451,19 @@ const STAGES = [
   "Writing the read",
 ];
 
-function Working({ startedAt, model }: { startedAt: number | null; model?: string }) {
+export function Working({
+  startedAt,
+  model,
+  stages = STAGES,
+  noun = "report",
+}: {
+  startedAt: number | null;
+  model?: string;
+  /** The lines cycled under the clock — what this kind of writing reads first. */
+  stages?: readonly string[];
+  /** What is being written, for the attribution line. */
+  noun?: string;
+}) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -466,7 +472,8 @@ function Working({ startedAt, model }: { startedAt: number | null; model?: strin
   const elapsed = Math.max(0, Math.floor((now - (startedAt ?? now)) / 1000));
   const mm = Math.floor(elapsed / 60);
   const ss = String(elapsed % 60).padStart(2, "0");
-  const stage = STAGES[Math.floor(elapsed / 8) % STAGES.length];
+  const stage = stages[Math.floor(elapsed / 8) % stages.length];
+  const gradId = useHelmId();
 
   return (
     <div
@@ -481,60 +488,15 @@ function Working({ startedAt, model }: { startedAt: number | null; model?: strin
         * `hermes-mark` so it breathes and glitches on the header's timeline
         * and stands down under prefers-reduced-motion with it.
         */}
-      <svg width="88" height="88" viewBox="0 0 512 512" aria-hidden style={{ overflow: "visible" }}>
-        <defs>
-          <linearGradient
-            id="report-wash"
-            gradientUnits="userSpaceOnUse"
-            x1="0"
-            y1="0"
-            x2="1024"
-            y2="0"
-          >
-            <stop offset="0" stopColor="var(--icon-a)" />
-            <stop offset="0.25" stopColor="var(--title-sheen)" />
-            <stop offset="0.5" stopColor="var(--icon-b)" />
-            <stop offset="0.75" stopColor="var(--title-sheen)" />
-            <stop offset="1" stopColor="var(--icon-a)" />
-            <animateTransform
-              attributeName="gradientTransform"
-              type="translate"
-              from="0 0"
-              to="-1024 0"
-              dur="5.6s"
-              repeatCount="indefinite"
-            />
-          </linearGradient>
-        </defs>
-        <g transform="rotate(-10 256 256) translate(512 0) scale(-1 1)">
-          <path
-            className="hermes-mark"
-            fill="url(#report-wash)"
-            stroke="url(#report-wash)"
-            strokeWidth={6}
-            d={HERMES_MARK_D}
-          />
-        </g>
-      </svg>
-
-      <svg
-        className="mt-6 h-[2px] w-[220px]"
-        viewBox="0 0 220 2"
-        preserveAspectRatio="none"
-        aria-hidden
-      >
-        <rect width="220" height="2" fill="var(--ring)" />
-        <rect width="70" height="2" fill="url(#report-wash)">
-          <animate attributeName="x" from="-70" to="220" dur="1.8s" repeatCount="indefinite" />
-        </rect>
-      </svg>
+      <HelmMark size={88} gradId={gradId} />
+      <HelmSweep width={220} gradId={gradId} className="mt-6" />
 
       <div className="fig mt-5 text-[22px] leading-none text-ink tabular-nums">
         {mm}:{ss}
       </div>
       <div className="mt-2 text-[12px] text-ink-2">{stage}…</div>
       <div className="fig mt-4 text-[10px] text-ink-3">
-        {model ? `${model} · ` : ""}usually 1–3 min on the free tier · the report names the
+        {model ? `${model} · ` : ""}usually 1–3 min on the free tier · the {noun} names the
         model that answered
       </div>
     </div>
@@ -549,21 +511,57 @@ function Empty() {
   );
 }
 
-function Failed({ rep }: { rep: ReportT }) {
+export function Failed({ error, raw, noun = "report" }: { error: string; raw?: string | null; noun?: string }) {
   return (
     <div className="space-y-2 px-4 py-4 text-[11.5px] leading-relaxed">
-      <p className="text-err">{rep.error}</p>
-      {rep.raw && (
+      <p className="text-err">{error}</p>
+      {raw && (
         <details className="text-[10.5px] text-ink-3">
           <summary className="cursor-pointer text-ink-3">What the model said instead</summary>
-          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap">{rep.raw}</pre>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap">{raw}</pre>
         </details>
       )}
       <p className="text-ink-3">
-        Nothing is shown above because there is no valid report to show — not because the panel
+        Nothing is shown above because there is no valid {noun} to show — not because the panel
         is empty.
       </p>
     </div>
+  );
+}
+
+/**
+ * GENERATE — the one control on a writing tab that makes something, so the one
+ * that is lit (`.generate` in globals.css). Shared by the Report and the Game
+ * plan so the two desks' briefs are summoned by the same key.
+ */
+export function GenerateButton({
+  onClick,
+  busy,
+  enabled,
+  busyTitle,
+  idleTitle,
+}: {
+  onClick: () => void;
+  busy: boolean;
+  enabled: boolean;
+  busyTitle: string;
+  idleTitle: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || !enabled}
+      data-busy={busy || undefined}
+      className="generate ml-1"
+      title={!enabled ? "Needs OPENROUTER_API_KEY" : busy ? busyTitle : idleTitle}
+    >
+      <svg className="generate-spark" width="11" height="11" viewBox="0 0 11 11" fill="currentColor" aria-hidden>
+        {/* Odd-sized, so the star's centre is a whole pixel. */}
+        <path d="M5.5 0l1.3 4.2L11 5.5 6.8 6.8 5.5 11 4.2 6.8 0 5.5l4.2-1.3z" />
+      </svg>
+      {busy ? "Reading…" : "Generate"}
+    </button>
   );
 }
 

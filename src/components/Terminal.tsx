@@ -13,6 +13,8 @@ import { Calendar } from "@/components/panels/Calendar";
 import { Sessions } from "@/components/panels/Sessions";
 import { Report } from "@/components/panels/Report";
 import { Scanner } from "@/components/panels/Scanner";
+import { StockPlan } from "@/components/panels/StockPlan";
+import { MarketBoard } from "@/components/MarketBoard";
 import { Settings } from "@/components/panels/Settings";
 import { SessionRanges } from "@/components/panels/SessionRanges";
 import { Earnings } from "@/components/panels/Earnings";
@@ -25,11 +27,13 @@ import { ScanAlerts } from "@/components/shell/ScanAlerts";
 import { DEFAULT_THEME, type ThemeChoice } from "@/lib/theme";
 import { DEFAULT_UI, type UiMode } from "@/lib/ui";
 import { UiProvider } from "@/components/state/UiMode";
+import { OfflineProvider } from "@/components/state/Offline";
 import { cn } from "@/lib/cn";
 import { useReport } from "@/lib/useReport";
+import { useStockPlan } from "@/lib/useStockPlan";
 import { useFrameLight, type FrameFx } from "@/lib/useFrameLight";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
-import { TAB_KEYS, type Tab } from "@/lib/tabs";
+import { DESK_HOME, TAB_KEYS, deskOf, isDesk, pageTitle, tabsFor, type Desk, type Tab } from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
 import { shareUnchanged } from "@/lib/share";
 import { ageStep } from "@/lib/format";
@@ -123,6 +127,8 @@ export function Terminal({
    * model, and the panel unmounting was cancelling it.
    */
   const report = useReport(initialReport);
+  // The Game plan's state, owned here for the same reason as the report's.
+  const plan = useStockPlan(null);
 
   /*
    * The chassis light. Held here because the frame it draws on lives here, and
@@ -162,6 +168,17 @@ export function Terminal({
   }, [storedTab]);
 
   /*
+   * THE DESK IS THE TAB'S, except on Settings, which belongs to both — there
+   * the desk you came from stays, so the header keeps its strip and its tabs.
+   * Each desk remembers its own last tab, so the switch returns you to the
+   * Scanner you left rather than to the desk's front page.
+   */
+  const [savedDesk, setSavedDesk] = usePersisted<Desk>("desk", deskOf(initialTab) ?? "futures", isDesk);
+  const desk: Desk = deskOf(tab) ?? savedDesk;
+  const [lastFutures, setLastFutures] = usePersisted<Tab>("tab.futures", DESK_HOME.futures, oneOf("terminal", "report"));
+  const [lastStocks, setLastStocks] = usePersisted<Tab>("tab.stocks", DESK_HOME.stocks, oneOf("market", "scanner", "plan"));
+
+  /*
    * The tab is written to the URL with replaceState rather than a navigation.
    * Both tabs are already mounted with their data in hand, so routing would
    * re-run the server component and re-fetch the collector to show something
@@ -170,6 +187,12 @@ export function Terminal({
   const setTab = useCallback((t: Tab) => {
     setTabState(t);
     setStoredTab(t);
+    const d = deskOf(t);
+    if (d) {
+      setSavedDesk(d);
+      if (d === "futures") setLastFutures(t);
+      else setLastStocks(t);
+    }
     urlPinned.current = false;
     if (typeof window !== "undefined") {
       const u = new URL(window.location.href);
@@ -177,7 +200,47 @@ export function Terminal({
       else u.searchParams.set("tab", t);
       window.history.replaceState(null, "", u);
     }
-  }, [setStoredTab]);
+  }, [setStoredTab, setSavedDesk, setLastFutures, setLastStocks]);
+
+  const switchDesk = useCallback(
+    (d: Desk) => setTab(d === "futures" ? lastFutures : lastStocks),
+    [setTab, lastFutures, lastStocks],
+  );
+
+  /*
+   * THE KEYBOARD. 1–4 reach the current desk's tabs in bar order (Settings
+   * last), D flips the desk. Never while typing — the watchlist editor and
+   * the inputs own their keys — and never with a modifier held, so the
+   * browser's own shortcuts are untouched.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (e.key === "d" || e.key === "D") {
+        e.preventDefault();
+        switchDesk(desk === "futures" ? "stocks" : "futures");
+        return;
+      }
+      const n = Number(e.key);
+      if (Number.isInteger(n) && n >= 1) {
+        const t = tabsFor(desk)[n - 1];
+        if (t) {
+          e.preventDefault();
+          setTab(t.key);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [desk, setTab, switchDesk]);
+
+  // The browser tab says where you are: "HERMESX · Stocks & options · Scanner".
+  useEffect(() => {
+    document.title = pageTitle(tab, desk);
+  }, [tab, desk]);
+
   const [data, setData] = useState<TerminalData>(initial);
   const [lastPoll, setLastPoll] = useState<Date | null>(null);
   // Guards against a slow response landing after a newer one — with a fixed
@@ -213,6 +276,7 @@ export function Terminal({
 
   return (
     <UiProvider value={ui}>
+    <OfflineProvider value={Boolean(data.offline)}>
     <div className="h-screen overflow-hidden p-2 sm:p-3 qt:p-0 qt:sm:p-0">
       <div
         ref={frameRef}
@@ -238,6 +302,8 @@ export function Terminal({
           onRefresh={load}
           tab={tab}
           onTab={setTab}
+          desk={desk}
+          onDesk={switchDesk}
         />
 
         <AlertStrip items={data.wire ?? NONE} />
@@ -259,6 +325,10 @@ export function Terminal({
           <Report {...report} />
         ) : tab === "scanner" ? (
           <ScannerTab />
+        ) : tab === "plan" ? (
+          <StockPlan {...plan} />
+        ) : tab === "market" ? (
+          <MarketBoard data={data} />
         ) : (
         <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
           {/* ---- left: the context the news is read against ------------- */}
@@ -404,6 +474,7 @@ export function Terminal({
         <MStatusRail status={st} ages={raw} pollSec={POLL_SEC} lastPoll={lastPoll} />
       </div>
     </div>
+    </OfflineProvider>
     </UiProvider>
   );
 }

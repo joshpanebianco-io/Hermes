@@ -2,6 +2,7 @@
 
 import type { ExpiryState, SessionRange } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -47,7 +48,11 @@ const HEAD = "fig shrink-0 text-right text-[8.5px] tracking-wide text-ink-3";
 
 // Wide enough for "Europe midday" on one line when the panel has the room; the
 // wrapping 52px it always was when it does not, so the track keeps its width.
-const LABEL = "w-[52px] shrink-0 @min-[400px]:w-[84px] @min-[400px]:whitespace-nowrap qt:@min-[400px]:w-[104px]";
+// One line always: a label that wrapped ("London / open") doubled its row's
+// height and broke the shared axis's rhythm in a narrow column. Narrow, it
+// truncates and the full name is on hover.
+const LABEL =
+  "w-[60px] shrink-0 truncate whitespace-nowrap @min-[400px]:w-[84px] qt:w-[72px] qt:@min-[400px]:w-[104px]";
 
 /** The one scale every row shares: all five ranges and the current price. */
 function scaleOf(sessions: SessionRange[], last: number | null) {
@@ -108,9 +113,13 @@ export function SessionRanges({
       }
     >
       {!active || !x ? (
-        <p className="px-3 py-5 text-center text-[11px] text-ink-3">
-          No session data yet — the collector segments the last two days of bars.
-        </p>
+        ageMin == null && !error ? (
+          <Skeleton rows={5} label="Loading session ranges" />
+        ) : (
+          <p className="px-3 py-5 text-center text-[11px] text-ink-3">
+            No session data for this book — the collector segments the last two days of bars.
+          </p>
+        )
       ) : (
         <div className="@container">
           {/* The column names once, and the price the line stands for, riding
@@ -193,7 +202,9 @@ function Row({
 ${num(s.low)}–${num(s.high)} · range ${num(s.range, 1)}
 ${where}`}
     >
-      <span className={cn("fig py-[3px] text-[10.5px] text-ink-2", LABEL, dim)}>{s.label}</span>
+      <span className={cn("fig py-[3px] text-[10.5px] text-ink-2", LABEL, dim)} title={s.label}>
+        {s.label}
+      </span>
       <span className="relative min-w-0 flex-1 self-stretch">
         <span className="absolute inset-x-0 top-1/2 h-px bg-ring/50" />
         {/* Square ends, because the ends of this bar ARE the low and the high. */}

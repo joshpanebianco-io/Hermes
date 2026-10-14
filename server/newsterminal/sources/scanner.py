@@ -16,6 +16,19 @@ bars once per name per six hours on top. A 40-name list stretches each name's
 refresh to ~3 minutes rather than raising the rate — Yahoo has no published
 limit and the polite answer to that is to stay well under the unpublished one.
 
+IN THE REGULAR SESSION, TWO MORE CLOCKS (owner, 2026-10-14: "as close to real
+time as possible"). THE LIVE LAYER reads every name's last trade from the
+batched spark endpoint — twelve names a request, so the default list is two
+requests every five seconds, ~14 KB each — and the read path lays that trade
+over the name's bars (scan.with_live), so price and everything read off it is
+seconds old rather than a rotation old. THE CLOSE READ fetches every name's
+bars ten seconds after each ten-minute bar closes, 09:30 to the bell, five
+names a tick with the ticks a second apart, so a signal on that bar lands
+within half a minute of it instead of whenever the name's turn came round.
+
+The live layer is the first thing to give way: a failed read steps it back to
+15 s, then 30 s, and a 429 on the bars stops it outright with them.
+
 HEADLINES AND FILINGS ROTATE SLOWER. Yahoo's per-ticker RSS, ten minutes a name
 (three names a minute); SEC EDGAR's submissions JSON, thirty minutes a name
 (two a minute) — EDGAR asks for ten requests a second at most and a real
@@ -43,11 +56,14 @@ import urllib.parse
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from .. import scan
 from ..config import BROWSER_UA, CACHE_DIR, UA
+from ..holidays import is_trading_day
 from ..http import CACHE, SourceStatus, clean_text, feed_body, fetch, json_body, rss_items
+from ..scanscore import adv20
+from .quotes import SPARK
 from .wire import gnews
 
 CHART = (
@@ -78,12 +94,33 @@ DAILY_TTL = 6 * 3600.0
 DAILY_PER_TICK = 3
 NEWS_SEC = 600.0
 NEWS_PER_TICK = 3
+#: After a restart, names never read get a catch-up of this many a tick, so the
+#: whole list has its headlines in about two minutes rather than seven — a
+#: game plan generated just after a restart was otherwise written blind.
+NEWS_PER_TICK_COLD = 10
 SEC_SEC = 1800.0
 SEC_PER_TICK = 2
 FILING_DAYS = 3
 BACKOFF_BASE = 30.0
 BACKOFF_MAX = 15 * 60.0
 RATE_LIMIT_PAUSE = 120.0
+#: The live layer's clock in the regular session, its steps back after a
+#: failed read (reset by the next good one), and its idle check outside it.
+LIVE_SEC = 5.0
+LIVE_BACKOFF = (15.0, 30.0)
+LIVE_IDLE_SEC = 30.0
+#: Names per batched read — the board's chunk (sources/quotes.py), well inside
+#: the twenty the endpoint accepts.
+LIVE_CHUNK = 12
+#: A ten-minute bar's last prints take a moment to reach Yahoo's bars.
+CLOSE_LAG = 10.0
+#: While a close is being read the bars job comes back this soon.
+BURST_TICK_SEC = 1.0
+
+
+class LiveQuote(NamedTuple):
+    price: float
+    at: int  # epoch of the trade
 
 
 def backoff(failures: int) -> float:
@@ -122,6 +159,28 @@ SECTOR: dict[str, str] = {
     **dict.fromkeys(["NEE", "VST", "CEG", "SO", "DUK", "NRG", "OKLO", "SMR"], "XLU"),
     **dict.fromkeys(["FCX", "LIN", "NEM", "MP", "AA", "CLF", "DOW"], "XLB"),
     **dict.fromkeys(["PLD", "AMT", "EQIX", "O", "SPG"], "XLRE"),
+    # Big caps that seldom sit on a watchlist but whose reports move their
+    # sector — here so a name's sector peers (scanscore.peers_for) can find
+    # them on the earnings calendar. Unambiguous GICS sectors only.
+    **dict.fromkeys(
+        ["ACN", "CDNS", "SNPS", "FTNT", "APH", "GLW", "TEL"], "XLK"),
+    **dict.fromkeys(["CHTR", "EA", "TTWO"], "XLC"),
+    **dict.fromkeys(
+        ["ORLY", "AZO", "MAR", "HLT", "RCL", "CCL", "YUM", "EBAY", "ROST"], "XLY"),
+    **dict.fromkeys(
+        ["PGR", "TRV", "CB", "AIG", "ALL", "MET", "PNC", "USB", "TFC", "COF", "BK", "BNY",
+         "MMC", "MRSH", "AON", "CME", "ICE", "SPGI", "MCO"], "XLF"),
+    **dict.fromkeys(["PSX", "VLO", "KMI", "WMB", "OKE", "BKR"], "XLE"),
+    **dict.fromkeys(
+        ["ABT", "DHR", "ELV", "CI", "BMY", "GILD", "VRTX", "REGN", "MDT", "SYK", "BSX", "ZTS",
+         "HCA", "MCK"], "XLV"),
+    **dict.fromkeys(
+        ["UNP", "CSX", "NSC", "MMM", "ETN", "PH", "ITW", "EMR", "WM", "GEV", "PWR", "FAST"],
+        "XLI"),
+    **dict.fromkeys(["MDLZ", "CL", "KMB", "GIS", "MNST", "KDP", "STZ", "KHC"], "XLP"),
+    **dict.fromkeys(["AEP", "D", "EXC", "SRE", "PCG"], "XLU"),
+    **dict.fromkeys(["SHW", "APD", "ECL", "NUE"], "XLB"),
+    **dict.fromkeys(["WELL", "PSA", "CCI", "DLR"], "XLRE"),
 }
 
 # How the wire writes a company, for matching headlines that do not carry the
@@ -223,6 +282,60 @@ def _last_close_mark(now: datetime) -> float:
         if d.weekday() < 5 and mark <= et_now:
             return mark.timestamp()
         d -= timedelta(days=1)
+
+
+def _in_session_close(close: float) -> bool:
+    """Is the ten-minute bar that closed at epoch `close` one the close read
+    covers — 09:30 (the pre-market's last, which fixes PMH / PML) to the bell?"""
+    dt = datetime.fromtimestamp(close, scan.ET)
+    d, m = dt.date(), dt.hour * 60 + dt.minute
+    return is_trading_day(d) and scan.RTH_START <= m <= scan.rth_end(d)
+
+
+def close_mark(now: datetime) -> float | None:
+    """When the newest finished ten-minute bar's prints are all in — its close +
+    CLOSE_LAG — or None when that bar is outside the session. Pure.
+
+    Any name whose bars were read before this mark is due for the close read.
+    """
+    t = now.timestamp()
+    close = t - t % scan.BAR_SEC
+    if t - close < CLOSE_LAG:
+        close -= scan.BAR_SEC
+    return close + CLOSE_LAG if _in_session_close(close) else None
+
+
+def next_mark_in(now: datetime) -> float | None:
+    """Seconds to the next close mark, or None when that close is outside the session. Pure."""
+    t = now.timestamp()
+    close = t - t % scan.BAR_SEC
+    if t >= close + CLOSE_LAG:
+        close += scan.BAR_SEC
+    return close + CLOSE_LAG - t if _in_session_close(close) else None
+
+
+def parse_live(doc: Any, names: dict[str, str], day: date) -> dict[str, LiveQuote]:
+    """A spark response → {symbol: its last regular-session trade on `day`}. Pure.
+
+    `names` maps Yahoo's spelling back to the watchlist's (BRK-B → BRK.B). A
+    quote stamped outside `day`'s regular session is dropped: before the open
+    `regularMarketPrice` is yesterday's close, and after it the official close —
+    neither is a live trade.
+    """
+    out: dict[str, LiveQuote] = {}
+    rows = ((doc or {}).get("spark") or {}).get("result") if isinstance(doc, dict) else None
+    for row in rows or []:
+        try:
+            meta = (row.get("response") or [None])[0]["meta"]
+            sym = names[row["symbol"]]
+            px, at = float(meta["regularMarketPrice"]), int(meta["regularMarketTime"])
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+            continue
+        dt = datetime.fromtimestamp(at, scan.ET)
+        m = dt.hour * 60 + dt.minute
+        if dt.date() == day and scan.RTH_START <= m < scan.rth_end(day) and px > 0:
+            out[sym] = LiveQuote(px, at)
+    return out
 
 
 def _yahoo(sym: str) -> str:
@@ -392,6 +505,13 @@ class ScanStore:
         self.daily_fails: dict[str, tuple[int, float]] = {}
         #: Yahoo said 429 — nothing is fetched before this (epoch).
         self.pause_until = 0.0
+        #: Each name's last regular-session trade (the live layer), and how many
+        #: live reads have failed in a row.
+        self.live: dict[str, LiveQuote] = {}
+        self.live_fails = 0
+        #: Names still owed the current close read — the bars job comes back
+        #: BURST_TICK_SEC later while this is non-zero.
+        self.burst_left = 0
         self._warm = False
 
     # ---- watchlist ----------------------------------------------------------
@@ -444,10 +564,12 @@ class ScanStore:
         if status == 429:
             self.pause_until = max(self.pause_until, t + RATE_LIMIT_PAUSE)
 
-    def _fetch_bars(self, sym: str) -> str | None:
+    def _fetch_bars(self, sym: str, fresh: bool = False) -> str | None:
+        """`fresh` skips the ten-second cache: the close read needs bars read
+        after the mark, and a copy cached five seconds before it is not that."""
         url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="5d", iv="5m")
-        r = fetch(url, key=f"scan5m_{sym}", ttl_sec=10.0, ua=BROWSER_UA, timeout=15,
-                  stale_max_sec=900.0, validate=json_body)
+        r = fetch(url, key=f"scan5m_{sym}", ttl_sec=0.0 if fresh else 10.0, ua=BROWSER_UA,
+                  timeout=15, stale_max_sec=900.0, validate=json_body)
         if not r.ok or r.source == "stale":
             self._failed(self.fails, sym, r.status, time.time())
         else:
@@ -465,6 +587,37 @@ class ScanStore:
         self.bars[sym], self.meta[sym] = bars, meta
         self.fetched[sym] = time.time() - (r.age_min or 0.0) * 60.0
         return None if r.source != "stale" else f"stale: {r.error}"
+
+    def bars_1m(self, sym: str) -> tuple[list[scan.Bar], str | None]:
+        """Two sessions of one-minute bars for the chart's 1m and 3m views.
+
+        Fetched ON DEMAND, from the API thread, only while a chart is open on
+        one of those views — never in the rotation, which the scan itself runs
+        on 5-minute bars. Twenty seconds of cache keeps a chart polling every
+        thirty from costing more than one request per poll, and a 429 elsewhere
+        pauses this too: the chart serves its last copy instead of hitting
+        Yahoo while the rotation is backing off.
+        """
+        key = f"scan1m_{sym}"
+        if self.pause_until > time.time():
+            blob = CACHE.read(key)
+            if blob is None:
+                return [], "Yahoo is rate-limiting — paused"
+            body: bytes = blob
+        else:
+            url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="2d", iv="1m")
+            r = fetch(url, key=key, ttl_sec=20.0, ua=BROWSER_UA, timeout=12,
+                      stale_max_sec=600.0, validate=json_body)
+            if r.status == 429:
+                self.pause_until = max(self.pause_until, time.time() + RATE_LIMIT_PAUSE)
+            if not r.ok or r.body is None:
+                return [], r.error or "unavailable"
+            body = r.body
+        try:
+            bars, _meta = scan.parse_chart(json.loads(body), step=60)
+        except ValueError as e:
+            return [], f"unparseable: {e}"
+        return bars, None if bars else "no bars"
 
     def _fetch_daily(self, sym: str) -> str | None:
         url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="3mo", iv="1d")
@@ -507,17 +660,25 @@ class ScanStore:
             return book.get(s, (0, 0.0))[1] > t
 
         paused = self.pause_until > t
+        # The close read: every name read before the newest session bar's mark
+        # goes first, ahead of the rotation.
+        mark = None if paused else close_mark(now)
+
+        def closing(s: str) -> bool:
+            return mark is not None and self.fetched.get(s, 0.0) < mark
+
         due = [] if paused else sorted(
-            (s for s in syms if lag(s) >= 1.0 and not waiting(s, self.fails)),
-            key=lambda s: -lag(s))
+            (s for s in syms if (lag(s) >= 1.0 or closing(s)) and not waiting(s, self.fails)),
+            key=lambda s: (not closing(s), -lag(s)))
         errors: list[str] = []
         for sym in due[:MAX_PER_TICK]:
-            err = self._fetch_bars(sym)
+            err = self._fetch_bars(sym, fresh=closing(sym))
             if err:
                 self.errors[sym] = err
                 errors.append(f"{sym}: {err}")
             else:
                 self.errors.pop(sym, None)
+        self.burst_left = sum(1 for s in syms if closing(s) and not waiting(s, self.fails))
 
         # Daily bars must be FINAL for every finished session: the previous
         # close is read off them (scan.technicals), and a copy fetched at 14:00
@@ -541,6 +702,8 @@ class ScanStore:
         st.age_min = max(ages) if ages else None
         done = min(len(due), MAX_PER_TICK)
         st.notes = [f"{done} refreshed, {len(due) - done} queued"]
+        if self.burst_left:
+            st.notes.append(f"close read: {self.burst_left} left")
         missing = len(syms) - len(have)
         if missing:
             st.notes.append(f"{missing} name(s) without bars yet")
@@ -556,6 +719,84 @@ class ScanStore:
             st.last_ok_utc = datetime.now(UTC).isoformat()
         return st
 
+    def wake_in(self, now: datetime | None = None) -> float:
+        """Seconds until the bars job should run again: BURST_TICK_SEC while a
+        close read is unfinished, the next close's mark when it comes before the
+        usual tick (so the read starts on time, not up to a tick late), else
+        TICK_SEC."""
+        if self.burst_left:
+            return BURST_TICK_SEC
+        nxt = next_mark_in(now or datetime.now(UTC))
+        return max(BURST_TICK_SEC, min(TICK_SEC, nxt)) if nxt is not None else TICK_SEC
+
+    def tick_live(self, now: datetime | None = None) -> tuple[SourceStatus | None, float]:
+        """One batched read of every name's last trade; returns the status and
+        the seconds until the next read.
+
+        The status is None outside the regular session — nothing was fetched,
+        and a tick-log row every thirty seconds saying so would be noise.
+        """
+        now = now or datetime.now(UTC)
+        clock = self.clock(now)
+        if clock.session != "rth":
+            return None, LIVE_IDLE_SEC
+        st = SourceStatus("Scanner live")
+        t = time.time()
+        if self.pause_until > t:
+            # The bars were refused: the live layer gives way first and whole.
+            st.source = "unavailable"
+            st.error = "paused with the bars — Yahoo is rate-limiting (HTTP 429)"
+            return st, max(LIVE_SEC, self.pause_until - t)
+        syms = self.symbols()
+        got: dict[str, LiveQuote] = {}
+        err: str | None = None
+        for i in range(0, len(syms), LIVE_CHUNK):
+            chunk = syms[i : i + LIVE_CHUNK]
+            names = {_yahoo(s): s for s in chunk}
+            url = SPARK.format(syms=urllib.parse.quote(",".join(names), safe=""), rng="1d", iv="1d")
+            # Never cached and never a stale copy: a five-second-old price
+            # served as live is the one thing this layer exists to avoid.
+            r = fetch(url, key=f"scanlive_{i}", ttl_sec=0.0, ua=BROWSER_UA, timeout=8,
+                      stale_ok=False, store=False, validate=json_body)
+            if not r.ok:
+                err = f"HTTP {r.status}" if r.status else (r.error or "unreachable")
+                break
+            try:
+                got.update(parse_live(r.json(), names, clock.trading_day))
+            except ValueError as e:
+                err = f"unparseable: {e}"
+                break
+        self.live.update(got)
+        if err:
+            self.live_fails += 1
+            delay = LIVE_BACKOFF[min(self.live_fails, len(LIVE_BACKOFF)) - 1]
+            st.error = f"{err} — next read in {delay:.0f}s"
+        else:
+            self.live_fails = 0
+            delay = LIVE_SEC
+        st.items = len(got)
+        st.ok = bool(got)
+        st.source = "live" if st.ok else "unavailable"
+        st.age_min = 0.0 if st.ok else None
+        st.notes = [f"{len(got)} of {len(syms)} names"]
+        if st.ok:
+            st.last_ok_utc = datetime.now(UTC).isoformat()
+        return st, delay
+
+    def live_bars(self, sym: str, clock: scan.Clock) -> list[scan.Bar] | None:
+        """The name's bars, with its live trade laid over them in the regular
+        session (scan.with_live). A trade the bars were read after is already
+        in them, so it changes nothing."""
+        bars = self.bars.get(sym)
+        q = self.live.get(sym)
+        if not bars or q is None or clock.session != "rth":
+            return bars
+        if datetime.fromtimestamp(q.at, scan.ET).date() != clock.trading_day:
+            return bars
+        if q.at <= self.fetched.get(sym, 0.0) or q.at > clock.now.timestamp():
+            return bars
+        return scan.with_live(bars, q.price, q.at)
+
     def clock(self, now: datetime) -> scan.Clock:
         return scan.clock_at(now.astimezone(scan.ET))
 
@@ -565,7 +806,7 @@ class ScanStore:
         clock = self.clock(now)
         techs: dict[str, scan.Tech] = {}
         for sym in self.symbols():
-            bars = self.bars.get(sym)
+            bars = self.live_bars(sym, clock)
             if not bars:
                 continue
             name = (self.meta.get(sym) or {}).get("shortName") or self.sec_names.get(sym)
@@ -575,6 +816,8 @@ class ScanStore:
         for sym, tech in techs.items():
             row = scan.row_of(sym, tech, techs.get("SPY"), techs.get("QQQ"), clock)
             row["sector"] = SECTOR.get(sym)
+            row["adv20"] = adv20([d.volume for d in (self.daily.get(sym) or [])
+                                  if d.day < clock.trading_day])
             if self.errors.get(sym) and not tech.ok:
                 row["error"] = self.errors[sym]
             rows[sym] = row
@@ -616,7 +859,8 @@ class ScanStore:
         due = sorted((s for s in names if t - self.news_at.get(s, 0.0) >= NEWS_SEC),
                      key=lambda s: self.news_at.get(s, 0.0))
         errors: list[str] = []
-        for sym in due[:NEWS_PER_TICK]:
+        cold = sum(1 for s in due if s not in self.news_at)
+        for sym in due[:max(NEWS_PER_TICK, min(cold, NEWS_PER_TICK_COLD))]:
             r = fetch(YAHOO_RSS.format(sym=urllib.parse.quote(_yahoo(sym))),
                       key=f"scannews_{sym}", ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15,
                       stale_max_sec=6 * 3600.0, validate=feed_body)

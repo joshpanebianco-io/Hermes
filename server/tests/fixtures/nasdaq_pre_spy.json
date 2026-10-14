@@ -1,0 +1,109 @@
+{
+ "data": {
+  "previousInfo": " Market Close: $778.1",
+  "lastUpdateInfo": [
+   "Data last updated Oct 13, 2026 09:30 AM ET.",
+   "This page will resume updating on Oct 14, 2026 04:00 AM ET."
+  ],
+  "sessionText": "",
+  "infoTable": {
+   "asOf": null,
+   "headers": {
+    "consolidated": "Pre-Market Consolidated Last Trade",
+    "volume": "Pre-Market Share Volume",
+    "highPrice": "Pre-Market High",
+    "lowPrice": "Pre-Market Low"
+   },
+   "rows": [
+    {
+     "consolidated": "$778.0117 -0.0883 (-0.01%)",
+     "volume": "777,110",
+     "highPrice": "$778.82 (06:05:55 AM)",
+     "lowPrice": "$776.51 (04:03:10 AM)",
+     "delta": "down"
+    }
+   ]
+  },
+  "tradeDetailTable": {
+   "asOf": null,
+   "headers": {
+    "time": "Pre-Market Time (ET)",
+    "price": "Pre-Market Price",
+    "shareVolume": "Pre-Market Share Volume"
+   },
+   "rows": [
+    {
+     "time": "09:33:13",
+     "price": "$778.0117",
+     "shareVolume": "35,000"
+    },
+    {
+     "time": "09:30:00",
+     "price": "$777.42",
+     "shareVolume": "18"
+    },
+    {
+     "time": "09:30:00",
+     "price": "$777.42",
+     "shareVolume": "20"
+    }
+   ]
+  },
+  "filterList": [
+   {
+    "name": "Last 100 Trades",
+    "value": 0
+   },
+   {
+    "name": "4:00 - 4:29",
+    "value": 1
+   },
+   {
+    "name": "4:30 - 4:59",
+    "value": 2
+   },
+   {
+    "name": "5:00 - 5:29",
+    "value": 3
+   },
+   {
+    "name": "5:30 - 5:59",
+    "value": 4
+   },
+   {
+    "name": "6:00 - 6:29",
+    "value": 5
+   },
+   {
+    "name": "6:30 - 6:59",
+    "value": 6
+   },
+   {
+    "name": "7:00 - 7:29",
+    "value": 7
+   },
+   {
+    "name": "7:30 - 7:59",
+    "value": 8
+   },
+   {
+    "name": "8:00 - 8:29",
+    "value": 9
+   },
+   {
+    "name": "8:30 - 8:59",
+    "value": 10
+   },
+   {
+    "name": "9:00 - 9:29",
+    "value": 11
+   }
+  ]
+ },
+ "message": null,
+ "status": {
+  "rCode": 200,
+  "bCodeMessage": null,
+  "developerMessage": null
+ }
+}

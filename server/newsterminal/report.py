@@ -1854,8 +1854,13 @@ def extract_json(text: str) -> Any | None:
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
+                        # strict=False: a raw line break or tab inside a string
+                        # is the commonest way a long free-model answer stops
+                        # being strict JSON, and strict parsing then fell
+                        # through to the first INNER object — a single plan,
+                        # reported as "needs a headline" (2026-10-13).
                         with contextlib.suppress(ValueError, TypeError):
-                            return json.loads(candidate[start : i + 1])
+                            return json.loads(candidate[start : i + 1], strict=False)
                         break
     return None
 

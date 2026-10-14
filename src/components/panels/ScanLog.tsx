@@ -6,6 +6,7 @@ import { num } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { HelmLoader } from "@/components/ui/HelmLoader";
 
 /**
  * The signal log — every (L), (E), breakout and near-break the engine saw,
@@ -105,7 +106,7 @@ export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
       </div>
 
       {!loaded ? (
-        <p className="px-3 py-8 text-center text-[12px] text-ink-3">Loading the log…</p>
+        <HelmLoader label="Loading the log" size={40} minHeight={220} />
       ) : days.length === 0 ? (
         <p className="px-3 py-8 text-center text-[12px] text-ink-3">
           Nothing logged yet. Signals are recorded as the engine sees them on confirmed ten-minute bars during the

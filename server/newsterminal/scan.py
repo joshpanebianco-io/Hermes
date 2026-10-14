@@ -124,8 +124,11 @@ def _quote_rows(doc: Any) -> tuple[list[Any], dict[str, Any], dict[str, Any]]:
     return list(res.get("timestamp") or []), res.get("meta") or {}, q
 
 
-def parse_chart(doc: Any) -> tuple[list[Bar], dict[str, Any]]:
+def parse_chart(doc: Any, step: int = 0) -> tuple[list[Bar], dict[str, Any]]:
     """A Yahoo v8 chart response (5m, extended) → bars on the 5-minute grid. Pure.
+
+    `step` is the grid in seconds — the 5-minute default, or 60 for the chart's
+    one-minute download.
 
     THE LAST BAR IS NOT ON THE GRID. Yahoo stamps the live bar with the time of
     its last trade (05:38:51), so every stamp is floored to five minutes, and a
@@ -133,6 +136,7 @@ def parse_chart(doc: Any) -> tuple[list[Bar], dict[str, Any]]:
     null price are holes in the tape (no trade) and are dropped, never zeroed.
     """
     ts, meta, q = _quote_rows(doc)
+    step = step or SRC_SEC
     opens, highs, lows = q.get("open") or [], q.get("high") or [], q.get("low") or []
     closes, vols = q.get("close") or [], q.get("volume") or []
     bars: list[Bar] = []
@@ -144,7 +148,7 @@ def parse_chart(doc: Any) -> tuple[list[Bar], dict[str, Any]]:
             continue
         if o is None or h is None or lo is None or c is None:
             continue
-        k = int(t) - int(t) % SRC_SEC
+        k = int(t) - int(t) % step
         b = Bar(k, float(o), float(h), float(lo), float(c), float(v or 0.0))
         if bars and bars[-1].t == k:
             p = bars[-1]
@@ -176,6 +180,33 @@ def parse_daily(doc: Any) -> list[DayBar]:
         else:
             out.append(row)
     return out
+
+
+def with_live(bars: list[Bar], price: float, at: int) -> list[Bar]:
+    """The bars with one live trade laid over the newest. Pure.
+
+    A TRADE, NOT A BAR (owner, 2026-10-14: the session "as close to real time as
+    possible"). Between two bar downloads the live layer (sources/scanner.py)
+    knows where a name last traded and when. Laid over the five-minute bucket
+    it falls in, that trade moves the bucket's close and stretches its high or
+    low; past the newest bar it opens the next bucket. Every figure read off the
+    close — % change, RS, level progress, trend — then reads the live price by
+    the same arithmetic as before. Volume stays with the bars: a trade carries
+    none here, and Yahoo's day volume counts ~20% more than its bars do
+    (measured 2026-10-14), so mixing the two would make the column jump.
+
+    A trade older than the newest bar is already inside it and changes nothing.
+    """
+    if not bars:
+        return bars
+    k = at - at % SRC_SEC
+    last = bars[-1]
+    if k < last.t:
+        return bars
+    if k == last.t:
+        return [*bars[:-1], Bar(k, last.open, max(last.high, price), min(last.low, price), price,
+                                last.volume)]
+    return [*bars, Bar(k, price, price, price, price, 0.0)]
 
 
 # ----------------------------------------------------------------------- clock
@@ -766,65 +797,181 @@ def _session_of(day: date, m: int) -> str | None:
     return None
 
 
-def chart_series(bars5: list[Bar], clock: Clock, tech: Tech) -> dict[str, Any]:
-    """The Scanner's mini chart for one name: ten-minute bars from the previous
-    session's open, the 8/9/10 EMA wave, today's VWAP, the four levels, the
-    session spans and today's signals. Pure — no fetch, the store's bars.
+#: The chart's timeframes (owner instruction, 2026-10-14: "a toggle for the
+#: time frames on the chart — 1m 3m 5m 10m D"), in seconds. 10m is the one the
+#: script's signals are read on; the others are views of the same tape.
+CHART_TF: dict[str, int] = {"1m": 60, "3m": 180, "5m": 300, "10m": 600, "D": 86400}
+#: The most bars an intraday chart ships — the pane draws at most about a
+#: hundred, and the EMA is computed on everything before the cut regardless.
+CHART_MAX = 400
+#: Sessions on the daily chart.
+CHART_DAYS = 90
 
-    THE EMA IS COMPUTED ON EVERY BAR THE STORE HOLDS and then sliced, so the
-    wave at the left edge of the chart is the same wave the signals were read
-    off, not one re-seeded at the first bar shown.
+
+def _empty_chart(tf: str, error: str) -> dict[str, Any]:
+    return {"ok": False, "tf": tf, "error": error, "bars": [], "ema8": [], "ema9": [],
+            "ema10": [], "vwap": [], "levels": {}, "sessions": [], "signals": []}
+
+
+def _levels_out(tech: Tech) -> dict[str, Any]:
+    return {"pdh": _r(tech.pdh), "pdl": _r(tech.pdl), "pmh": _r(tech.pmh),
+            "pml": _r(tech.pml), "pm_done": tech.pm_done}
+
+
+def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
+                 bars1: list[Bar] | None = None, daily: list[DayBar] | None = None,
+                 daily_asof: float | None = None) -> dict[str, Any]:
+    """The Scanner's mini chart for one name: bars from the previous session's
+    open, the 8/9/10 EMA wave, today's VWAP, the four levels, the session spans
+    and today's signals. Pure — no fetch, the store's bars.
+
+    `tf` picks the timeframe: 5m and 10m are the store's own 5-minute bars (as
+    they are, or paired); 1m and 3m need `bars1`, the one-minute download the
+    chart asks for only while it is open on one of them; D is `daily` with the
+    last few sessions rebuilt from the 5-minute bars (see `_daily_chart`).
+
+    THE EMA IS COMPUTED ON EVERY BAR HELD and then sliced, so the wave at the
+    left edge is the same wave the rest of the series runs on, not one
+    re-seeded at the first bar shown.
+
+    SIGNALS ARE READ ON 10-MINUTE BARS WHATEVER THE VIEW. On a shorter one the
+    mark goes on the bar holding the signal bar's last minute — the close that
+    confirmed it — so a 1m chart shows the (L) where it was confirmed, not ten
+    minutes early.
     """
+    if tf == "D":
+        return _daily_chart(daily or [], bars5, clock, tech, daily_asof)
+    step = CHART_TF.get(tf)
+    if step is None:
+        return _empty_chart(tf, f"no {tf} chart")
+    base = bars5 if step >= SRC_SEC else bars1
+    if not base:
+        return _empty_chart(tf, "no bars" if step >= SRC_SEC else "no one-minute bars")
     now_ts = int(clock.now.timestamp())
-    bars10 = resample([b for b in bars5 if b.t < now_ts])
-    if not bars10:
-        return {"ok": False, "error": "no bars", "bars": [], "ema8": [], "ema9": [], "ema10": [],
-                "vwap": [], "levels": {}, "sessions": [], "signals": []}
-    closes = [b.close for b in bars10]
+    bars = resample([b for b in base if b.t < now_ts], step)
+    if not bars:
+        return _empty_chart(tf, "no bars")
+    closes = [b.close for b in bars]
     e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
 
     # From the previous session's 09:30 (the PDH/PDL day) — or the start of the
-    # download if that day is not in it.
+    # download if that day is not in it — and never more than CHART_MAX bars.
     start = 0
     if tech.pdh_day is not None:
         d = tech.pdh_day
         t0 = int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
-        start = next((i for i, b in enumerate(bars10) if b.t >= t0), 0)
+        start = next((i for i, b in enumerate(bars) if b.t >= t0), 0)
+    start = max(start, len(bars) - CHART_MAX)
 
     td = clock.trading_day
     vwap: list[float | None] = []
     pv = vol = 0.0
     sessions: list[dict[str, Any]] = []
-    for b in bars10[start:]:
+    span_day: date | None = None
+    for b in bars[start:]:
         dt = datetime.fromtimestamp(b.t, ET)
         m = _mod(dt)
         kind = _session_of(dt.date(), m)
         if kind is not None:
-            if sessions and sessions[-1]["kind"] == kind and sessions[-1]["to"] == b.t:
-                sessions[-1]["to"] = b.t + BAR_SEC
+            # One span per session per day, gaps included: a thin name's
+            # one-minute pre-market has minutes with no trade, and each gap
+            # would otherwise start a span of its own.
+            if sessions and sessions[-1]["kind"] == kind and span_day == dt.date():
+                sessions[-1]["to"] = b.t + step
             else:
-                sessions.append({"kind": kind, "from": b.t, "to": b.t + BAR_SEC})
-        if dt.date() == td and kind == "rth" and b.volume > 0:
-            pv += (b.high + b.low + b.close) / 3.0 * b.volume
-            vol += b.volume
-            vwap.append(round(pv / vol, 4))
+                sessions.append({"kind": kind, "from": b.t, "to": b.t + step})
+                span_day = dt.date()
+        if dt.date() == td and kind == "rth":
+            # A bar with no volume yet (the live one, before its first print
+            # is counted) holds VWAP where it was rather than breaking the line.
+            if b.volume > 0:
+                pv += (b.high + b.low + b.close) / 3.0 * b.volume
+                vol += b.volume
+            vwap.append(round(pv / vol, 4) if vol > 0 else None)
         else:
             vwap.append(None)
 
     def cut(xs: list[float]) -> list[float | None]:
         return [round(x, 4) for x in xs[start:]]
 
+    def at(t: int) -> int:
+        return (t + BAR_SEC - 1) // step * step if step < BAR_SEC else t
+
     return {
         "ok": True,
+        "tf": tf,
         "bars": [{"t": b.t, "o": round(b.open, 4), "h": round(b.high, 4), "l": round(b.low, 4),
-                  "c": round(b.close, 4), "v": b.volume} for b in bars10[start:]],
+                  "c": round(b.close, 4), "v": b.volume} for b in bars[start:]],
         "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
         "vwap": vwap,
-        "levels": {"pdh": _r(tech.pdh), "pdl": _r(tech.pdl), "pmh": _r(tech.pmh),
-                   "pml": _r(tech.pml), "pm_done": tech.pm_done},
+        "levels": _levels_out(tech),
         "sessions": sessions,
-        "signals": [{"t": x["t"], "kind": x["kind"], "side": x["side"], "price": x["price"]}
+        "signals": [{"t": at(x["t"]), "kind": x["kind"], "side": x["side"], "price": x["price"]}
                     for x in tech.signals if x.get("t") is not None],
+    }
+
+
+def _daily_chart(daily: list[DayBar], bars5: list[Bar], clock: Clock, tech: Tech,
+                 daily_asof: float | None = None) -> dict[str, Any]:
+    """The daily view: regular-session candles, the wave on daily closes, the
+    four levels. No VWAP and no session spans — a daily bar has neither.
+
+    YAHOO'S DAILY ROW WHEN IT WAS FETCHED AFTER THAT DAY'S CLOSE, THE 5-MINUTE
+    BARS OTHERWISE. The daily download refreshes every few hours, so a row can
+    be a session caught halfway (fetched at 10:00, still that day's bar at
+    16:00) — that row, and today's, are rebuilt from the 5-minute bars'
+    regular session instead. A finished row is kept as Yahoo has it, because
+    its close is the closing auction's print and the last 5-minute bar's is
+    not. `daily_asof` is when the daily download was made (epoch); unknown
+    means no row is trusted where the 5-minute bars can stand in for it.
+    Today's candle appears once the open has traded and grows with the session.
+    """
+    now_ts = int(clock.now.timestamp())
+    rth: dict[date, list[Bar]] = {}
+    for b in bars5:
+        if b.t >= now_ts:
+            continue
+        dt = datetime.fromtimestamp(b.t, ET)
+        if _session_of(dt.date(), _mod(dt)) == "rth":
+            rth.setdefault(dt.date(), []).append(b)
+    def settled(d: date) -> bool:
+        # Fetched at least fifteen minutes after that day's close.
+        if daily_asof is None or d >= clock.trading_day:
+            return False
+        close = datetime(d.year, d.month, d.day, tzinfo=ET).timestamp() + rth_end(d) * 60
+        return daily_asof >= close + 15 * 60
+
+    have = {x.day for x in daily if settled(x.day)}
+    rebuilt = {
+        d: DayBar(d, xs[0].open, max(x.high for x in xs), min(x.low for x in xs), xs[-1].close,
+                  sum(x.volume for x in xs))
+        for d, xs in rth.items() if d <= clock.trading_day and d not in have
+    }
+    days = [x for x in daily if x.day not in rebuilt and x.day < clock.trading_day]
+    days = sorted(days + list(rebuilt.values()), key=lambda x: x.day)
+    if not days:
+        return _empty_chart("D", "no daily bars")
+    closes = [x.close for x in days]
+    e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
+    start = max(0, len(days) - CHART_DAYS)
+
+    def cut(xs: list[float]) -> list[float | None]:
+        return [round(x, 4) for x in xs[start:]]
+
+    def t_of(d: date) -> int:
+        return int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
+
+    return {
+        "ok": True,
+        "tf": "D",
+        "bars": [{"t": t_of(x.day), "o": round(x.open, 4), "h": round(x.high, 4),
+                  "l": round(x.low, 4), "c": round(x.close, 4), "v": x.volume}
+                 for x in days[start:]],
+        "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
+        "vwap": [None] * (len(days) - start),
+        "levels": _levels_out(tech),
+        "sessions": [],
+        "signals": [],
     }
 
 

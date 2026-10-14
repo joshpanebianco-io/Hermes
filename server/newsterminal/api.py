@@ -20,12 +20,13 @@ import contextlib
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import config
 from . import report as report_mod
+from . import stockplan as plan_mod
 from .collector import COLLECTOR
 from .sessions import session_state
 from .sources import scanner as scan_src
@@ -284,10 +285,12 @@ def scanner_stats(days: int = Query(20, ge=1, le=30)) -> dict[str, Any]:
 
 
 @app.get("/api/scanner/bars/{sym}")
-def scanner_bars(sym: str) -> dict[str, Any]:
-    """One name's ten-minute chart: bars, the EMA wave, VWAP, levels and signals.
-    Always 200; `ok: false` with an `error` when the name has no bars."""
-    return COLLECTOR.scanner_bars(sym[:12])
+def scanner_bars(sym: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|D)$")) -> dict[str, Any]:
+    """One name's chart on `tf` (1m, 3m, 5m, 10m or D): bars, the EMA wave,
+    VWAP, levels and signals. Always 200; `ok: false` with an `error` when the
+    name has no bars."""
+    return COLLECTOR.scanner_bars(sym[:12], tf)
+
 
 
 @app.post("/api/scanner/watchlist")
@@ -296,3 +299,57 @@ def scanner_watchlist_set(body: WatchlistIn) -> dict[str, Any]:
     failing the whole save; an empty or all-invalid list keeps the old one."""
     ok, bad = COLLECTOR.set_watchlist(body.symbols)
     return {"symbols": ok, "default": list(scan_src.DEFAULT_WATCHLIST), "rejected": bad}
+
+
+# ---------------------------------------------------------------- market
+#
+# The stocks desk's context (marketctx.py): the tape count and its grade,
+# breadth, fuel, today's prints, the Fed path, gamma in ETF prices, the index
+# ETFs' options and the sector peers reporting. Computed on read from the
+# scanner payload and the snapshot, like the Scanner itself.
+
+
+@app.get("/api/market")
+def market() -> dict[str, Any]:
+    return COLLECTOR.market_payload()
+
+
+# ---------------------------------------------------------------- game plan
+#
+# The stocks desk's brief (stockplan.py): its own routes and storage, so the
+# futures report's history never carries a stock plan and the reverse. Like
+# the report, generating is the one thing here that works on the request
+# path — an explicit act by the reader, a minute or three on a free model.
+
+_PLAN_ID = r"^\d{8}-\d{6}$"
+
+
+def _plan_feed() -> dict[str, Any]:
+    return {"config": plan_mod.configured(), "latest": plan_mod.latest(),
+            "history": plan_mod.history()}
+
+
+@app.get("/api/plan")
+def plan_latest() -> dict[str, Any]:
+    """The most recent game plan, the history list, and whether a key is set."""
+    return _plan_feed()
+
+
+@app.get("/api/plan/{plan_id}")
+def plan_one(plan_id: str = Path(..., pattern=_PLAN_ID)) -> dict[str, Any]:
+    return {"config": plan_mod.configured(), "latest": plan_mod.load(plan_id)}
+
+
+@app.delete("/api/plan/{plan_id}")
+def plan_delete(plan_id: str = Path(..., pattern=_PLAN_ID)) -> dict[str, Any]:
+    """Drop one stored plan and hand back the list without it (see report_delete)."""
+    gone = plan_mod.remove(plan_id)
+    return {**_plan_feed(), "deleted": gone}
+
+
+@app.post("/api/plan")
+def plan_generate(top: int = Query(plan_mod.TOP_DEFAULT, ge=plan_mod.TOP_MIN,
+                                   le=plan_mod.TOP_MAX)) -> dict[str, Any]:
+    """Write a game plan for the top `top` scanner names, against the live state."""
+    rep = plan_mod.generate(COLLECTOR.scanner_payload(), COLLECTOR.snapshot(), top=top)
+    return {"config": plan_mod.configured(), "latest": rep, "history": plan_mod.history()}

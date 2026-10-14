@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ScanBars } from "@/types/scanner";
+import type { ChartTf, ScanBars } from "@/types/scanner";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { segItem } from "@/lib/seg";
+import { HelmLoader } from "@/components/ui/HelmLoader";
+import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
- * One name's ten-minute chart, drawn the way LE_Model.pine draws it: the
+ * One name's chart, drawn the way LE_Model.pine draws it: the
  * candles, the four levels (PDH / PDL solid, PMH / PML dashed, as the script's
  * defaults set them), the 8 EMA wave, VWAP, and the signals where they fired —
  * so the setup the row describes can be SEEN before switching to TradingView
@@ -26,13 +29,31 @@ import { cn } from "@/lib/cn";
  * Extended hours are shaded and their candles dimmed, because the strategy is
  * a regular-session one and the pre-market is where its levels come from, not
  * where it trades.
+ *
+ * TIMEFRAMES (owner instruction, 2026-10-14: "a toggle for the time frames on
+ * the chart — 1m 3m 5m 10m D"). Ten minutes is the default and the one the
+ * script's signals are read on; the others are views of the same tape, with
+ * each signal marked on the bar that holds the ten-minute close confirming
+ * it. The choice is remembered for every name.
  */
 
 const H = 280;
 const PAD = { top: 22, right: 78, bottom: 20, left: 4 };
 /** Narrowest a candle step may get before the oldest bars are dropped instead. */
 const MIN_STEP = 5;
-const POLL_SEC = 30;
+
+const TFS: readonly ChartTf[] = ["1m", "3m", "5m", "10m", "D"];
+const TF_NAME: Record<ChartTf, string> = {
+  "1m": "one-minute",
+  "3m": "three-minute",
+  "5m": "five-minute",
+  "10m": "ten-minute",
+  D: "daily",
+};
+/** A daily chart changes once a session; the intraday ones as fast as their bars. */
+const POLL_SEC: Record<ChartTf, number> = { "1m": 20, "3m": 30, "5m": 30, "10m": 30, D: 120 };
+/** Minutes between time labels — kept 44px apart on screen regardless. */
+const TICK_MIN: Record<Exclude<ChartTf, "D">, number> = { "1m": 15, "3m": 30, "5m": 60, "10m": 60 };
 
 const ET_HM = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
@@ -41,8 +62,22 @@ const ET_HM = new Intl.DateTimeFormat("en-US", {
   hour12: false,
 });
 const hm = (t: number) => ET_HM.format(new Date(t * 1000));
+const ET_DAY = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+const ET_WDAY = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" });
+const md = (t: number) => ET_DAY.format(new Date(t * 1000));
+const wd = (t: number) => ET_WDAY.format(new Date(t * 1000));
 
-export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 | 2 }) {
+export function ScanChart({
+  sym,
+  state,
+  em = null,
+}: {
+  sym: string;
+  state: -2 | -1 | 0 | 1 | 2;
+  /** The front expiry's expected move, drawn as a dotted band. */
+  em?: { lo: number; hi: number; label: string } | null;
+}) {
+  const [tf, setTf] = usePersisted<ChartTf>("scan.tf", "10m", oneOf(...TFS));
   const [data, setData] = useState<ScanBars | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [w, setW] = useState(0);
@@ -53,7 +88,7 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
   const load = useCallback(async () => {
     const mine = ++seq.current;
     try {
-      const r = await fetch(`/api/scanner/bars/${encodeURIComponent(sym)}`, { cache: "no-store" });
+      const r = await fetch(`/api/scanner/bars/${encodeURIComponent(sym)}?tf=${tf}`, { cache: "no-store" });
       const d = (await r.json()) as ScanBars & { offline?: { reason: string } };
       if (mine !== seq.current) return;
       setData(d);
@@ -61,17 +96,18 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
     } catch (e) {
       if (mine === seq.current) setErr(e instanceof Error ? e.message : "request failed");
     }
-  }, [sym]);
+  }, [sym, tf]);
 
-  // A new name starts blank rather than showing the last one's candles under its ticker.
+  // A new name or timeframe starts blank rather than showing the last one's
+  // candles under its ticker.
   useEffect(() => {
     setData(null);
     setErr(null);
     setHover(null);
     void load();
-    const id = setInterval(load, POLL_SEC * 1000);
+    const id = setInterval(load, POLL_SEC[tf] * 1000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, tf]);
 
   useEffect(() => {
     const el = box.current;
@@ -82,7 +118,16 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
     return () => ro.disconnect();
   }, []);
 
-  const g = useMemo(() => (data?.ok && w > 0 ? geometry(data, w, state) : null), [data, w, state]);
+  const emLo = em?.lo ?? null;
+  const emHi = em?.hi ?? null;
+  const emLabel = em?.label ?? "";
+  const g = useMemo(
+    () =>
+      data?.ok && w > 0
+        ? geometry(data, w, state, emLo != null && emHi != null ? { lo: emLo, hi: emHi, label: emLabel } : null, data.tf ?? "10m")
+        : null,
+    [data, w, state, emLo, emHi, emLabel],
+  );
 
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!g) return;
@@ -92,11 +137,36 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
   };
 
   return (
+    <div className="w-full">
+      <div className="flex items-center gap-3 pb-1.5">
+        <span className="qt-cap text-[10.5px] text-ink-3">Chart</span>
+        {tf !== "10m" && tf !== "D" && (
+          <span className="min-w-0 truncate text-[11px] text-ink-3" title="LE_Model's (L) and (E) are read on ten-minute bars; on this view each sits on the bar holding the ten-minute close that confirmed it">
+            signals read on 10m
+          </span>
+        )}
+        <span className="seg ml-auto shrink-0" role="group" aria-label="Chart timeframe">
+          {TFS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTf(t)}
+              aria-pressed={tf === t}
+              title={`${TF_NAME[t]} bars`}
+              {...segItem(tf === t, { className: "fig min-w-[30px] justify-center" })}
+            >
+              {t}
+            </button>
+          ))}
+        </span>
+      </div>
     <div ref={box} className="relative w-full" style={{ height: H }}>
       {!g ? (
-        <p className="absolute inset-0 flex items-center justify-center text-[12px] text-ink-3">
-          {err ? `No chart — ${err}` : "Loading the chart…"}
-        </p>
+        err ? (
+          <p className="absolute inset-0 flex items-center justify-center text-[12px] text-ink-3">No chart — {err}</p>
+        ) : (
+          <HelmLoader label={`Loading the ${tf} chart`} size={40} className="absolute inset-0" />
+        )
       ) : (
         <svg
           width={w}
@@ -105,7 +175,7 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
           role="img"
-          aria-label={`${sym} ten-minute chart with its levels`}
+          aria-label={`${sym} ${TF_NAME[g.tf]} chart with its levels`}
         >
           {/* extended hours, shaded */}
           {g.shades.map((s, i) => (
@@ -121,6 +191,10 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
           {g.ema10 && <path d={g.ema10} fill="none" stroke={g.waveHue} strokeWidth={1} opacity={0.45} />}
           {/* VWAP */}
           {g.vwap && <path d={g.vwap} fill="none" stroke="var(--ink-2)" strokeWidth={1} strokeDasharray="4 3" opacity={0.85} />}
+          {/* the straddle's expected move */}
+          {g.em.map((e) => (
+            <line key={e.key} x1={g.x0} x2={w - PAD.right} y1={e.y} y2={e.y} stroke="var(--ink-3)" strokeWidth={1} strokeDasharray="2 3" opacity={0.9} />
+          ))}
           {/* levels */}
           {g.levels.map((l) => (
             <line
@@ -176,9 +250,10 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
       )}
       {g && (
         <p className={cn("fig pointer-events-none absolute top-0 left-1 text-[10.5px] text-ink-3")}>
-          {hover !== null && g.bars[hover] ? readout(g, hover) : `10m · ET · ${g.n} bars`}
+          {hover !== null && g.bars[hover] ? readout(g, hover) : `${g.tf} · ${g.tf === "D" ? "regular session" : "ET"} · ${g.n} bars`}
         </p>
       )}
+    </div>
     </div>
   );
 }
@@ -186,6 +261,7 @@ export function ScanChart({ sym, state }: { sym: string; state: -2 | -1 | 0 | 1 
 /* -------------------------------------------------------------------------- */
 
 interface Geo {
+  tf: ChartTf;
   n: number;
   x0: number;
   step: number;
@@ -202,6 +278,7 @@ interface Geo {
   waveHue: string;
   vwap: string | null;
   levels: Array<{ key: string; y: number; hue: string; dashed: boolean }>;
+  em: Array<{ key: string; y: number }>;
   labels: Array<{ key: string; y: number; text: string; hue: string; spot?: boolean }>;
   marks: Array<{ d: string; x: number; ty: number; label: string; hue: string; hollow: boolean }>;
   ticks: Array<{ x: number; text: string }>;
@@ -210,7 +287,8 @@ interface Geo {
 
 function readout(g: Geo, i: number): string {
   const b = g.bars[i];
-  const parts = [`${hm(b.t)}`, `O ${num(b.o)}`, `H ${num(b.h)}`, `L ${num(b.l)}`, `C ${num(b.c)}`];
+  const when = g.tf === "D" ? `${wd(b.t)} ${md(b.t)}` : hm(b.t);
+  const parts = [when, `O ${num(b.o)}`, `H ${num(b.h)}`, `L ${num(b.l)}`, `C ${num(b.c)}`];
   const v = g.vwapAt[i];
   const e = g.ema8At[i];
   if (v != null) parts.push(`VWAP ${num(v)}`);
@@ -218,7 +296,15 @@ function readout(g: Geo, i: number): string {
   return parts.join("  ");
 }
 
-function geometry(d: ScanBars, w: number, state: number): Geo | null {
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function geometry(
+  d: ScanBars,
+  w: number,
+  state: number,
+  emBand: { lo: number; hi: number; label: string } | null,
+  tf: ChartTf,
+): Geo | null {
   const all = d.bars;
   if (all.length === 0) return null;
   const plotW = w - PAD.left - PAD.right;
@@ -226,10 +312,11 @@ function geometry(d: ScanBars, w: number, state: number): Geo | null {
 
   // Start at today's pre-market (and six bars of the evening before it, for
   // context), or simply the most recent bars that fit — whichever is shorter.
+  // The daily chart simply shows the most recent sessions that fit.
   const lastT = all[all.length - 1].t;
   const pre = [...d.sessions].reverse().find((s) => s.kind === "pre" && s.from <= lastT);
   let start = pre ? all.findIndex((b) => b.t >= pre.from) : -1;
-  start = start < 0 ? Math.max(0, all.length - 60) : Math.max(0, start - 6);
+  start = tf === "D" ? 0 : start < 0 ? Math.max(0, all.length - 60) : Math.max(0, start - 6);
   start = Math.max(start, all.length - maxBars);
   const bars = all.slice(start);
   const n = bars.length;
@@ -275,7 +362,9 @@ function geometry(d: ScanBars, w: number, state: number): Geo | null {
   const y = (v: number) => top + ((hi - v) / (hi - lo)) * (bot - top);
   const clampY = (v: number) => Math.max(top + 6, Math.min(bot - 6, y(v)));
 
+  // A daily bar is the regular session by construction — nothing to shade.
   const inExt = (t: number) => {
+    if (tf === "D") return false;
     const s = d.sessions.find((x) => t >= x.from && t < x.to);
     return !s || s.kind !== "rth";
   };
@@ -339,6 +428,15 @@ function geometry(d: ScanBars, w: number, state: number): Geo | null {
       hue: l.hue,
     });
   }
+  // The expected-move band: drawn where it falls on the scale, labelled once
+  // (at its upper edge) so it reads as one band rather than two more levels.
+  const em: Geo["em"] = [];
+  if (emBand) {
+    for (const [key, v] of [["emhi", emBand.hi], ["emlo", emBand.lo]] as const) {
+      if (v >= lo && v <= hi) em.push({ key, y: y(v) });
+    }
+    labels.push({ key: "em", y: clampY(emBand.hi), text: emBand.label, hue: "var(--ink-3)" });
+  }
   const lastV = bars[n - 1].c;
   const vLast = vwap[n - 1];
   if (vLast != null) labels.push({ key: "VWAP", y: clampY(vLast), text: `VWAP ${num(vLast)}`, hue: "var(--ink-2)" });
@@ -372,18 +470,32 @@ function geometry(d: ScanBars, w: number, state: number): Geo | null {
   // apart. Spacing is measured on screen, not counted in hours: the bars are
   // contiguous but time is not — 19:50 sits beside 04:00 across the night —
   // so two hour marks can land a candle apart.
+  //
+  // The interval follows the timeframe (every quarter-hour on 1m, half-hour on
+  // 3m, the hour above); the daily chart labels the first session of each week.
   const ticks: Geo["ticks"] = [];
   let lastX = -Infinity;
   bars.forEach((b, i) => {
-    const t = hm(b.t);
     const x = xAt(i);
-    if (t.endsWith(":00") && x - lastX >= 44) {
-      ticks.push({ x, text: t });
+    let text: string | null = null;
+    if (tf === "D") {
+      const prev = bars[i - 1];
+      // A new week: this session's weekday comes before the last one's, or
+      // more than three days have passed (a holiday Monday).
+      if (!prev || b.t - prev.t > 3 * 86400 || DOW.indexOf(wd(b.t)) < DOW.indexOf(wd(prev.t))) text = md(b.t);
+    } else {
+      const t = hm(b.t);
+      if (Number(t.slice(3)) % TICK_MIN[tf] === 0 && (TICK_MIN[tf] < 60 || t.endsWith(":00"))) text = t;
+    }
+    // Not so near the left edge that half the label is cut off.
+    if (text && x >= 18 && x - lastX >= 44) {
+      ticks.push({ x, text });
       lastX = x;
     }
   });
 
   return {
+    tf,
     n,
     x0,
     step,
@@ -400,6 +512,7 @@ function geometry(d: ScanBars, w: number, state: number): Geo | null {
     waveHue,
     vwap: line(vwap),
     levels,
+    em,
     labels,
     marks,
     ticks,

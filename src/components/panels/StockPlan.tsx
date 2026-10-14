@@ -14,6 +14,7 @@ import { ConvictionBar, SplitBar, biasWord, gradeText, leanText, readText, sideT
 import { bp, compact, dir, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
+import { NoteAge } from "@/components/ui/NoteAge";
 
 /** The engine's setup state in the words the Scanner prints — never the raw key. */
 const STATE_WORD: Record<string, string> = {
@@ -126,6 +127,7 @@ export function StockPlan({ top, setTop, feed, busy, viewing, generate, open, di
             <Failed error={plan.error} raw={plan.raw} noun="plan" />
           ) : plan.plan && plan.facts ? (
             <>
+              <NoteAge createdUtc={plan.created_utc} what="plan" />
               <PlanView p={plan} />
               <Provenance p={plan} showDigest={showDigest} onDigest={() => setShowDigest((v) => !v)} />
             </>

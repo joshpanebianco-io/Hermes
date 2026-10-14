@@ -47,6 +47,12 @@ def test_the_table_still_covers_this_year() -> None:
         (date(2025, 1, 9), False, time(16, 0)),  # the Carter day of mourning
         (date(2026, 10, 13), True, time(16, 0)),
         (date(2026, 10, 17), False, time(16, 0)),  # a Saturday is not a trading day
+        # 2028, from NYSE's page (read 2026-10-14): New Year's Day is a Saturday
+        # and is not observed, so Friday Dec 31 2027 and Monday Jan 3 trade.
+        (date(2027, 12, 31), True, time(16, 0)),
+        (date(2028, 1, 3), True, time(16, 0)),
+        (date(2028, 4, 14), False, time(16, 0)),  # Good Friday
+        (date(2028, 11, 24), True, time(13, 0)),  # the half day after Thanksgiving
     ],
 )
 def test_trading_days_and_closes(d: date, trading: bool, close: time) -> None:

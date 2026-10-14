@@ -1347,6 +1347,17 @@
   .flat {
     color: var(--ink-3);
   }
+  /* Quiet prints a signed figure in the hue's figure tier — GEXYGEN's
+     text-call-fig. HERE, in utilities, not beside Quiet's other rules in
+     components: a later layer beats an earlier one whatever the specificity,
+     so over there these lost to the plain .up/.down above and Quiet's
+     negatives read at 3.3:1 against the page (audit, 2026-10-14). */
+  .ui-qt .up {
+    color: var(--call-fig);
+  }
+  .ui-qt .down {
+    color: var(--put-fig);
+  }
 
   .rule {
     border-color: color-mix(in oklab, var(--ring) 70%, transparent);
@@ -1498,13 +1509,6 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     white-space: nowrap;
-  }
-  /* A signed figure prints in the hue's figure tier — GEXYGEN's text-call-fig. */
-  .ui-qt .up {
-    color: var(--call-fig);
-  }
-  .ui-qt .down {
-    color: var(--put-fig);
   }
 }
 

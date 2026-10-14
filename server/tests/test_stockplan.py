@@ -590,3 +590,15 @@ def test_json_punctuation_typed_into_a_why_line_is_dropped() -> None:
     assert sp._why(["Options: calls lead at put/call 0.39, which backs the long],"]) == [
         "Options: calls lead at put/call 0.39, which backs the long"]
     assert sp._why(["Macro: Dollar -0.31% (tailwind)"]) == ["Macro: Dollar -0.31% (tailwind)"]
+
+
+def test_the_plan_takes_the_expiry_rules_pick_and_prints_the_rule() -> None:
+    """One rule (optcalc.expiry_rule) for the table, Settings and the plan: the
+    row's `options.pick` names the contract summarised, and the prompt states the
+    rule's own words rather than a copy of them (audit, 2026-10-14)."""
+    from newsterminal import optcalc
+
+    row = _row("AAA", 60, "long", options=OPTS | {"pick": "front"})
+    assert sp._options(row)["long"]["expiry"] == "2026-10-13"
+    assert optcalc.expiry_rule()["text"] in sp.STRATEGY
+    assert "0DTE only on" not in sp.system_prompt("rth")

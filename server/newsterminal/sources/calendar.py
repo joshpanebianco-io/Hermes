@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
 from ..http import SourceStatus, clean_text, fetch, json_body
+from ..sessions import desk_window
 
 ET = ZoneInfo("America/New_York")
 NASDAQ = "https://api.nasdaq.com/api/calendar/economicevents?date={d}"
@@ -196,15 +197,19 @@ REGIONS: dict[str, str] = {
     "Malaysia": "apac", "Thailand": "apac", "Philippines": "apac", "Vietnam": "apac",
 }
 
-# The trading session an ET time falls in — the same four windows the range
-# panel segments on, so "prints in the London session" means one thing across
-# the terminal.
-SESSION_WINDOWS: list[tuple[str, float, float]] = [
-    ("asia", 18.0, 3.0),
-    ("london", 3.0, 8.0),
-    ("preny", 8.0, 9.5),
-    ("ny", 9.5, 16.0),
-]
+# The trading session a release prints into — the range panel's windows
+# (sessions.desk_window), with its two European windows folded into one
+# "london", so "prints in the London session" means one thing across the
+# terminal. They were four ET constants here, with London from 03:00 ET: UK
+# GDP at 07:00 London (02:00 ET) printed "in the Asia session" (review,
+# 2026-10-14), and every boundary was an hour out in the mismatch weeks.
+_SESSION_OF_WINDOW: dict[str | None, str] = {
+    "asia": "asia",
+    "london": "london",
+    "euro_mid": "london",
+    "preny": "preny",
+    "ny": "ny",
+}
 
 
 def region_of(country: str) -> str:
@@ -215,12 +220,8 @@ def session_of(when_et: datetime | None) -> str | None:
     """Which trading session this release prints into. None when untimed."""
     if when_et is None:
         return None
-    h = when_et.hour + when_et.minute / 60.0
-    for key, start, end in SESSION_WINDOWS:
-        if (start <= h < end) if start < end else (h >= start or h < end):
-            return key
-    # 16:00–18:00 ET: cash is shut and Globex has not reopened.
-    return "closed"
+    # 16:00–18:00 ET: cash is shut and Globex has not reopened, or is about to halt.
+    return _SESSION_OF_WINDOW.get(desk_window(when_et), "closed")
 
 
 def parse_day(doc: Any, day: date) -> list[dict[str, Any]]:

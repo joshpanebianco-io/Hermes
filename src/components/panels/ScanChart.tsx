@@ -206,8 +206,18 @@ export function ScanChart({
               stroke={l.hue}
               strokeWidth={1}
               strokeDasharray={l.dashed ? "5 4" : undefined}
-              opacity={0.8}
+              opacity={l.faint ? 0.5 : 0.8}
             />
+          ))}
+          {/* earlier sessions' levels, each over its own day */}
+          {g.hist.map((h) => (
+            <g key={h.key} opacity={0.55}>
+              <title>{h.title}</title>
+              <line x1={h.x1} x2={h.x2} y1={h.y} y2={h.y} stroke={h.hue} strokeWidth={1} strokeDasharray={h.dashed ? "5 4" : undefined} />
+              <text x={h.lx} y={h.y - 3} textAnchor={h.anchor} className="fig" fontSize={9} fill={h.hue}>
+                {h.label}
+              </text>
+            </g>
           ))}
           {/* candles */}
           {g.candles.map((c, i) => (
@@ -232,6 +242,7 @@ export function ScanChart({
             <g key={l.key}>
               {l.spot && <rect x={w - PAD.right + 2} y={l.y - 7} width={PAD.right - 4} height={14} fill="var(--surface-3)" />}
               <text x={w - PAD.right + 6} y={l.y + 3.5} className="fig" fontSize={10} fill={l.hue}>
+                {l.title && <title>{l.title}</title>}
                 {l.text}
               </text>
             </g>
@@ -277,9 +288,21 @@ interface Geo {
   ema10: string | null;
   waveHue: string;
   vwap: string | null;
-  levels: Array<{ key: string; y: number; hue: string; dashed: boolean }>;
+  levels: Array<{ key: string; y: number; hue: string; dashed: boolean; faint?: boolean }>;
+  hist: Array<{
+    key: string;
+    x1: number;
+    x2: number;
+    y: number;
+    hue: string;
+    dashed: boolean;
+    label: string;
+    lx: number;
+    anchor: "start" | "end";
+    title: string;
+  }>;
   em: Array<{ key: string; y: number }>;
-  labels: Array<{ key: string; y: number; text: string; hue: string; spot?: boolean }>;
+  labels: Array<{ key: string; y: number; text: string; hue: string; spot?: boolean; title?: string }>;
   marks: Array<{ d: string; x: number; ty: number; label: string; hue: string; hollow: boolean }>;
   ticks: Array<{ x: number; text: string }>;
   lastY: number;
@@ -342,16 +365,40 @@ function geometry(
   }
   const span0 = Math.max(hi - lo, hi * 0.002);
   const L = d.levels;
-  const lvl: Array<{ key: string; v: number | null; hue: string; dashed: boolean }> = [
+  /*
+   * PMH / PML WHILE THEY FORM (owner, 2026-10-14: "ensure that the chart in
+   * the scanner includes the pre market highs and lows"). They were hidden
+   * until 09:30, when the pre-market is done — so the hours the levels are
+   * made in showed none. Now they draw as they stand, fainter and marked
+   * "·f" (forming), and become the day's lines at the bell.
+   */
+  const forming = !L.pm_done;
+  const lvl: Array<{ key: string; v: number | null; hue: string; dashed: boolean; forming?: boolean }> = [
     { key: "PDH", v: L.pdh, hue: "var(--call-fig)", dashed: false },
-    { key: "PMH", v: L.pm_done ? L.pmh : null, hue: "var(--call-fig)", dashed: true },
-    { key: "PML", v: L.pm_done ? L.pml : null, hue: "var(--put-fig)", dashed: true },
+    { key: "PMH", v: L.pmh, hue: "var(--call-fig)", dashed: true, forming },
+    { key: "PML", v: L.pml, hue: "var(--put-fig)", dashed: true, forming },
     { key: "PDL", v: L.pdl, hue: "var(--put-fig)", dashed: false },
   ];
-  for (const l of lvl) {
-    if (l.v != null && l.v > lo - span0 * 0.6 && l.v < hi + span0 * 0.6) {
-      lo = Math.min(lo, l.v);
-      hi = Math.max(hi, l.v);
+  // Earlier sessions' levels, each over its own regular hours — the Pine's
+  // "keep previous days' levels" — where that session is on screen. Overnight
+  // the chart shows yesterday; these are the levels yesterday traded against.
+  const hist0 = (d.history ?? [])
+    .map((h) => {
+      const i0 = bars.findIndex((b) => b.t >= h.from);
+      let i1 = -1;
+      for (let i = n - 1; i >= 0; i--) {
+        if (bars[i].t < h.to) {
+          i1 = i;
+          break;
+        }
+      }
+      return { ...h, i0, i1 };
+    })
+    .filter((h) => h.i0 >= 0 && h.i1 >= h.i0);
+  for (const v of [...lvl.map((l) => l.v), ...hist0.map((h) => h.v)]) {
+    if (v != null && v > lo - span0 * 0.6 && v < hi + span0 * 0.6) {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
     }
   }
   const pad = (hi - lo) * 0.06 || hi * 0.001;
@@ -420,12 +467,35 @@ function geometry(
   for (const l of lvl) {
     if (l.v == null) continue;
     const onScale = l.v >= lo && l.v <= hi;
-    if (onScale) levels.push({ key: l.key, y: y(l.v), hue: l.hue, dashed: l.dashed });
+    if (onScale) levels.push({ key: l.key, y: y(l.v), hue: l.hue, dashed: l.dashed, faint: l.forming });
     labels.push({
       key: l.key,
       y: clampY(l.v),
-      text: `${l.key} ${num(l.v)}${onScale ? "" : l.v > hi ? " ↑" : " ↓"}`,
+      text: `${l.key} ${num(l.v)}${l.forming ? " ·f" : ""}${onScale ? "" : l.v > hi ? " ↑" : " ↓"}`,
       hue: l.hue,
+      title: l.forming ? `${l.key} so far — the pre-market is still forming it; final at 09:30 ET` : undefined,
+    });
+  }
+  // The earlier sessions' segments: PDH / PDL named at their left end, PMH /
+  // PML at their right, so a pair that sits close does not print its names
+  // over each other.
+  const hist: Geo["hist"] = [];
+  for (const h of hist0) {
+    if (h.v < lo || h.v > hi) continue;
+    const pm = h.key === "PMH" || h.key === "PML";
+    const x1 = xAt(h.i0) - step / 2;
+    const x2 = xAt(h.i1) + step / 2;
+    hist.push({
+      key: `${h.day}-${h.key}`,
+      x1,
+      x2,
+      y: y(h.v),
+      hue: h.key === "PDH" || h.key === "PMH" ? "var(--call-fig)" : "var(--put-fig)",
+      dashed: pm,
+      label: h.key,
+      lx: pm ? x2 - 2 : x1 + 2,
+      anchor: pm ? "end" : "start",
+      title: `${h.key} ${num(h.v)} — the ${h.day} session's level`,
     });
   }
   // The expected-move band: drawn where it falls on the scale, labelled once
@@ -512,6 +582,7 @@ function geometry(
     waveHue,
     vwap: line(vwap),
     levels,
+    hist,
     em,
     labels,
     marks,

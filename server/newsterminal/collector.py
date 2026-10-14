@@ -52,7 +52,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -299,7 +299,15 @@ class Collector:
         # Its failure is its own: a log that cannot be written must not mark the
         # scanner itself as down.
         try:
-            self.events.observe(self.scanner_payload(), dict(self.scan.bars))
+            payload = self.scanner_payload()
+            self.events.observe(payload, dict(self.scan.bars), fetched=dict(self.scan.fetched))
+            # A finished day's signals, settled once against bars read after its
+            # bell (scanlog's "second look"). Cheap when there is nothing to do:
+            # only names with unchecked events and a post-bell download replay.
+            for day, syms in self.events.unchecked(str(payload.get("trading_day") or "")).items():
+                got = self.scan.day_signals(date.fromisoformat(day), syms)
+                if got:
+                    self.events.settle(day, got)
         except Exception as e:  # noqa: BLE001 — see module docstring
             st_ev = SourceStatus("Scanner events")
             st_ev.error = f"{e.__class__.__name__}: {e}"
@@ -350,8 +358,11 @@ class Collector:
         if not bars:
             return {"ok": False, "sym": sym, "tf": tf, "error": "no bars yet"}
         daily = self.scan.daily.get(sym) or []
+        # Confirmed by the download, as on the row (scan.CLOSE_LAG_SEC) — a chart
+        # marking a signal the row does not have would be its own phantom.
         tech = scan_mod.technicals(bars, daily, clock,
-                                   official=scan_mod.official_close(self.scan.meta.get(sym)))
+                                   official=scan_mod.official_close(self.scan.meta.get(sym)),
+                                   asof=self.scan.fetched.get(sym))
         bars1: list[scan_mod.Bar] | None = None
         if scan_mod.CHART_TF.get(tf, 600) < 300:
             bars1, err = self.scan.bars_1m(sym)

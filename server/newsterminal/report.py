@@ -43,11 +43,23 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
+from datetime import time as dtime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import CACHE_DIR, UA
+from .holidays import close_time, cme_closed, is_trading_day
 from .profile import value_position
+from .sessions import (
+    GLOBEX_REOPEN,
+    LONDON_DESKS,
+    LONDON_OPEN_END,
+    NY_OPEN,
+    PRE_NY,
+    globex_trade_date,
+    london_at,
+    overlap_end,
+)
 
 ET = ZoneInfo("America/New_York")
 
@@ -152,14 +164,60 @@ def _q(quotes: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     return next((q for q in quotes if q.get("key") == key), None)
 
 
-def _brief(q: dict[str, Any] | None) -> dict[str, Any] | None:
-    """One instrument, trimmed to what a read actually uses."""
+# --------------------------------------------------------------------------
+# How old each price is.
+#
+# THE DIGEST USED TO CARRY NO AGES AT ALL (review, 2026-10-14). The CME futures
+# quotes run about ten minutes behind the exchange, and after the cash close
+# the 10-year's last print was 14:59 ET for the rest of the night — and the
+# brief read every one of them as "now". The board rows now say what they are
+# (`feed`, from quotes.feed_state); an older snapshot without it falls back to
+# the print's own age.
+# --------------------------------------------------------------------------
+
+#: A print older than this, with no `feed` to say otherwise, is not current.
+NOT_CURRENT_MIN = 30.0
+FUTURES_DELAY_NOTE = (
+    "CME futures quotes (NQ, ES, GC, YM, RTY, crude, metals, the note futures) come "
+    "via Yahoo about 10 minutes behind the exchange"
+)
+
+
+def _print_age(q: dict[str, Any], now: datetime | None) -> tuple[str | None, str | None]:
+    """(feed, last print in ET) for one board row. `feed` is live, delayed,
+    stale or closed, or None when nothing says. Pure."""
+    feed = q.get("feed") if isinstance(q.get("feed"), str) else None
+    qt = q.get("quote_time")
+    if not isinstance(qt, int | float) or qt <= 0 or now is None:
+        return feed, None
+    when = datetime.fromtimestamp(qt, ET)
+    if feed is None and (now.timestamp() - qt) / 60.0 > NOT_CURRENT_MIN:
+        feed = "stale"
+    return feed, when.strftime("%H:%M ET" if when.date() == now.date() else "%a %H:%M ET")
+
+
+def _not_current(q: dict[str, Any] | None, now: datetime | None) -> str | None:
+    """"last print 14:59 ET" for a row that is stale or shut, else None."""
+    if not q:
+        return None
+    feed, label = _print_age(q, now)
+    if feed in ("stale", "closed") and label:
+        return f"last print {label}"
+    return None
+
+
+def _brief(q: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any] | None:
+    """One instrument, trimmed to what a read actually uses — and, when its
+    last print is not current, when that was."""
     if not q:
         return None
     out: dict[str, Any] = {
         "last": q.get("last"),
         "pct": round(q["pct"], 2) if q.get("pct") is not None else None,
     }
+    feed, label = _print_age(q, now)
+    if feed in ("stale", "closed") and label:
+        out["not_current"] = f"{feed}: last print {label}"
     if q.get("range_pos") is not None:
         # Where in the day's range the last print sits — the figure that says
         # whether a gain is being held or given back.
@@ -180,10 +238,16 @@ def _brief(q: dict[str, Any] | None) -> dict[str, Any] | None:
 # prompt below is assembled around whichever one is chosen.
 # --------------------------------------------------------------------------
 
+# WHAT LEADS EACH SESSION NAMES ONLY WHAT THE DIGEST CARRIES (review,
+# 2026-10-14). London's line listed "Bunds and Gilts", which the data has never
+# held, and a stored brief duly cited a Gilt move nobody had measured. Every
+# instrument named here is a row the digest prints.
+#
+# The hours are not here: they move with the clocks, and `session_hours`
+# writes them for the day the note is for.
 SESSIONS: dict[str, dict[str, str]] = {
     "asia": {
         "label": "Asia",
-        "hours": "18:00–03:00 ET (Tokyo 19:00–01:00, Hong Kong 21:30–04:00)",
         "leads": "Nikkei, Hang Seng, Shanghai, KOSPI, ASX; USD/JPY, AUD/USD, USD/CNY",
         "handover": "New York's close is the handover — Asia opens reacting to it",
         "character": (
@@ -194,11 +258,7 @@ SESSIONS: dict[str, dict[str, str]] = {
     },
     "london": {
         "label": "London",
-        "hours": (
-            "02:00–08:00 ET; the OPEN window is 02:00–05:00 "
-            "(European futures from 02:00, LSE cash 03:00–11:30 ET)"
-        ),
-        "leads": "FTSE, DAX, Euro Stoxx; EUR/USD, GBP/USD, Bunds and Gilts",
+        "leads": "FTSE, DAX, Euro Stoxx; EUR/USD, GBP/USD; the US curve as Europe trades it",
         "handover": "Asia's session is the handover — London reprices what Asia did",
         "character": (
             "The first real liquidity of the day. London routinely takes out the Asia "
@@ -208,7 +268,6 @@ SESSIONS: dict[str, dict[str, str]] = {
     },
     "ny": {
         "label": "New York",
-        "hours": "09:30–16:00 ET, with the 08:00–11:30 London overlap around the open",
         "leads": "NQ/ES/YM/RTY, the sector SPDRs, the Treasury curve, the dollar",
         "handover": "Asia and London are the handover — the US opens into their range",
         "character": (
@@ -288,51 +347,92 @@ def resolve_asset(want: str) -> str:
     return want if want in ASSETS else "all"
 
 
-def resolve_session(clock: dict[str, Any], want: str = "auto") -> str:
-    """Which session a note is being written for.
-
-    `auto` resolves to the session that is about to trade or is trading now,
-    which is what someone pressing Generate almost always means. Between 16:00
-    and 18:00 ET nothing is open and the honest answer is the one that reopens.
-    """
-    if want in SESSIONS:
-        return want
-    et = str(clock.get("et") or "")
-    try:
-        hour = int(et[11:13]) + int(et[14:16]) / 60.0
-    except (ValueError, IndexError):
-        return "ny"
-    if 16.0 <= hour < 18.0 or hour >= 18.0 or hour < 2.0:
-        return "asia"
-    if 2.0 <= hour < 7.5:
-        return "london"
-    return "ny"
-
-
-# When each session actually STARTS trading, and how many hours it runs.
+# --------------------------------------------------------------------------
+# When each session actually runs.
 #
-# DELIBERATELY NOT `resolve_session`'S BOUNDARIES. That answers "which session
-# is this note FOR", and from 16:00 ET it already says Asia, because the note
-# worth writing at 16:30 is the one for tonight. These are the instants the
-# session itself opens and closes, which is the different question this file
-# used to never ask: at 16:30, Asia has NOT started.
-SESSION_CLOCK: dict[str, tuple[tuple[int, int], float]] = {
-    "asia": ((18, 0), 9.0),    # 18:00 -> 03:00 ET
-    "london": ((2, 0), 6.0),   # 02:00 -> 08:00 ET, matching resolve_session
-    "ny": ((9, 30), 6.5),      # 09:30 -> 16:00 ET
-}
+# EVERY BOUNDARY ON ITS OWN CITY'S CLOCK, FROM sessions.py (review,
+# 2026-10-14). These were ET constants — London from 02:00, Asia to 03:00 —
+# an hour out for the weeks the UK's and the US's clocks disagree, and one of
+# three different definitions of London across the terminal. Now:
+#
+#   asia     18:00 ET     -> 07:00 London   Sun–Thu evenings Globex reopens
+#   london   07:00 London -> 08:00 ET       weekdays Globex trades
+#   ny       09:30 ET     -> NYSE close     NYSE trading days
+#
+# AND ONLY ON THE DAYS IT RUNS. The clock used to be pure time-of-day, so it
+# called Friday 20:30 ET "Asia, 2h 30m in" with Globex shut for the weekend,
+# and Saturday 10:00 and Thanksgiving morning "New York underway". A session
+# is underway only inside an occurrence that actually happened.
+# --------------------------------------------------------------------------
+
+# How long before its bell the note becomes New York's: the 07:30 switch
+# `auto` has always made, so the London note stops at the US pre-open.
+NY_LEAD_MIN = 120
 
 
-def _span(minutes: int) -> str:
-    """90 -> "1h 30m". Rounded to the minute; nobody reads seconds off a brief."""
-    h, m = divmod(max(0, minutes), 60)
-    if h and m:
-        return f"{h}h {m}m"
-    return f"{h}h" if h else f"{m}m"
+def _session_spans(session: str, around: datetime) -> list[tuple[datetime, datetime]]:
+    """Every (open, close) of `session` from two days before `around` to nine
+    after, in ET, skipping the days it does not run. Pure."""
+    base = around.astimezone(ET).date()
+    out: list[tuple[datetime, datetime]] = []
+    for k in range(-2, 10):
+        d = base + timedelta(days=k)
+        if session == "asia":
+            if d.weekday() not in (6, 0, 1, 2, 3):
+                continue
+            opened = datetime.combine(d, GLOBEX_REOPEN, tzinfo=ET)
+            trade = globex_trade_date(opened)
+            if cme_closed(trade):
+                continue
+            closed = london_at(trade, LONDON_DESKS).astimezone(ET)
+        elif session == "london":
+            if d.weekday() >= 5 or cme_closed(d):
+                continue
+            opened = london_at(d, LONDON_DESKS).astimezone(ET)
+            closed = datetime.combine(d, PRE_NY, tzinfo=ET)
+        else:
+            if not is_trading_day(d):
+                continue
+            opened = datetime.combine(d, NY_OPEN, tzinfo=ET)
+            closed = datetime.combine(d, close_time(d), tzinfo=ET)
+        out.append((opened, closed))
+    return out
+
+
+def _hm(t: datetime) -> str:
+    return t.astimezone(ET).strftime("%H:%M")
+
+
+def session_hours(session: str, opened: datetime) -> str:
+    """The session's hours in ET for the occurrence that opens at `opened`,
+    with the cities that define it — right in the mismatch weeks and in both
+    halves of the year. The prompt's Tokyo hours were an EST-only constant,
+    an hour out all summer. Pure."""
+    if session == "asia":
+        trade = globex_trade_date(opened)
+        end = london_at(trade, LONDON_DESKS)
+
+        def city(zone: str, o: dtime, c: dtime) -> str:
+            tz = ZoneInfo(zone)
+            return (f"{_hm(datetime.combine(trade, o, tzinfo=tz))}–"
+                    f"{_hm(datetime.combine(trade, c, tzinfo=tz))}")
+
+        return (f"{_hm(opened)}–{_hm(end)} ET (Tokyo "
+                f"{city('Asia/Tokyo', dtime(9, 0), dtime(15, 30))}, Hong Kong "
+                f"{city('Asia/Hong_Kong', dtime(9, 30), dtime(16, 0))} ET)")
+    d = opened.astimezone(ET).date()
+    if session == "london":
+        win_end = london_at(d, LONDON_OPEN_END)
+        lse_open = london_at(d, dtime(8, 0))
+        return (f"{_hm(opened)}–08:00 ET; the OPEN window is {_hm(opened)}–{_hm(win_end)} ET "
+                f"(07:00–10:00 London: European futures from {_hm(opened)}, "
+                f"LSE cash {_hm(lse_open)}–{_hm(overlap_end(d))} ET)")
+    return (f"09:30–{close_time(d):%H:%M} ET, with the London overlap 08:00–"
+            f"{_hm(overlap_end(d))} ET around the open")
 
 
 def session_progress(session: str, now_et: datetime) -> dict[str, Any]:
-    """Where `now` sits inside the session the note is being written for.
+    """Where `now` sits against the session the note is being written for.
 
     THE FACT THE BRIEF WAS MISSING. Everything downstream — the prompt's field
     descriptions, the panel's headings — was written for a note composed BEFORE
@@ -344,32 +444,75 @@ def session_progress(session: str, now_et: datetime) -> dict[str, Any]:
 
     So this states it outright and the prompt branches on it. `underway` is the
     load-bearing bit; the minutes are what let the note say how far in it is.
+    Elapsed time is measured on timestamps, so the night the clocks change
+    counts its real minutes.
     """
-    (open_h, open_m), hours = SESSION_CLOCK.get(session, SESSION_CLOCK["ny"])
-    opened = now_et.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
-    if opened > now_et:
-        # Today's open is still ahead, so the most recent one was yesterday's —
-        # which is what carries Asia across midnight: at 00:30 the session that
-        # is running started at 18:00 on the previous calendar day.
-        opened -= timedelta(days=1)
-
-    minutes_in = int((now_et - opened).total_seconds() / 60.0)
-    if 0 <= minutes_in < hours * 60:
-        return {
-            "underway": True,
-            "minutes_in": minutes_in,
-            "opened_et": opened.strftime("%H:%M"),
-            "phrase": _span(minutes_in),
-        }
-
-    opens = opened + timedelta(days=1)
-    minutes_until = max(0, int((opens - now_et).total_seconds() / 60.0))
+    now = now_et.astimezone(ET)
+    key = session if session in SESSIONS else "ny"
+    spans = _session_spans(key, now)
+    for opened, closed in spans:
+        if opened <= now < closed:
+            minutes_in = int((now.timestamp() - opened.timestamp()) / 60.0)
+            return {
+                "underway": True,
+                "minutes_in": minutes_in,
+                "opened_et": _hm(opened),
+                "phrase": _span(minutes_in),
+                "hours": session_hours(key, opened),
+            }
+    opens = next((o for o, _ in spans if o > now), None)
+    if opens is None:  # unreachable with a ten-day walk; never fatal
+        return {"underway": False, "minutes_until": None, "opens_et": None,
+                "phrase": "", "hours": ""}
+    minutes_until = max(0, int((opens.timestamp() - now.timestamp()) / 60.0))
     return {
         "underway": False,
         "minutes_until": minutes_until,
-        "opens_et": opens.strftime("%H:%M"),
+        # The weekday when it is not today: "Sun 18:00", not an 18:00 that
+        # reads as tonight on a Friday.
+        "opens_et": opens.strftime("%H:%M" if opens.date() == now.date() else "%a %H:%M"),
         "phrase": _span(minutes_until),
+        "hours": session_hours(key, opens),
     }
+
+
+def resolve_session(clock: dict[str, Any], want: str = "auto") -> str:
+    """Which session a note is being written for.
+
+    `auto` resolves to the session that is trading now, or else the one that
+    opens next — which is what someone pressing Generate almost always means.
+    New York takes over two hours before its bell. Between 16:00 and 18:00 ET,
+    over a weekend and on Thanksgiving morning nothing is running, and the
+    honest answer is the one that opens next: Asia, on Sunday evening if need
+    be — never a New York "underway" with the market shut.
+    """
+    if want in SESSIONS:
+        return want
+    try:
+        now = datetime.fromisoformat(str(clock.get("et"))).astimezone(ET)
+    except ValueError:
+        return "ny"
+    progs = {k: session_progress(k, now) for k in SESSIONS}
+    ny = progs["ny"]
+    if ny["underway"] or (ny.get("minutes_until") or 10**9) <= NY_LEAD_MIN:
+        return "ny"
+    for k in ("london", "asia"):
+        if progs[k]["underway"]:
+            return k
+    return min(SESSIONS, key=lambda k: progs[k].get("minutes_until") or 10**9)
+
+
+def _span(minutes: int) -> str:
+    """90 -> "1h 30m", 2790 -> "1d 22h 30m". Rounded to the minute; nobody reads
+    seconds off a brief."""
+    days, rest = divmod(max(0, minutes), 24 * 60)
+    h, m = divmod(rest, 60)
+    parts = [f"{days}d"] if days else []
+    if h:
+        parts.append(f"{h}h")
+    if m or not parts:
+        parts.append(f"{m}m")
+    return " ".join(parts)
 
 
 def _vp_reads(asset: dict[str, Any], session: str) -> dict[str, Any]:
@@ -559,9 +702,19 @@ def _wk_mo(row: dict[str, Any] | None, month: bool = False) -> list[str]:
     return out
 
 
-def _snapshot(snap: dict[str, Any], books: list[str]) -> list[dict[str, Any]]:
-    """The handful of instruments the brief is read against, each with its context."""
+def _snapshot(
+    snap: dict[str, Any], books: list[str], now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """The handful of instruments the brief is read against, each with its context.
+
+    A row whose last print is not current says so in its sub-line ("last print
+    14:59 ET"), on the page as well as in the digest."""
     quotes = snap.get("quotes") or []
+
+    def aged(q: dict[str, Any] | None, bits: list[str]) -> str:
+        stamp = _not_current(q, now)
+        return " · ".join([*bits, stamp] if stamp else bits)
+
     rates = snap.get("rates") or {}
     equity = any(b in books for b in ("NQ", "ES"))
     rows: list[dict[str, Any]] = []
@@ -575,12 +728,12 @@ def _snapshot(snap: dict[str, Any], books: list[str]) -> list[dict[str, Any]]:
             bits.append(f"settle {q['prev']:,.{BOOK_DP[b]}f}")
         bits += _wk_mo(_ctx(snap, b), month=True)
         rows.append(_srow(b, BOOK_LABELS[b], q["last"], BOOK_DP[b], chg=q.get("pct"),
-                          sub=" · ".join(bits)))
+                          sub=aged(q, bits)))
 
     dxy = _q(quotes, "DXY")
     if dxy:
         rows.append(_srow("DXY", "DXY", dxy["last"], 2, chg=dxy.get("chg"), unit="pts",
-                          sub=" · ".join(_wk_mo(_ctx(snap, "DXY")))))
+                          sub=aged(dxy, _wk_mo(_ctx(snap, "DXY")))))
 
     ten = _q(quotes, "US10Y")
     if ten:
@@ -593,7 +746,7 @@ def _snapshot(snap: dict[str, Any], books: list[str]) -> list[dict[str, Any]]:
         rows.append(_srow(
             "US10Y", "US 10Y", ten["last"], 2, suffix="%", unit="bp",
             chg=ten["chg"] * 100.0 if ten.get("chg") is not None else None,
-            sub=" · ".join(bits),
+            sub=aged(ten, bits),
         ))
 
     if "GC" in books:
@@ -617,7 +770,7 @@ def _snapshot(snap: dict[str, Any], books: list[str]) -> list[dict[str, Any]]:
             rows.append(_srow(
                 "VOL", "VIX / VXN", (vix or {}).get("last"), 1, last2=(vxn or {}).get("last"),
                 tag=shape.capitalize() if shape not in {"", "unknown"} else None,
-                sub=" · ".join(bits),
+                sub=aged(vix or vxn, bits),
             ))
 
     if "GC" in books:
@@ -629,18 +782,18 @@ def _snapshot(snap: dict[str, Any], books: list[str]) -> list[dict[str, Any]]:
     wti = _q(quotes, "WTI")
     if wti:
         rows.append(_srow("WTI", "WTI", wti["last"], 2, chg=wti.get("pct"),
-                          sub=" · ".join(_wk_mo(_ctx(snap, "WTI"), month=True))))
+                          sub=aged(wti, _wk_mo(_ctx(snap, "WTI"), month=True))))
 
     jpy = _q(quotes, "USDJPY")
     if jpy:
         rows.append(_srow("USDJPY", "USD/JPY", jpy["last"], 2, chg=jpy.get("chg"), unit="pts",
-                          sub=" · ".join(_wk_mo(_ctx(snap, "USDJPY")))))
+                          sub=aged(jpy, _wk_mo(_ctx(snap, "USDJPY")))))
 
     if "GC" in books:
         si = _q(quotes, "SILVER")
         if si:
             rows.append(_srow("SILVER", "Silver", si["last"], 2, chg=si.get("pct"),
-                              sub=" · ".join(_wk_mo(_ctx(snap, "SILVER")))))
+                              sub=aged(si, _wk_mo(_ctx(snap, "SILVER")))))
     return rows
 
 
@@ -704,12 +857,19 @@ def _ladder(
     }
     if session in handover:
         keys, prefix = handover[session]
-        picked = [sessions[k] for k in keys if k in sessions]
+        # TODAY'S WINDOWS ONLY (review, 2026-10-14). At 07:50 ET the Pre-NY row
+        # is yesterday's — its window has not come round again — and it went
+        # into the max with the rest, so the ladder printed yesterday's high,
+        # 31,089, as the "ON high" against a true overnight high of 30,906.
+        # The ranges flag such rows `prior_day`; they are not the overnight.
+        picked = [sessions[k] for k in keys
+                  if k in sessions and not sessions[k].get("prior_day")]
         if picked:
             add(max(s["high"] for s in picked), f"{prefix} high", "range")
             add(min(s["low"] for s in picked), f"{prefix} low", "range")
     hour = now.hour + now.minute / 60.0
-    if session == "ny" and 9.5 <= hour < 16.0 and "ny" in sessions:
+    if (session == "ny" and 9.5 <= hour < 16.0 and "ny" in sessions
+            and not sessions["ny"].get("prior_day")):
         add(sessions["ny"]["high"], "RTH high so far", "range")
         add(sessions["ny"]["low"], "RTH low so far", "range")
 
@@ -1027,12 +1187,42 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         "books": books,
         "as_of": f"{now:%a %d %b %Y}, {now:%H:%M} ET",
         "partial": _partial(snap, books),
-        "snapshot": _snapshot(snap, books),
+        "snapshot": _snapshot(snap, books, now),
         "ladders": ladders,
         "gamma": [card for b in books if (card := _gamma_card(snap, b, by_book.get(b)))],
         "catalysts": _catalysts(snap, books, now),
         "rotation": _rotation(snap, books),
         "headlines": _headlines(snap, session, now),
+    }
+
+
+# The board rows the digest prints, for `price_feed`'s list of what is not current.
+_DIGEST_KEYS = (
+    "NQ", "QQQ", "ES", "SPY", "GC", "GLD", "YM", "RTY", "N225", "HSI", "SHCOMP", "KOSPI",
+    "ASX", "FTSE", "DAX", "SX5E", "VIX", "VVIX", "MOVE", "VXN", "VIX3M", "US10Y", "DXY",
+    "USDJPY", "EURUSD", "GBPUSD", "AUDUSD", "USDCNY", "WTI", "BRENT", "NATGAS", "SILVER",
+    "COPPER", "BTC", "HYG", "TLT",
+)
+
+
+def _price_feed(quotes: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    """The board's age in one block: what is delayed, and what has stopped. Pure."""
+    delayed: list[str] = []
+    stopped: dict[str, str] = {}
+    for key in _DIGEST_KEYS:
+        q = _q(quotes, key)
+        if not q:
+            continue
+        feed, label = _print_age(q, now)
+        if feed == "delayed":
+            delayed.append(key)
+        elif feed in ("stale", "closed") and label:
+            stopped[key] = f"{feed}: last print {label}"
+    return {
+        "board_read_et": now.strftime("%H:%M ET"),
+        "futures": FUTURES_DELAY_NOTE,
+        "delayed": delayed,
+        "not_current": stopped,
     }
 
 
@@ -1052,6 +1242,9 @@ def build_digest(
     # binding, reused by the gamma age below for the same reason.
     now = _now_et(snap)
     _prog = session_progress(session, now)
+
+    def brief(key: str) -> dict[str, Any] | None:
+        return _brief(_q(quotes, key), now)
     rates = snap.get("rates") or {}
     sectors = snap.get("sectors") or []
     gex = (snap.get("gex") or {}).get("assets") or {}
@@ -1064,14 +1257,14 @@ def build_digest(
     # than the right one. The context stays — NQ leading ES is a genuine read —
     # but it can no longer be mistaken for the thing being traded.
     all_books: dict[str, Any] = {
-        "NQ_futures": _brief(_q(quotes, "NQ")),
-        "QQQ": _brief(_q(quotes, "QQQ")),
-        "ES_futures": _brief(_q(quotes, "ES")),
-        "SPY": _brief(_q(quotes, "SPY")),
-        "GC_gold_futures": _brief(_q(quotes, "GC")),
-        "GLD": _brief(_q(quotes, "GLD")),
-        "YM_dow": _brief(_q(quotes, "YM")),
-        "RTY_russell": _brief(_q(quotes, "RTY")),
+        "NQ_futures": brief("NQ"),
+        "QQQ": brief("QQQ"),
+        "ES_futures": brief("ES"),
+        "SPY": brief("SPY"),
+        "GC_gold_futures": brief("GC"),
+        "GLD": brief("GLD"),
+        "YM_dow": brief("YM"),
+        "RTY_russell": brief("RTY"),
     }
     focus_keys = BOOK_KEYS.get(asset, ())
     if focus_keys:
@@ -1176,9 +1369,11 @@ def build_digest(
 
     return {
         "writing_for_session": SESSIONS.get(session, SESSIONS["ny"])["label"],
-        "session_hours": SESSIONS.get(session, SESSIONS["ny"])["hours"],
+        "session_hours": _prog.get("hours"),
         "writing_about": ASSETS[resolve_asset(asset)]["instruments"],
         "as_of_et": clock.get("et"),
+        # HOW OLD THE PRICES ARE — see `_print_age`. Read beside every figure.
+        "price_feed": _price_feed(quotes, now),
         # STATED AS DATA AS WELL AS IN THE PROMPT. The prompt tells the model
         # how to write; this lets it reason about how far in it is — an Asia
         # note twenty minutes after the bell and one five hours in are different
@@ -1199,10 +1394,10 @@ def build_digest(
         "overnight_sessions": {
             # ASX included because the desk is in Sydney: for an Asia-session
             # note the home index is not "overnight", it is the tape.
-            k: _brief(_q(quotes, k))
-            for k in ("N225", "HSI", "SHCOMP", "ASX", "FTSE", "DAX", "SX5E")
+            k: brief(k)
+            for k in ("N225", "HSI", "SHCOMP", "KOSPI", "ASX", "FTSE", "DAX", "SX5E")
         },
-        "volatility": {k: _brief(_q(quotes, k)) for k in ("VIX", "VVIX", "MOVE", "VXN")},
+        "volatility": {k: brief(k) for k in ("VIX", "VVIX", "MOVE", "VXN")},
         # THE SHAPE, NOT JUST THE LEVEL. Contango is the calm shape; the near
         # tenor overtaking the far one is the stressed one, and that crossover
         # usually leads the index rather than following it.
@@ -1293,11 +1488,15 @@ def build_digest(
                 for m in (snap.get("policy_meetings") or {}).get("meetings") or []
             ][:6],
         },
+        # The crosses each session's `leads` line names: EUR/USD and GBP/USD
+        # for London, AUD/USD and USD/CNY for Asia — so a channel the prompt
+        # points at has a figure behind it.
         "dollar_and_commodities": {
-            k: _brief(_q(quotes, k))
-            for k in ("DXY", "USDJPY", "WTI", "BRENT", "NATGAS", "SILVER", "COPPER")
+            k: brief(k)
+            for k in ("DXY", "USDJPY", "EURUSD", "GBPUSD", "AUDUSD", "USDCNY",
+                      "WTI", "BRENT", "NATGAS", "SILVER", "COPPER")
         },
-        "risk_appetite": {k: _brief(_q(quotes, k)) for k in ("BTC", "HYG", "TLT")},
+        "risk_appetite": {k: brief(k) for k in ("BTC", "HYG", "TLT")},
         # Week and month changes from daily bars: the "WTI +11% on the week"
         # figures a one-day board cannot give. `week_change` is a plain
         # difference, which is how a yield's move is said.
@@ -1465,30 +1664,44 @@ SCHEMA: dict[str, Any] = _obj({
 # THE OWNER'S RULE, KEPT: US macro and the Fed remain the anchor in every
 # session. What changes by session is which OTHER evidence is admissible and how
 # far a break should be believed — never the weight of the US itself.
+#
+# AND THEY NAME ONLY CHANNELS THE DIGEST CAN SHOW (review, 2026-10-14). The
+# London block sent the model to "Bunds and Gilts" and the gold block to "the
+# LBMA fixes", "Shanghai premiums" and "Indian buying" — none of which this
+# data has ever carried — and a stored GC brief duly repeated all three as if
+# they had been read. The figure check catches an invented number, not an
+# invented market. So each channel now points at the block where it shows, and
+# anything without one is admissible only from a headline that states it.
 TRANSMISSION: dict[str, str] = {
     "asia": """\
 ASIA REACHES A US BOOK THROUGH THREE CHANNELS, AND ESSENTIALLY NO OTHERS:
   * USD/JPY and the BoJ — a funding channel, not a sentiment one. Yen strength
     forces carry unwinds and that lands hardest on the long-duration index.
-  * China growth and policy — PBOC fixes and operations, credit data, stimulus
-    headlines. Real, but second-order for the indices and first-order for
-    commodities and the dollar.
-  * Taiwan and the semiconductor complex — TSMC, export curbs, Taiwan risk.
-    This one hits NQ directly through the semis, not through "Asian equities".
+    USD/JPY is in `dollar_and_commodities`; the BoJ is in the catalysts or the
+    headlines when it is in play at all.
+  * China growth and policy — the Chinese prints in `catalysts`, USD/CNY, and
+    stimulus or PBOC headlines. Real, but second-order for the indices and
+    first-order for commodities and the dollar.
+  * Taiwan and the semiconductor complex — TSMC, export curbs, Taiwan risk,
+    as the headlines and `index_movers` show them. This one hits NQ directly
+    through the semis, not through "Asian equities".
 A Nikkei or Hang Seng move on its own is CORRELATION, not cause: those indices
 are usually reacting to the same US close the reader already knows about. Say
 what Asia did, but only let it move the call when it arrives through one of the
 three channels above.""",
     "london": """\
-LONDON REACHES A US BOOK MAINLY THROUGH RATES, and it matters more than Asia
-does:
-  * Bunds and Gilts price into the US curve, and the US curve is the discount
-    rate under the index — long duration first. A disorderly Gilt move is a US
-    equity event, as September 2022 demonstrated.
-  * EUR/USD and GBP/USD are the other side of the dollar, so European data
-    moves the DXY that gold and the multinationals are priced against.
-  * European data (CPI, PMIs, ZEW/IFO) and ECB/BoE speakers set the day's rate
-    narrative before New York has an opinion.
+LONDON REACHES A US BOOK MAINLY THROUGH RATES AND THE DOLLAR, and it matters
+more than Asia does:
+  * European rates trade into the US curve, and the US curve is the discount
+    rate under the index — long duration first. THIS DATA CARRIES NO EUROPEAN
+    YIELDS: what it has is the US curve itself (`rates.curve`, the 10-year in
+    the snapshot), which is where a European rates move shows up for these
+    books. Name a Bund or Gilt move only if a headline states one, and say so.
+  * EUR/USD and GBP/USD are the other side of the dollar
+    (`dollar_and_commodities`), so European data moves the DXY that gold and
+    the multinationals are priced against.
+  * European data and ECB/BoE speakers, as `catalysts` and the headlines list
+    them, set the day's rate narrative before New York has an opinion.
 Liquidity is genuinely here, so London is where the overnight range gets
 resolved rather than merely drifted through — and it is positioning ahead of
 the 08:30 ET US print, which remains the actual event.""",
@@ -1502,15 +1715,15 @@ is American.""",
 
 # Gold's answer to the same question is different enough to state separately.
 TRANSMISSION_GC = """\
-GOLD IS THE ONE BOOK WHERE THE NON-US SESSIONS ARE MORE THAN A TIMEZONE:
-  * LONDON IS THE PHYSICAL MARKET. The LBMA fixes (10:30 and 15:00 London) are
-    real price discovery, not a clock — sizeable flow prints into them.
-  * ASIA IS PHYSICAL DEMAND: Shanghai premiums or discounts to loco London,
-    Indian buying, and central-bank reserve accumulation.
-Weight those higher than you would for an index. But the PRICE DRIVER is still
-US real yields and the dollar: physical flow sets the basis and the depth, the
-front of the US curve sets the level. A gold thesis that never mentions real
-rates is incomplete however busy Shanghai was."""
+GOLD IS THE ONE BOOK WHERE THE NON-US SESSIONS ARE MORE THAN A TIMEZONE: London
+and Asia are where much of the physical market trades, so a move there can be
+real flow rather than drift. BUT THIS DATA CARRIES NO PHYSICAL-MARKET SERIES —
+no fix prices, no regional premiums or import figures, no ETF holdings, no
+central-bank purchases. Do not name any of them as a fact or a driver; if a
+headline reports one, cite that headline as the source. What the data does
+carry, and what sets the level: US real yields (`rates.real`) and the policy
+path, the dollar (DXY, USD/JPY), silver and copper beside gold, GVZ, and the
+session ranges. A gold thesis that never mentions real rates is incomplete."""
 
 
 def _thin_tape(session: str) -> str:
@@ -1613,6 +1826,8 @@ def system_prompt(session: str, asset: str = "all", prog: dict[str, Any] | None 
     thing being written about.
     """
     s = SESSIONS.get(session, SESSIONS["ny"])
+    if prog is None:
+        prog = session_progress(session, datetime.now(ET))
     a = ASSETS[resolve_asset(asset)]
 
     # THE MUST-READ LIST BENDS WITH THE BOOK, because the fixed one contradicted
@@ -1674,7 +1889,7 @@ trade the Asia, London and New York sessions.
 THIS BRIEF IS ABOUT {a["instruments"].upper()}.
   {a["drivers"]}
 
-THIS BRIEF IS FOR THE {s["label"].upper()} SESSION, {s["hours"]}.
+THIS BRIEF IS FOR THE {s["label"].upper()} SESSION, {prog.get("hours")}.
   What leads it: {s["leads"]}
   Handover: {s["handover"]}
   How it usually behaves: {s["character"]}
@@ -1704,9 +1919,20 @@ view, the call is neutral with a low conviction — a hedged guess presented \
 confidently is worse than no brief.
 
 WHAT THIS DATA DOES NOT HAVE: COT positioning, options open interest or \
-put/call ratios, net gamma notional, ETF flows. Never mention them. A figure \
-that is not in the data does not go in the brief, however standard it would be \
-in one.
+put/call ratios, net gamma notional, ETF flows or holdings, European or \
+Japanese government bond yields, gold fixes or physical premiums. Never \
+mention them. A figure that is not in the data does not go in the brief, \
+however standard it would be in one — AND NEITHER DOES A MARKET, FLOW OR DATA \
+SERIES. Every driver you name must be a block or row in the data, or a \
+headline you cite by id. "Gilts sold off", "Indian demand", "the fix was \
+strong" are claims about data you were not given; leave them out.
+
+PRICES HAVE AGES. `price_feed` says how old the board is: the CME futures \
+quotes run about ten minutes behind the exchange, and any row listed under \
+`not_current` stopped printing hours ago (a cash yield after its close, an \
+index whose exchange is shut). Quote those as the last or closing print \
+("10Y closed 4.12%"), never as where the market is now, and do not build a \
+"right now" read on them.
 
 WORK THROUGH EVERY BLOCK OF THE DATA BEFORE YOU CONCLUDE. Notes written before \
 this instruction cited the gamma levels and the session ranges and silently \
@@ -1732,7 +1958,7 @@ the data has them. Do not rebuild those tables in prose. Write the read that \
 sits beside them, point at rows by `key` or `id` where a field asks for one, \
 and take any level you name from `brief_tables.ladders`.
 
-{_live_framing(session, prog or session_progress(session, datetime.now(ET)))}
+{_live_framing(session, prog)}
 HOW THE BIAS IS FORMED, AND IN WHAT ORDER. Macro sets the DIRECTION: the data \
 that printed, what is priced for the Fed, the policy path, the dollar and the \
 curve are why the market wants to go somewhere, and the call is anchored there \
@@ -2051,10 +2277,20 @@ def _num_key(tok: str) -> str | None:
     return f"{round(v * 10_000) / 10_000:.4f}".rstrip("0").rstrip(".")
 
 
+# AN INDEX'S NAME IS NOT A FIGURE: "mega-cap tech lagging S&P 500" put "500"
+# in a London brief's unverified banner (2026-10-14). Only the names' own
+# numbers — "Nasdaq 30,794" is still a price and still checked.
+_INDEX_NAME = re.compile(
+    r"\b(?:S&P|Nasdaq|Russell|FTSE|(?:Euro\s)?Stoxx|DAX|CAC|Nikkei|ASX|Hang\sSeng)"
+    r"[\s-]?(?:40|50|100|200|225|250|500|600|1000|2000|3000)\b(?![.,]\d)",
+    re.IGNORECASE,
+)
+
+
 def numerals_in(text: str) -> list[str]:
     """Every numeral in a text, as keys, in order. Pure."""
     out: list[str] = []
-    for m in _NUM.finditer(text or ""):
+    for m in _NUM.finditer(_INDEX_NAME.sub(" ", text or "")):
         k = _num_key(m.group(0))
         if k is not None:
             out.append(k)
@@ -2260,7 +2496,7 @@ def generate(
                     f"which opened {prog['phrase']} ago and is trading now — "
                     "write it from the current price, not for the open. "
                     if prog["underway"]
-                    else f"which opens in {prog['phrase']}. "
+                    else f"which opens in {prog['phrase']} ({prog.get('opens_et')} ET). "
                 )
                 + f"About {ASSETS[book]['instruments']}. "
                 f"Books in scope: {', '.join(facts['books'])}."

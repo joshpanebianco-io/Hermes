@@ -1,7 +1,7 @@
 "use client";
 
 import type { OptContract, OptionsCtx, OptionsFlow, ScanRow } from "@/types/scanner";
-import { estTitle, premiumHue, shortDate, strike } from "@/components/panels/ScanTable";
+import { estTitle, optionsPick, premiumHue, shortDate, strike } from "@/components/panels/ScanTable";
 import { Tick } from "@/components/ui/Tick";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
 import { compact, num } from "@/lib/format";
@@ -19,12 +19,12 @@ import { cn } from "@/lib/cn";
  *
  * THE CONTRACT IS A SUGGESTION FROM RULES, AND SAYS WHICH. The strike nearest
  * 0.60 delta (enough of the move, less theta than at-the-money's coin flip),
- * the spread selling the 0.30 delta; risk is the stock-level stop distance ×
- * delta × 100, an approximation that ignores gamma and time — named here, not
- * hidden. Cboe's chains are delayed fifteen minutes; the age is on the page.
+ * the spread selling the 0.30 delta; which expiry is the collector's one rule
+ * (`o.pick`), marked on the page. Risk runs from the setup's ENTRY to its stop:
+ * the contract re-marked to each through delta and gamma, plus half its
+ * bid-ask — an approximation that ignores time, named here, not hidden.
+ * Cboe's chains are delayed fifteen minutes; the age is on the page.
  */
-
-const ETFS = new Set(["SPY", "QQQ", "IWM"]);
 
 export function ScanOptions({ r }: { r: ScanRow }) {
   const o = r.options;
@@ -51,10 +51,12 @@ export function ScanOptions({ r }: { r: ScanRow }) {
 function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: number | null; zeroDte: boolean }) {
   const front = o.em.find((e) => e.key === "front");
   const weekly = o.em.find((e) => e.key === "weekly");
-  // 0DTE off in Settings: an index ETF's same-day contracts give way to the weekly.
-  const hideFront = !zeroDte && ETFS.has(r.sym) && front?.dte === 0;
+  // 0DTE off in Settings: no same-day contract on any name — the weekly instead.
+  const hideFront = !zeroDte && front?.dte === 0;
   const contracts = o.contracts.filter((c) => !(hideFront && c.key === "front"));
-  const keys = [...new Set(contracts.map((c) => c.key))];
+  const pick = optionsPick(o, zeroDte);
+  // The pick first: it is the contract the rule says to trade.
+  const keys = [...new Set(contracts.map((c) => c.key))].sort((a, b) => Number(b === pick) - Number(a === pick));
   const lean =
     o.premium === "rich"
       ? "Premium is rich against realised volatility — the debit spread sells some of it back."
@@ -153,6 +155,11 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
             <div key={k} className="flex flex-col gap-2">
               <p className="qt-cap text-[10.5px] text-ink-3">
                 {k === "front" ? "Front expiry" : "Weekly"} · {r.score.side === "short" ? "puts" : "calls"}
+                {k === pick && (
+                  <span className="ml-2 text-call-fig" title="The expiry the desk's rule picks for this name — Settings → Options">
+                    the pick
+                  </span>
+                )}
               </p>
               {contracts
                 .filter((c) => c.key === k)
@@ -165,8 +172,9 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
       )}
 
       <p className="text-[10.5px] leading-[1.5] text-ink-3">
-        Risk per contract is the stock-level stop distance × delta × 100 — an approximation that ignores gamma and
-        time decay. Chains are Cboe&apos;s, delayed about fifteen minutes. Rules, not advice.
+        Risk per contract runs from the setup&apos;s entry to its stop: the contract re-marked to each through delta and
+        gamma, plus half its bid-ask to get out — an approximation that ignores time decay. Chains are Cboe&apos;s,
+        delayed about fifteen minutes. Rules, not advice.
       </p>
     </div>
   );
@@ -240,8 +248,8 @@ function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) 
       )}
       <p className="fig mt-1 text-[11.5px] text-ink-3">
         {Math.abs(c.est_delta ?? c.delta).toFixed(2)}Δ
-        {c.theta != null && ` · θ ${c.theta.toFixed(2)}`}
-        {c.iv != null && ` · IV ${c.iv.toFixed(0)}%`}
+        {c.theta != null && ` · θ ${c.theta.toFixed(2)}${c.kind === "spread" ? " net" : ""}`}
+        {c.iv != null && ` · IV ${c.iv.toFixed(0)}${c.short_iv != null ? ` / ${c.short_iv.toFixed(0)}` : ""}%`}
         {` · ${c.bid.toFixed(2)} / ${c.ask.toFixed(2)}`}
         {c.spread_pct != null && ` (${c.spread_pct.toFixed(1)}%)`}
         {c.max_value != null && ` · worth up to $${c.max_value.toFixed(2)}`}
@@ -256,6 +264,17 @@ function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) 
                 {" · "}
                 <span className={cn("fig", size > 0 ? "text-ink" : "text-put-fig")}>{size}</span> for a ${budget} budget
               </>
+            )}
+            {c.stock_entry != null && c.stock_stop != null && (
+              <span className="mt-0.5 block text-[10.5px] text-ink-3" title={c.risk_basis ?? undefined}>
+                entry <span className="fig">{num(c.stock_entry)}</span> → stop <span className="fig">{num(c.stock_stop)}</span>
+                {c.risk_basis && ` · ${c.risk_basis}`}
+                {c.entry_mid != null && (
+                  <>
+                    {" · "}about <span className="fig">${c.entry_mid.toFixed(2)}</span> at the entry
+                  </>
+                )}
+              </span>
             )}
           </>
         ) : (

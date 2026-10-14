@@ -92,12 +92,14 @@ def test_a_window_that_has_not_come_round_again_is_the_prior_days() -> None:
     # the three windows still to come are Tuesday's.
     assert prior(datetime(2026, 9, 16, 3, 0, tzinfo=ET)) == {
         "asia": False, "london": False, "euro_mid": True, "preny": True, "ny": True,
+        "post": True,
     }
     # 17:00 Wednesday, the post-close lull: one whole day, nothing stale.
     assert not any(prior(datetime(2026, 9, 16, 17, 0, tzinfo=ET)).values())
     # 18:15 Wednesday, Asia has reopened: everything else is now the day before.
     assert prior(datetime(2026, 9, 16, 18, 15, tzinfo=ET)) == {
         "asia": False, "london": True, "euro_mid": True, "preny": True, "ny": True,
+        "post": True,
     }
 
 
@@ -125,13 +127,49 @@ def test_every_row_carries_an_open() -> None:
 
 
 def test_windows_do_not_overlap_or_leave_a_gap() -> None:
-    """Every hour of the clock belongs to exactly one window."""
-    from newsterminal.sources.ranges import WINDOWS, _in_window
+    """Every minute of a Globex day belongs to exactly one window, in the order
+    the day runs them — in a normal week and in the mismatch week alike."""
+    from newsterminal.sessions import DESK_WINDOWS, desk_window
 
-    for tenth in range(240):
-        hour = tenth / 10.0
-        owners = [k for k, _, s, e in WINDOWS if _in_window(hour, s, e)]
-        # 16:00-18:00 is the post-close lull and belongs to nothing.
-        assert len(owners) <= 1, (hour, owners)
-        if not (16.0 <= hour < 18.0):
-            assert len(owners) == 1, (hour, owners)
+    order = [k for k, _ in DESK_WINDOWS]
+    for day in (datetime(2026, 10, 19, 18, 0, tzinfo=ET), datetime(2026, 10, 26, 18, 0, tzinfo=ET)):
+        seen: list[str] = []
+        for m in range(0, 24 * 60, 5):
+            k = desk_window(day + timedelta(minutes=m))
+            if k is None:
+                # 17:00-18:00 is the maintenance hour and belongs to nothing.
+                assert 23 * 60 <= m < 24 * 60, m
+                continue
+            if not seen or seen[-1] != k:
+                seen.append(k)
+        assert seen == order, (day, seen)
+
+
+def test_london_keeps_londons_clock_in_the_mismatch_week() -> None:
+    """Mon 2026-10-26: the UK is on GMT, the US still on EDT, so London's 07:00
+    is 03:00 ET. The window used to open at 02:00 ET regardless, filing the
+    last hour of Asia as London's open."""
+    start = datetime(2026, 10, 25, 18, 0, tzinfo=ET)
+    r = rows(datetime(2026, 10, 26, 7, 0, tzinfo=ET), start, 52)
+    assert r["asia"]["end_et"] == "02:45"
+    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("03:00", "05:45")
+    assert r["euro_mid"]["start_et"] == "06:00"
+    # A week later both are on standard time and it is 02:00 again.
+    r = rows(datetime(2026, 11, 2, 7, 0, tzinfo=ET), datetime(2026, 11, 1, 18, 0, tzinfo=ET), 52)
+    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("02:00", "04:45")
+
+
+def test_the_post_close_hour_is_its_own_row() -> None:
+    """16:00-17:00, where after-hours earnings land, used to belong to nothing."""
+    start = datetime(2026, 9, 15, 18, 0, tzinfo=ET)
+    r = rows(datetime(2026, 9, 16, 16, 50, tzinfo=ET), start, 92)  # to Wed 16:45
+    assert (r["post"]["start_et"], r["post"]["end_et"]) == ("16:00", "16:45")
+    assert r["post"]["status"] == "live" and r["ny"]["status"] == "complete"
+
+
+def test_nothing_is_live_while_globex_is_shut() -> None:
+    """Saturday 10:00 is inside the clock's "ny" hours, and Friday's New York
+    row is complete — it used to read live all weekend."""
+    start = datetime(2026, 10, 15, 18, 0, tzinfo=ET)
+    r = rows(datetime(2026, 10, 17, 10, 0, tzinfo=ET), start, 92)  # to Fri 16:45
+    assert all(x["status"] == "complete" for x in r.values())

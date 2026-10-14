@@ -52,6 +52,15 @@ export interface Quote {
   currency: string | null;
   exchange: string | null;
   quote_time: number | null;
+  /**
+   * How current `last` is (quotes.feed_state): inside its trading hours
+   * "live" or "delayed" (Yahoo's CME futures trail by ten minutes), "stale"
+   * past half an hour, or "closed". Absent on a snapshot from before
+   * 2026-10-14.
+   */
+  feed?: "live" | "delayed" | "stale" | "closed";
+  /** Minutes the last print trails the collector's clock. */
+  lag_min?: number | null;
   spark: number[];
 }
 
@@ -209,7 +218,7 @@ export interface SourceStatus {
 }
 
 export interface SessionRange {
-  key: "asia" | "london" | "euro_mid" | "preny" | "ny";
+  key: "asia" | "london" | "euro_mid" | "preny" | "ny" | "post";
   label: string;
   ok: boolean;
   high: number | null;

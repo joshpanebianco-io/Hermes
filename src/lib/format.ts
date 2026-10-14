@@ -48,6 +48,54 @@ export function bp(v: number | null | undefined, dp = 0): string {
 }
 
 /**
+ * A board row's day change in the row's own unit. A yield is quoted in
+ * percent, so its "percent change" is a change of a percentage — the 10-year
+ * down 2.3bp printed "−0.44%" (audit, 2026-10-14), a figure no rates desk
+ * says. `fmt: "bp"` rows print the move in basis points instead; `v` is the
+ * signed number to colour by.
+ */
+export function quoteChg(q: { fmt: string; chg: number | null; pct: number | null }): { text: string; v: number | null } {
+  if (q.fmt === "bp") {
+    const b = q.chg === null || !Number.isFinite(q.chg) ? null : q.chg * 100;
+    return { text: bp(b, 1), v: b };
+  }
+  return { text: pct(q.pct), v: q.pct };
+}
+
+/** "14:59" in New York, from a unix time — when a closed or late price printed. */
+export function etTime(unix: number | null | undefined): string {
+  if (unix === null || unix === undefined || !Number.isFinite(unix)) return "—";
+  return new Date(unix * 1000).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/**
+ * What a board price IS, in words, for its tooltip — or null when it is live.
+ *
+ * The fetch is not the print (audit, 2026-10-14): ES on Yahoo trails CME by
+ * ten minutes all day, and after the cash close the VIX and the 10-year are
+ * hours old. The collector classifies each row (quotes.feed_state); this
+ * says it the way a reader asks: how late, and as of when.
+ */
+export function feedNote(q: { feed?: string | null; lag_min?: number | null; quote_time: number | null }): string | null {
+  const at = etTime(q.quote_time);
+  switch (q.feed) {
+    case "delayed":
+      return `Delayed ${Math.round(q.lag_min ?? 0)} min · as of ${at} ET`;
+    case "closed":
+      return `Market closed · last print ${at} ET`;
+    case "stale":
+      return q.lag_min == null ? "No print time from the feed" : `No print for ${Math.round(q.lag_min)} min · last ${at} ET`;
+    default:
+      return null;
+  }
+}
+
+/**
  * The direction class for a change. Returns "flat" for exactly zero AND for
  * null — an unknown change must not be painted green.
  */
@@ -116,10 +164,15 @@ export function ageStep(m: number | null | undefined): number | null | undefined
   return Math.round(m / 6) * 6;
 }
 
-/** An age in minutes, for the freshness chips on each module. */
+/**
+ * An age in minutes, for the freshness chips on each module — how long since
+ * the collector FETCHED the block. "now", not "live": a block fetched this
+ * minute can still hold a ten-minute-late futures print or yesterday's close
+ * (audit, 2026-10-14), and whether a price is live is the row's to say.
+ */
 export function age(m: number | null | undefined): string {
   if (m === null || m === undefined || !Number.isFinite(m)) return "—";
-  if (m < 1) return "live";
+  if (m < 1) return "now";
   if (m < 60) return `${Math.round(m)}m`;
   return `${(m / 60).toFixed(1)}h`;
 }

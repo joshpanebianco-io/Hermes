@@ -22,8 +22,11 @@ line here and a branch in the UI.
 from __future__ import annotations
 
 import hashlib
+import time
 import urllib.parse
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
 from ..http import SourceStatus, fetch, json_body
@@ -200,8 +203,73 @@ def _spark(symbols: list[str], rng: str, iv: str, ttl: float, *,
     return out, None
 
 
-def _row(key: str, label: str, group: str, fmt: str, resp: dict[str, Any]) -> dict[str, Any] | None:
-    """One spark response → one board row. Pure."""
+#: A print this many minutes behind the clock, while its market trades, is
+#: called delayed rather than live. Yahoo carries CME futures ten minutes
+#: late and Tokyo's and Hong Kong's indices fifteen to twenty.
+LIVE_LAG_MIN = 2.0
+#: Past this with no print, a market is not "delayed" but not trading — a
+#: lunch break, a grain contract between sessions, a feed that stopped. Said
+#: as "stale" and drawn like a closed market, never as a late live one.
+STALE_LAG_MIN = 30.0
+#: A closing print can land a moment after the session's stated end (the VIX
+#: settles 15:15:01 CT against a 15:15 end).
+CLOSE_SLACK_SEC = 300
+
+_ET = ZoneInfo("America/New_York")
+
+
+def cme_break(now: float) -> bool:
+    """Is Globex in its daily or weekend halt — 17:00–18:00 ET Monday to
+    Thursday, Friday 17:00 to Sunday 18:00? Pure. Holidays are not modelled:
+    a halted holiday reads "stale" after half an hour, which is still true."""
+    et = datetime.fromtimestamp(now, _ET)
+    wd, h = et.weekday(), et.hour
+    if wd == 5 or (wd == 4 and h >= 17) or (wd == 6 and h < 18):
+        return True
+    return h == 17
+
+
+def feed_state(meta: dict[str, Any], now: float) -> tuple[str, float | None]:
+    """How current one instrument's price is: "live", "delayed", "stale" or
+    "closed", and the minutes its last print trails `now`. Pure.
+
+    WHY THE BOARD NEEDS IT (audit, 2026-10-14). Every module's chip said
+    "live" under a minute after the FETCH, and the fetch is not the print: ES
+    on Yahoo is ten minutes late around the clock, and after the cash close
+    the VIX and the 10-year are hours old while their row looks like any
+    other.
+
+    CLOSED IS THE EXCHANGE'S WORD, CHECKED AGAINST THE PRINT. Yahoo's
+    `currentTradingPeriod` is the session a cash market is in or waiting for —
+    at 01:16 ET the 10-year's was 08:20–15:00 that day, its last print the
+    previous 14:59:55 — but for a 24-hour market it is only the calendar day
+    (ES: 00:00–23:59 ET; bitcoin: the UTC day), whose edges are not closes. So
+    a period counts as over only if the last print came before its end, and
+    as not yet begun only if the print came before its start; a print outside
+    it means the market traded on. CME's own halts are known (`cme_break`).
+    Past that, the gap between the last print and the clock decides.
+    """
+    t = meta.get("regularMarketTime")
+    if not isinstance(t, (int, float)) or t <= 0:
+        return "stale", None
+    lag = round(max(0.0, (now - float(t)) / 60.0), 1)
+    period = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
+    start, end = period.get("start"), period.get("end")
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+        if now >= end and t <= end + CLOSE_SLACK_SEC:
+            return "closed", lag
+        if now < start and t < start:
+            return "closed", lag
+    if str(meta.get("symbol") or "").endswith("=F") and cme_break(now):
+        return "closed", lag
+    if lag < LIVE_LAG_MIN:
+        return "live", lag
+    return ("delayed" if lag <= STALE_LAG_MIN else "stale"), lag
+
+
+def _row(key: str, label: str, group: str, fmt: str, resp: dict[str, Any],
+         now: float | None = None) -> dict[str, Any] | None:
+    """One spark response → one board row. Pure but for the default clock."""
     meta = resp.get("meta") or {}
     px = meta.get("regularMarketPrice")
     if px is None:
@@ -225,6 +293,7 @@ def _row(key: str, label: str, group: str, fmt: str, resp: dict[str, Any]) -> di
         closes = []
 
     hi, lo = meta.get("regularMarketDayHigh"), meta.get("regularMarketDayLow")
+    feed, lag = feed_state(meta, time.time() if now is None else now)
     return {
         "key": key,
         "symbol": meta.get("symbol"),
@@ -248,6 +317,10 @@ def _row(key: str, label: str, group: str, fmt: str, resp: dict[str, Any]) -> di
         "currency": meta.get("currency"),
         "exchange": meta.get("exchangeName"),
         "quote_time": meta.get("regularMarketTime"),
+        # Measured when the row is built, so a cached copy served late reads
+        # later still — see feed_state.
+        "feed": feed,
+        "lag_min": lag,
         "spark": closes[-80:],
     }
 

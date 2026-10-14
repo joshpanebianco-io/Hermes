@@ -114,7 +114,7 @@ export function SessionRanges({
     >
       {!active || !x ? (
         ageMin == null && !error ? (
-          <Skeleton rows={5} label="Loading session ranges" />
+          <Skeleton rows={6} label="Loading session ranges" />
         ) : (
           <p className="px-3 py-5 text-center text-[11px] text-ink-3">
             No session data for this book — the collector segments the last two days of bars.

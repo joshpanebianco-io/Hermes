@@ -42,7 +42,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import marketctx
+from . import marketctx, optcalc
 from . import report as rp
 from .config import CACHE_DIR
 from .holidays import close_time, next_trading_day
@@ -59,8 +59,8 @@ TOP_MAX = 10
 # Always in the facts, ranked or not: they are the tape the plan is read
 # against, and the two names the owner trades 0DTE.
 TAPE = ("SPY", "QQQ")
-# The only names with a same-day expiry worth trading; everything else is a weekly.
-ZERO_DTE = {"SPY", "QQQ", "IWM"}
+# Which expiry each name trades is optcalc's rule (`expiry_rule`, each row's
+# `options.pick`) — one copy, read here, by the table and by Settings.
 
 # Sources a plan stands on, worded for the Partial-data banner. Options are
 # checked separately — see `_partial`.
@@ -100,8 +100,9 @@ def _options(row: dict[str, Any]) -> dict[str, Any] | None:
 
     Read defensively: the options source is newer than this module, and an
     absent block, a None, or `ok: false` all mean "no options context", never
-    an error. The contract preferred for the summary is the same-day one on the
-    three index ETFs and the weekly on everything else.
+    an error. The contract summarised is the one the expiry rule picks for the
+    name (optcalc.expiry_rule): the same-day one on the 0DTE names, the weekly on
+    everything else.
     """
     o = row.get("options")
     if not isinstance(o, dict) or not o.get("ok"):
@@ -110,7 +111,7 @@ def _options(row: dict[str, Any]) -> dict[str, Any] | None:
     liq_raw = o.get("liquidity")
     liq: dict[str, Any] = liq_raw if isinstance(liq_raw, dict) else {}
     contracts = [c for c in o.get("contracts") or [] if isinstance(c, dict)]
-    want = "front" if row.get("sym") in ZERO_DTE else "weekly"
+    want = o.get("pick") or optcalc.pick_key(str(row.get("sym")))
 
     def pick(kind: str) -> dict[str, Any] | None:
         mine = [c for c in contracts if c.get("kind") == kind]
@@ -516,8 +517,9 @@ STRATEGY = (
     " chart — or of VWAP / the 8 EMA wave when price has run far from the level (entry.dist_atr "
     "is the distance in 10-minute ATRs). (L) = a retest with the 8 EMA wave at the level; (E) = "
     "the first candle touching the 8 EMA wave, triggered when price breaks that candle. The "
-    "Pine's stop idea is below the signal bar (long) / above it (short). Options: 0DTE only on "
-    "SPY, QQQ and IWM; single names use the weekly. A long call/put near 0.60 delta when premium "
+    "Pine's stop idea is below the signal bar (long) / above it (short). Options, the expiry: "
+    + optcalc.expiry_rule()["text"] + " The contract in each name's `options` is that pick. "
+    "A long call/put near 0.60 delta when premium "
     "is cheap or fair; a debit spread (buy ~0.60 delta, sell ~0.30 delta) when premium is rich "
     "(iv_rv above 1.25). An expected move (em_*_pct) smaller than the distance to the target "
     "argues for the spread or for no trade. An earnings date inside the expiry (earnings_in) "
@@ -557,8 +559,9 @@ VIX and its band, the curve shape, the tape's bias and whether VIX confirms it, 
 one-day move. `tape_count` is the engine's count of eleven independent reads of the tape (each \
 long, short or neutral) with its grade. `breadth` is sectors up and down, equal weight against \
 SPY and the index leaders; `fuel` is how much of its implied one-day move SPY, QQQ and IWM have \
-already used (room / normal / stretched); `prints` are today's US releases against consensus, \
-read hot (stronger economy) / cold / in line; `fed` is what the next meetings price; `gamma` is \
+already used (room / normal / stretched); `prints` are the session's US releases against \
+consensus, read hot (stronger economy) / cold / in line — `done` means its time has passed (a \
+speech never has an actual); `fed` is what the next meetings price; `gamma` is \
 dealer gamma in QQQ and SPY prices — POS means dealers damp moves and the walls tend to hold, NEG \
 means they chase moves and breaks run (absent when the feed is down).
 
@@ -575,9 +578,10 @@ say it in words.
 - `trigger` is what must happen first (the break, the retest of the named level, the reclaim of \
 VWAP); `invalidation` is the price or condition that cancels the plan; `target` is the first \
 target from the levels in the data or the expected move.
-- `options` says how to express it: long option or debit spread, and which expiry (0DTE only for \
-SPY/QQQ/IWM), from the premium verdict and the expected move; flag poor liquidity and earnings \
-inside the expiry. If there is no options context for the name, say that.
+- `options` says how to express it: long option or debit spread, and which expiry (the expiry \
+rule in the strategy — the contract given is its pick), from the premium verdict and the expected \
+move; flag poor liquidity and earnings inside the expiry. If there is no options context for the \
+name, say that.
 - `why` is four to six short lines, each starting with its layer. EVERY plan carries \
 "Structure:", "RS:", "Macro:" and "News:", and adds "Tape:", "Options:" or "Catalyst:" where \
 they matter.
@@ -706,7 +710,7 @@ def _market_digest(facts: dict[str, Any]) -> dict[str, Any]:
                                                "gap_pct", "state")}
                        for f in facts["fuel"] or [] if isinstance(f, dict)]
     if "prints" in facts:
-        out["prints"] = [{k: x.get(k) for k in ("et", "title", "released", "actual",
+        out["prints"] = [{k: x.get(k) for k in ("et", "title", "released", "done", "actual",
                                                  "consensus", "previous", "read")}
                          for x in facts["prints"] or [] if isinstance(x, dict)]
     if "fed" in facts:

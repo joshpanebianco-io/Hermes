@@ -16,6 +16,7 @@ import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { HelmMark, HelmSweep, useHelmId } from "@/components/ui/HelmLoader";
 import { useQuiet } from "@/components/state/UiMode";
+import { NoteAge } from "@/components/ui/NoteAge";
 
 /**
  * The session report — a model's read of the whole terminal.
@@ -190,6 +191,7 @@ export function Report({
             <Failed error={rep.error} raw={rep.raw} />
           ) : rep.report ? (
             <>
+              <NoteAge createdUtc={rep.created_utc} what="brief" />
               {rep.format === "brief" && rep.facts ? <Brief rep={rep} /> : <Body rep={rep} />}
               <Provenance
                 rep={rep}

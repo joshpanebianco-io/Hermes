@@ -10,14 +10,14 @@ import { useSyncExternalStore } from "react";
  * THE BUDGET IS OPTIONAL. With none set, the contract helper prints the
  * premium at risk per contract and stops there; with one, it also says how
  * many contracts that budget buys. It is a convenience for sizing, not advice,
- * and the helper's risk figure is an approximation it names (the stock-level
- * stop × the contract's delta).
+ * and the helper's risk figure is an approximation it names (entry to stop,
+ * re-marked through delta and gamma, plus half the bid-ask).
  */
 
 export interface OptionsPrefs {
   /** Premium you are willing to lose on one trade, in dollars. Null = not set. */
   budget: number | null;
-  /** Offer 0DTE on SPY / QQQ / IWM when one is listed. */
+  /** Offer same-day (0DTE) contracts when one is listed — off, every name gets the weekly. */
   zeroDte: boolean;
 }
 

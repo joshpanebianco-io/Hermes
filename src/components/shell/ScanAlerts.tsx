@@ -27,6 +27,12 @@ import { cn } from "@/lib/cn";
  * A BACKGROUND TAB IS SLOWER. Chrome throttles timers in a tab hidden for five
  * minutes to about once a minute, so an alert can arrive up to a minute after
  * the bar; on ten-minute bars that is still inside the retest.
+ *
+ * A WITHDRAWN SIGNAL IS SAID OUT LOUD (audit, 2026-10-14). The engine checks
+ * every signal it logged against the newest final bars and retracts one they
+ * no longer hold (scanlog.py). An alert this page raised for it is marked
+ * withdrawn where it stands, or — once its toast has gone — announced again,
+ * quietly: the reader may already be acting on it.
  */
 
 const POLL_SEC = 15;
@@ -46,10 +52,31 @@ export function ScanAlerts() {
     prefsRef.current = prefs;
   }, [prefs]);
   const cursor = useRef<number | null>(null);
+  // What this page announced, and which of those it has already withdrawn.
+  const raised = useRef(new Map<number, ScanEvent>());
+  const withdrawn = useRef(new Set<number>());
   const [toasts, setToasts] = useState<ScanEvent[]>([]);
+
+  const withdraw = useCallback((e: ScanEvent) => {
+    const gone = { ...e, retracted: true };
+    setToasts((t) => [...t.filter((x) => x.id !== e.id), gone].slice(-MAX_TOASTS));
+    const p = prefsRef.current;
+    if (p.desktop && typeof Notification !== "undefined" && Notification.permission === "granted") {
+      try {
+        new Notification(`Withdrawn · ${GLYPH[e.kind]} ${e.sym} · ${e.at_et} ET`, {
+          body: "The final bars do not hold this signal.",
+          tag: `hx-${e.id}`,
+          silent: true,
+        });
+      } catch {
+        /* see raise() */
+      }
+    }
+  }, []);
 
   const raise = useCallback((e: ScanEvent) => {
     const p = prefsRef.current;
+    raised.current.set(e.id, e);
     setToasts((t) => [...t.filter((x) => x.id !== e.id), e].slice(-MAX_TOASTS));
     if (p.sound) chime(e.side);
     if (p.desktop && typeof Notification !== "undefined" && Notification.permission === "granted") {
@@ -83,14 +110,20 @@ export function ScanAlerts() {
       const p = prefsRef.current;
       for (const e of d.events) {
         cursor.current = Math.max(cursor.current ?? 0, e.id);
-        if (!p.on || !e.live || !p.kinds.includes(e.kind)) continue;
+        if (!p.on || !e.live || e.retracted || !p.kinds.includes(e.kind)) continue;
         if ((e.score ?? 0) < p.minScore) continue;
         raise(e);
+      }
+      for (const id of d.retracted ?? []) {
+        const e = raised.current.get(id);
+        if (!e || withdrawn.current.has(id)) continue;
+        withdrawn.current.add(id);
+        withdraw(e);
       }
     } catch {
       /* the collector is down or restarting — the next poll tries again */
     }
-  }, [raise]);
+  }, [raise, withdraw]);
 
   useEffect(() => {
     void poll();
@@ -139,10 +172,16 @@ export function ScanAlerts() {
           style={{ borderLeftColor: e.side === "long" ? "var(--call-fig)" : "var(--put-fig)" }}
         >
           <div className="flex items-baseline gap-2">
-            <span className={cn("fig text-[12px] font-semibold", e.side === "long" ? "text-call-fig" : "text-put-fig")}>
+            <span
+              className={cn(
+                "fig text-[12px] font-semibold",
+                e.retracted ? "text-ink-3 line-through" : e.side === "long" ? "text-call-fig" : "text-put-fig",
+              )}
+            >
               {GLYPH[e.kind]} {e.side === "long" ? "▲" : "▼"}
             </span>
-            <span className="text-[13.5px] font-semibold text-ink">{e.sym}</span>
+            <span className={cn("text-[13.5px] font-semibold", e.retracted ? "text-ink-3 line-through" : "text-ink")}>{e.sym}</span>
+            {e.retracted && <span className="qt-cap text-[10.5px] text-flip-fig">withdrawn</span>}
             {e.level && <span className="qt-cap text-[10.5px] text-ink-3">{e.level}</span>}
             <span className="fig ml-auto text-[11px] text-ink-3">{e.at_et} ET</span>
             <button
@@ -154,7 +193,9 @@ export function ScanAlerts() {
               ×
             </button>
           </div>
-          <p className="text-[12px] leading-snug text-ink-2">{e.note}</p>
+          <p className="text-[12px] leading-snug text-ink-2">
+            {e.retracted ? "The final bars do not hold this signal — it is out of the log's record." : e.note}
+          </p>
           <div className="flex items-baseline gap-3 text-[11px] text-ink-3">
             <span className="fig">
               {num(e.price)}

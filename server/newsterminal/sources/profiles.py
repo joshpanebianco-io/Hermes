@@ -73,6 +73,8 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
             list((q.get("volume") or [None] * n)[:n]),
             now_et,
             opens=list((q.get("open") or [None] * n)[:n]),
+            # Gold's RTH is COMEX's 08:20-13:30, not the equity day.
+            book=key,
         )
         if not rows:
             assets[key] = {"ok": False, "error": "no window had enough traded bars", "rows": []}

@@ -786,3 +786,79 @@ def test_the_close_read_fetches_everyone_fresh_and_comes_back_soon(
     assert s.wake_in(now) == scan_src.TICK_SEC
     # Five seconds before a mark, the job wakes for it rather than a tick late.
     assert s.wake_in(ets(10, 20, 5)) == 5.0
+
+
+# --- a bar is confirmed by the download, not the clock (audit, 2026-10-14) ----------
+
+
+def _breakout_day() -> list[Bar]:
+    """Monday's high is 101; Tuesday's 09:30 ten-minute bar closes through it."""
+    mon = day_bars(date(2026, 10, 12), [(100, 101, 99, 100)])
+    tue = day_bars(date(2026, 10, 13), [(100.5, 101.5, 100.2, 101.2), (101.2, 101.6, 101.0, 101.4)],
+                   pm=[(100, 100.4, 99.8, 100.2)])
+    return mon + tue
+
+
+@pytest.mark.parametrize(
+    ("asof", "fires", "final_to"),
+    [
+        # Read at 09:39:58: the 09:30 bar's last prints are not in this copy, so
+        # the clock passing 09:40 confirms nothing — on Oct 13 exactly this fired
+        # IBM's (L) at 09:40 that the final bars never had.
+        (et(2026, 10, 13, 9, 39).timestamp() + 58, False, None),
+        # Read at 09:40:09 — one second short of CLOSE_LAG_SEC: still not.
+        (et(2026, 10, 13, 9, 40).timestamp() + 9, False, None),
+        # Read at 09:40:10 and after: the bar is final, the breakout fires.
+        (et(2026, 10, 13, 9, 40).timestamp() + 10, True, et(2026, 10, 13, 9, 40).timestamp()),
+        # A replay from a later download (asof None) confirms by the clock.
+        (None, True, et(2026, 10, 13, 9, 40).timestamp()),
+    ],
+)
+def test_a_bar_counts_only_in_bars_read_after_it_closed(asof: float | None, fires: bool,
+                                                        final_to: float | None) -> None:
+    clock = scan.clock_at(et(2026, 10, 13, 9, 40).replace(second=20))
+    tech = scan.technicals(_breakout_day(), [], clock, asof=asof)
+    bo = [s for s in tech.signals if s["kind"] == "BO" and s["level"] == "PDH"]
+    assert bool(bo) is fires
+    assert tech.final_to == (int(final_to) if final_to is not None else None)
+    # The row carries the same horizon for the event log's second look.
+    assert scan.row_of("AAPL", tech, None, None, clock)["final_to"] == tech.final_to
+
+
+def test_only_the_oldest_unread_bar_forms() -> None:
+    """Read at 09:39:58 with the clock at 09:50:05: the 09:30 bar is not final and
+    the 09:40 bar is not either. The 09:30 one forms; the 09:40 one waits its turn —
+    an (E) cannot fire on a bar while the bar before it is still unread."""
+    bars = _breakout_day() + day_bars(date(2026, 10, 13), [(101.4, 101.9, 101.3, 101.8)],
+                                      rth_start=(9, 40))
+    clock = scan.clock_at(et(2026, 10, 13, 9, 50).replace(second=5))
+    tech = scan.technicals(bars, [], clock, asof=et(2026, 10, 13, 9, 39).timestamp() + 58)
+    assert tech.final_to is None and not any(s["kind"] == "BO" for s in tech.signals)
+    later = scan.technicals(bars, [], clock, asof=et(2026, 10, 13, 9, 50).timestamp() + 11)
+    assert later.final_to == int(et(2026, 10, 13, 9, 50).timestamp())
+    assert [s["at_et"] for s in later.signals if s["kind"] == "BO"] == ["09:30"]
+
+
+def test_store_confirms_each_name_by_its_own_download(tmp_path: Any) -> None:
+    store = scan_src.ScanStore(watchlist_path=str(tmp_path / "wl.json"))
+    store._warm = True
+    store.bars["AAPL"] = _breakout_day()
+    store.fetched["AAPL"] = et(2026, 10, 13, 9, 39).timestamp() + 58
+    now = et(2026, 10, 13, 9, 40).replace(second=20)
+    rows = store.compute(now)["rows"]
+    assert not any(s["kind"] == "BO" for s in rows["AAPL"]["signals"])
+    store.fetched["AAPL"] = et(2026, 10, 13, 9, 40).timestamp() + 12
+    rows = store.compute(now)["rows"]
+    assert any(s["kind"] == "BO" for s in rows["AAPL"]["signals"])
+
+
+def test_day_signals_replays_a_finished_day_from_bars_read_after_its_bell(tmp_path: Any) -> None:
+    store = scan_src.ScanStore(watchlist_path=str(tmp_path / "wl.json"))
+    store.bars["AAPL"] = _breakout_day()
+    store.fetched["AAPL"] = et(2026, 10, 13, 15, 0).timestamp()  # read before the bell
+    assert store.day_signals(date(2026, 10, 13), ["AAPL", "MSFT"]) == {}
+    store.fetched["AAPL"] = et(2026, 10, 13, 16, 5).timestamp()
+    got = store.day_signals(date(2026, 10, 13), ["AAPL", "MSFT"])
+    sigs, final_to = got["AAPL"]
+    assert [s["level"] for s in sigs if s["kind"] == "BO"] == ["PDH"]
+    assert final_to == int(et(2026, 10, 13, 9, 40).timestamp())  # its last bar's close

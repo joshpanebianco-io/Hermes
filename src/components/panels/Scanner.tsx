@@ -12,6 +12,9 @@ import { age, dir, inMin, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { setAskFocus } from "@/lib/ask/open";
+import { nextEvent } from "@/lib/events";
+import type { CalendarRow } from "@/types/terminal";
 
 /**
  * The Scanner — LE_Model.pine's scanner table, ranked, with the tape and the
@@ -49,6 +52,7 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
  * nothing worth saving; outside the session nothing moves that fast.
  */
 
+const NO_ROWS: CalendarRow[] = [];
 const POLL_SEC = 20;
 const LIVE_POLL_SEC = 5;
 
@@ -94,7 +98,7 @@ function useMinuteClock(): number | null {
 
 type View = "setups" | "log";
 
-export function Scanner({ now: shellNow }: { now?: number | null } = {}) {
+export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | null; calendar?: CalendarRow[] } = {}) {
   const ownNow = useMinuteClock();
   const now = shellNow ?? ownNow;
   const [data, setData] = useState<ScannerPayload | null>(null);
@@ -102,6 +106,12 @@ export function Scanner({ now: shellNow }: { now?: number | null } = {}) {
   const [sel, setSel] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [view, setView] = usePersisted<View>("scan.view", "setups", oneOf("setups", "log"));
+  // The next US print scored 4+, however far off — shown when none falls
+  // inside the six hours the engine prices in (see RegimeStrip).
+  const later = useMemo(
+    () => (now === null ? null : nextEvent(calendar, now / 1000, (r) => r.region === "us" && r.score >= 4)),
+    [calendar, now],
+  );
 
   // `?sym=` (an alert's click-through) opens straight onto that name.
   useEffect(() => {
@@ -163,6 +173,23 @@ export function Scanner({ now: shellNow }: { now?: number | null } = {}) {
   // The selection survives a re-poll by symbol; it falls back to the top row
   // when the name it pointed at is filtered out or dropped from the list.
   const selected = rows.find((r) => r.sym === sel) ?? rows[0] ?? null;
+  /*
+   * AND THE FALLBACK IS PINNED. Left as "whatever is on top", the pane changed
+   * name under the reader whenever the ranking did — every five seconds in
+   * the session since the live layer (audit, 2026-10-14). The name it falls
+   * back to becomes the selection, so only a click or an arrow moves it.
+   */
+  const shownSym = selected?.sym ?? null;
+  useEffect(() => {
+    if (shownSym !== null && shownSym !== sel) setSel(shownSym);
+  }, [shownSym, sel]);
+
+  // Hermes reads the name under the cursor: "explain this setup" means it.
+  const focusSym = selected?.sym ?? null;
+  useEffect(() => {
+    setAskFocus(focusSym);
+  }, [focusSym]);
+  useEffect(() => () => setAskFocus(null), []);
 
   /*
    * THE KEYBOARD WALKS THE LIST. A row is a stop in the tab order, Enter picks
@@ -212,7 +239,7 @@ export function Scanner({ now: shellNow }: { now?: number | null } = {}) {
         </p>
       ) : null}
 
-      {data && !data.offline && <RegimeStrip regime={data.regime} />}
+      {data && !data.offline && <RegimeStrip regime={data.regime} later={later} now={now} />}
 
       {/*
         * THE DETAIL PANE IS A FIXED COLUMN and the table takes everything else:
@@ -391,7 +418,7 @@ function dayName(iso: string): string {
 /* The weather: VIX, the tape, the bias, the next print                        */
 /* -------------------------------------------------------------------------- */
 
-function RegimeStrip({ regime }: { regime: Regime }) {
+function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRow | null; now: number | null }) {
   const v = regime.vix;
   const shapeHue =
     v.shape === "backwardation" ? "text-put-fig" : v.shape === "contango" ? "text-call-fig" : "text-flip-fig";
@@ -465,7 +492,7 @@ function RegimeStrip({ regime }: { regime: Regime }) {
             </p>
           </Cell>
         )}
-        <Cell label="Next high-impact" title="The next US release scored 4+ on the calendar, inside six hours. Inside thirty minutes it costs every score ten points.">
+        <Cell label="Next high-impact" title="The next US release scored 4+ on the calendar. Inside six hours the engine prices it in; inside thirty minutes it costs every score ten points.">
           {regime.event ? (
             <>
               <span
@@ -480,10 +507,19 @@ function RegimeStrip({ regime }: { regime: Regime }) {
                 <span className="fig text-ink-2">{regime.event.et}</span> {regime.event.title}
               </p>
             </>
+          ) : later && later.ts !== null && now !== null ? (
+            /* Past the six hours that cost a score, still the print the session
+               is waiting for — CPI at 08:30 seen from the night before. */
+            <>
+              <span className="fig text-[17px] leading-none text-ink-2">in {inMin((later.ts - now / 1000) / 60)}</span>
+              <p className="mt-1.5 truncate text-[11px] text-ink-3" title={later.event}>
+                <span className="fig text-ink-2">{etDay(later.ts, now)}{later.et ?? ""}</span> {later.event}
+              </p>
+            </>
           ) : (
             <>
-              <span className="text-[14px] leading-none text-ink-3">Nothing inside 6h</span>
-              <p className="mt-1.5 text-[11px] text-ink-3">no scheduled US print to wait for</p>
+              <span className="text-[14px] leading-none text-ink-3">None scheduled</span>
+              <p className="mt-1.5 text-[11px] text-ink-3">no US print scored 4+ on the calendar</p>
             </>
           )}
         </Cell>
@@ -552,6 +588,13 @@ function Cell({ label, title, children }: { label: string; title?: string; child
       {children}
     </div>
   );
+}
+
+/** "Wed " when the event falls on another New York day than now, else nothing. */
+function etDay(ts: number, now: number): string {
+  const day = (ms: number) => new Date(ms).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" });
+  const d = day(ts * 1000);
+  return d === day(now) ? "" : `${d} `;
 }
 
 const trendGlyph = (t: -1 | 0 | 1) => (t === 1 ? "▲" : t === -1 ? "▼" : "–");

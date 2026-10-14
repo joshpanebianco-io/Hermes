@@ -219,11 +219,12 @@ export interface OptionsFlow {
 /* -------------------------------------------------------------------------- */
 
 /**
- * One suggested contract for the row's side. `front` is 0DTE on SPY / QQQ /
- * IWM when one is listed today and it is before 15:00 ET, otherwise the
- * nearest expiry; `weekly` is the nearest with two trading days or more to
- * run. A `long` is the strike nearest 0.60 delta; a `spread` buys that and
- * sells the strike nearest 0.30 delta in the same expiry.
+ * One suggested contract for the row's side. `front` is the nearest expiry —
+ * today's while it is listed, until 15:00 ET on SPY / QQQ / IWM and 14:00 ET
+ * on a single name; `weekly` is the nearest with two trading days or more to
+ * run. Which of the two the desk trades is `OptionsCtx.pick` (the collector's
+ * expiry rule — `ExpiryRule`). A `long` is the strike nearest 0.60 delta; a
+ * `spread` buys that and sells the strike nearest 0.30 delta in the same expiry.
  */
 export interface OptContract {
   key: "front" | "weekly";
@@ -239,14 +240,32 @@ export interface OptContract {
   ask: number;
   mid: number;
   delta: number;
+  /** Per day; a spread's is the net of its legs. */
   theta: number | null;
   /** The long leg's implied volatility, in percent (as iv30 is). */
   iv: number | null;
+  /** A spread's short leg's implied volatility; null on a long. */
+  short_iv?: number | null;
+  /** Bid-ask as a % of mid — a spread's natural market (long bid − short ask … long ask − short bid). */
   spread_pct: number | null;
   max_value: number | null;
-  /** $ per share to the stop used — the latest signal's stop, else the entry ∓ the Pine buffer, else one ATR. */
+  /**
+   * The stock-level trade the contract is sized against: the latest signal's
+   * price and stop, else the setup's entry and that ∓ the Pine buffer, else the
+   * last print and one ATR — and how it was found.
+   */
+  stock_entry?: number | null;
+  stock_stop?: number | null;
+  risk_basis?: string | null;
+  /** $ per share from the entry to the stop. */
   stock_risk: number | null;
-  /** stock_risk × |delta| × 100, capped at the premium — the estimate's, when there is one. */
+  /** The contract's estimated mid with the stock at the entry. */
+  entry_mid?: number | null;
+  /**
+   * What the stop costs one contract: its value at the entry minus its value at
+   * the stop (re-marked by delta and gamma), plus half its bid-ask, capped at its
+   * price at the entry.
+   */
   risk_per_contract: number | null;
   /**
    * The contract re-marked to the stock's live price (Cboe's quote is fifteen
@@ -292,9 +311,20 @@ export interface OptionsCtx {
     grade: "good" | "ok" | "poor" | null;
   };
   zero_dte: boolean;
+  /** The contract the expiry rule picks for this name — the front on SPY / QQQ / IWM, else the weekly. */
+  pick?: "front" | "weekly" | null;
   earnings_in: string | null;
   contracts: OptContract[];
   flow?: OptionsFlow | null;
+}
+
+/** The expiry rule in the collector's words (optcalc.expiry_rule) — what Settings prints. */
+export interface ExpiryRule {
+  zero_dte_names: string[];
+  etf_cutoff_et: string;
+  single_cutoff_et: string;
+  weekly_min_sessions: number;
+  text: string;
 }
 
 export interface ScannerPayload {
@@ -320,6 +350,8 @@ export interface Watchlist {
   rejected?: string[];
   /** The collector's reason when a POST was refused. */
   error?: string;
+  /** The options expiry rule, for Settings' copy. */
+  options_rule?: ExpiryRule;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -364,11 +396,20 @@ export interface ScanEvent {
   /** Seen within two bars of its close. False = found by a replay after a restart — never alerted. */
   live: boolean;
   outcome: ScanOutcome | null;
+  /** The final bars no longer hold this signal — kept in the log, out of the record. */
+  retracted?: boolean;
+  retracted_ts?: string;
+  /** The final bars moved its price or stop: the figures it was first logged with. */
+  revised?: { price: number; stop: number | null; note: string };
+  /** A finished day, settled against bars read after its bell. */
+  checked?: boolean;
 }
 
 export interface ScanEvents {
   latest: number;
   events: ScanEvent[];
+  /** Ids withdrawn over the last two sessions — a page that announced one says so. */
+  retracted?: number[];
   offline?: { reason: string; api: string };
 }
 
@@ -413,6 +454,12 @@ export interface ScanBars {
   ema10: Array<number | null>;
   vwap: Array<number | null>;
   levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pm_done: boolean };
+  /**
+   * Each earlier session's four levels over its own regular hours
+   * (scan.history_levels) — the Pine's "keep previous days' levels". Absent
+   * from a collector older than 2026-10-14.
+   */
+  history?: Array<{ key: "PDH" | "PDL" | "PMH" | "PML"; v: number; from: number; to: number; day: string }>;
   sessions: Array<{ kind: "pre" | "rth" | "post"; from: number; to: number }>;
   signals: Array<{ t: number; kind: "L" | "E" | "BO" | "E_SETUP"; side: Side; price: number }>;
 }

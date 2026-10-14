@@ -104,7 +104,7 @@ function AgeChip({ m }: { m: number }) {
         "qt:border-0 qt:px-0 qt:text-[11px]",
         tone,
       )}
-      title={`Last refreshed ${age(m)} ago`}
+      title={m < 1 ? "Fetched in the last minute" : `Fetched ${age(m)} ago`}
     >
       {age(m)}
     </span>

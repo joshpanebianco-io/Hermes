@@ -75,10 +75,27 @@ SEC_TICKERS = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 SEC_DOC = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 
-# The LE_Model.pine scanner's ON tickers, in the script's order.
+# The LE_Model.pine scanner's ON tickers, in the script's order — then the
+# names added for the same playbook (owner, 2026-10-14: "add more stocks …
+# that they would recommend trading with this model").
+#
+# HOW THE ADDITIONS WERE CHOSEN. EllyD (the LE model) and PB trade on camera
+# the index ETFs and the megacaps already here, and build the rest of the day
+# from what is moving pre-market on news — they publish no fixed list. So the
+# additions are the names that suit a level-retest options trade on numbers,
+# screened 14 Oct 2026 off Yahoo dailies and Cboe's chains: $2bn+ a day
+# traded (clean levels, honest pre-market), a 14-day ATR of 2.5%+ (room for a
+# retest to pay the premium), the weekly at-the-money spread near 5% or under
+# and tens of thousands of contracts a day near the money. MU, AVGO, ORCL and
+# MSTR were on the script's own list, switched off; SMCI too, the thinnest
+# of these and kept for that history. GME by name (owner, 2026-10-14: "can we
+# also add gamestop") — under the dollar-volume bar at $27 a share (about
+# $270m a day), but a 4.6% ATR and 130k+ contracts a day near the money,
+# five cents wide.
 DEFAULT_WATCHLIST = [
     "SPY", "QQQ", "IWM", "AMD", "SPCX", "COIN", "PLTR", "HOOD", "DELL", "IBM", "AAPL",
     "NVDA", "TSLA", "AMZN", "META", "MSFT", "GOOG", "NFLX", "ADBE", "PYPL", "INTC",
+    "MU", "AVGO", "ORCL", "MSTR", "MRVL", "SNDK", "CRWV", "NBIS", "SMCI", "GME",
 ]
 # Always fetched: RS is measured against SPY and QQQ, and the tape reads IWM.
 BENCHMARKS = ("SPY", "QQQ", "IWM")
@@ -112,8 +129,9 @@ LIVE_IDLE_SEC = 30.0
 #: Names per batched read — the board's chunk (sources/quotes.py), well inside
 #: the twenty the endpoint accepts.
 LIVE_CHUNK = 12
-#: A ten-minute bar's last prints take a moment to reach Yahoo's bars.
-CLOSE_LAG = 10.0
+#: A ten-minute bar's last prints take a moment to reach Yahoo's bars — the
+#: same wait scan.technicals makes before it calls a bar confirmed.
+CLOSE_LAG = float(scan.CLOSE_LAG_SEC)
 #: While a close is being read the bars job comes back this soon.
 BURST_TICK_SEC = 1.0
 
@@ -138,13 +156,14 @@ SECTOR: dict[str, str] = {
         ["AAPL", "MSFT", "NVDA", "AMD", "INTC", "AVGO", "MU", "ORCL", "CRM", "ADBE", "IBM",
          "DELL", "SMCI", "ARM", "PLTR", "QCOM", "TXN", "CSCO", "NOW", "AMAT", "LRCX", "KLAC",
          "MRVL", "PANW", "CRWD", "SNOW", "ANET", "TSM", "SHOP", "MSTR", "ASML", "HPE", "HPQ",
-         "NET", "DDOG", "ZS", "INTU", "ON", "ADI", "NXPI", "WDC", "STX", "APP", "IONQ"], "XLK"),
+         "NET", "DDOG", "ZS", "INTU", "ON", "ADI", "NXPI", "WDC", "STX", "APP", "IONQ",
+         "SNDK", "CRWV", "NBIS"], "XLK"),
     **dict.fromkeys(
         ["META", "GOOG", "GOOGL", "NFLX", "DIS", "T", "VZ", "TMUS", "RDDT", "SPOT", "CMCSA",
          "SNAP", "PINS", "WBD", "ROKU", "TTD"], "XLC"),
     **dict.fromkeys(
         ["AMZN", "TSLA", "HD", "NKE", "MCD", "SBUX", "ABNB", "BKNG", "LULU", "RIVN", "GM", "F",
-         "LOW", "TJX", "CMG", "DASH", "LCID", "NIO", "CVNA", "DKNG"], "XLY"),
+         "LOW", "TJX", "CMG", "DASH", "LCID", "NIO", "CVNA", "DKNG", "GME"], "XLY"),
     **dict.fromkeys(
         ["COIN", "HOOD", "PYPL", "SOFI", "JPM", "GS", "BAC", "V", "MA", "XYZ", "SQ", "C", "WFC",
          "MS", "SCHW", "AFRM", "UPST", "AXP", "BLK", "BRK.B", "BRK-B"], "XLF"),
@@ -197,6 +216,8 @@ ALIASES: dict[str, list[str]] = {
     "MSTR": ["MicroStrategy"], "SOFI": ["SoFi"], "TSM": ["TSMC"], "JPM": ["JPMorgan"],
     "GS": ["Goldman Sachs"], "BA": ["Boeing"], "WMT": ["Walmart"], "COST": ["Costco"],
     "DIS": ["Disney"], "XOM": ["Exxon"], "LLY": ["Eli Lilly"], "UNH": ["UnitedHealth"],
+    "MRVL": ["Marvell"], "SNDK": ["Sandisk", "SanDisk"], "CRWV": ["CoreWeave"],
+    "NBIS": ["Nebius"], "GME": ["GameStop"],
 }
 
 # EDGAR form types worth a line under a stock. Form 4 (insider trades) and 144
@@ -810,8 +831,11 @@ class ScanStore:
             if not bars:
                 continue
             name = (self.meta.get(sym) or {}).get("shortName") or self.sec_names.get(sym)
+            # `asof`: a bar is confirmed by THIS download, not by the clock —
+            # see scan.CLOSE_LAG_SEC.
             techs[sym] = scan.technicals(bars, self.daily.get(sym) or [], clock, name=name,
-                                         official=scan.official_close(self.meta.get(sym)))
+                                         official=scan.official_close(self.meta.get(sym)),
+                                         asof=self.fetched.get(sym))
         rows: dict[str, dict[str, Any]] = {}
         for sym, tech in techs.items():
             row = scan.row_of(sym, tech, techs.get("SPY"), techs.get("QQQ"), clock)
@@ -829,6 +853,28 @@ class ScanStore:
             "fetched": dict(self.fetched),
             "errors": dict(self.errors),
         }
+
+    def day_signals(self, day: date, syms: Iterable[str]
+                    ) -> dict[str, tuple[list[dict[str, Any]], int | None]]:
+        """Each name's signals for a FINISHED session `day`, replayed from the bars
+        held as of that day's bell — what the event log settles the day against
+        (scanlog.EventLog.settle). Only names whose bars were read after the bell
+        and still reach back to the day: anything else cannot be checked yet.
+        `final_to` is where those bars are final (the bell, when they are whole)."""
+        m = scan.rth_end(day)
+        bell = datetime(day.year, day.month, day.day, m // 60, m % 60, tzinfo=scan.ET)
+        first = datetime(day.year, day.month, day.day, scan.PM_START // 60,
+                         tzinfo=scan.ET).timestamp()
+        clock = scan.clock_at(bell)
+        out: dict[str, tuple[list[dict[str, Any]], int | None]] = {}
+        for sym in syms:
+            bars, at = self.bars.get(sym), self.fetched.get(sym, 0.0)
+            if not bars or at < bell.timestamp() + CLOSE_LAG or bars[0].t > first:
+                continue
+            tech = scan.technicals(bars, self.daily.get(sym) or [], clock, asof=at)
+            if tech.ok and tech.rth_today:
+                out[sym] = (tech.signals, tech.final_to)
+        return out
 
     # ---- headlines ----------------------------------------------------------
 

@@ -89,6 +89,11 @@ export interface Print {
   title: string;
   score: number;
   released: boolean;
+  /**
+   * Its time has passed — released, or a speech (which never has an actual), or
+   * a print whose figures have not loaded yet. Absent from an older collector.
+   */
+  done?: boolean;
   actual: string | null;
   consensus: string | null;
   previous: string | null;

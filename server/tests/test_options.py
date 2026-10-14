@@ -196,15 +196,20 @@ def test_earnings_inside_an_expiry() -> None:
 
 def test_stop_prefers_the_signal_while_price_holds_it() -> None:
     row = {"last": 101.0, "atr_b": 0.5, "setup": {"entry": {"kind": "PMH", "price": 100.0}},
-           "signals": [{"kind": "L", "side": "long", "stop": 99.6}]}
+           "signals": [{"kind": "L", "side": "long", "price": 100.4, "stop": 99.6}]}
     assert optcalc.stock_stop(row, "long")[0] == 99.6
+    # …and the signal's own price is the entry the risk runs from.
+    assert optcalc.trade_plan(row, "long")[:2] == (100.4, 99.6)
     # Price below the signal's stop AND under the entry's buffer: one bar-ATR.
     row["last"] = 99.5
     stop, how = optcalc.stock_stop(row, "long")
     assert stop == pytest.approx(99.0) and "ATR" in how
     row["last"] = 100.5
-    row["signals"] = [{"kind": "L", "side": "long", "stop": 100.9}]
+    row["signals"] = [{"kind": "L", "side": "long", "price": 101.2, "stop": 100.9}]
     assert optcalc.stock_stop(row, "long")[0] == pytest.approx(100.0 - 0.25 * 0.5)
+    # The setup's entry — the level — is where the trade starts, not the last print.
+    entry, stop, how = optcalc.trade_plan(row, "long")
+    assert (entry, stop) == (100.0, pytest.approx(99.875)) and "buffer" in how
 
 
 def test_stop_falls_back_to_one_atr_and_mirrors_for_shorts() -> None:
@@ -217,7 +222,8 @@ def test_stop_falls_back_to_one_atr_and_mirrors_for_shorts() -> None:
 def test_long_contract_risk_is_capped_at_its_premium() -> None:
     o = _opt("C", 99, 1.9, 2.1, 0.62)
     c = optcalc.contract_long(o, "front", TUE, stock_risk=0.5)
-    assert c["risk_per_contract"] == pytest.approx(0.5 * 0.62 * 100)
+    # Straight-line without a plan: the stop through delta, plus half the bid-ask.
+    assert c["risk_per_contract"] == pytest.approx((0.5 * 0.62 + 0.1) * 100)
     assert c["note"].startswith("0.62Δ call, 0DTE")
     big = optcalc.contract_long(o, "front", TUE, stock_risk=10.0)
     assert big["risk_per_contract"] == pytest.approx(2.0 * 100)  # the mid, not 620
@@ -230,7 +236,7 @@ def test_debit_spread_maths() -> None:
     assert s["mid"] == pytest.approx(1.0) and s["max_value"] == pytest.approx(2.0)
     assert s["delta"] == pytest.approx(0.24)
     assert (s["bid"], s["ask"]) == (pytest.approx(0.8), pytest.approx(1.2))
-    assert s["risk_per_contract"] == pytest.approx(24.0)
+    assert s["risk_per_contract"] == pytest.approx((1.0 * 0.24 + 0.2) * 100)
     puts = optcalc.contract_spread(_opt("P", 101, 1.9, 2.1, -0.62), _opt("P", 99, 0.9, 1.1, -0.38),
                                    "front", TUE, None)
     assert puts is not None and puts["delta"] == pytest.approx(-0.24)
@@ -280,9 +286,9 @@ def test_contract_carries_the_estimate_and_risk_follows_it() -> None:
     assert c["est_mid"] == pytest.approx(2.0 + 0.62 + 0.02)
     assert c["est_delta"] == pytest.approx(0.66)
     assert (c["est_spot"], c["quote_spot"]) == (101.0, 100.0)
-    assert c["risk_per_contract"] == pytest.approx(0.5 * 0.66 * 100)
+    assert c["risk_per_contract"] == pytest.approx((0.5 * 0.66 + 0.1) * 100)
     plain = optcalc.contract_long(o, "front", TUE, stock_risk=0.5)
-    assert plain["est_mid"] is None and plain["risk_per_contract"] == pytest.approx(31.0)
+    assert plain["est_mid"] is None and plain["risk_per_contract"] == pytest.approx(41.0)
 
 
 def test_spread_estimate_stays_inside_its_width() -> None:
@@ -340,7 +346,11 @@ def test_options_ctx_on_a_real_chain() -> None:
                      ("weekly", "spread")]
     long0 = ctx["contracts"][0]
     assert long0["right"] == "C" and 0.45 <= long0["delta"] <= 0.75
-    assert long0["stock_risk"] == pytest.approx(777.68 - (777.0 - 0.25 * 0.7))
+    # From the setup's entry (PDH 777.00) to its stop, not from the last print.
+    assert (long0["stock_entry"], long0["stock_stop"]) == (777.0, pytest.approx(776.825))
+    assert long0["stock_risk"] == pytest.approx(0.25 * 0.7)
+    assert long0["entry_mid"] is not None and long0["entry_mid"] < long0["mid"]
+    assert ctx["pick"] == "front"
     assert ctx["liquidity"]["grade"] in ("good", "ok")
 
 
@@ -450,3 +460,73 @@ def test_build_attaches_options_only_once_a_chain_is_held() -> None:
     assert rows["SPY"]["options"]["ok"] is True
     assert rows["SPY"]["options"]["age_min"] == pytest.approx(2.0)
     assert rows["AAPL"]["options"] is None
+
+
+# --- the audit's fixes (2026-10-14) ----------------------------------------------------------
+
+
+def test_the_spread_card_carries_the_spreads_own_figures() -> None:
+    """MSFT's front spread printed the long leg's θ −2.31 and a 6.7% spread; its
+    natural market 1.94 / 2.32 is 17.8% of the 2.13 mid."""
+    lo = _opt("C", 99, 1.9, 2.1, 0.62, iv=0.26, theta=-0.30)
+    sh = _opt("C", 101, 0.9, 1.1, 0.38, iv=0.27, theta=-0.22)
+    s = optcalc.contract_spread(lo, sh, "front", TUE, None)
+    assert s is not None
+    assert s["theta"] == pytest.approx(-0.08)  # net of the legs, not the long's −0.30
+    assert (s["iv"], s["short_iv"]) == (26.0, 27.0)
+    assert s["spread_pct"] == pytest.approx((1.2 - 0.8) / 1.0 * 100)  # natural, not 10%
+    assert optcalc.contract_long(lo, "front", TUE, None)["short_iv"] is None
+
+
+def test_risk_runs_from_the_entry_to_the_stop_not_from_the_last_print() -> None:
+    """A long retest of 99.50 with the stop 0.125 under it, priced off a chain
+    quoted at 100.00. Old: |100.00 − 99.375| × 0.62Δ = $38.75 (+ half the bid-ask).
+    New: the call re-marked to 99.50 (1.695) and to 99.375 (1.620), 0.075 apart,
+    plus the 0.10 half-spread — $17.47."""
+    o = replace(_opt("C", 99, 1.9, 2.1, 0.62), gamma=0.04)
+    plan = optcalc.Plan(entry=99.5, stop=99.375, how="PMH ∓ the retest buffer", spot=100.0)
+    c = optcalc.contract_long(o, "front", TUE, stock_risk=0.125, plan=plan)
+    assert c["entry_mid"] == pytest.approx(2.0 - 0.31 + 0.5 * 0.04 * 0.25)
+    assert c["risk_per_contract"] == pytest.approx(17.47, abs=0.01)
+    assert (c["stock_entry"], c["stock_stop"], c["stock_risk"]) == (99.5, 99.375, 0.125)
+    old_way = optcalc.contract_long(o, "front", TUE, stock_risk=0.625)
+    assert old_way["risk_per_contract"] == pytest.approx(48.75)
+    # Past REMARK_MAX the straight line is kept, on the entry-to-stop distance.
+    far = optcalc.Plan(entry=90.0, stop=89.875, how="x", spot=100.0)
+    lin = optcalc.contract_long(o, "front", TUE, stock_risk=0.125, plan=far)
+    assert lin["entry_mid"] is None
+    assert lin["risk_per_contract"] == pytest.approx((0.125 * 0.62 + 0.1) * 100)
+
+
+def test_a_put_spread_risk_is_priced_the_same_way_round() -> None:
+    lo = replace(_opt("P", 101, 1.9, 2.1, -0.62), gamma=0.04)
+    sh = replace(_opt("P", 99, 0.9, 1.1, -0.38), gamma=0.04)
+    plan = optcalc.Plan(entry=100.5, stop=100.7, how="PDL ∓ the retest buffer", spot=100.0)
+    s = optcalc.contract_spread(lo, sh, "weekly", TUE, 0.2, plan=plan)
+    assert s is not None and s["entry_mid"] is not None
+    # Net delta −0.24 over 0.20 of stock against the spread, plus half its 0.40 market.
+    assert s["risk_per_contract"] == pytest.approx((0.24 * 0.2 + 0.2) * 100, abs=0.2)
+
+
+@pytest.mark.parametrize("sym,minute,front", [
+    # Wednesday: AAPL lists a same-day expiry. Shown as the front until 14:00…
+    ("AAPL", 13 * 60 + 59, date(2026, 10, 14)),
+    # …and from 14:00 its front is Friday's — two hours before the bell, not one.
+    ("AAPL", 14 * 60, date(2026, 10, 16)),
+    # SPY keeps its 0DTE an hour longer.
+    ("SPY", 14 * 60, date(2026, 10, 14)),
+    ("SPY", 15 * 60, date(2026, 10, 16)),
+])
+def test_a_single_names_same_day_expiry_stops_two_hours_before_the_bell(
+        sym: str, minute: int, front: date) -> None:
+    wed = date(2026, 10, 14)
+    exps = [wed, date(2026, 10, 16), date(2026, 10, 19)]
+    assert optcalc.pick_expiries(sym, exps, wed, minute)["front"] == front
+
+
+def test_one_expiry_rule_for_the_table_the_plan_and_settings() -> None:
+    assert optcalc.pick_key("SPY") == "front" and optcalc.pick_key("MSFT") == "weekly"
+    rule = optcalc.expiry_rule()
+    assert rule["zero_dte_names"] == ["SPY", "QQQ", "IWM"]
+    assert (rule["etf_cutoff_et"], rule["single_cutoff_et"]) == ("15:00", "14:00")
+    assert "15:00 ET" in rule["text"] and "14:00 ET" in rule["text"] and "weekly" in rule["text"]

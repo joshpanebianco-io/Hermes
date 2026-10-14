@@ -9,39 +9,42 @@ London as well as New York, so the question is not only "what happened
 overnight" — it is "what happened in the session I am about to trade, and in
 the one that just handed over to it".
 
-FIVE WINDOWS, IN ET, AND THEY DO NOT OVERLAP.
+SIX WINDOWS, AND THEY DO NOT OVERLAP. Normal weeks, in ET:
 
   asia      18:00 → 02:00   Globex reopens; Tokyo and Hong Kong lead
   london    02:00 → 05:00   the London OPEN window, where Europe does its damage
   euro_mid  05:00 → 08:00   European midday; US premarket starts building
   preny     08:00 → 09:30   the overlap and the 08:30 data window
   ny        09:30 → 16:00   US cash
+  post      16:00 → 17:00   after the bell: the after-hours earnings reaction,
+                            until Globex halts
 
 The boundaries are the handovers a trader actually uses, not the exchanges'
-own hours — London cash runs to 11:30 ET but by 09:30 the flow is American, and
-a "London range" that included the US open would describe neither.
+own hours — London cash runs to 16:30 London but by 09:30 ET the flow is
+American, and a "London range" that included the US open would describe
+neither.
 
-LONDON IS THE OPEN WINDOW, 02:00-05:00, AND IT STARTS BEFORE THE CASH BELL.
-The LSE opens at 08:00 London, which is 03:00 ET all year (the two
-hemispheres shift together for this pair).
-But European flow is already in by then: Eurex futures open at 08:00 CET —
-02:00 ET — and the London desks are at their screens an hour before the cash
-open. The hour from 02:00 is European-driven, and counting it as Asia described
-it as thin Globex drift when it is nothing of the kind. `resolve_session` in
-report.py has always used 02:00 for the same reason; the windows here now agree
-with it instead of contradicting it by an hour.
+LONDON IS 07:00-10:00 LONDON, AND IT STARTS BEFORE THE CASH BELL. The LSE opens
+at 08:00 London, but European flow is already in by then: Eurex futures open at
+08:00 CET and the London desks are at their screens an hour before the cash
+open. The hour from 07:00 London is European-driven, and counting it as Asia
+described it as thin Globex drift when it is nothing of the kind.
 
-IT ENDS AT 05:00 BECAUSE THAT IS WHERE THE DAMAGE IS DONE. "London took out the
-Asia high" is a claim about the OPEN move; run the window to 08:00 and it
-absorbs three hours of midday drift and stops meaning that. So the leftovers get
-their own window rather than diluting this one — euro_mid exists to be somewhere
-else for them to go. Note the report still writes a LONDON SESSION note across
-roughly 02:00-07:30 (resolve_session); this row is labelled "London open" so two
+THOSE ARE LONDON TIMES, NOT ET (review, 2026-10-14). This said "03:00 ET all
+year (the two hemispheres shift together for this pair)", which is true except
+for the week between the UK's clock change and the US's and the three weeks
+the other way every March — when London's 07:00 is 03:00 ET and the window
+ran an hour early, filing London's open as Asia. The boundaries now come from
+`sessions.desk_window`, the one definition the calendar and the brief read
+too.
+
+IT ENDS AT 10:00 LONDON BECAUSE THAT IS WHERE THE DAMAGE IS DONE. "London took
+out the Asia high" is a claim about the OPEN move; run the window to 08:00 ET
+and it absorbs three hours of midday drift and stops meaning that. So the
+leftovers get their own window rather than diluting this one — euro_mid exists
+to be somewhere else for them to go. The report's LONDON SESSION note runs from
+the same 07:00 London to 08:00 ET; this row is labelled "London open" so two
 different spans are never both called London.
-
-EVERYTHING IN ET, converted from the bar's own epoch. The instruments settle on
-CME's clock, which is New York's; deriving from local time would put every
-boundary an hour out for the weeks the two hemispheres' DST disagree.
 
 TRUE HIGHS AND LOWS, FROM v8 BARS (review, 2026-10-13). This used to read the
 batched spark endpoint, which returns closes only — so every "high" was the
@@ -62,19 +65,10 @@ from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
 from ..http import SourceStatus, fetch, json_body
+from ..sessions import DESK_WINDOWS, desk_window, globex_open
 from .profiles import CHART as V8_CHART
 
 ET = ZoneInfo("America/New_York")
-
-# key, label, start hour (ET), end hour (ET). A window whose start is greater
-# than its end wraps midnight.
-WINDOWS: list[tuple[str, str, float, float]] = [
-    ("asia", "Asia", 18.0, 2.0),
-    ("london", "London open", 2.0, 5.0),
-    ("euro_mid", "Europe midday", 5.0, 8.0),
-    ("preny", "Pre-NY", 8.0, 9.5),
-    ("ny", "New York", 9.5, 16.0),
-]
 
 # Which books get segmented. Deliberately only the three actually traded: this
 # costs one extra request and forty instruments' worth of it would buy nothing.
@@ -83,11 +77,6 @@ ASSETS: list[tuple[str, str]] = [
     ("ES", "ES=F"),
     ("GC", "GC=F"),
 ]
-
-
-def _in_window(hour: float, start: float, end: float) -> bool:
-    """Does an ET hour-of-day fall in a window that may wrap midnight?"""
-    return start <= hour < end if start < end else (hour >= start or hour < end)
 
 
 def segment(
@@ -110,19 +99,19 @@ def segment(
     admission as one boolean, for the panel that draws every row on a shared
     axis and would otherwise invite reading yesterday's rows as a timeline.
     """
-    now_h = now_et.hour + now_et.minute / 60.0
+    # The window the clock is in — None while Globex is shut, so Friday's New
+    # York row does not read "live" all weekend.
+    now_key = desk_window(now_et) if globex_open(now_et) else None
+    keys = [desk_window(datetime.fromtimestamp(t, ET)) for t in stamps]
     out: list[dict[str, Any]] = []
-    for key, label, start, end in WINDOWS:
+    for key, label in DESK_WINDOWS:
         # Walk backwards and stop at the first gap, so what is collected is the
         # latest contiguous run inside this window rather than every bar that
         # ever fell in it.
         picked: list[tuple[int, float, float, float]] = []
         seen_any = False
         for i in range(len(stamps) - 1, -1, -1):
-            et_h = datetime.fromtimestamp(stamps[i], ET)
-            h = et_h.hour + et_h.minute / 60.0
-            inside = _in_window(h, start, end)
-            if inside:
+            if keys[i] == key:
                 hi, lo, cl = highs[i], lows[i], closes[i]
                 # A bar with a close but no high/low (a hole in a thin futures
                 # minute) falls back to its close rather than being dropped.
@@ -147,15 +136,19 @@ def segment(
         lo = min(p[2] for p in picked)
         op, cl = picked[0][3], picked[-1][3]
         rng = hi - lo
+        # CENTS, NOT FOUR PLACES: Yahoo's gold bars are float32 underneath, so
+        # 4163.7 arrives as 4163.7002 and survived a round to 4. The brief then
+        # printed "opened at 4163.7002", and its numeral check flagged a correct
+        # "4163.8" because the digest only held 4163.7998 (2026-10-14).
         out.append({
             "key": key,
             "label": label,
             "ok": True,
-            "high": round(hi, 4),
-            "low": round(lo, 4),
-            "open": round(op, 4),
-            "close": round(cl, 4),
-            "range": round(rng, 4),
+            "high": round(hi, 2),
+            "low": round(lo, 2),
+            "open": round(op, 2),
+            "close": round(cl, 2),
+            "range": round(rng, 2),
             "chg_pct": ((cl - op) / op * 100.0) if op else None,
             # Where the CURRENT price sits inside that session's range — the
             # figure that answers "have we taken out the Asia high".
@@ -168,7 +161,7 @@ def segment(
             "date": datetime.fromtimestamp(picked[0][0], ET).strftime("%a %d"),
             # "live" while the clock is still inside this window, so a range
             # that is still being built is never read as a finished one.
-            "status": "live" if _in_window(now_h, start, end) else "complete",
+            "status": "live" if now_key == key else "complete",
             "start_ts": picked[0][0],
         })
 

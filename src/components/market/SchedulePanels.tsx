@@ -32,13 +32,13 @@ export function PrintsFed({
   loading: boolean;
 }) {
   return (
-    <Module title="Prints & the Fed" sub="today, against consensus" bodyClassName="px-0 py-0">
+    <Module title="Prints & the Fed" sub="the session's, against consensus" bodyClassName="px-0 py-0">
       {loading ? (
         <Skeleton rows={5} label="Loading today's prints" />
       ) : (
         <>
           {prints.length === 0 ? (
-            <Gap>No US print scored 3 or more today.</Gap>
+            <Gap>No US print scored 3 or more for the session.</Gap>
           ) : (
             <ul className="py-1">
               {prints.map((p) => (
@@ -67,11 +67,11 @@ function PrintRow({ p, builtUtc }: { p: Print; builtUtc: string }) {
           <span aria-label="High impact" title="High impact" className="h-[5px] w-[5px] shrink-0 -translate-y-[2px] bg-warn" />
         )}
         <span className={cn("qt-cap ml-auto w-[44px] shrink-0 text-right text-[9.5px]", p.released ? readText(p.read) : "text-ink-3")}>
-          {!p.released ? "due" : p.read ?? "out"}
+          {p.released ? (p.read ?? "out") : !p.done ? "due" : p.consensus != null || p.previous != null ? "out" : "done"}
         </span>
       </div>
       <p className="fig mt-0.5 pl-[66px] text-[10px] text-ink-3 qt:pl-[74px]">
-        {p.released && (
+        {(p.released || p.done) && (
           <>
             act <span className={surprised ? "text-flip-fig" : "text-ink"}>{p.actual ?? "—"}</span> ·{" "}
           </>

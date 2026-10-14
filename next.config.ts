@@ -11,6 +11,11 @@ const nextConfig: NextConfig = {
   // The "N" badge sat over the status rail's first source and the corner of
   // every pane — and daily use runs `next dev`, so it was on screen all day.
   devIndicators: false,
+  // `next dev` binds 127.0.0.1 only (package.json -H): on every interface it
+  // let any machine on the network press Generate or delete history. The page
+  // still opens as either name for the loopback, and both must load the dev
+  // bundle.
+  allowedDevOrigins: ["localhost", "127.0.0.1"],
   // A production build gets its own directory (`npm run prod`, `dev.ps1
   // -Prod`): `next build` into `.next` would rewrite the files a running
   // `next dev` is serving from and break it mid-session.

@@ -72,6 +72,16 @@ def post_end(d: date) -> int:
 SRC_SEC = 300  # Yahoo's 5-minute bars
 BAR_SEC = 600  # the 10-minute chart the script is built for
 
+# A BAR IS CONFIRMED BY THE DOWNLOAD, NOT BY THE CLOCK (audit, 2026-10-14). The
+# clock passing 09:50 does not put the 09:40 bar's last prints in a copy of the
+# bars read at 09:49:30 — and on Oct 13 that copy fired eight signals the final
+# bars never had (IBM's (L) at 09:40, score 82, alerted and logged, among them).
+# So a ten-minute bar counts as closed only in bars downloaded this long after
+# its close: Yahoo's bars carry a bar's last trades a few seconds after it ends.
+# The scanner's close read (sources/scanner.py) fetches every name just after
+# this mark, so the wait it costs a signal is seconds.
+CLOSE_LAG_SEC = 10
+
 ATR_LEN = 14  # ta.atr(14) on the chart, and the hand-kept daily ATR
 WAVE_LEN = 8  # EMA 8 / 9 / 10
 BUF_MULT = 0.25  # "Retest buffer (× ATR 14)"
@@ -584,6 +594,10 @@ class Tech:
     progress: dict[str, float | None] = field(default_factory=dict)
     broken: dict[str, bool] = field(default_factory=dict)
     range_used: float | None = None
+    #: Epoch up to which the ten-minute bars are FINAL in this download — the
+    #: newest confirmed bar's close. A logged signal on a bar that ends at or
+    #: before it can be checked against these bars (scanlog.revalidate).
+    final_to: int | None = None
 
 
 def official_close(meta: dict[str, Any] | None) -> tuple[date, float] | None:
@@ -609,13 +623,20 @@ def _vwap(bars: list[Bar]) -> float | None:
 
 
 def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
-               name: str | None = None, official: tuple[date, float] | None = None) -> Tech:
+               name: str | None = None, official: tuple[date, float] | None = None,
+               asof: float | None = None) -> Tech:
     """Everything the script computes for one symbol, as of `clock.now`. Pure.
 
     Bars that OPEN after `clock.now` are ignored, so the same function replays
     any past instant from a later download — which is how the boundary table in
     tools/scan_probe.py is produced. `official` is `official_close(meta)`;
     pass None when replaying the past, since it is a fact about now.
+
+    `asof` is when `bars5` were downloaded (epoch). A ten-minute bar is
+    confirmed — levels step on it, an (L) or a breakout can fire on it — only
+    once it closed CLOSE_LAG_SEC before that download; until then it is still
+    the forming bar, whatever the clock says. None (a replay from a later
+    download) confirms by the clock alone.
     """
     tech = Tech(name=name)
     now_ts = int(clock.now.timestamp())
@@ -776,8 +797,16 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
         if datetime.fromtimestamp(b.t, ET).date() == td
         and RTH_START <= _mod(datetime.fromtimestamp(b.t, ET)) < td_end
     ]
-    confirmed = [k for k in rth10 if bars10[k].t + BAR_SEC <= now_ts]
-    forming = rth10[-1] if rth10 and rth10[-1] not in confirmed else None
+    # Confirmed: closed by the clock AND in a download read CLOSE_LAG_SEC after
+    # its close (see the constant). A bar the clock has closed but the download
+    # has not caught up with is still forming — and only the OLDEST such bar
+    # forms, so a live trade laid on the next bucket cannot fire an (E) ahead
+    # of the bar before it, which would log the same trigger twice.
+    final_ts = now_ts if asof is None else min(now_ts, int(asof) - CLOSE_LAG_SEC)
+    confirmed = [k for k in rth10 if bars10[k].t + BAR_SEC <= final_ts]
+    pending = [k for k in rth10 if bars10[k].t + BAR_SEC > final_ts]
+    forming = pending[0] if pending else None
+    tech.final_to = bars10[confirmed[-1]].t + BAR_SEC if confirmed else None
     if rth10:
         rp = replay(bars10, confirmed, forming, levels, atr10, w_top, w_bot, pmh_live, pml_live)
         tech.signals = rp.signals
@@ -810,12 +839,52 @@ CHART_DAYS = 90
 
 def _empty_chart(tf: str, error: str) -> dict[str, Any]:
     return {"ok": False, "tf": tf, "error": error, "bars": [], "ema8": [], "ema9": [],
-            "ema10": [], "vwap": [], "levels": {}, "sessions": [], "signals": []}
+            "ema10": [], "vwap": [], "levels": {}, "history": [], "sessions": [], "signals": []}
 
 
 def _levels_out(tech: Tech) -> dict[str, Any]:
     return {"pdh": _r(tech.pdh), "pdl": _r(tech.pdl), "pmh": _r(tech.pmh),
             "pml": _r(tech.pml), "pm_done": tech.pm_done}
+
+
+def history_levels(bars5: list[Bar], trading_day: date, since: int) -> list[dict[str, Any]]:
+    """Each EARLIER session's four levels, over that session's regular hours —
+    LE_Model.pine's "keep previous days' levels". Pure.
+
+    WHY (owner, 2026-10-14: "ensure that the chart in the scanner includes the
+    pre market highs and lows"). The chart drew only the trading day's four,
+    and the trading day's PMH / PML do not exist until 04:00 — so overnight,
+    when a plan is read, the chart showed yesterday's session and none of the
+    levels it traded against. Each earlier day in view now carries its own
+    PMH / PML (its 04:00–09:30 high and low) and PDH / PDL (the session before
+    it), drawn across that day's 09:30 to its close.
+
+    `since` is the first bar the chart ships; days before it are not drawn.
+    """
+    days: dict[date, dict[str, list[float]]] = {}
+    for b in bars5:
+        dt = datetime.fromtimestamp(b.t, ET)
+        kind = _session_of(dt.date(), _mod(dt))
+        if kind in ("pre", "rth"):
+            slot = days.setdefault(dt.date(), {"pre": [], "rth": []})
+            slot[kind].extend((b.high, b.low))
+    order = sorted(d for d in days if days[d]["rth"])
+    out: list[dict[str, Any]] = []
+    for i, d in enumerate(order):
+        if d >= trading_day:
+            continue
+        t0 = int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
+        t1 = t0 + (rth_end(d) - RTH_START) * 60
+        if t1 <= since:
+            continue
+        pre = days[d]["pre"]
+        prior = days[order[i - 1]]["rth"] if i > 0 else []
+        for key, vals, pick in (("PDH", prior, max), ("PDL", prior, min),
+                                ("PMH", pre, max), ("PML", pre, min)):
+            if vals:
+                out.append({"key": key, "v": _r(pick(vals)), "from": t0, "to": t1,
+                            "day": d.isoformat()})
+    return out
 
 
 def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
@@ -905,6 +974,7 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
         "vwap": vwap,
         "levels": _levels_out(tech),
+        "history": history_levels(bars5, td, bars[start].t),
         "sessions": sessions,
         "signals": [{"t": at(x["t"]), "kind": x["kind"], "side": x["side"], "price": x["price"]}
                     for x in tech.signals if x.get("t") is not None],
@@ -1221,4 +1291,7 @@ def row_of(sym: str, t: Tech, spy: Tech | None, qqq: Tech | None,
         "signals": t.signals,
         # Carried for the read path's tape and regime; not part of the contract.
         "pdh_day": t.pdh_day.isoformat() if t.pdh_day else None,
+        # Where this row's bars are final (Tech.final_to) — the event log checks
+        # what it logged against the signals up to here.
+        "final_to": t.final_to,
     }

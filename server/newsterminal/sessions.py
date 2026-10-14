@@ -13,10 +13,17 @@ and observe US daylight saving; deriving from local time would put every
 boundary an hour out for three weeks of the year, twice a year, which is
 exactly the kind of bug that only shows up when you are least able to spot it.
 
-THE OVERLAPS ARE THE POINT. London-New York, 08:00 to 11:30 ET, is when both
-of the two largest pools are open at once and is where the day's range is
-usually set. It is called out separately because it is not derivable at a
-glance from two rows of open/closed.
+EXCEPT WHERE A BOUNDARY BELONGS TO ANOTHER CITY. London's desks arrive at
+07:00 London, which is 02:00 ET for most of the year and 03:00 ET for the
+week between the UK's clock change and the US's (and the three weeks every
+March the other way round). Those boundaries are London times, converted —
+see "the desk day" below, which every module that splits the day reads.
+
+THE OVERLAPS ARE THE POINT. London-New York, 08:00 ET to the LSE's 16:30
+London close (11:30 ET, 12:30 ET in the mismatch weeks), is when both of the
+two largest pools are open at once and is where the day's range is usually
+set. It is called out separately because it is not derivable at a glance from
+two rows of open/closed.
 """
 
 from __future__ import annotations
@@ -25,10 +32,126 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .holidays import REGULAR_CLOSE, close_minute, close_time, holiday_name, is_trading_day
+from .holidays import (
+    REGULAR_CLOSE,
+    close_minute,
+    close_time,
+    cme_closed,
+    cme_halt,
+    holiday_name,
+    is_trading_day,
+)
 
 ET = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
+
+# ---------------------------------------------------------------- the desk day
+#
+# ONE DEFINITION OF WHERE EACH DESK'S DAY STARTS (review, 2026-10-14). There
+# were three "Londons": the ranges started it at 02:00 ET, the calendar at
+# 03:00 ET (so UK GDP at 07:00 London printed "in the Asia session"), and the
+# brief at 02:00 — all three ET constants, all three an hour out for the weeks
+# the two countries' clocks disagree. Now each boundary is written in the zone
+# that defines it, and the ranges, the calendar and the brief read it here.
+#
+#   18:00 ET       Globex reopens: the futures day, and Asia, begin
+#   07:00 London   European futures and the London desks are in (Eurex opens
+#                  08:00 CET); an hour before the LSE's cash bell
+#   10:00 London   the London OPEN window ends — where its damage is done
+#   08:00 ET       the overlap and the 08:30 US data window
+#   09:30 ET       US cash
+#   16:00 ET       US cash close; ES and NQ settle on this minute
+#   17:00 ET       Globex halts for its maintenance hour
+GLOBEX_REOPEN = time(18, 0)
+GLOBEX_HALT = time(17, 0)
+LONDON_DESKS = time(7, 0)
+LONDON_OPEN_END = time(10, 0)
+LONDON_CLOSE = time(16, 30)
+PRE_NY = time(8, 0)
+NY_OPEN = time(9, 30)
+NY_CLOSE = REGULAR_CLOSE
+
+# The windows that split one Globex day, in the order it runs them.
+DESK_WINDOWS: list[tuple[str, str]] = [
+    ("asia", "Asia"),
+    ("london", "London open"),
+    ("euro_mid", "Europe midday"),
+    ("preny", "Pre-NY"),
+    ("ny", "New York"),
+    ("post", "Post-close"),
+]
+
+
+def _hours(t: datetime) -> float:
+    return t.hour + t.minute / 60.0 + t.second / 3600.0
+
+
+def desk_window(when: datetime) -> str | None:
+    """Which desk window an instant falls in — each boundary on its own city's clock.
+
+    None for 17:00-18:00 ET, Globex's maintenance hour. The clock only: it does
+    not ask whether anything traded (a Saturday reads as its weekday hours);
+    `globex_open` is that question. Pure.
+    """
+    et = _hours(when.astimezone(ET))
+    if 17.0 <= et < 18.0:
+        return None
+    if et >= 18.0:
+        return "asia"
+    if et >= 16.0:
+        return "post"
+    if et >= 9.5:
+        return "ny"
+    if et >= 8.0:
+        return "preny"
+    # Before 08:00 ET the boundaries are London's. ET 00:00-08:00 is London
+    # 04:00/05:00-12:00/13:00, so London's hour never wraps here.
+    lon = _hours(when.astimezone(LONDON))
+    if lon < 7.0:
+        return "asia"
+    return "london" if lon < 10.0 else "euro_mid"
+
+
+def london_at(d: date, t: time) -> datetime:
+    """London wall time `t` on London date `d`, as an aware instant."""
+    return datetime.combine(d, t, tzinfo=LONDON)
+
+
+def globex_trade_date(when: datetime) -> date:
+    """The futures trade date an instant belongs to: from 18:00 ET it is the next
+    weekday's, and a weekend belongs to Monday."""
+    et = when.astimezone(ET)
+    d = et.date()
+    if et.time() >= GLOBEX_REOPEN:
+        d += timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def globex_open(when: datetime) -> bool:
+    """Are the index and metal futures trading at this instant?
+
+    Shut Friday 17:00 to Sunday 18:00 ET, every day 17:00-18:00, all of a trade
+    date CME closes outright (Christmas, New Year's Day, Good Friday), and after
+    the early halt on the NYSE's holidays and half days.
+    """
+    et = when.astimezone(ET)
+    wd, t = et.weekday(), et.time()
+    if GLOBEX_HALT <= t < GLOBEX_REOPEN:
+        return False
+    if wd == 5 or (wd == 6 and t < GLOBEX_REOPEN) or (wd == 4 and t >= GLOBEX_HALT):
+        return False
+    trade = globex_trade_date(when)
+    if cme_closed(trade):
+        return False
+    halt = cme_halt(trade)
+    return not (halt is not None and et.date() == trade and t >= halt)
+
+
+def overlap_end(d: date) -> datetime:
+    """The London-New York overlap's end on `d`: the LSE's 16:30 close, in ET."""
+    return london_at(d, LONDON_CLOSE).astimezone(ET)
 
 # key, label, city zone, local open, local close, weight
 #
@@ -63,6 +186,7 @@ SESSIONS: list[tuple[str, str, str, time, time, int]] = [
 #   london    London            UK weekdays
 #   nyse      New York          NYSE trading days (holidays skipped)
 #   cme       New York          NYSE trading days
+#   halt      New York          Globex weekdays, at the early halt on holidays
 MARKERS: list[tuple[str, time, str, str]] = [
     ("globex", time(18, 0), "Globex open", "Futures reopen; the new session's first print"),
     ("london", time(7, 0), "London pre-open",
@@ -77,8 +201,13 @@ MARKERS: list[tuple[str, time, str, str]] = [
     ("london", time(16, 30), "London close",
      "The LSE's closing auction; European desks square up"),
     ("nyse", time(15, 0), "Final hour", "Closing imbalances begin building"),
-    ("nyse", time(16, 0), "NYSE close", "US cash close; futures continue"),
-    ("cme", time(17, 0), "CME settlement", "Daily settlement; the futures day rolls"),
+    # WHAT 16:00 AND 17:00 ACTUALLY ARE (review, 2026-10-14). 17:00 used to be
+    # "CME settlement", which it is not: ES and NQ settle off the 30 seconds
+    # to 16:00 ET, gold off the minute to 13:30 ET. 17:00 is only the halt.
+    ("cme", time(13, 30), "Gold settlement", "COMEX gold settles on this minute"),
+    ("nyse", time(16, 0), "NYSE close", "US cash close; ES and NQ settle on this minute"),
+    ("halt", time(17, 0), "Globex halt",
+     "Futures stop for the maintenance hour; the trade date rolls at 18:00"),
 ]
 
 
@@ -157,11 +286,12 @@ def session_state(
     et = now.astimezone(ET)
     et_min = et.hour * 60 + et.minute
 
-    # The overlap. Hard-coded to ET rather than derived from the two rows above
-    # because the two cities' DST transitions are three weeks apart and the
-    # window genuinely moves during those weeks — a derived value would be
-    # right, but nobody could check it.
-    overlap = is_trading_day(et.date()) and (8 * 60) <= et_min < (11 * 60 + 30)
+    # The overlap: 08:00 ET to the LSE's close, which is a LONDON time. It was
+    # an ET constant (08:00-11:30) on the grounds that a derived value could
+    # not be checked; the mismatch weeks are exactly when it is wrong, and
+    # tests/test_desk_day.py now checks it.
+    overlap = (is_trading_day(et.date()) and et_min >= 8 * 60
+               and now < overlap_end(et.date()))
 
     return {
         "et": et.isoformat(),
@@ -227,11 +357,17 @@ def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
     # The cash market is closed all day; the index and metal futures run a
     # shortened session and halt at 13:00 ET.
     d = et.date()
+    if wd < 5 and cme_closed(d) and m < 18 * 60:
+        return {
+            "key": "holiday",
+            "label": "Market holiday",
+            "note": f"{holiday_name(d) or 'CME closed'} — futures and cash shut all day",
+        }
     if wd < 5 and not is_trading_day(d) and 8 * 60 <= m < 18 * 60:
         return {
             "key": "holiday",
             "label": "US market holiday",
-            "note": f"{holiday_name(d) or 'NYSE closed'} — cash shut; futures halt early",
+            "note": f"{holiday_name(d) or 'NYSE closed'} — cash shut; futures halt at 13:00 ET",
         }
 
     # New York, in New York's own clock — shortened on a half day.
@@ -254,7 +390,7 @@ def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
             "key": "post",
             "label": "Post-close",
             "note": ("Early close today — cash shut at 13:00 ET" if half
-                     else "Cash shut; settlement at 17:00 ET"),
+                     else "Cash shut; futures run to the 17:00 ET halt"),
         }
 
     # Overnight: whoever is actually trading says what this is.
@@ -327,14 +463,21 @@ def _fed_markers(et: datetime, fed: list[dict[str, Any]] | None) -> list[dict[st
 def _marker_day_ok(kind: str, d: date) -> bool:
     """Does a marker of this kind happen on its own zone's date `d`?"""
     if kind == "globex":
-        return d.weekday() in (6, 0, 1, 2, 3)  # Sunday–Thursday evenings
-    if kind == "london":
-        return d.weekday() < 5
+        # Sunday–Thursday evenings, unless the trade date they open is one CME
+        # closes outright (no reopen on Christmas Eve).
+        if d.weekday() not in (6, 0, 1, 2, 3):
+            return False
+        return not cme_closed(globex_trade_date(datetime.combine(d, GLOBEX_REOPEN, tzinfo=ET)))
+    if kind in ("london", "halt"):
+        return d.weekday() < 5 and not cme_closed(d)
     return is_trading_day(d)  # nyse, cme
 
 
 def _marker_time(kind: str, label: str, t: time, d: date) -> time:
-    """A NYSE moment on a half day: the close moves to 13:00 and the final hour with it."""
+    """A NYSE moment on a half day: the close moves to 13:00 and the final hour with it.
+    Globex's halt moves to 13:00 on an NYSE holiday and 13:15 on a half day."""
+    if kind == "halt":
+        return cme_halt(d) or t
     if kind != "nyse":
         return t
     close = close_time(d)

@@ -49,6 +49,15 @@ RTH_OPEN = time(9, 30)
 RTH_CLOSE = time(16, 0)
 GLOBEX_OPEN = time(18, 0)
 
+# GOLD'S DAY IS NOT THE EQUITY DAY (review, 2026-10-14). The COMEX day session
+# runs 08:20-13:30 ET and gold settles on its last minute, so gold's "prior
+# RTH" is that window — the equity 09:30-16:00 one it used to share put
+# gold's value area across two and a half hours of post-settlement drift and
+# missed the 08:30 data reaction entirely. Books not listed keep 09:30-16:00.
+RTH_HOURS: dict[str, tuple[time, time]] = {
+    "GC": (time(8, 20), time(13, 30)),
+}
+
 # The value area convention: the smallest set of bins around the POC holding
 # this share of the window's volume. 70% is the standard nobody argues with.
 VALUE_AREA = 0.70
@@ -163,8 +172,8 @@ def build(
         "second_node": round(centre(second_i), 4) if second_i is not None else None,
         "vah": round(base + (hi_i + 1) * step, 4),
         "val": round(base + lo_i * step, 4),
-        "low": round(lo, 4),
-        "high": round(hi, 4),
+        "low": round(lo, 2),
+        "high": round(hi, 2),
         "volume": round(total),
         "bin": step,
         "bars": len(bars),
@@ -202,12 +211,20 @@ def prev_trading_day(d: datetime) -> datetime:
     return d
 
 
-def rth_close(day: date) -> time:
-    """16:00, or 13:00 on a half day — where that day's cash profile ends."""
+def rth_close(day: date, book: str | None = None) -> time:
+    """16:00, or 13:00 on a half day — where that day's cash profile ends. Gold's
+    is its 13:30 settlement."""
+    if book in RTH_HOURS:
+        return RTH_HOURS[book][1]
     return close_time(day)
 
 
-def windows(now_et: datetime) -> list[dict[str, Any]]:
+def rth_open(book: str | None = None) -> time:
+    """09:30, or a book's own day-session open (gold's 08:20)."""
+    return RTH_HOURS[book][0] if book in RTH_HOURS else RTH_OPEN
+
+
+def windows(now_et: datetime, book: str | None = None) -> list[dict[str, Any]]:
     """Which profiles exist right now, and their [start, end) instants.
 
     THREE REFERENCES AT ALL HOURS: the last completed RTH, the last completed
@@ -240,6 +257,10 @@ def windows(now_et: datetime) -> list[dict[str, Any]]:
     """
     d = now_et.date()
     t = now_et.time()
+    o = rth_open(book)
+
+    def close(day: date) -> time:
+        return rth_close(day, book)
 
     def at(day: Any, tm: time) -> datetime:
         return datetime(day.year, day.month, day.day, tm.hour, tm.minute, tzinfo=ET)
@@ -254,36 +275,36 @@ def windows(now_et: datetime) -> list[dict[str, Any]]:
         """
         return {
             "key": "overnight", "label": label, "kind": "done",
-            "start": at(prev_trading_day(ref), GLOBEX_OPEN), "end": at(ref, RTH_OPEN),
+            "start": at(prev_trading_day(ref), GLOBEX_OPEN), "end": at(ref, o),
         }
 
     out: list[dict[str, Any]] = []
 
     trading = is_trading_day(d)
-    if RTH_OPEN <= t < rth_close(d) and trading:
+    if o <= t < close(d) and trading:
         # New York is trading: yesterday's cash, the completed overnight, and
-        # the live RTH profile off the 09:30 anchor.
+        # the live RTH profile off the 09:30 anchor (gold's 08:20).
         prev = prev_trading_day(now_et)
         out.append({"key": "prev_rth", "label": "Prev RTH", "kind": "done",
-                    "start": at(prev, RTH_OPEN), "end": at(prev, rth_close(prev.date()))})
+                    "start": at(prev, o), "end": at(prev, close(prev.date()))})
         out.append({"key": "overnight", "label": "Recent overnight", "kind": "done",
-                    "start": at(prev, GLOBEX_OPEN), "end": at(d, RTH_OPEN)})
-        out.append({"key": "dev", "label": "Live · 09:30", "kind": "live",
-                    "start": at(d, RTH_OPEN), "end": now_et})
-    elif rth_close(d) <= t < GLOBEX_OPEN and trading:
+                    "start": at(prev, GLOBEX_OPEN), "end": at(d, o)})
+        out.append({"key": "dev", "label": f"Live · {o:%H:%M}", "kind": "live",
+                    "start": at(d, o), "end": now_et})
+    elif close(d) <= t < GLOBEX_OPEN and trading:
         # Post-close lull: today's cash just completed; nothing develops
         # until Globex reopens at 18:00.
         prev = prev_trading_day(now_et)
         out.append({"key": "prev_rth", "label": "Recent RTH", "kind": "done",
-                    "start": at(d, RTH_OPEN), "end": at(d, rth_close(d))})
+                    "start": at(d, o), "end": at(d, close(d))})
         out.append({"key": "overnight", "label": "Recent overnight", "kind": "done",
-                    "start": at(prev, GLOBEX_OPEN), "end": at(d, RTH_OPEN)})
+                    "start": at(prev, GLOBEX_OPEN), "end": at(d, o)})
     elif t >= GLOBEX_OPEN:
         # Globex evening (Asia). Sunday's reference cash day is Friday.
         rth_day = d if trading else prev_trading_day(now_et).date()
         out.append({"key": "prev_rth", "label": "Recent RTH", "kind": "done",
-                    "start": at(rth_day, RTH_OPEN), "end": at(rth_day, rth_close(rth_day))})
-        out.append(overnight_before(at(rth_day, RTH_OPEN), "Prev overnight"))
+                    "start": at(rth_day, o), "end": at(rth_day, close(rth_day))})
+        out.append(overnight_before(at(rth_day, o), "Prev overnight"))
         out.append({"key": "dev", "label": "Live · 18:00", "kind": "live",
                     "start": at(d, GLOBEX_OPEN), "end": now_et})
     else:
@@ -293,7 +314,7 @@ def windows(now_et: datetime) -> list[dict[str, Any]]:
         anchor_day = d - timedelta(days=1)
         prev = prev_trading_day(now_et)
         out.append({"key": "prev_rth", "label": "Recent RTH", "kind": "done",
-                    "start": at(prev, RTH_OPEN), "end": at(prev, rth_close(prev.date()))})
+                    "start": at(prev, o), "end": at(prev, close(prev.date()))})
         out.append(overnight_before(prev, "Prev overnight"))
         if now_et.weekday() < 5 and anchor_day.weekday() != 5:  # Saturday has no bars
             out.append({"key": "dev", "label": "Live · 18:00", "kind": "live",
@@ -309,6 +330,7 @@ def assemble(
     vols: list[float | None],
     now_et: datetime,
     opens: list[float | None] | None = None,
+    book: str | None = None,
 ) -> list[dict[str, Any]]:
     """Bars + the clock -> the profile rows the panel and digest show.
 
@@ -317,7 +339,8 @@ def assemble(
     without a holiday calendar.
     """
     rows: list[dict[str, Any]] = []
-    for w in windows(now_et):
+    o = rth_open(book)
+    for w in windows(now_et, book):
         start, end = w["start"], w["end"]
         tries = 0
         while True:
@@ -338,16 +361,16 @@ def assemble(
             # A holiday: slide the whole RTH window back one trading day.
             prev = prev_trading_day(start)
             start = datetime(
-                prev.year, prev.month, prev.day, RTH_OPEN.hour, RTH_OPEN.minute, tzinfo=ET
+                prev.year, prev.month, prev.day, o.hour, o.minute, tzinfo=ET
             )
-            close = rth_close(prev.date())
+            close = rth_close(prev.date(), book)
             end = datetime(prev.year, prev.month, prev.day, close.hour, close.minute, tzinfo=ET)
             tries += 1
         if prof is None:
             continue
         rows.append({
             **prof,
-            "open": round(w_open, 4) if w_open is not None else None,
+            "open": round(w_open, 2) if w_open is not None else None,
             "key": w["key"],
             "label": w["label"],
             "kind": w["kind"],

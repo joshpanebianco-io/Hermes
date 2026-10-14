@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import type { ReportFeed, Terminal as TerminalData } from "@/types/terminal";
+import type { CalendarRow, ReportFeed, Terminal as TerminalData } from "@/types/terminal";
 import { Header } from "@/components/shell/Header";
 import { StatusRail } from "@/components/shell/StatusRail";
 import { Wire } from "@/components/panels/Wire";
@@ -24,6 +24,8 @@ import { VolumeProfile } from "@/components/panels/VolumeProfile";
 import { Fed } from "@/components/panels/Fed";
 import { AlertStrip } from "@/components/shell/AlertStrip";
 import { ScanAlerts } from "@/components/shell/ScanAlerts";
+import { AskPanel } from "@/components/ask/AskPanel";
+import { openAsk } from "@/lib/ask/open";
 import { DEFAULT_THEME, type ThemeChoice } from "@/lib/theme";
 import { DEFAULT_UI, type UiMode } from "@/lib/ui";
 import { UiProvider } from "@/components/state/UiMode";
@@ -70,6 +72,8 @@ import { ageStep } from "@/lib/format";
  */
 
 const POLL_SEC = Number(process.env.NEXT_PUBLIC_POLL_SEC ?? 20);
+/** A poll still unanswered after this is abandoned and counted as failed. */
+const POLL_TIMEOUT_MS = 15_000;
 
 /*
  * The panels, memoised. Their props are the payload's blocks, which a poll
@@ -209,9 +213,9 @@ export function Terminal({
 
   /*
    * THE KEYBOARD. 1–4 reach the current desk's tabs in bar order (Settings
-   * last), D flips the desk. Never while typing — the watchlist editor and
-   * the inputs own their keys — and never with a modifier held, so the
-   * browser's own shortcuts are untouched.
+   * last), D flips the desk, A opens Hermes. Never while typing — the
+   * watchlist editor, the inputs and Hermes's own box own their keys — and
+   * never with a modifier held, so the browser's own shortcuts are untouched.
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -221,6 +225,12 @@ export function Terminal({
       if (e.key === "d" || e.key === "D") {
         e.preventDefault();
         switchDesk(desk === "futures" ? "stocks" : "futures");
+        return;
+      }
+      // A — ask Hermes; again to put it away.
+      if (e.key === "a" || e.key === "A") {
+        e.preventDefault();
+        openAsk();
         return;
       }
       const n = Number(e.key);
@@ -249,19 +259,34 @@ export function Terminal({
   // The previous poll's block serialisations — see `shareUnchanged`.
   const seen = useRef(new Map<string, string>());
 
+  // A failed poll, remembered. The previous payload stays on screen — it is
+  // still the best there is — but the header stops calling it live and a
+  // banner says since when (audit, 2026-10-14: sixty-five seconds of failed
+  // polls still read LIVE beside a green dot).
+  const [lost, setLost] = useState<Date | null>(null);
+
   const load = useCallback(async () => {
     const mine = ++seq.current;
+    // A poll that never answers is a failure too, not a pending forever.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), POLL_TIMEOUT_MS);
     try {
-      const r = await fetch("/api/terminal", { cache: "no-store" });
+      const r = await fetch("/api/terminal", { cache: "no-store", signal: ctl.signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const next = (await r.json()) as TerminalData;
       if (mine === seq.current) {
         setData((prev) => shareUnchanged(prev, next, seen.current));
         setLastPoll(new Date());
+        setLost(null);
       }
     } catch {
       // The route handler already turns a dead collector into a body with an
-      // `offline` block; reaching here means the Next server itself is gone,
-      // and the previous payload with its ages climbing is the honest render.
+      // `offline` block; reaching here means the Next server itself is gone
+      // or hung. The previous payload with its ages climbing is the honest
+      // render — said as such.
+      if (mine === seq.current) setLost((was) => was ?? new Date());
+    } finally {
+      clearTimeout(timer);
     }
   }, []);
 
@@ -298,7 +323,7 @@ export function Terminal({
         <Header
           clock={data.clock ?? null}
           quotes={data.quotes ?? []}
-          live={!data.offline && data.ok}
+          link={data.offline || !data.ok ? "offline" : lost ? "lost" : "live"}
           onRefresh={load}
           tab={tab}
           onTab={setTab}
@@ -309,7 +334,17 @@ export function Terminal({
         <AlertStrip items={data.wire ?? NONE} />
         {/* Raises the scanner's alerts on every tab — see the file. */}
         <ScanAlerts />
+        {/* The assistant, mounted once; the rail's key and A open it. */}
+        <AskPanel tab={tab} />
 
+        {lost && !data.offline && (
+          <div className="border-b border-warn/40 bg-warn/10 px-3 py-2 text-[11px] text-warn">
+            <strong className="font-semibold">Lost contact with the terminal&apos;s server</strong> at{" "}
+            {lost.toLocaleTimeString("en-US", { hour12: false })}. Everything below is from the last refresh that
+            landed{lastPoll ? ` (${lastPoll.toLocaleTimeString("en-US", { hour12: false })})` : ""} and is not
+            updating; it retries every {POLL_SEC}s.
+          </div>
+        )}
         {data.offline && (
           <div className="border-b border-err/40 bg-err/10 px-3 py-2 text-[11px] text-err">
             <strong className="font-semibold">Collector offline.</strong> {data.offline.reason} —
@@ -324,7 +359,7 @@ export function Terminal({
         ) : tab === "report" ? (
           <Report {...report} />
         ) : tab === "scanner" ? (
-          <ScannerTab />
+          <ScannerTab calendar={data.calendar ?? NONE} />
         ) : tab === "plan" ? (
           <StockPlan {...plan} />
         ) : tab === "market" ? (
@@ -490,7 +525,7 @@ const EMPTY = {} as Record<string, never>;
  * The Scanner with its own thirty-second clock for the headline ages — the
  * only time it prints — so its tick re-renders the scanner, not the shell.
  */
-function ScannerTab() {
+function ScannerTab({ calendar }: { calendar: CalendarRow[] }) {
   const now = useNow(30_000);
-  return <Scanner now={now} />;
+  return <Scanner now={now} calendar={calendar} />;
 }

@@ -20,11 +20,13 @@ import contextlib
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import FastAPI, Path, Query
+from fastapi import FastAPI, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.middleware.base import RequestResponseEndpoint
 
-from . import config
+from . import ask as ask_mod
+from . import config, optcalc
 from . import report as report_mod
 from . import stockplan as plan_mod
 from .collector import COLLECTOR
@@ -46,12 +48,29 @@ app = FastAPI(title="HERMESX", version="0.1.0", lifespan=lifespan)
 # The Next server component calls this from the same machine; the browser never
 # does. Localhost only, and only the dev ports — this service holds nothing
 # secret but there is no reason for it to answer anyone else.
+ORIGINS = ("http://localhost:3100", "http://127.0.0.1:3100")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3100", "http://127.0.0.1:3100"],
+    allow_origins=list(ORIGINS),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def same_desk_writes(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    """CORS STOPS A PAGE READING THE ANSWER, NOT SENDING THE REQUEST. A query-
+    string POST is a "simple" request, so any website open in the same browser
+    could fire `POST /api/report` at this port and spend a model call — the
+    response is withheld, the work is done. A browser always names the page a
+    write came from; the Next server's own fetch names none. So a write that
+    names a foreign origin is refused before it reaches a route (audit,
+    2026-10-14)."""
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin not in ORIGINS:
+        return Response("cross-origin write refused", status_code=403)
+    return await call_next(request)
 
 
 @app.get("/api/health")
@@ -263,8 +282,10 @@ def scanner() -> dict[str, Any]:
 
 @app.get("/api/scanner/watchlist")
 def scanner_watchlist() -> dict[str, Any]:
+    # The options expiry rule rides along for Settings' copy: one rule, worded
+    # once (optcalc.expiry_rule), on the scanner's lightest read.
     return {"symbols": COLLECTOR.scan.watchlist(), "default": list(scan_src.DEFAULT_WATCHLIST),
-            "rejected": []}
+            "rejected": [], "options_rule": optcalc.expiry_rule()}
 
 
 @app.get("/api/scanner/events")
@@ -345,6 +366,20 @@ def plan_delete(plan_id: str = Path(..., pattern=_PLAN_ID)) -> dict[str, Any]:
     """Drop one stored plan and hand back the list without it (see report_delete)."""
     gone = plan_mod.remove(plan_id)
     return {**_plan_feed(), "deleted": gone}
+
+
+@app.get("/api/ask/context")
+def ask_context(
+    tab: str = Query("terminal", pattern="^(terminal|report|market|scanner|plan|settings)$"),
+    sym: str | None = Query(None, max_length=12),
+) -> dict[str, Any]:
+    """What the assistant reads for a question asked on `tab` (ask.py): the
+    desk's brief digest, the selected scanner row, the latest note. A read of
+    what the collector holds — the model is called by the web app, not here."""
+    snap = COLLECTOR.snapshot()
+    scan = COLLECTOR.scanner_payload() if tab in ask_mod.STOCKS_TABS else None
+    note = report_mod.latest() if tab == "report" else plan_mod.latest() if tab == "plan" else None
+    return ask_mod.context(tab, snap, scan, sym, note)
 
 
 @app.post("/api/plan")

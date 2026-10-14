@@ -134,6 +134,12 @@ def test_numerals_match_on_value_not_spelling() -> None:
     assert report.numerals_in("30,707 and 30707, 1.10 and 1.1") == ["30707", "30707", "1.1", "1.1"]
 
 
+def test_an_index_name_is_not_a_figure_but_its_price_still_is() -> None:
+    assert report.numerals_in("tech lagging S&P 500 and the Russell 2000") == []
+    assert report.numerals_in("Nasdaq-100, Euro Stoxx 50, Nikkei 225") == []
+    assert report.numerals_in("Nasdaq 30,794 · S&P 500 at 7,871.5") == ["30794", "7871.5"]
+
+
 def test_the_guard_names_a_rounded_and_an_invented_figure() -> None:
     brief = {"thesis": "Gold at 4,329.3, up 0.25%, eyeing 5% and 4400",
              "calls": [{"why": ["10Y at 4.96%"], "rest_of_day": "", "wrong_if": "above 4345"}]}

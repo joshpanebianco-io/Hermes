@@ -20,7 +20,15 @@ RSP and the index constituents still carry yesterday's change (the board
 reads Yahoo's regular-session price), so those reads are neutral pre-market
 and say so; the index ETFs vote on their pre-market gap instead of their
 levels, and index volume starts at the open. A quote whose last trade is not
-from today is likewise not a vote before the bell.
+from the trading day is likewise not a vote before the bell.
+
+OVERNIGHT IS BEFORE THE OPEN TOO (audit, 2026-10-14). From 20:00 the scanner's
+trading day is the NEXT session, and the tab is read to plan it — but the
+votes went neutral only in "pre", so all evening the session just finished
+voted as if live ("Index leaders 23 up · 36 down" casting a short vote at
+22:00 that capped the Game plan's conviction, and flipped to neutral at 04:00
+on the same numbers). "closed" now reads like "pre": the levels vote on the
+after-hours move, and the cash reads wait for the open they are about.
 
 EVERY BLOCK DEGRADES ON ITS OWN. Breadth without the constituents keeps its
 sector count; gamma is null whenever the terminal's optional gamma feed is off
@@ -39,6 +47,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .holidays import next_trading_day
 from .policy import HOLD_BAND_BP
 from .volterm import state as volterm_state
 
@@ -124,24 +133,44 @@ def _side(x: float, long_at: float, short_at: float) -> str:
     return "long" if x >= long_at else "short" if x <= short_at else "neutral"
 
 
+def _trading_day(scan: dict[str, Any], now: datetime) -> date:
+    """The scanner's trading day — the session the tab is read for — else today."""
+    try:
+        return date.fromisoformat(str(scan.get("trading_day"))[:10])
+    except ValueError:
+        return now.astimezone(ET).date()
+
+
 def _rows(scan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(r.get("sym")): r for r in scan.get("rows") or []
             if isinstance(r, dict) and r.get("ok")}
 
 
-def _fresh(q: dict[str, Any], session: str, now: datetime) -> bool:
-    """Whether a quote has traded today. Only asked before the bell: in the session a
-    regular-market quote is today's by definition. An unstamped quote is trusted."""
-    if session != "pre":
+def _before_open(session: str) -> bool:
+    """The pre-market, and overnight / the weekend — read for the session ahead."""
+    return session in ("pre", "closed")
+
+
+def _fresh(q: dict[str, Any], session: str, now: datetime, td: date | None = None) -> bool:
+    """Whether a quote has traded on the trading day `td` (today when not given).
+    Only asked before the bell: in the session a regular-market quote is the day's
+    by definition. An unstamped quote is trusted."""
+    if not _before_open(session):
         return True
     t = _num(q.get("quote_time"))
     if t is None:
         return True
-    return datetime.fromtimestamp(t, ET).date() >= now.astimezone(ET).date()
+    return datetime.fromtimestamp(t, ET).date() >= (td or now.astimezone(ET).date())
+
+
+def _on(td: date | None, now: datetime) -> str:
+    """"today", or "on Wed" when the trading day is a later one (overnight)."""
+    return "today" if td is None or td == now.astimezone(ET).date() else f"on {td:%a}"
 
 
 def _quote(quotes: list[dict[str, Any]], key: str, field: str, session: str,
-           now: datetime) -> tuple[dict[str, Any] | None, float | None, str | None]:
+           now: datetime, td: date | None = None
+           ) -> tuple[dict[str, Any] | None, float | None, str | None]:
     """(quote, the field, why it is missing). The field is None with a reason when the
     quote is absent, has no value, or has not traded today before the bell."""
     q = _q(quotes, key)
@@ -150,8 +179,8 @@ def _quote(quotes: list[dict[str, Any]], key: str, field: str, session: str,
     v = _num(q.get(field))
     if v is None:
         return q, None, f"{key} has no change yet"
-    if not _fresh(q, session, now):
-        return q, None, f"{key} has not traded today yet — it votes once it does"
+    if not _fresh(q, session, now, td):
+        return q, None, f"{key} has not traded {_on(td, now)} yet — it votes once it does"
     return q, v, None
 
 
@@ -184,11 +213,11 @@ def _levels_vote(key: str, sym: str, row: dict[str, Any] | None,
     label = f"{sym} vs its levels"
     if row is None:
         return _vote(key, label, "—", "neutral", f"no {sym} bars yet")
-    if session == "pre":
+    if _before_open(session):
         gap = _num(row.get("ext_pct"))
         if gap is None:
             return _vote(key, label, "—", "neutral",
-                         "no pre-market print yet — before the open it votes on the gap")
+                         "no extended-hours print yet — before the open it votes on the gap")
         v = _side(gap, GAP_FLAT, -GAP_FLAT)
         why = {"long": "gapping up", "short": "gapping down",
                "neutral": f"a gap inside ±{GAP_FLAT}% is no lean"}[v]
@@ -211,9 +240,10 @@ def _levels_vote(key: str, sym: str, row: dict[str, Any] | None,
                  "between its highs and lows — no break to lean on")
 
 
-def _vix_dir(quotes: list[dict[str, Any]], session: str, now: datetime) -> dict[str, Any]:
+def _vix_dir(quotes: list[dict[str, Any]], session: str, now: datetime,
+             td: date | None = None) -> dict[str, Any]:
     key, label = "vix_dir", "VIX direction"
-    q, pct, why = _quote(quotes, "VIX", "pct", session, now)
+    q, pct, why = _quote(quotes, "VIX", "pct", session, now, td)
     if pct is None or q is None:
         return _vote(key, label, "—", "neutral", why or "no VIX")
     v = _side(-pct, VIX_FLAT, -VIX_FLAT)
@@ -225,16 +255,17 @@ def _vix_dir(quotes: list[dict[str, Any]], session: str, now: datetime) -> dict[
     return _vote(key, label, value, v, note)
 
 
-def _vix_curve(quotes: list[dict[str, Any]], session: str, now: datetime) -> dict[str, Any]:
+def _vix_curve(quotes: list[dict[str, Any]], session: str, now: datetime,
+               td: date | None = None) -> dict[str, Any]:
     key, label = "vix_curve", "VIX curve"
     vt = volterm_state(quotes)
     ratio = _num(vt.get("ratio"))
     if ratio is None:
         return _vote(key, label, "—", "neutral", "VIX or VIX3M missing from the board")
     q = _q(quotes, "VIX")
-    if q is not None and not _fresh(q, session, now):
+    if q is not None and not _fresh(q, session, now, td):
         return _vote(key, label, f"{ratio:.2f}", "neutral",
-                     "VIX has not traded today yet — the curve votes once it does")
+                     f"VIX has not traded {_on(td, now)} yet — the curve votes once it does")
     v = "long" if ratio < CURVE_CALM else "short" if ratio >= CURVE_STRESS else "neutral"
     note = {"long": f"VIX ÷ VIX3M under {CURVE_CALM:.2f}: steep contango, a calm tape",
             "short": f"VIX ÷ VIX3M at {CURVE_STRESS:.2f} or more: near-dated protection bid",
@@ -248,9 +279,9 @@ def _sectors_vote(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
     moves = _sector_moves(sectors)
     up, down, n = sum(m > 0 for m in moves), sum(m < 0 for m in moves), len(moves)
     value = f"{up} up · {down} down" if n else "—"
-    if session == "pre":
+    if _before_open(session):
         return _vote(key, label, value, "neutral",
-                     "yesterday's count — the sector SPDRs vote from the open")
+                     "the last session's count — the sector SPDRs vote from the open")
     if n < SECTOR_MIN:
         return _vote(key, label, value, "neutral", f"only {n} sectors reporting")
     need = math.ceil(SECTOR_SHARE * n)
@@ -268,8 +299,9 @@ def _equal_weight(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
         return _vote(key, label, "—", "neutral", "RSP or SPY missing from the sectors")
     spread = rsp - spy
     value = f"RSP {_signed(rsp, 2, '%')} vs SPY {_signed(spy, 2, '%')}"
-    if session == "pre":
-        return _vote(key, label, value, "neutral", "yesterday's figures — votes from the open")
+    if _before_open(session):
+        return _vote(key, label, value, "neutral",
+                     "the last session's figures — votes from the open")
     v = _side(spread, RSP_EDGE, -RSP_EDGE)
     note = {"long": "the average stock is beating the index — broad participation",
             "short": "the index is leaning on its megacaps — the average stock lags",
@@ -279,9 +311,9 @@ def _equal_weight(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
 
 def _pct_vote(quotes: list[dict[str, Any]], session: str, now: datetime, *, key: str,
               label: str, sym: str, flat: float, rising: str,
-              notes: tuple[str, str]) -> dict[str, Any]:
+              notes: tuple[str, str], td: date | None = None) -> dict[str, Any]:
     """A vote on one quote's day change: `rising` is the side a rise votes for."""
-    q, pct, why = _quote(quotes, sym, "pct", session, now)
+    q, pct, why = _quote(quotes, sym, "pct", session, now, td)
     if pct is None or q is None:
         return _vote(key, label, "—", "neutral", why or f"no {sym}")
     last = _num(q.get("last"))
@@ -293,9 +325,10 @@ def _pct_vote(quotes: list[dict[str, Any]], session: str, now: datetime, *, key:
     return _vote(key, label, value, rising if up else falling, notes[0] if up else notes[1])
 
 
-def _yields(quotes: list[dict[str, Any]], session: str, now: datetime) -> dict[str, Any]:
+def _yields(quotes: list[dict[str, Any]], session: str, now: datetime,
+            td: date | None = None) -> dict[str, Any]:
     key, label = "yields", "10Y yield"
-    q, chg, why = _quote(quotes, "US10Y", "chg", session, now)
+    q, chg, why = _quote(quotes, "US10Y", "chg", session, now, td)
     if chg is None or q is None:
         return _vote(key, label, "—", "neutral", why or "no 10Y")
     bp = chg * 100.0
@@ -310,7 +343,7 @@ def _yields(quotes: list[dict[str, Any]], session: str, now: datetime) -> dict[s
 
 def _index_volume(rows: dict[str, dict[str, Any]], session: str) -> dict[str, Any]:
     key, label = "index_volume", "Index volume"
-    if session == "pre":
+    if _before_open(session):
         return _vote(key, label, "—", "neutral", "starts at the open")
     rv = [x for s in ("SPY", "QQQ") if (x := _num((rows.get(s) or {}).get("rvol"))) is not None]
     if not rv:
@@ -337,9 +370,9 @@ def _participation(constituents: dict[str, Any] | None, session: str) -> dict[st
     up = sum(p > 0 for p in lead.values())
     down = sum(p < 0 for p in lead.values())
     value = f"{up} up · {down} down" if lead else "—"
-    if session == "pre":
+    if _before_open(session):
         return _vote(key, label, value, "neutral",
-                     "yesterday's changes — the leaders vote from the open")
+                     "the last session's changes — the leaders vote from the open")
     if up + down < PART_MIN:
         return _vote(key, label, value, "neutral",
                      f"only {up + down} of the index leaders reporting")
@@ -357,23 +390,24 @@ def votes(scan: dict[str, Any], quotes: list[dict[str, Any]], sectors: list[dict
     """The eleven reads of the tape, in a fixed order. Pure."""
     now = now or datetime.now(UTC)
     session = str(scan.get("session") or "closed")
+    td = _trading_day(scan, now)
     rows = _rows(scan)
     return [
         _levels_vote("spy_levels", "SPY", rows.get("SPY"), session),
         _levels_vote("qqq_levels", "QQQ", rows.get("QQQ"), session),
-        _vix_dir(quotes, session, now),
-        _vix_curve(quotes, session, now),
+        _vix_dir(quotes, session, now, td),
+        _vix_curve(quotes, session, now, td),
         _sectors_vote(sectors, session),
         _equal_weight(sectors, session),
         _pct_vote(quotes, session, now, key="credit", label="Credit (HYG)", sym="HYG",
                   flat=HYG_FLAT, rising="long",
                   notes=("high yield bid — credit is taking risk", "high yield offered — "
-                         "credit is leaving risk before equities do")),
-        _yields(quotes, session, now),
+                         "credit is leaving risk before equities do"), td=td),
+        _yields(quotes, session, now, td),
         _pct_vote(quotes, session, now, key="dollar", label="Dollar", sym="DXY",
                   flat=DXY_FLAT, rising="short",
                   notes=("a firmer dollar tightens conditions — a headwind",
-                         "a softer dollar eases conditions — a tailwind")),
+                         "a softer dollar eases conditions — a tailwind"), td=td),
         _index_volume(rows, session),
         _participation(constituents, session),
     ]
@@ -473,7 +507,7 @@ def fuel(scan: dict[str, Any], quotes: list[dict[str, Any]]) -> list[dict[str, A
             lv = row.get("levels") or {}
             prev = _num(row.get("prev_close")) or _num(lv.get("pdc"))
             if prev:
-                if session == "pre":
+                if _before_open(session):
                     gap = _num(row.get("ext_pct"))
                 else:
                     hi, lo = _num(lv.get("day_hi")), _num(lv.get("day_lo"))
@@ -495,13 +529,6 @@ def fuel(scan: dict[str, Any], quotes: list[dict[str, Any]]) -> list[dict[str, A
 
 
 # --------------------------------------------------------------------- prints
-
-
-def _next_weekday(d: date) -> date:
-    d += timedelta(days=1)
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    return d
 
 
 def _fmt(v: Any, raw: Any) -> str | None:
@@ -533,10 +560,24 @@ def read_of(title: str, surprise: float | None, consensus: float | None) -> str 
 PRINT_NOISE = re.compile(r"\bn\.\s?s\.\s?a\b|,\s*s\.\s?a\b|\b(?:cpi|ppi|pce) index\b", re.I)
 
 
-def prints(calendar: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    """Today's US prints scored 3+, and tomorrow's before the open, in time order. Pure."""
+def prints(calendar: list[dict[str, Any]], now: datetime,
+           trading_day: date | None = None) -> list[dict[str, Any]]:
+    """The trading day's US prints scored 3+, in time order — and, while that day
+    is today, the next session's before its open. Pure.
+
+    KEYED ON THE SESSION, NOT THE CALENDAR (audit, 2026-10-14). At 22:00 the
+    tab is read for tomorrow, and keyed on the calendar date it showed today's
+    finished releases and only tomorrow's pre-09:30 ones — Wednesday's 11:00
+    Cleveland CPI, 13:30 Fed speaker and 14:00 Beige Book were nowhere. Now the
+    day is the scanner's trading day.
+
+    `done` is whether its time has passed: a speech is never `released` (it
+    has no actual), so a 13:00 Barkin read as the next print all afternoon.
+    """
     today = now.astimezone(ET).date()
-    tomorrow = _next_weekday(today)
+    day = trading_day or today
+    now_ts = now.timestamp()
+    after = next_trading_day(day) if day == today else None
     out: list[tuple[tuple[str, str], dict[str, Any]]] = []
     seen: set[tuple[Any, ...]] = set()
     for r in calendar:
@@ -553,7 +594,7 @@ def prints(calendar: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]
             except ValueError:
                 continue
             et = str(r.get("et") or "")
-        if d != today and not (d == tomorrow and et and et < "09:30"):
+        if d != day and not (d == after and et and et < "09:30"):
             continue
         title = str(r.get("event") or "")
         if PRINT_NOISE.search(title):
@@ -567,10 +608,11 @@ def prints(calendar: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]
         if surprise is None and actual is not None and cons is not None:
             surprise = actual - cons
         released = bool(r.get("released"))
-        label = (et or "untimed") if d == today else f"{d:%a} {et}"
+        label = (et or "untimed") if d == today else f"{d:%a} {et}".strip()
         out.append(((d.isoformat(), et or "99:99"), {
             "et": label, "title": title, "score": int(_num(r.get("score")) or 0),
             "released": released,
+            "done": released or (ts is not None and ts <= now_ts),
             "actual": _fmt(r.get("actual"), r.get("actual_raw")),
             "consensus": _fmt(r.get("consensus"), r.get("consensus_raw")),
             "previous": _fmt(r.get("previous"), r.get("previous_raw")),
@@ -806,7 +848,8 @@ def build(scan: dict[str, Any], snap: dict[str, Any],
         "conviction": conviction_for(scan, quotes, sectors, cons, now),
         "breadth": breadth(sectors, cons),
         "fuel": fuel(scan, quotes),
-        "prints": prints([c for c in snap.get("calendar") or [] if isinstance(c, dict)], now),
+        "prints": prints([c for c in snap.get("calendar") or [] if isinstance(c, dict)], now,
+                         _trading_day(scan, now)),
         "fed": fed(snap.get("policy_meetings") if isinstance(snap.get("policy_meetings"), dict)
                    else None),
         "macro": macro(quotes, snap.get("rates") if isinstance(snap.get("rates"), dict) else None),

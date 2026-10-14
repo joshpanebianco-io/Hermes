@@ -6,6 +6,8 @@ import { Module } from "@/components/ui/Module";
 import { cn } from "@/lib/cn";
 import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { segItem } from "@/lib/seg";
+import { isPending } from "@/lib/events";
+import { useNow } from "@/lib/useNow";
 
 /**
  * The economic calendar.
@@ -145,8 +147,11 @@ export function Calendar({
     oneOf("all", "us", "uk", "eu", "apac", "global", "other"),
   );
 
+  // The minute clock, so a passed row leaves Ahead on time rather than when
+  // the calendar next refetches (every ten minutes) — see lib/events.
+  const nowMs = useNow(60_000);
   const { upcoming, recent, counts, regionCounts } = useMemo(() => {
-    const now = Date.now() / 1000;
+    const now = (nowMs ?? Date.now()) / 1000;
     const pool = coreOnly ? rows.filter(mine.keep) : rows;
 
     // Each chip row counts against the OTHER filters, so a count is what you
@@ -167,13 +172,13 @@ export function Calendar({
     return {
       counts: c,
       regionCounts: rc,
-      upcoming: keep.filter((r) => !r.released && (r.ts ?? 0) >= now - 3600).slice(0, 20),
+      upcoming: keep.filter((r) => isPending(r, now)).slice(0, 20),
       recent: keep
         .filter((r) => r.released)
         .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
         .slice(0, 8),
     };
-  }, [rows, tiers, coreOnly, region, mine]);
+  }, [rows, tiers, coreOnly, region, mine, nowMs]);
 
   return (
     <Module

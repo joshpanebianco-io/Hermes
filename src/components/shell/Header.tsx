@@ -1,7 +1,7 @@
 "use client";
 
 import type { Clock, Quote } from "@/types/terminal";
-import { dir, inMin, num, pct } from "@/lib/format";
+import { dir, feedNote, inMin, num, quoteChg } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Tick } from "@/components/ui/Tick";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
@@ -31,6 +31,11 @@ const STRIP: Record<Desk, string[]> = {
   stocks: ["SPY", "QQQ", "IWM", "VIX", "VVIX", "US10Y"],
 };
 
+/** A strip figure's ink: dimmed when its market is shut or has not printed in half an hour. */
+function stripInk(q: Quote): string {
+  return q.feed === "closed" || q.feed === "stale" ? "text-ink-3" : "text-ink";
+}
+
 /** "NYSE opens in 1h 20m" / "closes in 2h 05m" / a holiday — the stocks desk's clock. */
 function nyClock(clock: Clock | null): { label: string; value: string; title: string } | null {
   const ny = clock?.sessions.find((x) => x.key === "newyork");
@@ -44,7 +49,7 @@ function nyClock(clock: Clock | null): { label: string; value: string; title: st
 export function Header({
   clock: rawClock,
   quotes,
-  live,
+  link,
   onRefresh,
   tab,
   onTab,
@@ -53,7 +58,12 @@ export function Header({
 }: {
   clock: Clock | null;
   quotes: Quote[];
-  live: boolean;
+  /**
+   * The page's own link to its data: "live" while polls land, "lost" once
+   * one has failed (the figures on screen are from the last poll that did),
+   * "offline" when the collector behind the server is down.
+   */
+  link: "live" | "lost" | "offline";
   onRefresh: () => void;
   tab: Tab;
   onTab: (t: Tab) => void;
@@ -171,15 +181,30 @@ export function Header({
                 <span className="fig text-[14.5px] leading-none text-ink">{ny.value}</span>
               </div>
             )}
-            {strip.map((q) => (
-              <div key={q.key} className="flex h-[36px] shrink-0 flex-col justify-center gap-1">
-                <span className="qt-cap text-[10.5px] text-ink-3">{q.key}</span>
-                <div className="flex items-baseline gap-1.5">
-                  <Tick value={num(q.last)} className="fig text-[14.5px] leading-none text-ink" />
-                  <Tick value={pct(q.pct)} className={cn("fig text-[11px] leading-none", dir(q.pct))} />
+            {strip.map((q) => {
+              const chg = quoteChg(q);
+              const note = feedNote(q);
+              return (
+                <div key={q.key} className="flex h-[36px] shrink-0 flex-col justify-center gap-1" title={note ?? undefined}>
+                  {/* How late a delayed print is rides under its own label —
+                      ES and NQ trail CME by ten minutes on this feed; a closed
+                      market's figure dims (see Board's Row). */}
+                  <span className="qt-cap text-[10.5px] text-ink-3">
+                    {q.key}
+                    {q.feed === "delayed" && q.lag_min != null && (
+                      <span className="text-ink-4"> · {Math.round(q.lag_min)}m</span>
+                    )}
+                  </span>
+                  <div className="flex items-baseline gap-1.5">
+                    <Tick
+                      value={num(q.last)}
+                      className={cn("fig text-[14.5px] leading-none", stripInk(q))}
+                    />
+                    <Tick value={chg.text} className={cn("fig text-[11px] leading-none", dir(chg.v))} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -215,12 +240,15 @@ export function Header({
           <span
             className={cn(
               "h-[7px] w-[7px] rounded-full",
-              live ? "bg-call live-dot" : "bg-err",
+              link === "live" ? "bg-call live-dot" : link === "lost" ? "bg-warn" : "bg-err",
             )}
             aria-hidden
           />
-          <span className="fig text-[9.5px] text-ink-3 uppercase qt:text-[10.5px]">
-            {live ? "Live" : "Offline"}
+          <span
+            className={cn("fig text-[9.5px] uppercase qt:text-[10.5px]", link === "lost" ? "text-warn" : "text-ink-3")}
+            title={link === "lost" ? "The last refresh failed — the figures on screen are from the last one that landed" : undefined}
+          >
+            {link === "live" ? "Live" : link === "lost" ? "Stale" : "Offline"}
           </span>
           {/* Quiet: the same key as Generate — one button family across the chrome. */}
           <button
@@ -241,13 +269,16 @@ export function Header({
               <span className="fig text-[11.5px] text-ink">{ny.value}</span>
             </div>
           )}
-          {strip.map((q) => (
-            <div key={q.key} className="flex items-baseline gap-1.5">
-              <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{q.key}</span>
-              <Tick value={num(q.last)} className="fig text-[11.5px] text-ink" />
-              <Tick value={pct(q.pct)} className={cn("fig text-[10px]", dir(q.pct))} />
-            </div>
-          ))}
+          {strip.map((q) => {
+            const chg = quoteChg(q);
+            return (
+              <div key={q.key} className="flex items-baseline gap-1.5" title={feedNote(q) ?? undefined}>
+                <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{q.key}</span>
+                <Tick value={num(q.last)} className={cn("fig text-[11.5px]", stripInk(q))} />
+                <Tick value={chg.text} className={cn("fig text-[10px]", dir(chg.v))} />
+              </div>
+            );
+          })}
         </div>
       )}
     </header>

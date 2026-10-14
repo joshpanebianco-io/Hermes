@@ -34,12 +34,27 @@ inside REMARK_MAX — further out a second-order step is a guess, and an unmoved
 IV is part of the guess anyway. Risk per contract is priced off the estimate
 when there is one. The quote itself stays beside it, as quoted.
 
-THE EXPIRIES (owner's defaults, the desks contract). SPY, QQQ and IWM trade a
-same-day expiry: their FRONT is today's while it is listed and the clock is an
-hour or more before the close (15:00 ET; 12:00 on a half day), else the next
-one. Single names' front is simply the nearest expiry that has not expired.
-The WEEKLY is the nearest expiry with at least two trading days still to run —
-far enough out that one bad session does not decide the trade.
+THE EXPIRIES — ONE RULE, STATED ONCE (owner's defaults; audit, 2026-10-14, after
+the plan, Settings and the table each kept their own). SPY, QQQ and IWM are the
+desk's 0DTE names: their FRONT is today's expiry while it is listed and the
+clock is an hour or more before the close (15:00 ET; 12:00 on a half day), else
+the next one, and the front is their PICK. Single names list same-day expiries
+too now (Wednesdays and Fridays on the big ones), but thinner books and the
+pin make the last hours a gamble: a single name's same-day expiry is its front
+only until TWO hours before the close (14:00 ET; 11:00 on a half day), and its
+pick is always the WEEKLY — the nearest expiry with at least two trading days
+still to run, far enough out that one bad session does not decide the trade.
+`expiry_rule()` says this in words for the page and the plan's prompt; each
+row's `pick` says which contract the rule chose.
+
+RISK IS PRICED FROM THE ENTRY, NOT FROM HERE (audit, 2026-10-14). The setup's
+entry is a level — the retest of PDL 543.06 — and its stop the level ∓ the
+retest buffer, nineteen cents on MSFT that day; priced from the last print two
+dollars away, the card said $119.61 a contract, ten times the trade. So each
+contract is re-marked to the ENTRY and to the STOP (delta and gamma off the
+chain's own spot, as for the live estimate), and the risk is the difference,
+plus half the contract's bid-ask — the cost of getting out at the stop — capped
+at what the contract costs at the entry.
 
 DTE AND "TODAY" ARE THE SCANNER'S TRADING DAY. Overnight on a Monday the
 levels are already Tuesday's, and so is the 0DTE: a plan written at 21:00 for
@@ -64,10 +79,12 @@ from .holidays import close_minute, is_trading_day
 ET = ZoneInfo("America/New_York")
 
 # ---- the rules (documented constants) -----------------------------------------
-#: Same-day expiries on these — their front is today's 0DTE.
+#: The desk's 0DTE names — daily expiries, and today's is their pick.
 DAILY_EXPIRY = frozenset({"SPY", "QQQ", "IWM"})
-#: A 0DTE stops being the front this long before the close.
+#: A same-day expiry stops being the front this long before the close: an hour
+#: on the 0DTE names, two on a single name (module docstring).
 ZERO_DTE_CUTOFF_MIN = 60
+SINGLE_ZERO_DTE_CUTOFF_MIN = 120
 #: The weekly needs this many trading days left to run.
 WEEKLY_MIN_SESSIONS = 2
 #: The long leg's delta, and the spread's short leg.
@@ -263,13 +280,45 @@ def pick_expiries(sym: str, expiries: list[date], ref_day: date, minute: int,
         if e == ref_day:
             if not is_trading_day(ref_day):
                 continue
-            cutoff = close_minute(ref_day) - (ZERO_DTE_CUTOFF_MIN if sym in DAILY_EXPIRY else 0)
+            cutoff = close_minute(ref_day) - (ZERO_DTE_CUTOFF_MIN if sym in DAILY_EXPIRY
+                                              else SINGLE_ZERO_DTE_CUTOFF_MIN)
             if minute >= cutoff:
                 continue
         usable.append(e)
     front = usable[0] if usable else None
     weekly = next((e for e in usable if sessions_left(ref_day, e) >= WEEKLY_MIN_SESSIONS), None)
     return {"front": front, "weekly": weekly}
+
+
+def pick_key(sym: str) -> str:
+    """Which of a name's two contracts the desk would trade: the front on the 0DTE
+    names, the weekly on everything else. Pure."""
+    return "front" if sym in DAILY_EXPIRY else "weekly"
+
+
+def _hm_before_close(minutes: int) -> str:
+    m = 16 * 60 - minutes
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def expiry_rule() -> dict[str, Any]:
+    """The expiry rule in words — the ONE copy the Settings page and the plan's
+    prompt print, so neither can drift from the code that applies it. Pure."""
+    order = ("SPY", "QQQ", "IWM")
+    names: list[str] = sorted(DAILY_EXPIRY, key=lambda s: (s not in order,
+                                                          order.index(s) if s in order else 0, s))
+    etf = _hm_before_close(ZERO_DTE_CUTOFF_MIN)
+    single = _hm_before_close(SINGLE_ZERO_DTE_CUTOFF_MIN)
+    return {
+        "zero_dte_names": names,
+        "etf_cutoff_et": etf,
+        "single_cutoff_et": single,
+        "weekly_min_sessions": WEEKLY_MIN_SESSIONS,
+        "text": (f"{', '.join(names)}: today's expiry (0DTE) is the pick until {etf} ET, then the "
+                 f"next one. Single names: a same-day expiry is shown until {single} ET, but the "
+                 f"pick is the weekly — the nearest expiry with {WEEKLY_MIN_SESSIONS} or more "
+                 f"sessions to run. Half days move both cutoffs three hours earlier."),
+    }
 
 
 # ---------------------------------------------------------------- the readings
@@ -415,22 +464,35 @@ def spans_earnings(expiry: date, earnings: dict[str, Any] | None) -> bool:
 # ------------------------------------------------------------------- the trade
 
 
-def stock_stop(row: dict[str, Any], side: str) -> tuple[float | None, str]:
-    """The stop the contract helper translates, and how it was found (desks
-    contract): today's latest (L)/(E) stop while price is still on its side;
-    else the entry reference ∓ the Pine's 0.25 bar-ATR buffer; else one bar-ATR
-    from the last print. An approximation, said out loud on the page."""
+@dataclass(frozen=True)
+class Plan:
+    """The stock-level trade a contract is sized against: where it is entered,
+    where it is stopped, how that was found, and the spot the chain was quoted
+    at (what the contracts are re-marked from)."""
+
+    entry: float
+    stop: float
+    how: str
+    spot: float
+
+
+def trade_plan(row: dict[str, Any], side: str) -> tuple[float | None, float | None, str]:
+    """(entry, stop, how) for the row's side (desks contract): today's latest
+    (L)/(E) — its price and its stop — while price is still on its side of the
+    stop; else the setup's entry reference and that ∓ the Pine's 0.25 bar-ATR
+    buffer; else the last print and one bar-ATR from it. An approximation, said
+    out loud on the page."""
     last = _f(row.get("last"))
     atr_b = _f(row.get("atr_b"))
     if last is None:
-        return None, "no price"
+        return None, None, "no price"
     sign = 1.0 if side == "long" else -1.0
     for s in reversed(row.get("signals") or []):
         if s.get("kind") not in ("L", "E") or s.get("side") != side:
             continue
-        stop = _f(s.get("stop"))
-        if stop is not None and sign * (last - stop) > 0:
-            return stop, f"the ({s.get('kind')}) signal's stop"
+        stop, price = _f(s.get("stop")), _f(s.get("price"))
+        if stop is not None and price is not None and sign * (last - stop) > 0:
+            return price, stop, f"the ({s.get('kind')}) signal's stop"
         break
     entry = (row.get("setup") or {}).get("entry")
     if isinstance(entry, dict) and atr_b:
@@ -438,10 +500,16 @@ def stock_stop(row: dict[str, Any], side: str) -> tuple[float | None, str]:
         if price is not None:
             stop = price - sign * STOP_BUFFER_ATR * atr_b
             if sign * (last - stop) > 0:
-                return stop, f"{entry.get('kind')} ∓ the retest buffer"
+                return price, stop, f"{entry.get('kind')} ∓ the retest buffer"
     if atr_b:
-        return last - sign * atr_b, "one ten-minute ATR"
-    return None, "no ATR yet"
+        return last, last - sign * atr_b, "one ten-minute ATR"
+    return None, None, "no ATR yet"
+
+
+def stock_stop(row: dict[str, Any], side: str) -> tuple[float | None, str]:
+    """The stop alone — `trade_plan` without its entry."""
+    _entry, stop, how = trade_plan(row, side)
+    return stop, how
 
 
 def live_move(chain: Chain, last: float | None, ref_day: date,
@@ -486,20 +554,48 @@ def _est(est: tuple[float, float] | None, move: tuple[float, float] | None) -> d
             "est_spot": round(move[0], 4), "quote_spot": round(move[0] - move[1], 4)}
 
 
+def _at(o: Opt, price: float, spot: float) -> tuple[float, float] | None:
+    """A contract's (mid, delta) with the stock at `price`, re-marked from the
+    chain's `spot` — None past REMARK_MAX, where a second-order step is a guess."""
+    if spot <= 0 or abs(price - spot) > REMARK_MAX * spot:
+        return None
+    return remark(o, price, price - spot)
+
+
+def _plan_fields(plan: Plan | None, stock_risk: float | None,
+                 entry_mid: float | None) -> dict[str, Any]:
+    return {
+        "stock_entry": round(plan.entry, 4) if plan else None,
+        "stock_stop": round(plan.stop, 4) if plan else None,
+        "stock_risk": round(stock_risk, 4) if stock_risk is not None else None,
+        "risk_basis": plan.how if plan else None,
+        "entry_mid": round(entry_mid, 4) if entry_mid is not None else None,
+    }
+
+
 def _label(dte: int, exp: date) -> str:
     return "0DTE" if dte == 0 else f"{exp.strftime('%a %b')} {exp.day} ({dte}DTE)"
 
 
 def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
-                  move: tuple[float, float] | None = None) -> dict[str, Any]:
-    """The 0.60Δ long. `move` (live_move) re-marks it to the live stock price."""
+                  move: tuple[float, float] | None = None,
+                  plan: Plan | None = None) -> dict[str, Any]:
+    """The 0.60Δ long. `move` (live_move) re-marks it to the live stock price;
+    `plan` prices its risk from the entry to the stop (module docstring)."""
     dte = (o.expiry - ref_day).days
     mid = o.mid or 0.0
     est = remark(o, *move) if move else None
     px, dl = est if est else (mid, o.delta)
-    rpc = None
-    if stock_risk is not None and dl is not None:
-        rpc = min(stock_risk * abs(dl) * 100.0, px * 100.0)
+    half = (o.ask - o.bid) / 2.0 if o.mid is not None else 0.0
+    rpc = entry_mid = None
+    if plan is not None:
+        a, b = _at(o, plan.entry, plan.spot), _at(o, plan.stop, plan.spot)
+        if a and b:
+            entry_mid = a[0]
+            rpc = min(max(a[0] - b[0], 0.0) + half, a[0]) * 100.0
+    if rpc is None and stock_risk is not None and dl is not None:
+        # Entry or stop past REMARK_MAX: today's delta, straight-line.
+        rpc = min(stock_risk * abs(dl) + half, px) * 100.0
     word = "call" if o.right == "C" else "put"
     theta = f" — theta {o.theta:+.2f}/day" if o.theta is not None else ""
     return {
@@ -507,9 +603,10 @@ def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
         "strike": o.strike, "short_strike": None, "symbol": o.symbol, "short_symbol": None,
         "bid": o.bid, "ask": o.ask, "mid": round(mid, 4), "delta": round(o.delta or 0.0, 4),
         "theta": o.theta, "iv": round(o.iv * 100.0, 2) if o.iv is not None else None,
+        "short_iv": None,
         "spread_pct": round(o.spread_pct, 2) if o.spread_pct is not None else None,
         "max_value": None,
-        "stock_risk": round(stock_risk, 4) if stock_risk is not None else None,
+        **_plan_fields(plan, stock_risk, entry_mid),
         "risk_per_contract": round(rpc, 2) if rpc is not None else None,
         **_est(est, move),
         "note": f"{abs(o.delta or 0):.2f}Δ {word}, {_label(dte, o.expiry)}{theta}",
@@ -517,9 +614,17 @@ def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
 
 
 def contract_spread(lo: Opt, sh: Opt, key: str, ref_day: date, stock_risk: float | None,
-                    move: tuple[float, float] | None = None) -> dict[str, Any] | None:
+                    move: tuple[float, float] | None = None,
+                    plan: Plan | None = None) -> dict[str, Any] | None:
     """Buy the 0.60Δ, sell the 0.30Δ, same expiry — a debit vertical. Pure.
-    `move` re-marks both legs; the estimated debit stays inside [0, width]."""
+
+    THE SPREAD'S OWN FIGURES, NOT ITS LONG LEG'S (audit, 2026-10-14: the card
+    printed the long leg's theta and a 6.7% spread on a spread whose natural
+    market was 1.94 / 2.32 — 17.8%). Theta is the net of the legs; the bid-ask
+    is the natural one, long bid − short ask to long ask − short bid, as a share
+    of the net mid; IV is both legs'. `move` re-marks both legs, `plan` prices
+    the risk from the entry to the stop; the debit stays inside [0, width].
+    """
     if lo.strike == sh.strike or lo.mid is None or sh.mid is None:
         return None
     debit = lo.mid - sh.mid
@@ -527,26 +632,41 @@ def contract_spread(lo: Opt, sh: Opt, key: str, ref_day: date, stock_risk: float
         return None
     width = abs(sh.strike - lo.strike)
     net_delta = (lo.delta or 0.0) - (sh.delta or 0.0)
+    nat_bid, nat_ask = max(lo.bid - sh.ask, 0.0), lo.ask - sh.bid
+    half = (nat_ask - nat_bid) / 2.0
     dte = (lo.expiry - ref_day).days
+
+    def net_at(price: float, spot: float) -> tuple[float, float] | None:
+        a, b = _at(lo, price, spot), _at(sh, price, spot)
+        return (min(max(a[0] - b[0], 0.0), width), a[1] - b[1]) if a and b else None
+
     est = None
     if move:
-        a, b = remark(lo, *move), remark(sh, *move)
-        if a and b:
-            est = (min(max(a[0] - b[0], 0.0), width), a[1] - b[1])
+        ma, mb = remark(lo, *move), remark(sh, *move)
+        if ma and mb:
+            est = (min(max(ma[0] - mb[0], 0.0), width), ma[1] - mb[1])
     px, dl = est if est else (debit, net_delta)
-    rpc = None
-    if stock_risk is not None:
-        rpc = min(stock_risk * abs(dl) * 100.0, px * 100.0)
+    rpc = entry_mid = None
+    if plan is not None:
+        at_entry, at_stop = net_at(plan.entry, plan.spot), net_at(plan.stop, plan.spot)
+        if at_entry and at_stop:
+            entry_mid = at_entry[0]
+            rpc = min(max(at_entry[0] - at_stop[0], 0.0) + half, at_entry[0]) * 100.0
+    if rpc is None and stock_risk is not None:
+        rpc = min(stock_risk * abs(dl) + half, px) * 100.0
+    theta = (lo.theta - sh.theta) if lo.theta is not None and sh.theta is not None else None
     word = "call" if lo.right == "C" else "put"
     return {
         "key": key, "kind": "spread", "right": lo.right, "expiry": lo.expiry.isoformat(),
         "dte": dte, "strike": lo.strike, "short_strike": sh.strike, "symbol": lo.symbol,
-        "short_symbol": sh.symbol, "bid": round(max(lo.bid - sh.ask, 0.0), 4),
-        "ask": round(lo.ask - sh.bid, 4), "mid": round(debit, 4), "delta": round(net_delta, 4),
-        "theta": lo.theta, "iv": round(lo.iv * 100.0, 2) if lo.iv is not None else None,
-        "spread_pct": round(lo.spread_pct, 2) if lo.spread_pct is not None else None,
+        "short_symbol": sh.symbol, "bid": round(nat_bid, 4),
+        "ask": round(nat_ask, 4), "mid": round(debit, 4), "delta": round(net_delta, 4),
+        "theta": round(theta, 4) if theta is not None else None,
+        "iv": round(lo.iv * 100.0, 2) if lo.iv is not None else None,
+        "short_iv": round(sh.iv * 100.0, 2) if sh.iv is not None else None,
+        "spread_pct": round((nat_ask - nat_bid) / debit * 100.0, 2),
         "max_value": round(width, 4),
-        "stock_risk": round(stock_risk, 4) if stock_risk is not None else None,
+        **_plan_fields(plan, stock_risk, entry_mid),
         "risk_per_contract": round(rpc, 2) if rpc is not None else None,
         **_est(est, move),
         "note": (f"{lo.strike:g}/{sh.strike:g} {word} debit spread, {_label(dte, lo.expiry)}"
@@ -564,7 +684,7 @@ def unavailable(error: str, age_min: float | None = None) -> dict[str, Any]:
         "rv20": None, "iv_rv": None, "premium": None, "iv_rank": None, "iv_pct": None,
         "iv_days": 0, "skew": None, "em": [],
         "liquidity": {"spread_pct": None, "oi": None, "volume": None, "grade": None},
-        "zero_dte": False, "earnings_in": None, "contracts": [], "flow": None,
+        "zero_dte": False, "pick": None, "earnings_in": None, "contracts": [], "flow": None,
     }
 
 
@@ -614,9 +734,11 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
     contracts: list[dict[str, Any]] = []
     if side in ("long", "short"):
         right = "C" if side == "long" else "P"
-        stop, _how = stock_stop(row, side)
+        entry, stop, how = trade_plan(row, side)
         last = _f(row.get("last"))
-        risk = abs(last - stop) if (stop is not None and last is not None) else None
+        risk = abs(entry - stop) if (stop is not None and entry is not None) else None
+        plan = (Plan(entry, stop, how, spot)
+                if risk and entry is not None and stop is not None else None)
         move = live_move(chain, last, ref_day, now)
         done: set[date] = set()
         for key in ("front", "weekly"):
@@ -628,12 +750,12 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
             lo = nearest_delta(opts, right, LONG_DELTA)
             if lo is None:
                 continue
-            contracts.append(contract_long(lo, key, ref_day, risk, move))
+            contracts.append(contract_long(lo, key, ref_day, risk, move, plan))
             sh = nearest_delta([o for o in opts if (o.strike > lo.strike if right == "C"
                                                     else o.strike < lo.strike)],
                                right, SHORT_DELTA)
             if sh is not None:
-                sp = contract_spread(lo, sh, key, ref_day, risk, move)
+                sp = contract_spread(lo, sh, key, ref_day, risk, move, plan)
                 if sp is not None:
                     contracts.append(sp)
 
@@ -645,6 +767,8 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
         "iv_rank": rank, "iv_pct": pct, "iv_days": len(history),
         "skew": skew, "em": em, "liquidity": liq,
         "zero_dte": ref_day in chain.expiries,
+        # The contract the expiry rule picks for this name (expiry_rule).
+        "pick": pick_key(chain.sym),
         "earnings_in": earnings_in, "contracts": contracts,
         "flow": options_flow(chain),
     }

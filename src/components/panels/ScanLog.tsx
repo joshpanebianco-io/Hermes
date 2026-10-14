@@ -109,7 +109,7 @@ export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
         <HelmLoader label="Loading the log" size={40} minHeight={220} />
       ) : days.length === 0 ? (
         <p className="px-3 py-8 text-center text-[12px] text-ink-3">
-          Nothing logged yet. Signals are recorded as the engine sees them on confirmed ten-minute bars during the
+          Nothing logged yet. Signals are recorded as the engine sees them on ten-minute bars read after they closed, during the
           regular session.
         </p>
       ) : (
@@ -143,12 +143,20 @@ function DayRows({ day, list, onPick }: { day: string; list: ScanEvent[]; onPick
         </td>
       </tr>
       {list.map((e) => (
-        <tr key={e.id} className="border-b border-ring/60 text-[12px]">
+        <tr key={e.id} className={cn("border-b border-ring/60 text-[12px]", e.retracted && "opacity-60")}>
           <td className="fig px-2.5 py-1.5 text-ink-3">
             {e.at_et}
             {!e.live && (
               <span className="qt-cap ml-1.5 text-[9px] text-ink-3" title="Found by a replay after a restart — never alerted">
                 replay
+              </span>
+            )}
+            {e.retracted && (
+              <span
+                className="qt-cap ml-1.5 text-[9px] text-flip-fig"
+                title="The final bars do not hold this signal — kept here, left out of the record"
+              >
+                withdrawn
               </span>
             )}
           </td>
@@ -161,9 +169,19 @@ function DayRows({ day, list, onPick }: { day: string; list: ScanEvent[]; onPick
             <span className="fig">{KIND[e.kind]}</span> {e.side === "long" ? "▲" : "▼"}
             {e.level && <span className="ml-1.5 text-ink-3">{e.level}</span>}
           </td>
-          <td className="fig px-2.5 py-1.5 text-right text-ink">{num(e.price)}</td>
+          <td
+            className={cn("fig px-2.5 py-1.5 text-right text-ink", e.retracted && "line-through")}
+            title={
+              e.revised
+                ? `Corrected on the final bars — first logged at ${num(e.revised.price)}${e.revised.stop != null ? `, stop ${num(e.revised.stop)}` : ""}`
+                : undefined
+            }
+          >
+            {num(e.price)}
+            {e.revised && <span className="qt-cap ml-1 text-[9px] text-ink-3">rev</span>}
+          </td>
           <td className="fig px-2.5 py-1.5 text-right text-ink-3">{e.stop != null ? num(e.stop) : "—"}</td>
-          <Outcome o={e.outcome} />
+          <Outcome o={e.retracted ? null : e.outcome} />
           <td className="fig px-2.5 py-1.5 text-right text-ink-3">{e.score ?? "—"}</td>
         </tr>
       ))}

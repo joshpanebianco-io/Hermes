@@ -1,6 +1,8 @@
 "use client";
 
 import type { SourceStatus } from "@/types/terminal";
+import { AskGlyph } from "@/components/ask/AskPanel";
+import { openAsk } from "@/lib/ask/open";
 import { age } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -138,6 +140,17 @@ export function StatusRail({
         <span className="fig text-[9px] text-ink-3 qt:text-[10px]" title="This terminal is for one desk only. Yahoo quotes and publisher RSS are personal-use; neither may be redistributed.">
           PERSONAL USE
         </span>
+        {/* The assistant's door — on the rail rather than in the header,
+            whose strip already gives up instruments for want of width. */}
+        <button
+          type="button"
+          onClick={openAsk}
+          title="Ask Hermes to explain anything on the terminal — or press A"
+          className="hit flex items-center gap-1.5 rounded-[4px] border border-ring-2 bg-surface-2 px-2.5 py-1 text-ink-2 hover:border-ink-4 hover:bg-surface-3 hover:text-ink"
+        >
+          <AskGlyph />
+          <span className="text-[11px] leading-none font-semibold">Ask Hermes</span>
+        </button>
       </div>
     </footer>
   );

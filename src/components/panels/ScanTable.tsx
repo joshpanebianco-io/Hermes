@@ -1,13 +1,14 @@
 "use client";
 
 import type { RefObject } from "react";
-import type { OptContract, ScanRow, Side } from "@/types/scanner";
+import type { OptContract, OptionsCtx, ScanRow, Side } from "@/types/scanner";
 import { Tick } from "@/components/ui/Tick";
 import { HelmInline } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { levelGlyph, setupLabel, sideHue } from "@/components/panels/ScanDetail";
 import { compact, dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { useOptionsPrefs } from "@/lib/optionsPrefs";
 
 /**
  * The scanner's table, in two column sets.
@@ -450,9 +451,14 @@ function OptionsRow({
   budget: number | null;
 }) {
   const o = r.options;
+  const { zeroDte } = useOptionsPrefs();
   const front = o?.em.find((e) => e.key === "front");
   const weekly = o?.em.find((e) => e.key === "weekly");
-  const c = o?.contracts.find((x) => x.kind === "long" && x.key === "weekly") ?? o?.contracts.find((x) => x.kind === "long");
+  // The contract the expiry rule picks — the same one the Game plan quotes.
+  const pick = o ? optionsPick(o, zeroDte) : "weekly";
+  // 0DTE off in Settings: no same-day contract, on any name.
+  const longs = o?.contracts.filter((x) => x.kind === "long" && (zeroDte || x.dte > 0)) ?? [];
+  const c = longs.find((x) => x.key === pick) ?? longs[0];
   const size = budget != null && c?.risk_per_contract ? Math.floor(budget / c.risk_per_contract) : null;
   return (
     <tr {...(handlers as React.HTMLAttributes<HTMLTableRowElement>)}>
@@ -767,6 +773,17 @@ export function estTitle(c: OptContract): string | null {
     `$${c.mid.toFixed(2)} (${Math.abs(c.delta).toFixed(2)}Δ) with the stock at $${c.quote_spot.toFixed(2)} — ` +
     "moved through its delta and gamma. IV is held where it was."
   );
+}
+
+/**
+ * The contract the desk trades on this name: the collector's rule (`o.pick` —
+ * the same-day front on SPY / QQQ / IWM, the weekly elsewhere), unless 0DTE is
+ * off in Settings and the pick is a same-day expiry.
+ */
+export function optionsPick(o: OptionsCtx, zeroDte: boolean): "front" | "weekly" {
+  const pick = o.pick ?? "weekly";
+  const sameDay = o.em.find((e) => e.key === "front")?.dte === 0 || o.contracts.some((c) => c.key === "front" && c.dte === 0);
+  return pick === "front" && !zeroDte && sameDay ? "weekly" : pick;
 }
 
 /** "2026-10-16" → "Oct 16". */

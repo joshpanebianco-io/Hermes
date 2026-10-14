@@ -53,7 +53,7 @@ export function MarketStrip({ ctx, failed }: { ctx: MarketCtx | null; failed?: s
   const b = ctx.breadth;
   const ndx = b.indices.find((i) => i.key === "NDX") ?? null;
   const next = nextPrint(ctx.prints);
-  const lastHot = [...ctx.prints].reverse().find((p) => p.released && p.score >= 4) ?? null;
+  const lastHot = [...ctx.prints].reverse().find((p) => (p.released || p.done) && p.score >= 4) ?? null;
   const clock = next ? printClock(next.et, ctx.built_utc) : null;
   const toGo = clock?.until ?? null;
 
@@ -161,7 +161,7 @@ export function MarketStrip({ ctx, failed }: { ctx: MarketCtx | null; failed?: s
         {/* ---- what prints next ---------------------------------------------- */}
         <Cell
           label="Next high-impact"
-          title="The next US release scored 4 or more on the calendar, today or before tomorrow's open"
+          title="The next US release scored 4 or more on the calendar, for the session the scanner is reading — and the one after it, before its open"
         >
           {next ? (
             <>
@@ -209,9 +209,13 @@ function FuelLine({ f, sym }: { f: Fuel | null; sym: "SPY" | "QQQ" }) {
   );
 }
 
-/** The first high-impact print still to come, in the order the collector lists them. */
+/**
+ * The first high-impact print still to come, in the order the collector lists
+ * them. Not merely un-released: a speech never has an actual, and a 13:00 Fed
+ * speaker read as "next" all afternoon (audit, 2026-10-14) — `done` is the clock.
+ */
 function nextPrint(prints: Print[]): Print | null {
-  return prints.find((p) => !p.released && p.score >= 4) ?? null;
+  return prints.find((p) => !p.released && !p.done && p.score >= 4) ?? null;
 }
 
 function StripFrame({ children }: { children: React.ReactNode }) {

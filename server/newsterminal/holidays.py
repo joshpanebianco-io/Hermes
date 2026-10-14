@@ -11,17 +11,22 @@ session Friday's "previous RTH"; and the scanner's own guess (no SPY print by
 a published fact, not an inference from the tape — so it is written down.
 
 THE SOURCE. https://www.nyse.com/markets/hours-calendars (2026 and 2027, read
-2026-10-13), and Kiplinger's 2025 table for the 2025 early closes. 2025-01-09 —
+2026-10-13; 2028, read 2026-10-14), and Kiplinger's 2025 table for the 2025
+early closes. 2025-01-09 —
 the national day of mourning for President Carter, when the NYSE closed — is
 not on any recurring calendar and is listed by hand.
 
-IT RUNS OUT. The table covers 2025–2027 and says so (`covered`); a date past it
+IT RUNS OUT. The table covers 2025–2028 and says so (`covered`); a date past it
 falls back to "every weekday trades", which is what this code did before the
 table existed. tests/test_holidays.py fails once the current year is no longer
 covered, which is the reminder to extend it.
 
-US cash only. CME's equity and metal futures keep their own holiday hours
-(an abbreviated session that halts at 13:00 ET); nothing here models those.
+CME'S GLOBEX KEEPS ITS OWN HOURS, and the two tables at the foot say which
+(review, 2026-10-14: the brief called Thanksgiving morning "NY underway"). On
+most NYSE holidays the equity-index and metal futures still trade — an
+abbreviated session that halts at 13:00 ET — so Asia and London happen as
+usual. Only Christmas, New Year's Day and Good Friday shut Globex outright,
+and on the cash market's half days the futures halt at 13:15 ET.
 """
 
 from __future__ import annotations
@@ -63,6 +68,16 @@ HOLIDAYS: dict[date, str] = {
     date(2027, 9, 6): "Labor Day",
     date(2027, 11, 25): "Thanksgiving Day",
     date(2027, 12, 24): "Christmas Day (observed)",
+    # 2028 — New Year's Day falls on a Saturday and is not observed.
+    date(2028, 1, 17): "Martin Luther King, Jr. Day",
+    date(2028, 2, 21): "Washington's Birthday",
+    date(2028, 4, 14): "Good Friday",
+    date(2028, 5, 29): "Memorial Day",
+    date(2028, 6, 19): "Juneteenth",
+    date(2028, 7, 4): "Independence Day",
+    date(2028, 9, 4): "Labor Day",
+    date(2028, 11, 23): "Thanksgiving Day",
+    date(2028, 12, 25): "Christmas Day",
 }
 
 # Days the cash market closes at 13:00 ET.
@@ -73,11 +88,13 @@ EARLY_CLOSES: dict[date, str] = {
     date(2026, 11, 27): "Day after Thanksgiving",
     date(2026, 12, 24): "Christmas Eve",
     date(2027, 11, 26): "Day after Thanksgiving",
+    date(2028, 7, 3): "Day before Independence Day",
+    date(2028, 11, 24): "Day after Thanksgiving",
 }
 
 EARLY_CLOSE = time(13, 0)
 REGULAR_CLOSE = time(16, 0)
-COVERED_YEARS = range(2025, 2028)
+COVERED_YEARS = range(2025, 2029)
 
 
 def covered(d: date) -> bool:
@@ -128,3 +145,45 @@ def prev_trading_day(d: date) -> date:
     while not is_trading_day(d):
         d -= timedelta(days=1)
     return d
+
+
+# ---------------------------------------------------------------- CME Globex
+#
+# The trade dates with NO Globex session for the equity-index and metal
+# futures: no reopen the evening before, no Asia, no London. Christmas and New
+# Year's Day every year; Good Friday where CME closed (2025) or is expected to
+# (2027, 2028). 2026's Good Friday is left off unverified — it was payrolls
+# day, and it is past.
+CME_CLOSED: dict[date, str] = {
+    date(2025, 1, 1): "New Year's Day",
+    date(2025, 4, 18): "Good Friday",
+    date(2025, 12, 25): "Christmas Day",
+    date(2026, 1, 1): "New Year's Day",
+    date(2026, 12, 25): "Christmas Day",
+    date(2027, 1, 1): "New Year's Day",
+    date(2027, 3, 26): "Good Friday",
+    date(2027, 12, 24): "Christmas Day (observed)",
+    date(2028, 4, 14): "Good Friday",
+    date(2028, 12, 25): "Christmas Day",
+}
+
+# Where an abbreviated Globex trade date halts, in ET: 13:00 on an NYSE holiday
+# CME does not close for, 13:15 on the cash market's half days.
+CME_HOLIDAY_HALT = time(13, 0)
+CME_EARLY_HALT = time(13, 15)
+
+
+def cme_closed(d: date) -> bool:
+    """Is `d` a weekday trade date with no Globex session at all?"""
+    return d in CME_CLOSED
+
+
+def cme_halt(d: date) -> time | None:
+    """When trade date `d`'s Globex session halts early, or None for a full day."""
+    if d in CME_CLOSED:
+        return time(0, 0)
+    if d in HOLIDAYS:
+        return CME_HOLIDAY_HALT
+    if d in EARLY_CLOSES:
+        return CME_EARLY_HALT
+    return None

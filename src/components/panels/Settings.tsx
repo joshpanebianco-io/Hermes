@@ -17,6 +17,7 @@ import { UI_COOKIE, type UiMode } from "@/lib/ui";
 import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
 import { segItem } from "@/lib/seg";
 import { setOptionsPrefs, useOptionsPrefs } from "@/lib/optionsPrefs";
+import type { ExpiryRule, Watchlist } from "@/types/scanner";
 import { cn } from "@/lib/cn";
 
 /**
@@ -480,10 +481,30 @@ function Alerts() {
  * THE BUDGET IS TYPED AS DOLLARS OF PREMIUM AT RISK, and blank means "do not
  * size" — the helper then prints the risk per contract and leaves the count
  * to you. Nothing here places an order; it is arithmetic on the screen.
+ *
+ * THE EXPIRY RULE IS THE COLLECTOR'S, IN ITS OWN WORDS (audit, 2026-10-14: the
+ * plan, this page and the table each kept a copy, and they disagreed). It is
+ * read from the watchlist route, where it rides along; offline, the line says
+ * so rather than printing a copy that may be stale.
  */
 function OptionsPrefsModule() {
   const p = useOptionsPrefs();
   const [draft, setDraft] = useState<string>("");
+  const [rule, setRule] = useState<ExpiryRule | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/scanner/watchlist", { cache: "no-store" })
+      .then((r) => r.json() as Promise<Watchlist>)
+      .then((w) => {
+        if (live && w.options_rule) setRule(w.options_rule);
+      })
+      .catch(() => {
+        /* offline: the hint says so */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
   useEffect(() => {
     setDraft(p.budget != null ? String(p.budget) : "");
   }, [p.budget]);
@@ -521,7 +542,7 @@ function OptionsPrefsModule() {
         </span>
       </div>
       <div className={row}>
-        <span className={label}>0DTE on SPY · QQQ · IWM</span>
+        <span className={label}>Same-day (0DTE) contracts</span>
         <span className="seg">
           <button type="button" onClick={() => setOptionsPrefs({ zeroDte: true })} {...segItem(p.zeroDte)}>
             On
@@ -530,7 +551,10 @@ function OptionsPrefsModule() {
             Off
           </button>
         </span>
-        <span className={hint}>Off, the index ETFs suggest the weekly instead of the same-day expiry</span>
+        <span className={hint}>
+          {rule ? rule.text : "The expiry rule loads from the collector."} Off: no same-day contract on any name — the
+          weekly instead.
+        </span>
       </div>
     </Module>
   );

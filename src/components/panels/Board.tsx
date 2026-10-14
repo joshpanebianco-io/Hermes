@@ -5,7 +5,7 @@ import { Module } from "@/components/ui/Module";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { Sparkline } from "@/components/ui/Sparkline";
-import { autoDp, dir, num, pct } from "@/lib/format";
+import { autoDp, dir, feedNote, num, quoteChg } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 /**
@@ -80,18 +80,29 @@ export function Board({
   );
 }
 
+/**
+ * WHAT THE PRICE IS, ON THE ROW (audit, 2026-10-14). A delayed print carries a
+ * small D, the convention on every retail screen; a closed market's last price
+ * is dimmed, because it is not moving and must not read as if it were — and so
+ * is one with no print for half an hour inside its hours (a lunch break, a
+ * grain contract between sessions). The tooltip says which, how late and as
+ * of when. A live row looks exactly as it always did.
+ */
 function Row({ q }: { q: Quote }) {
-  const d = dir(q.pct);
+  const chg = quoteChg(q);
+  const note = feedNote(q);
+  const ink = q.feed === "closed" || q.feed === "stale" ? "text-ink-3" : "text-ink";
   return (
-    <li className="hit flex items-center gap-2 px-3 py-[3px]">
-      <span className="fig w-[52px] shrink-0 truncate text-[11px] text-ink-2" title={q.name}>
-        {q.key}
-      </span>
+    <li className="hit flex items-center gap-2 px-3 py-[3px]" title={note ? `${q.name} — ${note}` : q.name}>
+      <span className="fig w-[52px] shrink-0 truncate text-[11px] text-ink-2">{q.key}</span>
       <Tick
         value={num(q.last, q.last >= 1000 ? autoDp(q.last) : undefined)}
-        className="fig w-[74px] shrink-0 truncate text-right text-[11.5px] text-ink"
+        className={cn("fig w-[74px] shrink-0 truncate text-right text-[11.5px]", ink)}
       />
-      <Tick value={pct(q.pct)} className={cn("fig w-[62px] shrink-0 text-right text-[11px]", d)} />
+      <span className="fig -ml-1 w-[7px] shrink-0 text-[8.5px] leading-none text-ink-4" aria-label={note ?? undefined}>
+        {q.feed === "delayed" ? "D" : ""}
+      </span>
+      <Tick value={chg.text} className={cn("fig -ml-1 w-[62px] shrink-0 text-right text-[11px]", dir(chg.v))} />
       <RangeBar pos={q.range_pos} />
       <Sparkline data={q.spark} prev={q.prev} width={56} height={16} />
     </li>

@@ -456,3 +456,81 @@ def test_build_and_the_scanner_count_are_the_same_function() -> None:
     assert (c["bias"], c["agree"], c["against"], c["grade"], c["max_conviction"]) == (
         "long", 11, 0, "strong", 5)
     assert c == mc.conviction_for(scan, quotes, sectors, _cons(15, 5), NOW)
+
+
+# ------------------------------------------------- overnight is before the open (audit)
+
+
+def _et(day: int, h: int, mi: int) -> datetime:
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 10, day, h, mi, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_overnight_the_last_sessions_cash_numbers_do_not_vote() -> None:
+    """Tue 22:00 ET: the scanner's trading day is Wednesday. Tuesday's sectors,
+    leaders and volume are not Wednesday's tape; the levels vote on the move
+    after the bell, and a VIX last printed at Tuesday's close waits for Wednesday."""
+    night = {"ok": True, "session": "closed", "trading_day": "2026-10-14",
+             "rows": [_row("SPY", ext=0.4), _row("QQQ", ext=-0.05, rvol=1.5, chg=1.0)]}
+    tue_close = _et(13, 16, 15).timestamp()
+    vs = mc.votes(night, [_q("VIX", 15.0, 5.0, qt=tue_close), _q("VIX3M", 20.0)],
+                  _sectors(2, 9, rsp=-1.0, spy=0.0), _cons(10, 40), _et(13, 22, 0))
+    got = {v["key"]: v for v in vs}
+    assert got["spy_levels"]["vote"] == "long" and "gap +0.40%" in got["spy_levels"]["value"]
+    assert got["qqq_levels"]["vote"] == "neutral"
+    for k in ("sectors", "equal_weight", "index_volume", "participation", "vix_dir", "vix_curve"):
+        assert got[k]["vote"] == "neutral", k
+    assert "the last session's" in got["sectors"]["note"]
+    assert "not traded on Wed yet" in got["vix_dir"]["note"]
+    # 19:59, still Tuesday's post-market: the day just finished is the day read.
+    post = night | {"session": "post", "trading_day": "2026-10-13"}
+    vs = mc.votes(post, [], _sectors(2, 9), _cons(10, 40), _et(13, 19, 59))
+    assert {v["key"]: v["vote"] for v in vs}["sectors"] == "short"
+
+
+CAL = [
+    _print("CPI", 0.4, 0.3, day=13, et="08:30"),
+    _print("FOMC Member Barkin Speaks", None, None, day=13, et="13:00"),
+    _print("PPI", None, 0.2, day=14, et="08:30"),
+    _print("Cleveland CPI", None, 0.3, day=14, et="11:00"),
+    _print("Beige Book", None, None, day=14, et="14:00"),
+    _print("Initial Jobless Claims", None, 230000, day=15, et="08:30"),
+]
+
+
+@pytest.mark.parametrize("now,session,td,expect", [
+    # Tue 15:00 in the session: Tuesday's prints — Barkin's 13:00 already done —
+    # and Wednesday's before its open.
+    (_et(13, 15, 0), "rth", "2026-10-13",
+     [("08:30", "CPI", True), ("13:00", "FOMC Member Barkin Speaks", True),
+      ("Wed 08:30", "PPI", False)]),
+    (_et(13, 19, 59), "post", "2026-10-13",
+     [("08:30", "CPI", True), ("13:00", "FOMC Member Barkin Speaks", True),
+      ("Wed 08:30", "PPI", False)]),
+    # Tue 20:00: the trading day is Wednesday — all of Wednesday, in-session prints too.
+    (_et(13, 20, 0), "closed", "2026-10-14",
+     [("Wed 08:30", "PPI", False), ("Wed 11:00", "Cleveland CPI", False),
+      ("Wed 14:00", "Beige Book", False)]),
+    # Past midnight it is Wednesday on the calendar too: today, and Thursday's early print.
+    (_et(14, 3, 59), "closed", "2026-10-14",
+     [("08:30", "PPI", False), ("11:00", "Cleveland CPI", False),
+      ("14:00", "Beige Book", False), ("Thu 08:30", "Initial Jobless Claims", False)]),
+    (_et(14, 4, 0), "pre", "2026-10-14",
+     [("08:30", "PPI", False), ("11:00", "Cleveland CPI", False),
+      ("14:00", "Beige Book", False), ("Thu 08:30", "Initial Jobless Claims", False)]),
+])
+def test_prints_follow_the_scanners_trading_day(now: datetime, session: str, td: str,
+                                                expect: list[tuple[str, str, bool]]) -> None:
+    from datetime import date
+
+    got = mc.prints(CAL, now, date.fromisoformat(td))
+    assert [(p["et"], p["title"], p["done"]) for p in got] == expect
+
+
+def test_a_speech_whose_hour_has_passed_is_done_not_due() -> None:
+    """A speech has no actual, so it is never `released`; at 13:01 it is done."""
+    speech = [_print("FOMC Member Barkin Speaks", None, None, et="13:00")]
+    assert [p["done"] for p in mc.prints(speech, _et(13, 12, 59))] == [False]
+    after = mc.prints(speech, _et(13, 13, 0))
+    assert [(p["released"], p["done"]) for p in after] == [(False, True)]

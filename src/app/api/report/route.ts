@@ -33,7 +33,7 @@ function offline(reason: string): ReportFeed {
   };
 }
 
-async function call(method: "GET" | "POST", timeoutMs: number, qs = "") {
+async function call(method: "GET" | "POST" | "DELETE", timeoutMs: number, qs = "") {
   const r = await fetch(`${API.replace(/\/$/, "")}/api/report${qs}`, {
     method,
     cache: "no-store",
@@ -77,6 +77,32 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     return NextResponse.json(await call("POST", 290_000, pickQuery(req)));
+  } catch (e) {
+    return NextResponse.json(offline(failureReason(e)));
+  }
+}
+
+/*
+ * SEVERAL OR ALL, IN ONE TRIP: `?ids=a&ids=b`, or `?all=1`. The ids are
+ * whitelisted by shape here as the single-id route does — a delete is the verb
+ * that must never carry a path — and the collector basenames them as well.
+ * Nothing valid forwards an empty delete, which removes nothing and hands the
+ * list back as it is.
+ */
+const ID = /^[0-9]{8}-[0-9]{6}$/;
+
+function deleteQuery(req: Request): string {
+  const u = new URL(req.url);
+  const qs = new URLSearchParams();
+  if (u.searchParams.get("all") === "1") qs.set("all", "1");
+  else for (const id of u.searchParams.getAll("ids")) if (ID.test(id)) qs.append("ids", id);
+  const out = qs.toString();
+  return out ? `?${out}` : "";
+}
+
+export async function DELETE(req: Request) {
+  try {
+    return NextResponse.json(await call("DELETE", 15_000, deleteQuery(req)));
   } catch (e) {
     return NextResponse.json(offline(failureReason(e)));
   }

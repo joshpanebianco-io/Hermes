@@ -6,6 +6,7 @@ import type { Conviction, Print } from "@/types/market";
 import { PLAN_TOPS } from "@/types/plan";
 import type { PlanController } from "@/lib/useStockPlan";
 import { Module } from "@/components/ui/Module";
+import { PastList } from "@/components/panels/PastList";
 import { HelmLoader } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { Failed, GenerateButton, NoKey, Offline, Working } from "@/components/panels/Report";
@@ -67,9 +68,21 @@ const SESSION: Record<PlanFacts["session"], string> = {
   closed: "market closed",
 };
 
-export function StockPlan({ top, setTop, feed, busy, viewing, generate, open, discard, retry, startedAt }: PlanController) {
+export function StockPlan({
+  top,
+  setTop,
+  feed,
+  busy,
+  viewing,
+  generate,
+  open,
+  discard,
+  discardMany,
+  discardAll,
+  retry,
+  startedAt,
+}: PlanController) {
   const [showDigest, setShowDigest] = useState(false);
-  const [confirming, setConfirming] = useState<string | null>(null);
   const plan = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
 
@@ -141,73 +154,29 @@ export function StockPlan({ top, setTop, feed, busy, viewing, generate, open, di
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <Module
+        <PastList
           title="Past plans"
-          large
-          sub={`${feed?.history?.length ?? 0} kept`}
-          className="xl:min-h-0 xl:flex-1"
-          bodyClassName="px-0 py-0 xl:min-h-0 xl:overflow-y-auto"
-        >
-          {!feed ? (
-            <ListSkeleton />
-          ) : !feed.history?.length ? (
-            <p className="px-3 py-5 text-center text-[11px] text-ink-3">
-              Nothing yet. Plans are kept so each one can be read against how the session went.
-            </p>
-          ) : (
-            <ul>
-              {feed.history.map((h) => (
-                <li key={h.id} className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => open(h.id)}
-                    className={cn(
-                      "hit flex w-full flex-col items-start gap-0.5 py-1.5 pr-7 pl-3 text-left",
-                      "qt:gap-1 qt:border-b qt:border-ring/60 qt:py-2.5",
-                      (viewing ?? plan?.id) === h.id && "bg-ink/[0.06] qt:bg-surface-2",
-                    )}
-                  >
-                    <div className="flex w-full items-baseline gap-2">
-                      <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
-                      <span className="fig ml-auto shrink-0 text-[10px] text-ink-3">
-                        {h.n} {h.n === 1 ? "name" : "names"}
-                      </span>
-                    </div>
-                    {h.headline && <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">{h.headline}</span>}
-                  </button>
-                  {confirming === h.id ? (
-                    <div className="absolute inset-0 flex items-center gap-1.5 bg-surface-2 px-3">
-                      <span className="mr-auto text-[10px] text-ink-3">Delete this plan?</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          discard(h.id);
-                          setConfirming(null);
-                        }}
-                        className="hit rounded px-1.5 py-0.5 text-[10px] font-semibold text-warn"
-                      >
-                        Delete
-                      </button>
-                      <button type="button" onClick={() => setConfirming(null)} className="hit rounded px-1.5 py-0.5 text-[10px] text-ink-3">
-                        Keep
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirming(h.id)}
-                      title="Delete this plan"
-                      aria-label={`Delete the plan from ${h.et_label}`}
-                      className="hit absolute top-1.5 right-1 rounded px-1 text-[12px] leading-none text-ink-4 opacity-0 group-hover:opacity-100 hover:text-warn focus-visible:opacity-100"
-                    >
-                      ×
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+          noun="plan"
+          items={feed ? (feed.history ?? []) : null}
+          skeleton={<ListSkeleton />}
+          current={viewing ?? plan?.id ?? null}
+          empty="Nothing yet. Plans are kept so each one can be read against how the session went."
+          onOpen={open}
+          onDiscard={discard}
+          onDiscardMany={discardMany}
+          onDiscardAll={discardAll}
+          row={(h) => (
+            <>
+              <span className="flex w-full items-baseline gap-2">
+                <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
+                <span className="fig ml-auto shrink-0 text-[10px] text-ink-3">
+                  {h.n} {h.n === 1 ? "name" : "names"}
+                </span>
+              </span>
+              {h.headline && <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">{h.headline}</span>}
+            </>
           )}
-        </Module>
+        />
       </div>
     </div>
   );

@@ -17,8 +17,9 @@ single panel should hit, and what makes this debuggable with curl.
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -170,6 +171,19 @@ def gex() -> dict[str, Any]:
             "age_min": (snap["age_min"] or {}).get("gex")}
 
 
+# A stored note's id — the timestamp slug report.generate and stockplan.generate
+# mint (`20261021-061500`). Checked on the way in because it becomes a path.
+_NOTE_ID = r"^\d{8}-\d{6}$"
+_NOTE_ID_RE = re.compile(_NOTE_ID)
+
+
+def _note_ids(ids: list[str] | None) -> list[str]:
+    """The ids that look like ids. A list query cannot carry a per-item pattern
+    the way `Path` does, so the shape check is here; the storage basenames each
+    one as well — two locks, as on the single-id routes."""
+    return [i for i in (ids or []) if _NOTE_ID_RE.match(i)]
+
+
 # ---------------------------------------------------------------- report
 #
 # The one place in this service that does work on the request path, and it has
@@ -207,6 +221,30 @@ def report_delete(report_id: str) -> dict[str, Any]:
     confirm should not raise. `deleted` says which actually happened.
     """
     gone = report_mod.remove(report_id)
+    return {
+        "config": report_mod.configured(),
+        "latest": report_mod.latest(),
+        "history": report_mod.history(),
+        "deleted": gone,
+    }
+
+
+@app.delete("/api/report")
+def report_delete_many(
+    ids: Annotated[list[str] | None, Query()] = None,
+    every: bool = Query(False, alias="all"),
+) -> dict[str, Any]:
+    """Drop several stored reports — `?ids=a&ids=b` — or every one — `?all=1` —
+    and hand back the list without them, as the single delete does.
+
+    ONE TRIP, NOT ONE PER ROW (owner, 2026-10-21: "multi select delete and
+    delete all options"). N single deletes land N feeds in network order and
+    the list flickers through states nobody asked for. `all` means every file
+    the collector keeps, not the twenty the list shows — `history` is capped
+    at twenty while KEEP holds forty. `deleted` names what went, so the panel
+    can tell a miss from a delete.
+    """
+    gone = report_mod.remove_all() if every else report_mod.remove_many(_note_ids(ids))
     return {
         "config": report_mod.configured(),
         "latest": report_mod.latest(),
@@ -342,7 +380,7 @@ def market() -> dict[str, Any]:
 # the report, generating is the one thing here that works on the request
 # path — an explicit act by the reader, a minute or three on a free model.
 
-_PLAN_ID = r"^\d{8}-\d{6}$"
+_PLAN_ID = _NOTE_ID
 
 
 def _plan_feed() -> dict[str, Any]:
@@ -365,6 +403,16 @@ def plan_one(plan_id: str = Path(..., pattern=_PLAN_ID)) -> dict[str, Any]:
 def plan_delete(plan_id: str = Path(..., pattern=_PLAN_ID)) -> dict[str, Any]:
     """Drop one stored plan and hand back the list without it (see report_delete)."""
     gone = plan_mod.remove(plan_id)
+    return {**_plan_feed(), "deleted": gone}
+
+
+@app.delete("/api/plan")
+def plan_delete_many(
+    ids: Annotated[list[str] | None, Query()] = None,
+    every: bool = Query(False, alias="all"),
+) -> dict[str, Any]:
+    """Drop several stored plans, or every one (see report_delete_many)."""
+    gone = plan_mod.remove_all() if every else plan_mod.remove_many(_note_ids(ids))
     return {**_plan_feed(), "deleted": gone}
 
 

@@ -38,6 +38,7 @@ import os
 import re
 import time
 import urllib.error
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -1672,3 +1673,27 @@ def remove(plan_id: str) -> bool:
     except OSError:
         return False
     return True
+
+
+def remove_many(ids: Iterable[str]) -> list[str]:
+    """Delete several stored plans; the ids that actually went, in the order asked.
+
+    Each goes through `remove`, so each is basenamed: an id that is not a
+    stored plan — a traversal, a typo, one that already went — simply does
+    not appear in the answer.
+    """
+    return [i for i in ids if remove(i)]
+
+
+def remove_all() -> list[str]:
+    """Delete every stored plan — the directory's worth, not the list's.
+
+    `history` shows the newest twenty while KEEP holds forty, so "all" has to
+    be read off the disk or it would leave the older half behind and call the
+    list empty. The ids that went, newest first.
+    """
+    try:
+        names = sorted((n for n in os.listdir(PLANS_DIR) if n.endswith(".json")), reverse=True)
+    except OSError:
+        return []
+    return [n[:-5] for n in names if remove(n[:-5])]

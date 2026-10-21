@@ -29,6 +29,8 @@ export interface PlanController {
   generate: () => void;
   open: (id: string) => void;
   discard: (id: string) => void;
+  discardMany: (ids: string[]) => void;
+  discardAll: () => void;
   retry: () => void;
   startedAt: number | null;
 }
@@ -115,7 +117,38 @@ export function useStockPlan(initial: PlanFeed | null = null): PlanController {
     })();
   }, []);
 
+
+  /*
+   * SEVERAL AT ONCE, OR ALL — one DELETE on the collection, not one per row.
+   * A loop of single deletes lands N feeds in whatever order the network
+   * chooses and the list flickers through states nobody asked for; the
+   * collector does the lot and hands back one list. `viewing` clears when
+   * the plan being read is among those gone — with "all" it always is.
+   */
+  const discardSet = useCallback((qs: string, gone: (id: string) => boolean) => {
+    void (async () => {
+      try {
+        const r = await fetch(`/api/plan?${qs}`, { method: "DELETE", cache: "no-store" });
+        const next = (await r.json()) as PlanFeed;
+        if (next.offline) {
+          setFeed((prev) => land(prev, next));
+          return;
+        }
+        setViewing((v) => (v !== null && gone(v) ? null : v));
+        setFeed(next);
+      } catch {
+        /* same */
+      }
+    })();
+  }, []);
+  const discardMany = useCallback(
+    (ids: string[]) =>
+      discardSet(ids.map((id) => `ids=${encodeURIComponent(id)}`).join("&"), (v) => ids.includes(v)),
+    [discardSet],
+  );
+  const discardAll = useCallback(() => discardSet("all=1", () => true), [discardSet]);
+
   const retry = useCallback(() => void refresh(), [refresh]);
 
-  return { top, setTop, feed, busy, viewing, generate, open, discard, retry, startedAt };
+  return { top, setTop, feed, busy, viewing, generate, open, discard, discardMany, discardAll, retry, startedAt };
 }

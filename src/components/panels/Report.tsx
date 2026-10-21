@@ -11,6 +11,7 @@ import type {
 import type { ReportController } from "@/lib/useReport";
 import { Brief } from "@/components/panels/Brief";
 import { Module } from "@/components/ui/Module";
+import { PastList } from "@/components/panels/PastList";
 import { biasHue, biasLabel } from "@/lib/bias";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
@@ -96,13 +97,13 @@ export function Report({
   generate,
   open,
   discard,
+  discardMany,
+  discardAll,
   retry,
   startedAt,
 }: ReportController) {
   const quiet = useQuiet();
   const [showDigest, setShowDigest] = useState(false);
-  /** Which row is asking "Delete this report?" — one at a time. */
-  const [confirming, setConfirming] = useState<string | null>(null);
   const rep = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
 
@@ -210,130 +211,60 @@ export function Report({
             beside it, and the list scrolls INSIDE it — the wire's arrangement.
             Only at xl, where the two sit side by side; stacked, it is as tall
             as its rows. */}
-        <Module
+        <PastList
           title="Past calls"
-          large
-          sub={`${feed?.history?.length ?? 0} kept`}
-          className="xl:min-h-0 xl:flex-1"
-          bodyClassName="px-0 py-0 xl:min-h-0 xl:overflow-y-auto"
-        >
-          {!feed?.history?.length ? (
-            <p className="px-3 py-5 text-center text-[11px] text-ink-3">
-              Nothing yet. Reports are kept so you can check the calls against how the
-              session actually went.
-            </p>
-          ) : (
-            <ul>
-              {feed.history.map((h) => (
-                <li key={h.id} className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => open(h.id)}
-                    className={cn(
-                      "hit flex w-full flex-col items-start gap-0.5 py-1.5 pr-7 pl-3 text-left",
-                      "qt:gap-1 qt:border-b qt:border-ring/60 qt:py-2.5",
-                      (viewing ?? rep?.id) === h.id && "bg-ink/[0.06] qt:bg-surface-2",
-                    )}
-                  >
-                    <div className="flex w-full items-baseline gap-2">
-                      <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
-                      {h.asset_label && h.asset !== "all" && h.asset_label !== "All three books" && (
-                        <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3 qt:border qt:border-ring-2 qt:bg-transparent">
-                          {h.asset_label}
-                        </span>
-                      )}
-                      {/* The one part of this line that may give way: on a narrow
-                          column the date, the book and the call all matter more
-                          than which session it was, so this is what truncates. */}
-                      {h.session_label && (
-                        <span className="fig min-w-0 truncate text-[10px] text-ink-3">
-                          {h.session_label}
-                        </span>
-                      )}
-                      {h.bias &&
-                        (quiet ? (
-                          // Quiet: no tinted pill — a square marker and caps in the
-                          // side's figure hue, the call's word as the brief prints it.
-                          <span
-                            className="qt-cap ml-auto inline-flex shrink-0 items-center gap-1 text-[10px]"
-                            style={{ color: quietBias(h.bias) }}
-                          >
-                            <span aria-hidden className="h-[5px] w-[5px] bg-current" />
-                            {biasLabel(h.bias)}
-                          </span>
-                        ) : (
-                          <span
-                            className="fig ml-auto shrink-0 rounded px-1 text-[10px]"
-                            style={{
-                              color: biasHue(h.bias),
-                              background: `color-mix(in oklab, ${biasHue(h.bias)} 18%, transparent)`,
-                            }}
-                          >
-                            {h.bias}
-                          </span>
-                        ))}
-                    </div>
-                    {h.headline && (
-                      <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">
-                        {h.headline}
-                      </span>
-                    )}
-                  </button>
-                  {/*
-                    * DELETE IS A SIBLING OF THE ROW BUTTON, NOT A CHILD OF IT.
-                    * A button inside a button is invalid HTML and browsers
-                    * resolve it by dropping one of them, so the row reserves
-                    * `pr-7` and this sits in the gutter it leaves.
-                    *
-                    * IT ASKS FIRST, INLINE. `window.confirm` would do the job
-                    * and is the wrong tool twice over: a modal dialog blocks
-                    * the whole page, and the thing being confirmed is a row you
-                    * can no longer see behind it. This keeps the row on screen
-                    * and puts the question over it. Deleting is permanent —
-                    * there is no trash folder on the collector.
-                    */}
-                  {confirming === h.id ? (
-                    <div className="absolute inset-0 flex items-center gap-1.5 bg-surface-2 px-3">
-                      <span className="mr-auto text-[10px] text-ink-3">Delete this report?</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          discard(h.id);
-                          setConfirming(null);
-                        }}
-                        className="hit rounded px-1.5 py-0.5 text-[10px] font-semibold text-warn"
-                      >
-                        Delete
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirming(null)}
-                        className="hit rounded px-1.5 py-0.5 text-[10px] text-ink-3"
-                      >
-                        Keep
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirming(h.id)}
-                      title="Delete this report"
-                      aria-label={`Delete the report from ${h.et_label}`}
-                      /*
-                       * Revealed on hover, but focus-visible brings it back for
-                       * the keyboard — an opacity-0 control that only a mouse
-                       * can summon is one a keyboard can tab to and not see.
-                       */
-                      className="hit absolute top-1.5 right-1 rounded px-1 text-[12px] leading-none text-ink-4 opacity-0 group-hover:opacity-100 hover:text-warn focus-visible:opacity-100"
+          noun="report"
+          items={feed?.history ?? []}
+          current={viewing ?? rep?.id ?? null}
+          empty="Nothing yet. Reports are kept so you can check the calls against how the session actually went."
+          onOpen={open}
+          onDiscard={discard}
+          onDiscardMany={discardMany}
+          onDiscardAll={discardAll}
+          row={(h) => (
+            <>
+              <span className="flex w-full items-baseline gap-2">
+                <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
+                {h.asset_label && h.asset !== "all" && h.asset_label !== "All three books" && (
+                  <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3 qt:border qt:border-ring-2 qt:bg-transparent">
+                    {h.asset_label}
+                  </span>
+                )}
+                {/* The one part of this line that may give way: on a narrow
+                    column the date, the book and the call all matter more
+                    than which session it was, so this is what truncates. */}
+                {h.session_label && (
+                  <span className="fig min-w-0 truncate text-[10px] text-ink-3">{h.session_label}</span>
+                )}
+                {h.bias &&
+                  (quiet ? (
+                    // Quiet: no tinted pill — a square marker and caps in the
+                    // side's figure hue, the call's word as the brief prints it.
+                    <span
+                      className="qt-cap ml-auto inline-flex shrink-0 items-center gap-1 text-[10px]"
+                      style={{ color: quietBias(h.bias) }}
                     >
-                      ×
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+                      <span aria-hidden className="h-[5px] w-[5px] bg-current" />
+                      {biasLabel(h.bias)}
+                    </span>
+                  ) : (
+                    <span
+                      className="fig ml-auto shrink-0 rounded px-1 text-[10px]"
+                      style={{
+                        color: biasHue(h.bias),
+                        background: `color-mix(in oklab, ${biasHue(h.bias)} 18%, transparent)`,
+                      }}
+                    >
+                      {h.bias}
+                    </span>
+                  ))}
+              </span>
+              {h.headline && (
+                <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">{h.headline}</span>
+              )}
+            </>
           )}
-        </Module>
+        />
       </div>
     </div>
   );

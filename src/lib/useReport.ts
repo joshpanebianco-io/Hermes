@@ -50,6 +50,10 @@ export interface ReportController {
   open: (id: string) => void;
   /** Delete one stored report. Permanent — the panel asks first. */
   discard: (id: string) => void;
+  /** Delete several in one trip. Permanent — the list asks first and says how many. */
+  discardMany: (ids: string[]) => void;
+  /** Delete every stored report the collector keeps, not only the rows listed. */
+  discardAll: () => void;
   /** Ask the collector again — the offline state's way back. */
   retry: () => void;
   /**
@@ -174,7 +178,41 @@ export function useReport(initial: ReportFeed | null): ReportController {
     })();
   }, []);
 
+
+  /*
+   * SEVERAL AT ONCE, OR ALL — one DELETE on the collection, not one per row.
+   * A loop of single deletes lands N feeds in whatever order the network
+   * chooses and the list flickers through states nobody asked for; the
+   * collector does the lot and hands back one list. `viewing` clears when
+   * the report being read is among those gone — with "all" it always is.
+   */
+  const discardSet = useCallback((qs: string, gone: (id: string) => boolean) => {
+    void (async () => {
+      try {
+        const r = await fetch(`/api/report?${qs}`, { method: "DELETE", cache: "no-store" });
+        const next = (await r.json()) as ReportFeed;
+        if (next.offline) {
+          setFeed((prev) => land(prev, next));
+          return;
+        }
+        setViewing((v) => (v !== null && gone(v) ? null : v));
+        setFeed(next);
+      } catch {
+        /* same */
+      }
+    })();
+  }, []);
+  const discardMany = useCallback(
+    (ids: string[]) =>
+      discardSet(ids.map((id) => `ids=${encodeURIComponent(id)}`).join("&"), (v) => ids.includes(v)),
+    [discardSet],
+  );
+  const discardAll = useCallback(() => discardSet("all=1", () => true), [discardSet]);
+
   const retry = useCallback(() => void refresh(), [refresh]);
 
-  return { pick, setPick, book, setBook, feed, busy, viewing, generate, open, discard, retry, startedAt };
+  return {
+    pick, setPick, book, setBook, feed, busy, viewing, generate, open,
+    discard, discardMany, discardAll, retry, startedAt,
+  };
 }

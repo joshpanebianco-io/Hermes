@@ -437,7 +437,7 @@ Windows, Node 20+, Python 3.11+.
 ```powershell
 npm install
 cp .env.example .env.local     # add an OpenRouter key if you want session reports
-.\dev.ps1                      # every half in its own window, then the browser
+.\dev.ps1                      # every half as a tab in one window, then the browser
 npm run shortcut               # optional: the same thing, on the desktop
 ```
 
@@ -450,7 +450,9 @@ npm run shortcut               # optional: the same thing, on the desktop
   start that service too if it finds it beside this repo (or at `NT_GEXYGEN_HOME`) —
   a launch-time convenience only, skipped with `-NoGexygen`, and silent about every
   way it can be absent.
-- Switches: `-CollectorOnly` (feeds, no web, no browser), `-NoBrowser`, `-Force`
+- Switches: `-Restart` (the collector again, in its own tab, rereading `.env.local` — how
+  new Python code or a config edit goes live), `-Windows` (a window per half instead of
+  tabs), `-CollectorOnly` (feeds, no web, no browser), `-NoBrowser`, `-Force`
   (start anyway, and clash), `-Prod` (the web half as a production build in
   `.next-prod` rather than `next dev` — lighter for a screen left open all day;
   `npm run prod` does the same by hand). Everything already listening is left alone, so a second

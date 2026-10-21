@@ -10,11 +10,10 @@
 # adds only the tabs that are missing to the same window, and is also how to get
 # the browser tab back after closing it.
 #
-# -Tabs LIVES HERE RATHER THAN IN dev.ps1's DEFAULTS. A double-click has no
-# terminal behind it, so three windows arriving unasked is the launcher making a
-# mess of the desktop; typing `.\dev.ps1` means you are already sitting in a
-# terminal and have your own arrangement, which this has no business rehoming.
-# Same script, and the switch is available by hand either way.
+# Tabs are dev.ps1's default now (owner, 2026-10-14: every service in one
+# window), so -Tabs here changes nothing; it stays so a shortcut made before
+# and one made now run exactly the same command. `dev.ps1 -Windows` is the old
+# window-per-service arrangement.
 #
 # -Collector installs the feed-only launcher under its own name, so the two sit
 # side by side on the desktop. That one opens the collector ALONE: the live

@@ -1,4 +1,18 @@
-@import "tailwindcss";
+@import "tailwindcss" source("..");
+
+/*
+ * SCAN src/, NOT THE REPO (2026-10-15). With no source() Tailwind takes the
+ * project root and hands webpack the whole tree as a watch dependency —
+ * .gitignore keeps server/cache out of the SCAN but not out of the WATCH. The
+ * collector rewrites files there dozens of times a minute, so `next dev`
+ * rebuilt this stylesheet 30–90 times a minute with nothing edited, and every
+ * rebuild pushed an update into the open page. One of those landing mid
+ * compile failed its refresh and Next fell back to a full reload — taking a
+ * two-to-four-minute report generation's working state with it, so the panel
+ * went back to the old report with Generate lit ("it didnt work when i
+ * selected NQ and Asia"). The path is relative to this file: src/. Every class
+ * this app uses is written under it.
+ */
 
 /*
  * NewsTerminal design tokens.

@@ -22,3 +22,5 @@ server/cache/
 
 # Editor/tool droppings
 *.tmp
+# dev.ps1 -Restart drops this beside server\run.ps1 for one restart in place.
+server/.restart

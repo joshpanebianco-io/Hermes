@@ -1,7 +1,9 @@
 # Start HERMESX — every half somewhere of its own, then the terminal on screen.
 #
-#   .\dev.ps1                 everything, skipping whatever is already up
-#   .\dev.ps1 -Tabs           one Windows Terminal window, a tab per service
+#   .\dev.ps1                 everything, skipping whatever is already up — as
+#                             tabs in one Windows Terminal window, "hermesx"
+#   .\dev.ps1 -Restart        the collector again, in the tab it already has
+#   .\dev.ps1 -Windows        a window per service instead of tabs
 #   .\dev.ps1 -Force          start anyway (will fail on a port clash)
 #   .\dev.ps1 -CollectorOnly  just the feeds — no Next.js, no browser
 #   .\dev.ps1 -NoBrowser      start everything, but leave the browser alone
@@ -15,11 +17,13 @@
 #
 # A PLACE EACH, because they are different things to watch. The COLLECTOR is the
 # live source feed: one row per source per refresh, with item counts and the age
-# of the bytes. The WEB one is just Next.js. Whether those places are separate
-# windows or tabs in one window is the only thing -Tabs decides — the desktop
-# shortcut passes it, since three windows fanned across the desktop is the cost
-# of a double-click, while typing `.\dev.ps1` in a terminal you already have
-# open is not the same situation.
+# of the bytes. The WEB one is just Next.js. TABS IN ONE WINDOW BY DEFAULT
+# (owner, 2026-10-14: "make sure all the seperate terminal windows are in one
+# terminal window but with mutliple tabs"). It used to be the desktop
+# shortcut's -Tabs only, on the theory that a hand-typed `.\dev.ps1` sat in a
+# terminal with its own arrangement — but every restart then fanned another
+# window across the desktop. -Tabs is still accepted, and changes nothing;
+# -Windows is the old behaviour.
 #
 # IDEMPOTENT ON PURPOSE. Running this twice is the normal case — you come back
 # to the project and do not remember which halves survived, and starting a
@@ -45,6 +49,8 @@
 param(
     [switch]$Force,
     [switch]$Tabs,
+    [switch]$Windows,
+    [switch]$Restart,
     [switch]$CollectorOnly,
     [switch]$NoBrowser,
     [switch]$NoGexygen,
@@ -74,13 +80,13 @@ function Test-Port([int]$Port) {
     $null -ne (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
-# -Tabs needs Windows Terminal, which ships with Windows 11 but is not
+# Tabs need Windows Terminal, which ships with Windows 11 but is not
 # guaranteed — a machine without it gets told once and gets a window per service,
 # because a launcher that refuses to launch over its own cosmetics is worse than
 # one that looks untidy.
 $WT_WINDOW = "hermesx"
 $useTabs = $false
-if ($Tabs) {
+if (-not $Windows) {
     if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
         $useTabs = $true
     } else {
@@ -174,6 +180,47 @@ function Get-Setting([string]$Key, [string]$Default) {
         }
     }
     return $Default
+}
+
+# -RESTART: the collector again, IN THE TAB IT ALREADY HAS — how new Python
+# code, or an edit to .env.local, goes live. It drops server\.restart and stops
+# the uvicorn process; server\run.ps1 finds the marker when uvicorn returns,
+# rereads .env.local and starts again in place (see there). Never a bare
+# uvicorn: run.ps1 is what loads the OpenRouter key. The new process is told
+# apart from the old by the PID that owns the port, so a slow shutdown cannot
+# pass for a restart. A collector whose run.ps1 predates the loop just stops —
+# that one gets a fresh tab, and its old window is left to close by hand.
+function Get-PortPid([int]$Port) {
+    $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { $c.OwningProcess } else { $null }
+}
+if ($Restart) {
+    $old = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+        Where-Object { $_.CommandLine -match 'newsterminal\.api:app' } | ForEach-Object { $_.ProcessId })
+    if ($old.Count) {
+        $flag = Join-Path $here "server\.restart"
+        Set-Content -Path $flag -Value (Get-Date -Format o)
+        foreach ($id in $old) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+        Write-Host "Collector -> restarting in its $place" -ForegroundColor Green
+        $back = $false
+        for ($i = 0; $i -lt 80; $i++) {
+            $owner = Get-PortPid 8100
+            if ($owner -and $owner -notin $old) { $back = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        if ($back) {
+            Write-Host "Collector -> back on 8100, .env.local reread" -ForegroundColor Green
+            return
+        }
+        Remove-Item $flag -Force -ErrorAction SilentlyContinue
+        Write-Host "  (it did not come back in place - starting a fresh one; close the old $place)" -ForegroundColor Yellow
+    }
+    Start-InWindow @("-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $here 'server\run.ps1')`"") `
+        -Title "HERMESX collector" -WorkDir (Join-Path $here "server")
+    for ($i = 0; $i -lt 60 -and -not (Test-Port 8100); $i++) { Start-Sleep -Milliseconds 500 }
+    if (Test-Port 8100) { Write-Host "Collector -> http://127.0.0.1:8100" -ForegroundColor Green }
+    else { Write-Host "  (still binding - check the collector $place)" -ForegroundColor Yellow }
+    return
 }
 
 $collectorUp = Test-Port 8100

@@ -70,7 +70,7 @@ OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 # Free on OpenRouter and one of only a handful of free models that support
 # `structured_outputs`, which the schema below depends on. Overridable because
 # the free roster changes month to month.
-DEFAULT_MODEL = os.environ.get("NT_REPORT_MODEL", "z-ai/glm-5.2:free")
+DEFAULT_MODEL = os.environ.get("NT_REPORT_MODEL", "nvidia/nemotron-3.5-super-vl:free")
 
 # ---------------------------------------------------------------------------
 # THE FALLBACK CHAIN, AND WHY A SINGLE FREE MODEL ID IS NOT ENOUGH.
@@ -89,10 +89,34 @@ DEFAULT_MODEL = os.environ.get("NT_REPORT_MODEL", "z-ai/glm-5.2:free")
 # Every entry supports `structured_outputs`, which is not optional here: the
 # schema is what makes the model commit to a direction instead of hedging, and
 # a model without it would return prose the panel cannot render.
+#
+# THE ROSTER ROTS (2026-10-21): `z-ai/glm-5.2:free` was delisted outright, and
+# `nvidia/nemotron-3-super-120b-a12b:free` is still listed but every request
+# comes back 404 "Function ... not found" from Nvidia in under a second — the
+# deployment behind it is gone, not wobbling. A dead entry costs four of the
+# ten attempts (two modes, two tries each), so dead ids are removed, not kept
+# for luck. When a report starts failing, re-run `tools/budget_probe.py` against
+# each entry before touching anything else.
 FALLBACK_MODELS = [
-    "nvidia/nemotron-3-super-120b-a12b:free",
     "dots-studio/dots-3-note-preview:free",
+    "xingchen-agi/xing4.0-29b-a4b:free",
 ]
+
+# HOW MUCH THE MODEL MAY THINK — A TOKEN CAP, NOT AN EFFORT LEVEL.
+#
+# `{"effort": "low"}` was the hint here, and Nvidia's free endpoint ignores it:
+# handed the London digest, nemotron-3.5-super-vl deliberated through all
+# 16,000 completion tokens and never reached the JSON (2026-10-21: one attempt,
+# 230s, finish_reason=length, 37k chars of thinking). `max_tokens` on the
+# reasoning block is what that provider honours, and OpenRouter maps it to an
+# effort level for providers that only take one of those. Measured on the same
+# digest, same model, strict schema: capped at 3,000 -> 98s, 2,999 reasoning
+# tokens, a valid brief; reasoning off -> 43s, a valid brief. The cap keeps the
+# short think the note was written to have, at a cost near the 90s
+# _ATTEMPT_RESERVE, with room for a second attempt inside BUDGET_SEC. Shared
+# with the game plan (stockplan.py); the chat has its own, smaller, in
+# src/lib/ask/llm.ts.
+REASONING: dict[str, Any] = {"max_tokens": 3000}
 
 # Statuses worth trying again for. A 401 is the key and no other model will fix
 # it; a 400 outside strict-schema mode is our request and moving on would hide
@@ -2629,8 +2653,9 @@ def generate(
             "max_tokens": 16000,
             # Ask for a short think rather than none: these models reason by
             # default and excluding it outright degrades the answer, but the
-            # note does not need three thousand tokens of deliberation.
-            "reasoning": {"effort": "low"},
+            # note does not need three thousand tokens of deliberation. Capped
+            # in tokens, because an effort hint is ignored — see REASONING.
+            "reasoning": REASONING,
         }
         if mode == "schema":
             payload["response_format"] = {

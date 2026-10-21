@@ -416,7 +416,7 @@ export function NoKey({ model, what = "report" }: { model?: string; what?: strin
         </li>
       </ol>
       <p className="text-ink-3">
-        Model: <span className="fig">{model ?? "z-ai/glm-5.2:free"}</span> — free tier, no card.
+        Model: <span className="fig">{model ?? "nvidia/nemotron-3.5-super-vl:free"}</span> — free tier, no card.
         Override with <code>NT_REPORT_MODEL</code>. The free tier allows 50 requests a day, or
         1000 once $10 of credit has ever been bought.
       </p>

@@ -26,7 +26,7 @@ if os.path.exists(ENV):
                 os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
 KEY = os.environ.get("OPENROUTER_API_KEY", "")
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "nvidia/nemotron-3-super-120b-a12b:free"
+MODEL = sys.argv[1] if len(sys.argv) > 1 else "nvidia/nemotron-3.5-super-vl:free"
 
 
 def try_budget(n: int, reasoning: dict | None) -> str:

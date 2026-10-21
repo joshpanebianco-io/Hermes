@@ -23,8 +23,8 @@
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 /** The report's default and fallbacks (report.py DEFAULT_MODEL / FALLBACK_MODELS). */
-const DEFAULT_MODEL = "z-ai/glm-5.2:free";
-const FALLBACK_MODELS = ["nvidia/nemotron-3-super-120b-a12b:free", "dots-studio/dots-3-note-preview:free"];
+const DEFAULT_MODEL = "nvidia/nemotron-3.5-super-vl:free";
+const FALLBACK_MODELS = ["dots-studio/dots-3-note-preview:free", "xingchen-agi/xing4.0-29b-a4b:free"];
 /** Silence before the first token — the model never started; try the next one. */
 const FIRST_TOKEN_MS = 45_000;
 /** Silence mid-answer — the model stalled; the answer ends where it stopped. */
@@ -33,6 +33,15 @@ const IDLE_MS = 30_000;
 const BUDGET_MS = 120_000;
 /** Plenty for an explanation, and a cap on a model that will not stop. */
 const MAX_TOKENS = 2_500;
+/**
+ * How much the model may think before it speaks, as a token cap. Nvidia's free
+ * endpoint ignores `effort` (see report.py REASONING): left to itself the model
+ * thinks for thousands of tokens, and thinking streams as `reasoning` deltas,
+ * not `content` — silence to the first-token timer above, which would move the
+ * turn on to the next model. Small on purpose: roughly twenty seconds at the
+ * ~55 tokens/s the report measured.
+ */
+const REASONING_TOKENS = 1_024;
 
 export type ChatMsg = { role: "system" | "user" | "assistant"; content: string };
 
@@ -133,7 +142,7 @@ export async function* streamChat(messages: ChatMsg[], signal?: AbortSignal): As
           stream: true,
           temperature: 0.3,
           max_tokens: MAX_TOKENS,
-          reasoning: { effort: "low" },
+          reasoning: { max_tokens: REASONING_TOKENS },
         }),
         signal: ctrl.signal,
         cache: "no-store",

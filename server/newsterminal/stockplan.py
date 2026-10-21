@@ -1504,7 +1504,10 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             # tokens and fit, the next ran past 16k twice and answered with no
             # JSON at all (finish_reason=length). The free model allows ~236k.
             "max_tokens": 32000,
-            "reasoning": {"effort": "low"},
+            # Capped in tokens, not an effort hint: see report.REASONING. One
+            # plan with the hint alone took 158s (2026-10-21) — over the 120s
+            # after which no second attempt can start.
+            "reasoning": rp.REASONING,
             "response_format": (
                 {"type": "json_schema",
                  "json_schema": {"name": "game_plan", "strict": True, "schema": sch}}

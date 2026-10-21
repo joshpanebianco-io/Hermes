@@ -99,6 +99,9 @@ P_EARN_AMC = -5
 P_FAILED = -15
 
 # ---- the regime's thresholds --------------------------------------------------
+# MIRRORED IN src/lib/vix.ts — the VIX card's click-through draws the same four
+# bands from its own copy of these three numbers. Change both or the card's
+# band word and its table disagree.
 VIX_GRIND = 13.0
 VIX_NORMAL = 20.0
 VIX_STRESSED = 28.0

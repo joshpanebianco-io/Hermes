@@ -13,6 +13,8 @@ import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
+import { BAND_LABEL } from "@/lib/vix";
+import { VixPopover } from "@/components/vol/VixBands";
 import { nextEvent } from "@/lib/events";
 import { groupReleases } from "@/lib/releases";
 import type { CalendarRow } from "@/types/terminal";
@@ -75,13 +77,6 @@ const SESSION_LABEL: Record<ScannerPayload["session"], string> = {
   rth: "Regular session",
   post: "Post-market",
   closed: "Market closed — levels for the next session",
-};
-
-const BAND_LABEL: Record<NonNullable<Regime["band"]>, string> = {
-  grind: "Grind",
-  normal: "Normal",
-  elevated: "Elevated",
-  stressed: "Stressed",
 };
 
 const CONFIRM_LABEL: Record<NonNullable<Regime["confirm"]>, string> = {
@@ -471,21 +466,31 @@ function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRo
   return (
     <div className="shrink-0 border-b border-ring">
       <div className="grid grid-cols-2 divide-ring md:grid-cols-5 md:divide-x">
-        <Cell label="VIX" title="Implied 30-day S&P 500 volatility. The weather, not a signal: it sets how far things travel and how hard to press.">
-          <div className="flex items-baseline gap-2">
-            <Tick value={num(v.last, 2)} className="fig text-[19px] leading-none text-ink" />
-            <Tick value={pct(v.pct)} className={cn("fig text-[11.5px]", dir(v.pct))} />
-            {regime.band && <span className={cn("qt-cap text-[10.5px]", bandHue)}>{BAND_LABEL[regime.band]}</span>}
-          </div>
-          <p className="mt-1.5 text-[11px] text-ink-3">
-            VIX/VIX3M <span className="fig text-ink-2">{v.ratio != null ? v.ratio.toFixed(2) : "—"}</span>{" "}
-            <span className={shapeHue}>{v.shape}</span>
-            {v.vvix != null && (
-              <>
-                {" "}· VVIX <span className="fig text-ink-2">{num(v.vvix, 1)}</span>
-              </>
-            )}
-          </p>
+        <Cell
+          label="VIX"
+          title={
+            "Implied 30-day S&P 500 volatility. The weather, not a signal: it sets how far things travel and how hard to press.\nClick for the bands and what each means."
+          }
+        >
+          {/* THE FIGURE IS THE BUTTON (owner, 2026-10-21): the card opens the
+              four bands with this row marked. Spans inside, because it is a
+              <button> now — see components/vol/VixBands. */}
+          <VixPopover facts={{ ...v, band: regime.band }} className="-mx-1.5 -my-1 block w-[calc(100%+12px)] px-1.5 py-1">
+            <span className="flex items-baseline gap-2">
+              <Tick value={num(v.last, 2)} className="fig text-[19px] leading-none text-ink" />
+              <Tick value={pct(v.pct)} className={cn("fig text-[11.5px]", dir(v.pct))} />
+              {regime.band && <span className={cn("qt-cap text-[10.5px]", bandHue)}>{BAND_LABEL[regime.band]}</span>}
+            </span>
+            <span className="mt-1.5 block text-[11px] text-ink-3">
+              VIX/VIX3M <span className="fig text-ink-2">{v.ratio != null ? v.ratio.toFixed(2) : "—"}</span>{" "}
+              <span className={shapeHue}>{v.shape}</span>
+              {v.vvix != null && (
+                <>
+                  {" "}· VVIX <span className="fig text-ink-2">{num(v.vvix, 1)}</span>
+                </>
+              )}
+            </span>
+          </VixPopover>
         </Cell>
         <Cell label="Implied SPY day" title="VIX ÷ √252 — the one-day, one-standard-deviation move the options market prices for SPY">
           <span className="fig text-[19px] leading-none text-ink">

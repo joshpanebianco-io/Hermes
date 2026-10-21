@@ -15,6 +15,7 @@ import { bp, compact, dir, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { NoteAge } from "@/components/ui/NoteAge";
+import { VixPopover } from "@/components/vol/VixBands";
 import { PrintSubs, printReleases } from "@/components/market/shared";
 import { groupReleases } from "@/lib/releases";
 
@@ -374,12 +375,20 @@ function PlanView({ p }: { p: Plan }) {
 function Regime({ r }: { r: PlanRegime }) {
   return (
     <div className="mt-6 grid grid-cols-2 border-y border-ring md:grid-cols-4 md:divide-x md:divide-ring">
-      <Cell label="VIX">
-        <span className="fig text-[17px] text-ink">{num(r.vix, 2)}</span>{" "}
-        <span className={cn("fig text-[11.5px]", dir(r.vix_pct))}>{pct(r.vix_pct)}</span>
-        <p className="mt-1 text-[11.5px] text-ink-3">
-          {[r.band, r.shape].filter(Boolean).join(" · ") || "—"}
-        </p>
+      <Cell label="VIX" title="The VIX the plan was written from. Click for the bands and what each means.">
+        {/* The same click-through as the Scanner's card, on the figure the
+            plan was written from — so the band it names is explained where
+            it is read. */}
+        <VixPopover
+          facts={{ last: r.vix, pct: r.vix_pct, ratio: null, shape: r.shape, vvix: null, band: r.band }}
+          className="-mx-1.5 -my-1 block w-[calc(100%+12px)] px-1.5 py-1"
+        >
+          <span className="fig text-[17px] text-ink">{num(r.vix, 2)}</span>{" "}
+          <span className={cn("fig text-[11.5px]", dir(r.vix_pct))}>{pct(r.vix_pct)}</span>
+          <span className="mt-1 block text-[11.5px] text-ink-3">
+            {[r.band, r.shape].filter(Boolean).join(" · ") || "—"}
+          </span>
+        </VixPopover>
       </Cell>
       <Cell label="Implied SPY day">
         <span className="fig text-[17px] text-ink">{r.spy_em_pct != null ? `±${r.spy_em_pct.toFixed(2)}%` : "—"}</span>

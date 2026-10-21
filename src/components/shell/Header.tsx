@@ -9,6 +9,8 @@ import { DESKS, tabsFor, type Desk, type Tab } from "@/lib/tabs";
 import { segItem } from "@/lib/seg";
 import { useNow } from "@/lib/useNow";
 import { localClock, readerClock } from "@/lib/clock";
+import { curveShape } from "@/lib/vix";
+import { VixPopover, type VixFacts } from "@/components/vol/VixBands";
 
 /**
  * The header rail — identity on the left, state on the right.
@@ -83,6 +85,20 @@ export function Header({
     .filter((q): q is Quote => Boolean(q));
   const ny = desk === "stocks" ? nyClock(clock) : null;
   const tabs = tabsFor(desk);
+  /*
+   * THE VIX FIGURE OPENS THE BANDS, ON BOTH DESKS (owner, 2026-10-21: "include
+   * the header vix too"). The header has quotes, not the scanner's regime, so
+   * the curve is read here from the VIX3M print on the same feed, with
+   * volterm's own flat band — and the band off the level, with lib/vix's copy
+   * of scanscore's rule. Same answer, same thresholds, no second opinion.
+   */
+  const vix3m = quotes.find((q) => q.key === "VIX3M")?.last ?? null;
+  const vvix = quotes.find((q) => q.key === "VVIX")?.last ?? null;
+  const vixFacts = (q: Quote): VixFacts => {
+    const ratio = vix3m && vix3m > 0 ? q.last / vix3m : null;
+    return { last: q.last, pct: q.pct, ratio, shape: curveShape(ratio), vvix };
+  };
+  const vixTitle = (note: string | null) => [note, "Click for what the level means"].filter(Boolean).join("\n");
 
   return (
     <header className="flex flex-col gap-0 border-b border-ring">
@@ -184,8 +200,9 @@ export function Header({
             {strip.map((q) => {
               const chg = quoteChg(q);
               const note = feedNote(q);
-              return (
-                <div key={q.key} className="flex h-[36px] shrink-0 flex-col justify-center gap-1" title={note ?? undefined}>
+              const tile = "flex h-[36px] shrink-0 flex-col justify-center gap-1";
+              const figure = (
+                <>
                   {/* How late a delayed print is rides under its own label —
                       ES and NQ trail CME by ten minutes on this feed; a closed
                       market's figure dims (see Board's Row). */}
@@ -195,13 +212,22 @@ export function Header({
                       <span className="text-ink-4"> · {Math.round(q.lag_min)}m</span>
                     )}
                   </span>
-                  <div className="flex items-baseline gap-1.5">
+                  <span className="flex items-baseline gap-1.5">
                     <Tick
                       value={num(q.last)}
                       className={cn("fig text-[14.5px] leading-none", stripInk(q))}
                     />
                     <Tick value={chg.text} className={cn("fig text-[11px] leading-none", dir(chg.v))} />
-                  </div>
+                  </span>
+                </>
+              );
+              return q.key === "VIX" ? (
+                <VixPopover key={q.key} facts={vixFacts(q)} title={vixTitle(note)} className={cn(tile, "-mx-1.5 px-1.5")}>
+                  {figure}
+                </VixPopover>
+              ) : (
+                <div key={q.key} className={tile} title={note ?? undefined}>
+                  {figure}
                 </div>
               );
             })}
@@ -271,11 +297,20 @@ export function Header({
           )}
           {strip.map((q) => {
             const chg = quoteChg(q);
-            return (
-              <div key={q.key} className="flex items-baseline gap-1.5" title={feedNote(q) ?? undefined}>
+            const figure = (
+              <>
                 <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{q.key}</span>
                 <Tick value={num(q.last)} className={cn("fig text-[11.5px]", stripInk(q))} />
                 <Tick value={chg.text} className={cn("fig text-[10px]", dir(chg.v))} />
+              </>
+            );
+            return q.key === "VIX" ? (
+              <VixPopover key={q.key} facts={vixFacts(q)} title={vixTitle(feedNote(q))} className="-mx-1 flex items-baseline gap-1.5 px-1">
+                {figure}
+              </VixPopover>
+            ) : (
+              <div key={q.key} className="flex items-baseline gap-1.5" title={feedNote(q) ?? undefined}>
+                {figure}
               </div>
             );
           })}

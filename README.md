@@ -1,6 +1,6 @@
 <div align="center">
   <h1>
-    <img src="docs/media/hermesx-mark.png" alt="" height="76" align="center" />
+    <img src="docs/media/hermesx-icon.png" alt="" height="76" align="center" />
     &nbsp;HermesX
   </h1>
 

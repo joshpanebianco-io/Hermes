@@ -8,6 +8,7 @@ import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { ProfilePopover } from "@/components/vol/ProfileRead";
 
 /**
  * Volume profile levels — where the volume traded, beside where the dealers
@@ -109,6 +110,19 @@ export function VolumeProfile({
               <Row key={r.key} r={r} last={active.last ?? null} />
             ))}
           </ul>
+          {/* THE READ, in the collector's words (profile.reads): where the
+              session opened against prior value and where price trades now.
+              It used to reach the brief and never the panel. The sentence is
+              the trigger for the rules it is read by (ProfileRead). */}
+          {active.reads?.text && (
+            <ProfilePopover
+              asset={active}
+              book={assets[sel] ? sel : keys[0]}
+              className="block w-full border-t border-ring/40 px-3 py-1.5 text-left"
+            >
+              <span className="block text-[10.5px] leading-[1.45] text-ink-2">{active.reads.text}</span>
+            </ProfilePopover>
+          )}
         </div>
       )}
     </Module>

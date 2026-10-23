@@ -43,10 +43,20 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import marketctx, optcalc
+from . import frame, marketctx, optcalc
 from . import report as rp
 from .config import CACHE_DIR
 from .holidays import close_time, next_trading_day
+from .sources.shortint import SQUEEZE_PCT
+from .targets import (  # noqa: F401 — re-exported for the tests
+    MIN_REACH_BARS,
+    MIN_REACH_DAY,
+    entry_of,
+    forming_levels,
+    min_reach,
+    sign_of,
+    target_candidates,
+)
 
 ET = ZoneInfo("America/New_York")
 
@@ -120,7 +130,39 @@ def _options(row: dict[str, Any]) -> dict[str, Any] | None:
 
     lg, sp = pick("long"), pick("spread")
     front = em.get("front") or {}
+    structure = o.get("structure") if isinstance(o.get("structure"), dict) else None
+    earn = o.get("earnings_move") if isinstance(o.get("earnings_move"), dict) else None
+    implied = earn.get("implied") if earn and isinstance(earn.get("implied"), dict) else None
+
+    def r_of(c: dict[str, Any] | None) -> dict[str, Any] | None:
+        """A contract's value at the first target and its R, when priced."""
+        if c is None or c.get("r_multiple") is None:
+            return None
+        return {"target": _r(c.get("target_price")), "target_label": c.get("target_label"),
+                "value_at_target": _r(c.get("target_mid")),
+                "reward_per_contract": _r(c.get("reward_per_contract"), 0),
+                "risk_per_contract": _r(c.get("risk_per_contract"), 0),
+                "r": _r(c.get("r_multiple"))}
+
     return {
+        # Long or spread by R at the first target when both are priced, else
+        # by premium (optcalc.structure_pick) — the plan says which and why.
+        "structure": None if structure is None else {
+            "kind": structure.get("kind"), "by": structure.get("by"),
+            "long_r": _r(structure.get("long_r")), "spread_r": _r(structure.get("spread_r"))},
+        # The chain's own term structure, front to back: at-the-money IV per expiry.
+        "term": [{"expiry": t.get("expiry"), "dte": _int(t.get("dte")), "iv": _r(t.get("iv"), 1)}
+                 for t in o.get("term") or [] if isinstance(t, dict)][:4],
+        # The earnings number: the move priced for the report against the
+        # last few realised, when there is a report ahead or a history.
+        "earnings_move": None if earn is None else {
+            "implied_pct": _r(implied.get("pct"), 1) if implied else None,
+            "implied_expiry": implied.get("expiry") if implied else None,
+            "event_pct": _r(implied.get("clean_pct"), 1) if implied else None,
+            "realised_pct": [_r(m.get("pct"), 1) for m in earn.get("realised") or []
+                             if isinstance(m, dict)],
+            "avg_abs_pct": _r(earn.get("avg_abs"), 1),
+        },
         "iv30": _r(o.get("iv30"), 1),
         "iv_rv": _r(o.get("iv_rv")),
         "premium": o.get("premium") if isinstance(o.get("premium"), str) else None,
@@ -137,10 +179,12 @@ def _options(row: dict[str, Any]) -> dict[str, Any] | None:
         "long": None if lg is None else {
             "expiry": lg.get("expiry"), "strike": _r(lg.get("strike")), "right": lg.get("right"),
             "mid": _r(lg.get("mid")), "delta": _r(lg.get("delta")),
+            "at_target": r_of(lg),
         },
         "spread": None if sp is None else {
             "expiry": sp.get("expiry"), "strike": _r(sp.get("strike")),
             "short_strike": _r(sp.get("short_strike")), "mid": _r(sp.get("mid")),
+            "at_target": r_of(sp),
         },
     }
 
@@ -362,11 +406,42 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
         "sector": _sector(row, sectors or {}),
         "macro": macro_for(sym, row.get("sector") if isinstance(row.get("sector"), str) else None,
                            moves or {}),
+        # The daily frame against the live print (frame.read) and the short
+        # interest (sources/shortint) — both the engine's reads, cited as such.
+        "daily": _daily(row),
+        "short_interest": _short(row),
     }
-    n["targets"] = target_candidates(n)
+    # The row's own targets where the scanner computed them (optcalc, from the
+    # same entry the contract is priced from); the rule on the facts otherwise.
+    got = row.get("targets")
+    mine = ([t for t in got if isinstance(t, dict) and isinstance(t.get("price"), (int, float))]
+            if isinstance(got, list) else [])
+    n["targets"] = mine or target_candidates(n)
     n["invalid_if"] = invalid_if(n)
     n["open_if"] = open_if(n) if session in OPEN_SESSIONS else None
     return n
+
+
+def _daily(row: dict[str, Any]) -> dict[str, Any] | None:
+    """The name's daily frame as the plan cites it: the trend word, the
+    averages it is above or below, the distance from the 52-week high."""
+    fr = row.get("frame_read")
+    if not isinstance(fr, dict) or not fr.get("text"):
+        return None
+    side = (row.get("score") or {}).get("side") or (row.get("setup") or {}).get("side")
+    return {"trend": fr.get("trend"), "text": fr.get("text"),
+            "with_side": frame.with_side(fr, side)}
+
+
+def _short(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Short interest, cut to what a plan cites."""
+    sh = row.get("short")
+    if not isinstance(sh, dict) or sh.get("pct_float") is None:
+        return None
+    return {"pct_float": _r(sh.get("pct_float"), 1),
+            "days_to_cover": _r(sh.get("days_to_cover"), 1),
+            "as_of": sh.get("as_of"),
+            "squeeze_risk": bool(float(sh["pct_float"]) >= SQUEEZE_PCT)}
 
 
 def _sector(row: dict[str, Any], sectors: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -411,19 +486,10 @@ def pick_names(rows: list[dict[str, Any]], top: int) -> list[dict[str, Any]]:
 #: the pre-market, and the overnight / weekend "closed" before it.
 OPEN_SESSIONS = ("pre", "closed")
 
-#: A first target must sit at least this many ten-minute ATRs past the entry.
-#: The Pine's stop is beyond the signal bar, about one ten-minute ATR from the
-#: level, so 1.5 is a first target worth a stop and a half before the option's
-#: spread is paid. Worked, from 2026-10-14's 05:18 facts: DELL short at PML
-#: 552.66 with a 3.38 ten-minute ATR needs a target at or below 547.59 — PDL
-#: 548.4 is 4.26 away, 1.26 ATRs, and is not one; GME long at PDH 27.53 with a
-#: 0.12 ATR needs 27.71 or higher.
-MIN_REACH_BARS = 1.5
-#: The same floor from the daily ATR when the ten-minute one is missing — a
-#: ten-minute ATR runs about a tenth of the daily on these names (GME 0.12 of
-#: 0.99, NVDA 0.46 of 5.4), so 1.5 bar-ATRs is about 0.15 of a day.
-MIN_REACH_DAY = 0.15
-
+# THE TARGET RULE IS targets.py'S NOW (2026-10-22): the options card prices
+# each contract at the first target, so the plan and the card share one
+# function. MIN_REACH_BARS / MIN_REACH_DAY, min_reach and target_candidates
+# are imported above and re-exported here for the tests that pin them.
 _LEVEL_WORD = {"PMH": "pre-market high", "PML": "pre-market low",
                "PDH": "previous day's high", "PDL": "previous day's low"}
 
@@ -433,75 +499,9 @@ def _px(v: float) -> str:
     return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
-def min_reach(n: dict[str, Any]) -> float | None:
-    """How far past the entry a first target must sit, in price. Pure."""
-    b, d = n.get("atr_b"), n.get("atr_d")
-    if isinstance(b, (int, float)) and b > 0:
-        return MIN_REACH_BARS * float(b)
-    if isinstance(d, (int, float)) and d > 0:
-        return MIN_REACH_DAY * float(d)
-    return None
-
-
-def _sign(n: dict[str, Any]) -> int:
-    return 1 if n.get("side") == "long" else -1 if n.get("side") == "short" else 0
-
-
-def _entry(n: dict[str, Any]) -> float | None:
-    e = n.get("entry")
-    p = e.get("price") if isinstance(e, dict) else None
-    return float(p) if isinstance(p, (int, float)) else None
-
-
-def _forming(n: dict[str, Any]) -> list[float]:
-    """The pre-market high and low while they are still forming. Pure."""
-    if not n.get("pm_forming"):
-        return []
-    lv = n.get("levels") or {}
-    return [float(v) for k in ("pmh", "pml") if isinstance(v := lv.get(k), (int, float))]
-
-
-def target_candidates(n: dict[str, Any], keep: int = 3) -> list[dict[str, Any]]:
-    """The first targets a plan may take, nearest first. Pure.
-
-    Only levels that are final — PDH, PDL, the previous close, and PMH / PML
-    once they lock — then today's expected move (the same-day straddle's
-    bounds) and a day's average range from the previous close. Each must sit
-    past the entry by `min_reach` and past the last price: a target the stock
-    has already traded through is not one.
-    """
-    sign, e = _sign(n), _entry(n)
-    if not sign or e is None:
-        return []
-    lv = n.get("levels") or {}
-    pool: list[tuple[str, Any]] = [("PDH", lv.get("pdh")), ("PDL", lv.get("pdl")),
-                                   ("previous close", lv.get("pdc"))]
-    if not n.get("pm_forming"):
-        pool += [("PMH", lv.get("pmh")), ("PML", lv.get("pml"))]
-    o = n.get("options") or {}
-    if o.get("em_front_dte") == 0:
-        pool.append(("today's expected-move " + ("high" if sign > 0 else "low"),
-                     o.get("em_front_hi") if sign > 0 else o.get("em_front_lo")))
-    pdc, atr = lv.get("pdc"), n.get("atr_d")
-    if isinstance(pdc, (int, float)) and isinstance(atr, (int, float)) and atr > 0:
-        pool.append(("a day's average range from the close", round(pdc + sign * atr, 2)))
-    reach = min_reach(n) or 0.0
-    last = n.get("last")
-    ref = e if not isinstance(last, (int, float)) else (max(e, last) if sign > 0 else min(e, last))
-    out: list[dict[str, Any]] = []
-    for label, v in pool:
-        if not isinstance(v, (int, float)):
-            continue
-        p = float(v)
-        if sign * (p - e) < reach - 1e-9 or sign * (p - ref) <= 0:
-            continue
-        # A second candidate inside half a reach of one already kept says the
-        # same thing twice (SPY's expected-move high 783.85, its ATR 783.87).
-        if any(abs(c["price"] - p) < max(0.005, 0.5 * reach) for c in out):
-            continue
-        out.append({"label": label, "price": round(p, 2)})
-    out.sort(key=lambda c: sign * (c["price"] - e))
-    return out[:keep]
+_sign = sign_of
+_entry = entry_of
+_forming = forming_levels
 
 
 def invalid_if(n: dict[str, Any]) -> str | None:
@@ -808,6 +808,8 @@ def build_facts(
             "vix": _r(vix.get("last")),
             "vix_pct": _r(vix.get("pct")),
             "band": regime.get("band"),
+            # The sub-line inside the band (scanscore.vix_sub): words, never score.
+            "sub": regime.get("sub"),
             "shape": vix.get("shape"),
             "bias": regime.get("bias"),
             "confirm": regime.get("confirm"),
@@ -854,9 +856,13 @@ STRATEGY = (
     + optcalc.expiry_rule()["text"] + " The contract in each name's `options` is that pick. "
     "A long call/put near 0.60 delta when premium "
     "is cheap or fair; a debit spread (buy ~0.60 delta, sell ~0.30 delta) when premium is rich "
-    "(iv_rv above 1.25). An expected move (em_*_pct) smaller than the distance to the target "
+    "(iv_rv above 1.25) — unless each contract's R at the first target (`at_target.r`: reward "
+    "over risk per contract, both from the entry to the stop and to the target) says otherwise: "
+    "`options.structure` is the engine's pick, by R when both are priced, and the plan uses it. "
+    "An expected move (em_*_pct) smaller than the distance to the target "
     "argues for the spread or for no trade. An earnings date inside the expiry (earnings_in) "
-    "means IV will collapse after the report — say so."
+    "means IV will collapse after the report — say so, and quote `earnings_move`: the move the "
+    "chain prices for the report against the name's last realised ones."
 )
 
 
@@ -891,7 +897,10 @@ levels, its earnings date, its options context (implied vs realised volatility, 
 verdict, the expected move from the at-the-money straddle, liquidity, a suggested long contract \
 and debit spread), today's options flow (`flow`: put/call volume, which way it leans, the \
 busiest strike), its pre-market volume against its 20-day average (`premkt`), big caps in its \
-sector reporting this week (`peers`), its sector SPDR against SPY (`sector`), the macro drivers \
+sector reporting this week (`peers`), its sector SPDR against SPY (`sector`), its daily frame \
+(`daily`: the trend on the daily chart, whether the setup is with it or against it, the \
+distance from the 52-week high), its short interest (`short_interest`: the share of the float \
+sold short and whether that is squeeze risk for a short), the macro drivers \
 it answers to with today's move and whether that is a headwind or a tailwind FOR THE STOCK \
 (`macro` — computed for you; for a short, a headwind helps), up to five of its own headlines \
 tagged rating / earnings / filing / news, and its recent SEC filings. `macro` at the top level is \
@@ -931,10 +940,16 @@ name, say that.
 - `why` is four to six short lines, each starting with its layer. EVERY plan carries \
 "Structure:", "RS:", "Macro:" and "News:", and adds "Tape:", "Options:" or "Catalyst:" where \
 they matter.
-- "Options:" gives the premium verdict and how that shapes the contract, and — when the name \
+- "Options:" gives the premium verdict and how that shapes the contract — and the engine's \
+structure pick with each contract's R at the first target where `at_target` is printed ("the \
+long makes 1.4 R to PDH 240.62, the spread 0.8, so the long") — and, when the name \
 has a `flow` — reads the flow in the same line: its put/call volume or its busiest strike, as \
 printed, and whether it backs the side (e.g. "Options: premium rich, so a debit spread; calls \
-lead at put/call 0.37, which backs the long"). Leave the flow out when the name has none.
+lead at put/call 0.37, which backs the long"). Leave the flow out when the name has none. A \
+name with `earnings_move` says the move priced for the report against its realised ones.
+- "Structure:" also says the daily frame (`daily.text`) and whether the setup is with the \
+daily trend or against it; a setup against it is a reason for lower conviction, said so. A \
+short on a name whose `short_interest.squeeze_risk` is true names the squeeze risk.
 - "Macro:" ties the name to today's macro: its sector against SPY (as printed — an index ETF \
 has no `sector`, so leave the sector out rather than calling it null) and the drivers \
 in its `macro` list — name the driver, its move as printed, and the verdict (headwind / \

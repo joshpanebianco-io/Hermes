@@ -23,6 +23,7 @@ import { Volatility } from "@/components/panels/Volatility";
 import { VolumeProfile } from "@/components/panels/VolumeProfile";
 import { Fed } from "@/components/panels/Fed";
 import { AlertStrip } from "@/components/shell/AlertStrip";
+import { DriverStrip } from "@/components/shell/DriverStrip";
 import { ScanAlerts } from "@/components/shell/ScanAlerts";
 import { AskPanel } from "@/components/ask/AskPanel";
 import { openAsk } from "@/lib/ask/open";
@@ -323,6 +324,8 @@ export function Terminal({
         <Header
           clock={data.clock ?? null}
           quotes={data.quotes ?? []}
+          implied={data.volterm?.books}
+          vixMonth={data.volterm?.vix_month}
           link={data.offline || !data.ok ? "offline" : lost ? "lost" : "live"}
           onRefresh={load}
           tab={tab}
@@ -353,6 +356,10 @@ export function Terminal({
             <code className="text-ink-2">.\dev.ps1</code>.
           </div>
         )}
+
+        {/* The driver board (drivers.py), on the futures Terminal only: the
+            stocks desk has its tape conviction on the Market tab. */}
+        {tab === "terminal" && <DriverStrip drivers={data.drivers} />}
 
         {tab === "settings" ? (
           <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
@@ -405,8 +412,10 @@ export function Terminal({
               enabled={data.gex?.enabled ?? false}
               ageMin={age("gex")}
               error={st.gex?.ok === false ? st.gex.error : null}
+              implied={data.volterm?.books}
+              expiry={data.expiry}
             />
-            <MVolatility vol={data.volterm} ageMin={age("quotes")} />
+            <MVolatility vol={data.volterm} ageMin={age("quotes")} implied putcall={data.putcall} />
             <MRates
               rates={data.rates}
               pm={data.policy_meetings}

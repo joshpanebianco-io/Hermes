@@ -149,6 +149,8 @@ CONTEXT: list[tuple[str, str, str]] = [
     ("GLD", "GLD", "GLD"),
     ("GDX", "GDX", "Gold miners ETF"),
     ("GVZ", "^GVZ", "Gold vol (GVZ)"),
+    # The VIX's own month (volterm.vix_month): twenty closes, both desks.
+    ("VIX", "^VIX", "VIX"),
 ]
 
 # Yahoo starts truncating the response somewhere above ~20 symbols; 12 keeps

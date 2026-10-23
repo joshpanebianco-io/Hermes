@@ -9,6 +9,7 @@ import { segItem } from "@/lib/seg";
 import { isPending } from "@/lib/events";
 import { groupReleases, subLabel, type Release } from "@/lib/releases";
 import { useNow } from "@/lib/useNow";
+import { PrintPopover, READ_WORD, readTone } from "@/components/vol/PrintRead";
 
 /**
  * The economic calendar.
@@ -447,6 +448,15 @@ function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
           </span>
         )}
       </span>
+      {/* THE READ, ONCE IT HAS PRINTED: hot, cold or in line — the economy's
+          word, never a colour for good or bad — and the click-through to what
+          that means for each book (PrintRead). The chip is the trigger, the
+          way every VIX figure opens the bands. */}
+      {!sub && r.read && (
+        <PrintPopover r={r} className="shrink-0 px-1 py-0 leading-none">
+          <span className={cn("qt-cap text-[9px]", readTone(r.read))}>{READ_WORD[r.read]}</span>
+        </PrintPopover>
+      )}
       {r.session && r.session !== "closed" && (
         <span
           className="fig hidden w-[38px] shrink-0 text-[9px] text-ink-3 md:block @max-[470px]:hidden"

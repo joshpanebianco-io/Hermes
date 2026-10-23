@@ -363,7 +363,8 @@ def test_score_parts_sum_to_the_total() -> None:
     reg = {"bias": "long", "confirm": "confirm"}
     sc = scanscore.score_row(_row(), reg, 0.5, None, None)
     by = {p["key"]: p["pts"] for p in sc["parts"]}
-    assert by == {"structure": 30, "rs": 15.0, "location": 20, "volume": 7, "market": 15}
+    assert by == {"structure": 30, "rs": 15.0, "location": 20, "volume": 7, "market": 15,
+                  "frame": 0, "catalyst": 0}
     assert sc["total"] == 87 and sc["side"] == "long"
 
 

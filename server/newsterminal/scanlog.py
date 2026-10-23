@@ -101,7 +101,7 @@ def blank_outcome() -> dict[str, Any]:
 
 def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price: float,
            stop: float | None, score: int | None, note: str, day: str,
-           now_ts: float) -> dict[str, Any]:
+           now_ts: float, parts: dict[str, Any] | None = None) -> dict[str, Any]:
     live = now_ts - (bar_t + BAR_SEC) <= LIVE_LAG_SEC
     return {
         "id": 0,
@@ -118,14 +118,27 @@ def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price:
         "stop": round(float(stop), 4) if stop is not None else None,
         # The row's score NOW — which is the signal's only when found live.
         "score": score if live else None,
+        # The score's parts at the signal (2026-10-22), for tools/fit_score.py:
+        # {key: {pts, max}}. Live signals only, like the score.
+        "parts": parts if (live and parts) else None,
         "note": note,
         "live": live,
         "outcome": blank_outcome() if kind in TRADES else None,
     }
 
 
+def score_parts(score: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A row's score parts as the log keeps them: {key: {pts, max}}. Pure."""
+    parts = (score or {}).get("parts") if isinstance(score, dict) else None
+    if not isinstance(parts, list):
+        return None
+    out = {str(p["key"]): {"pts": p.get("pts"), "max": p.get("max")}
+           for p in parts if isinstance(p, dict) and p.get("key")}
+    return out or None
+
+
 def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None, day: str,
-                  now_ts: float) -> list[dict[str, Any]]:
+                  now_ts: float, parts: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The (L) / (E) / breakout events one name's replayed signals imply. Pure."""
     out: list[dict[str, Any]] = []
     for sg in signals:
@@ -136,7 +149,7 @@ def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None
         text = str(sg.get("note") or "")
         note = f"{_LABEL[kind]} {side} — {text[:1].lower()}{text[1:]}"
         out.append(_event(sym, kind, side, sg.get("level"), int(sg["t"]), sg["price"],
-                          sg.get("stop"), score, note, day, now_ts))
+                          sg.get("stop"), score, note, day, now_ts, parts))
     return out
 
 
@@ -150,7 +163,8 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
             continue
         sym = str(r.get("sym"))
         score = (r.get("score") or {}).get("total")
-        out += signal_events(sym, r.get("signals") or [], score, day, now_ts)
+        parts = score_parts(r.get("score"))
+        out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts)
         if session != "rth" or r.get("last") is None:
             continue
         prog = r.get("progress") or {}
@@ -166,7 +180,7 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
             note = (f"Near {side} — {round(p * 100)}% of the way to {name} "
                     f"{fmt_px(lv.get(key))}")
             out.append(_event(sym, NEAR, side, name, bar_t, r["last"], None, score, note, day,
-                              now_ts))
+                              now_ts, parts))
     return out
 
 
@@ -343,6 +357,47 @@ def stats(events: Iterable[dict[str, Any]], days: int, today: date) -> dict[str,
             "to": today.isoformat(), "total": len(rows), "groups": groups}
 
 
+def record_table(events: Iterable[dict[str, Any]], days: int,
+                 today: date) -> dict[str, dict[str, Any]]:
+    """Settled (L)/(E) outcomes over the last `days`, keyed "band|kind|side" —
+    the record line under every row's score (scanscore.record_for). Pure.
+
+    The band is the score the signal was LOGGED with, so a row's own band is
+    compared with signals that looked the same when they fired. Backfilled
+    signals carry no score and are left out.
+    """
+    start = today - timedelta(days=days)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for e in events:
+        if e.get("kind") not in TRADES or e.get("retracted"):
+            continue
+        o = e.get("outcome") or {}
+        if not o.get("final") or o.get("r") is None or o.get("hit_1r") is None:
+            continue
+        sc = e.get("score")
+        if not isinstance(sc, (int, float)):
+            continue
+        try:
+            d = date.fromisoformat(str(e.get("day")))
+        except ValueError:
+            continue
+        if not start < d <= today:
+            continue
+        band = "60+" if sc >= 60 else "40-59" if sc >= 40 else "<40"
+        groups.setdefault(f"{band}|{e['kind']}|{e['side']}", []).append(e)
+    out: dict[str, dict[str, Any]] = {}
+    for key, evs in groups.items():
+        closes = [x["outcome"].get("ret_close_r") for x in evs]
+        closes = [c for c in closes if c is not None]
+        out[key] = {
+            "n": len(evs),
+            "win_1r": round(sum(1 for x in evs if x["outcome"].get("hit_1r")) / len(evs), 3),
+            "avg_close_r": round(sum(closes) / len(closes), 2) if closes else None,
+            "sessions": len({x["day"] for x in evs}),
+        }
+    return out
+
+
 class EventLog:
     """The persisted log: `observe` on the scanner thread, `since`/`stats` from the API."""
 
@@ -514,3 +569,8 @@ class EventLog:
         with self._lock:
             evs = list(self.events)
         return stats(evs, days, today or datetime.now(ET).date())
+
+    def record_table(self, days: int = 30, today: date | None = None) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            evs = list(self.events)
+        return record_table(evs, days, today or datetime.now(ET).date())

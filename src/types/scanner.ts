@@ -1,4 +1,4 @@
-import type { SourceStatus } from "@/types/terminal";
+import type { Frame, SourceStatus } from "@/types/terminal";
 
 /**
  * The scanner's payload — GET /api/scanner on the collector.
@@ -47,8 +47,12 @@ export interface Regime {
     shape: "contango" | "flat" | "backwardation" | "unknown";
     vvix: number | null;
     vvix_pct: number | null;
+    /** The VIX against its own month (volterm.vix_month). Absent from an older collector. */
+    month?: { pctile: number; lo: number; hi: number; days: number } | null;
   };
   band: "grind" | "normal" | "elevated" | "stressed" | null;
+  /** quiet / heavy inside normal (the median, 18), panic inside stressed (35) — words, never score. */
+  sub?: "quiet" | "heavy" | "panic" | null;
   spy_em_pct: number | null;
   tape: { SPY: TapeRow | null; QQQ: TapeRow | null; IWM: TapeRow | null };
   bias: Side | null;
@@ -101,7 +105,18 @@ export interface ScanSignal {
 }
 
 export interface ScanFlag {
-  kind: "earnings" | "event" | "filing" | "news" | "extended" | "fuel" | "gap" | "halt";
+  kind:
+    | "earnings"
+    | "event"
+    | "filing"
+    | "news"
+    | "extended"
+    | "fuel"
+    | "gap"
+    | "halt"
+    | "frame"
+    | "short_interest"
+    | "catalyst";
   tone: "good" | "warn" | "info";
   text: string;
 }
@@ -200,6 +215,58 @@ export interface ScanRow {
   } | null;
   /** Big caps in the same sector reporting from today through three trading days out. */
   peers?: Array<{ sym: string; date: string; when: string; days: number }>;
+  /** The daily levels (frame.frame_of) and their read against the live print. Absent from an older collector. */
+  frame?: Frame | null;
+  frame_read?: FrameRead | null;
+  /** Short interest and float from Yahoo's summary (sources/shortint). */
+  short?: ShortInterest | null;
+  /** The first targets by the plan's rule (targets.py), nearest first. */
+  targets?: Target[];
+  /**
+   * The record line (scanscore.record_for): settled signals of the kind this
+   * setup implies, the side and the score band, from ten of them; `small`
+   * under thirty. Null until there are enough.
+   */
+  record?: {
+    kind: "L" | "E";
+    side: Side;
+    band: "<40" | "40-59" | "60+";
+    n: number;
+    win_1r: number | null;
+    avg_close_r: number | null;
+    sessions: number | null;
+    small: boolean;
+  } | null;
+}
+
+/** The daily frame against the live print (frame.read). */
+export interface FrameRead {
+  /** Up above both the 20 and 50-day, down below both, mixed between. */
+  trend: "up" | "down" | "mixed" | null;
+  above20: boolean | null;
+  above50: boolean | null;
+  above200: boolean | null;
+  /** Distance from the 52-week high and low, %. */
+  wk52_hi_pct: number | null;
+  wk52_lo_pct: number | null;
+  pw: "above" | "inside" | "below" | null;
+  text: string | null;
+}
+
+export interface ShortInterest {
+  /** Share of the float sold short, %. */
+  pct_float: number | null;
+  days_to_cover: number | null;
+  shares_short: number | null;
+  prior_month: number | null;
+  float_shares: number | null;
+  /** FINRA's settlement date the figure is as of. */
+  as_of: string | null;
+}
+
+export interface Target {
+  label: string;
+  price: number;
 }
 
 /** Today's options volume against open interest, read for which way it leans. */
@@ -211,7 +278,17 @@ export interface OptionsFlow {
   put_oi: number;
   vol_oi: number | null;
   lean: "calls" | "puts" | "balanced" | null;
-  top: Array<{ strike: number; right: "C" | "P"; expiry: string; volume: number; oi: number }>;
+  top: Array<{ strike: number; right: "C" | "P"; expiry: string; volume: number; oi: number; oi_chg?: number | null }>;
+  /** Open interest since the previous session, each side (sources/options.OiLog); null until a second session is logged. */
+  oi_chg_calls?: number | null;
+  oi_chg_puts?: number | null;
+  oi_prev_day?: string | null;
+  /** Today's chain volume against the name's own 20-session average. */
+  vol_avg20?: number | null;
+  vol_x?: number | null;
+  vol_days?: number;
+  /** vol_x at or past 2 with at least a hundred contracts. */
+  unusual?: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -277,7 +354,49 @@ export interface OptContract {
   /** The live stock price the estimate is for, and the price Cboe's quote was taken at. */
   est_spot?: number | null;
   quote_spot?: number | null;
+  /**
+   * The contract at the first target (targets[0]): its value there — by delta
+   * and gamma inside the re-mark range, intrinsic value as a floor beyond it
+   * (`target_basis` says which) — the reward per contract after half the
+   * bid-ask, and that against the risk: the option's own R.
+   */
+  target_price?: number | null;
+  target_label?: string | null;
+  target_mid?: number | null;
+  target_basis?: string | null;
+  reward_per_contract?: number | null;
+  r_multiple?: number | null;
+  /** This is the structure the engine picks for the expiry, by R. */
+  better_r?: boolean;
   note: string;
+}
+
+export interface OptTerm {
+  expiry: string;
+  dte: number;
+  /** At-the-money implied volatility for the expiry, %. */
+  iv: number;
+}
+
+/** The earnings number: the move the chain prices for the report against the last realised. */
+export interface EarningsMove {
+  implied: {
+    report: string;
+    when: string | null;
+    expiry: string;
+    dte: number;
+    /** The covering expiry's straddle, % of spot. */
+    pct: number;
+    straddle: number;
+    /** Net of the expiry before the report — the event alone, about. */
+    clean_pct: number | null;
+    before_expiry: string | null;
+    before_pct: number | null;
+  } | null;
+  /** Close to close across each past report, newest first, the reaction day picked by volume. */
+  realised: Array<{ date: string; reaction: string; pct: number }>;
+  avg_abs: number | null;
+  max_abs: number | null;
 }
 
 export interface OptExpectedMove {
@@ -315,6 +434,12 @@ export interface OptionsCtx {
   pick?: "front" | "weekly" | null;
   earnings_in: string | null;
   contracts: OptContract[];
+  /** Long or spread for the pick expiry: by R at the first target when both are priced, else by premium. */
+  structure?: { kind: "long" | "spread"; by: "r" | "premium"; long_r: number | null; spread_r: number | null } | null;
+  targets?: Target[];
+  /** The name's own term structure, front to back. */
+  term?: OptTerm[];
+  earnings_move?: EarningsMove | null;
   flow?: OptionsFlow | null;
 }
 

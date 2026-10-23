@@ -3,6 +3,7 @@
 import type { OptContract, OptionsCtx, OptionsFlow, ScanRow } from "@/types/scanner";
 import { estTitle, optionsPick, premiumHue, shortDate, strike } from "@/components/panels/ScanTable";
 import { Tick } from "@/components/ui/Tick";
+import { OptionsFiguresPopover } from "@/components/vol/OptionsFigures";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -55,6 +56,8 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
   const hideFront = !zeroDte && front?.dte === 0;
   const contracts = o.contracts.filter((c) => !(hideFront && c.key === "front"));
   const pick = optionsPick(o, zeroDte);
+  // What every figure's long form reads — the row, its chain, the rule's pick.
+  const explain = { r, o, pick };
   // The pick first: it is the contract the rule says to trade.
   const keys = [...new Set(contracts.map((c) => c.key))].sort((a, b) => Number(b === pick) - Number(a === pick));
   const lean =
@@ -68,40 +71,60 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
 
   return (
     <div className="flex flex-col gap-4">
-      {/* volatility */}
+      {/*
+       * EVERY FIGURE OPENS THE SAME LONG FORM (owner, 2026-10-22: "what they
+       * mean for the stocks section"), the way every VIX figure opens the
+       * bands: what each number says for this name's trade, read with the
+       * name's own state — see OptionsFigures. The trigger is the figure
+       * itself, so each is phrasing content inside the popover's button.
+       */}
       <div className="grid grid-cols-5 gap-x-3">
-        <Fig label="IV30" v={o.iv30 != null ? `${o.iv30.toFixed(1)}%` : "—"} />
-        <Fig label="RV20" v={o.rv20 != null ? `${o.rv20.toFixed(1)}%` : "—"} />
-        <Fig
-          label="IV / RV"
-          v={o.iv_rv != null ? o.iv_rv.toFixed(2) : "—"}
-          sub={o.premium ? <span className={cn("qt-cap text-[9.5px]", premiumHue(o.premium))}>{o.premium}</span> : null}
-        />
-        <Fig
-          label="IV rank"
-          v={o.iv_rank != null ? `${Math.round(o.iv_rank)}` : "—"}
-          sub={
-            o.iv_rank == null ? (
-              <span className="text-[10.5px] text-ink-3" title="IV rank needs twenty logged sessions of IV30">
-                building · {o.iv_days}/20d
-              </span>
-            ) : o.iv_pct != null ? (
-              <span className="text-[10.5px] text-ink-3">pct {Math.round(o.iv_pct)}</span>
-            ) : null
-          }
-        />
-        <Fig
-          label="Skew"
-          v={o.skew != null ? `${o.skew >= 0 ? "+" : ""}${o.skew.toFixed(1)}` : "—"}
-          sub={<span className="text-[10.5px] text-ink-3">25Δ put − call</span>}
-        />
+        <OptionsFiguresPopover {...explain} className={TRIGGER}>
+          <Fig label="IV30" v={o.iv30 != null ? `${o.iv30.toFixed(1)}%` : "—"} />
+        </OptionsFiguresPopover>
+        <OptionsFiguresPopover {...explain} className={TRIGGER}>
+          <Fig label="RV20" v={o.rv20 != null ? `${o.rv20.toFixed(1)}%` : "—"} />
+        </OptionsFiguresPopover>
+        <OptionsFiguresPopover {...explain} className={TRIGGER}>
+          <Fig
+            label="IV / RV"
+            v={o.iv_rv != null ? o.iv_rv.toFixed(2) : "—"}
+            sub={o.premium ? <span className={cn("qt-cap text-[9.5px]", premiumHue(o.premium))}>{o.premium}</span> : null}
+          />
+        </OptionsFiguresPopover>
+        <OptionsFiguresPopover {...explain} className={TRIGGER}>
+          <Fig
+            label="IV rank"
+            v={o.iv_rank != null ? `${Math.round(o.iv_rank)}` : "—"}
+            sub={
+              o.iv_rank == null ? (
+                <span className="text-[10.5px] text-ink-3" title="IV rank needs twenty logged sessions of IV30">
+                  building · {o.iv_days}/20d
+                </span>
+              ) : o.iv_pct != null ? (
+                <span className="text-[10.5px] text-ink-3">pct {Math.round(o.iv_pct)}</span>
+              ) : null
+            }
+          />
+        </OptionsFiguresPopover>
+        <OptionsFiguresPopover {...explain} className={TRIGGER}>
+          <Fig
+            label="Skew"
+            v={o.skew != null ? `${o.skew >= 0 ? "+" : ""}${o.skew.toFixed(1)}` : "—"}
+            sub={<span className="text-[10.5px] text-ink-3">25Δ put − call</span>}
+          />
+        </OptionsFiguresPopover>
       </div>
 
       {/* expected moves */}
       <div className="flex flex-col gap-1">
         <p className="qt-cap text-[10.5px] text-ink-3">Expected move · the at-the-money straddle</p>
         {[front, weekly].filter(Boolean).map((e) => (
-          <div key={e!.key} className="grid grid-cols-[86px_minmax(0,1fr)_auto] items-baseline gap-x-3 text-[12px]">
+          <OptionsFiguresPopover
+            key={e!.key}
+            {...explain}
+            className={cn(TRIGGER, "grid w-full grid-cols-[86px_minmax(0,1fr)_auto] items-baseline gap-x-3 text-[12px]")}
+          >
             <span className="text-ink-2">
               {e!.dte === 0 ? "0DTE" : e!.key === "front" ? "Front" : "Weekly"}{" "}
               <span className="text-[11px] text-ink-3">{shortDate(e!.expiry)}</span>
@@ -112,8 +135,46 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
             <span className="fig text-[11.5px] text-ink-3">
               {num(e!.lo)} – {num(e!.hi)}
             </span>
-          </div>
+          </OptionsFiguresPopover>
         ))}
+        {/* THE EARNINGS NUMBER (owner, 2026-10-22): what the chain prices for
+            the report against what the name did on its last few, and the
+            term structure — where event premium shows as a near expiry priced
+            above the ones behind it. Both open the same long form. */}
+        {o.earnings_move && (o.earnings_move.implied || o.earnings_move.realised.length > 0) && (
+          <OptionsFiguresPopover {...explain} className={cn(TRIGGER, "text-[12px]")}>
+            <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Earnings move</span>
+            {o.earnings_move.implied && (
+              <span className="fig text-ink">
+                ±{o.earnings_move.implied.pct.toFixed(1)}%{" "}
+                <span className="text-ink-3">
+                  to {shortDate(o.earnings_move.implied.expiry)}
+                  {o.earnings_move.implied.clean_pct != null && ` · event ≈ ±${o.earnings_move.implied.clean_pct.toFixed(1)}%`}
+                </span>
+              </span>
+            )}
+            {o.earnings_move.realised.length > 0 && (
+              <span className="fig text-[11.5px] text-ink-3">
+                {o.earnings_move.implied ? " · " : ""}realised{" "}
+                {o.earnings_move.realised.map((m) => `${m.pct >= 0 ? "+" : ""}${m.pct.toFixed(1)}%`).join(", ")}
+                {o.earnings_move.avg_abs != null && ` (avg ±${o.earnings_move.avg_abs.toFixed(1)}%)`}
+              </span>
+            )}
+          </OptionsFiguresPopover>
+        )}
+        {o.term && o.term.length > 1 && (
+          <OptionsFiguresPopover {...explain} className={cn(TRIGGER, "text-[11.5px]")}>
+            <span className="qt-cap mr-2 text-[10.5px] text-ink-3">IV by expiry</span>
+            <span className="fig text-ink-3">
+              {o.term.slice(0, 4).map((t, i) => (
+                <span key={t.expiry}>
+                  {i > 0 && " · "}
+                  {shortDate(t.expiry)} <span className="text-ink-2">{t.iv.toFixed(0)}</span>
+                </span>
+              ))}
+            </span>
+          </OptionsFiguresPopover>
+        )}
       </div>
 
       {/* liquidity and warnings */}
@@ -141,7 +202,21 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
           </Warn>
         )}
         {o.liquidity.grade === "poor" && <Warn>Wide spreads — the fill alone can cost a good part of the move.</Warn>}
-        {lean && <p className="text-[12px] leading-[1.5] text-ink-3">{lean}</p>}
+        {lean && (
+          <p className="text-[12px] leading-[1.5] text-ink-3">
+            {lean}
+            {/* The structure the engine picks, by R at the first target when
+                both contracts are priced (optcalc.structure_pick). */}
+            {o.structure?.by === "r" && o.structure.long_r != null && o.structure.spread_r != null && (
+              <>
+                {" "}
+                By R at the first target the {o.structure.kind} pays better:{" "}
+                <span className="fig text-ink-2">{o.structure.long_r.toFixed(1)} R</span> long against{" "}
+                <span className="fig text-ink-2">{o.structure.spread_r.toFixed(1)} R</span> spread.
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       {/* the contract */}
@@ -202,6 +277,22 @@ function Flow({ f }: { f: OptionsFlow }) {
             vol/OI {f.vol_oi.toFixed(2)}
           </span>
         )}
+        {/* Today's volume against the name's own 20-session average, and the
+            change in open interest since the previous session, each side —
+            from the OI log (sources/options.OiLog). */}
+        {f.vol_x != null && (
+          <span
+            className={cn("ml-2", f.unusual ? "qt-cap text-[10px] text-flip-fig" : "fig text-ink-3")}
+            title={`Today's chain volume against its 20-session average (${f.vol_days ?? 0} sessions logged)`}
+          >
+            {f.unusual ? `unusual ${f.vol_x.toFixed(1)}×` : `${f.vol_x.toFixed(1)}× avg`}
+          </span>
+        )}
+        {(f.oi_chg_calls != null || f.oi_chg_puts != null) && (
+          <span className="fig ml-2 text-ink-3" title={`Open interest since ${f.oi_prev_day ?? "the previous session"}, calls and puts`}>
+            OI {signedCompact(f.oi_chg_calls)}C · {signedCompact(f.oi_chg_puts)}P
+          </span>
+        )}
       </p>
       {f.top.length > 0 && (
         <p className="fig text-[11.5px] text-ink-3">
@@ -214,12 +305,25 @@ function Flow({ f }: { f: OptionsFlow }) {
                 {t.right}
               </span>{" "}
               {shortDate(t.expiry)} {compact(t.volume)}
+              {t.oi_chg != null && (
+                <span className="text-ink-4" title="Open interest since the previous session">
+                  {" "}
+                  ({signedCompact(t.oi_chg)} OI)
+                </span>
+              )}
             </span>
           ))}
         </p>
       )}
     </div>
   );
+}
+
+/** "+12.4K", "−3.1K", "0" — a change in open interest, signed and compact. */
+function signedCompact(v: number | null | undefined): string {
+  if (v == null) return "—";
+  if (v === 0) return "0";
+  return `${v > 0 ? "+" : "−"}${compact(Math.abs(v))}`;
 }
 
 function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) {
@@ -281,6 +385,27 @@ function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) 
           <span className="text-ink-3">No stop to size against yet.</span>
         )}
       </p>
+      {/* THE REWARD HALF (owner, 2026-10-22): the contract priced at the first
+          target by the same maths as the stop, and the option's own R. Red
+          under one R; "better R" marks the structure the engine picks. */}
+      {c.r_multiple != null && c.target_price != null && c.target_mid != null && (
+        <p className="mt-1 text-[11.5px] text-ink-2">
+          Worth about <span className="fig text-ink">${c.target_mid.toFixed(2)}</span> at{" "}
+          {c.target_label} <span className="fig">{num(c.target_price)}</span>
+          {" · "}
+          <span className={cn("fig", c.r_multiple >= 1 ? "text-ink" : "text-put-fig")}>{c.r_multiple.toFixed(1)} R</span>
+          {c.better_r && (
+            <span className="qt-cap ml-2 text-[9.5px] text-call-fig" title="The structure the engine picks for this expiry, by R">
+              better R
+            </span>
+          )}
+          {c.target_basis?.startsWith("intrinsic") && (
+            <span className="ml-1.5 text-[10px] text-ink-3" title={c.target_basis}>
+              intrinsic floor
+            </span>
+          )}
+        </p>
+      )}
       <p className="mt-1 text-[10.5px] text-ink-3">
         <span className="fig select-all">{c.symbol}</span>
         {c.short_symbol && (
@@ -294,13 +419,17 @@ function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) 
   );
 }
 
+/** The figure's trigger: a little hit area round it, the row's own grid where it is one. */
+const TRIGGER = "-mx-1.5 block min-w-0 px-1.5 py-0.5";
+
+/** Spans, not paragraphs: a figure sits inside its popover's <button>, which takes phrasing content only. */
 function Fig({ label, v, sub }: { label: string; v: string; sub?: React.ReactNode }) {
   return (
-    <div className="min-w-0">
-      <p className="qt-cap mb-1 text-[10px] text-ink-3">{label}</p>
-      <p className="fig text-[14px] text-ink">{v}</p>
-      {sub && <div className="mt-0.5">{sub}</div>}
-    </div>
+    <span className="block min-w-0">
+      <span className="qt-cap mb-1 block text-[10px] text-ink-3">{label}</span>
+      <span className="fig block text-[14px] text-ink">{v}</span>
+      {sub && <span className="mt-0.5 block">{sub}</span>}
+    </span>
   );
 }
 

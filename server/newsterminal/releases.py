@@ -194,3 +194,86 @@ def group(
         levels = [r for r in rest if is_level(event(r), *figures(r))]
         out.append(Release(fam, lead, subs, levels))
     return out
+
+
+# --------------------------------------------------------------------------
+# What a print said, and what it means for each book.
+#
+# THE READ IS THE ECONOMY'S, NOT THE MARKET'S. "Hot" is a stronger economy —
+# a beat on inflation, jobs or growth, and a MISS on unemployment, claims or
+# inventories, where the higher number is the weaker one. Deciding what hot
+# means for an index is the second step, and it is different per book: a hot
+# CPI is a headwind for NQ through the discount rate and for gold through real
+# yields; a hot payrolls is good for earnings and bad for cuts, so the 10Y
+# decides which the index trades. Both steps live here so the stocks desk's
+# Macro tab, the futures Calendar and the driver board say the same thing.
+# --------------------------------------------------------------------------
+
+#: A surprise within this share of the consensus reads in line.
+INLINE_REL = 0.005
+_INVERTED = re.compile(r"unemploy|jobless|claims|inventor", re.I)
+
+BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
+
+
+def read_of(title: str, surprise: float | None, consensus: float | None) -> str | None:
+    """hot / cold / inline from the sign of the surprise. Pure."""
+    if surprise is None or consensus is None:
+        return None
+    if abs(surprise) <= max(INLINE_REL * abs(consensus), 1e-9):
+        return "inline"
+    hot = surprise > 0
+    if _INVERTED.search(title):
+        hot = not hot
+    return "hot" if hot else "cold"
+
+
+def implication(read: str | None, themes: list[str] | None) -> dict[str, str] | None:
+    """What a read means for NQ, ES and GC, by the release's theme. Pure.
+
+    Rules of thumb a desk would say out loud, never a vote on their own: the
+    driver board (drivers.py) counts only the inflation reads, where the first
+    reaction is the least ambiguous. None without a read, and for a rates
+    decision, whose "surprise" has no sign worth reading.
+    """
+    if read is None:
+        return None
+    th = set(themes or [])
+    if "rates" in th and not th & {"inflation", "jobs", "growth"}:
+        return None
+    if read == "inline":
+        line = "In line with consensus: nothing to reprice. Any reaction is positioning unwinding."
+        return dict.fromkeys(BOOKS, line)
+    hot = read == "hot"
+    if "inflation" in th:
+        eq = ("Hotter than priced: yields and the dollar bid first, a headwind for the index. "
+              "Watch the 10Y and what the next FOMC prices." if hot else
+              "Cooler than priced: yields ease and cuts come forward, a tailwind for the index "
+              "unless growth is the worry.")
+        gc = ("Hawkish for the Fed: real yields up, a headwind for gold." if hot else
+              "Dovish: real yields down, supportive for gold.")
+        return {"NQ": eq, "ES": eq, "GC": gc}
+    if "jobs" in th:
+        eq = ("A stronger labour market: good for earnings, bad for cuts. The 10Y decides which "
+              "one the index trades." if hot else
+              "A weaker labour market: cuts come forward, but a growth scare sells the index "
+              "first. Watch whether yields fall faster than stocks.")
+        gc = ("Hawkish: the Fed can wait, a headwind for gold." if hot else
+              "Dovish: cuts come forward, supportive for gold.")
+        return {"NQ": eq, "ES": eq, "GC": gc}
+    if "growth" in th:
+        eq = ("Stronger than priced: risk-on while yields stay quiet, a headwind if the 10Y "
+              "jumps on it." if hot else
+              "Weaker than priced: a growth scare. Cyclicals and small caps lead lower; the "
+              "index follows if credit confirms.")
+        gc = ("A headwind through yields." if hot else "Supportive: cuts come forward.")
+        return {"NQ": eq, "ES": eq, "GC": gc}
+    if "energy" in th:
+        eq = ("A draw: oil bid, an inflation impulse, a touch of headwind through yields."
+              if hot else "A build: oil softer, a touch of relief through yields.")
+        return {"NQ": eq, "ES": eq, "GC": "Gold trades the dollar and yields, not inventories."}
+    line = ("Stronger than priced. Read it through yields: a rise is a headwind for every "
+            "book here." if hot else
+            "Weaker than priced. Read it through yields: a fall supports the index and gold "
+            "unless it is a growth scare.")
+    return dict.fromkeys(BOOKS, line)

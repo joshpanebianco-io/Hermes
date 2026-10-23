@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
 from ..http import SourceStatus, clean_text, fetch, json_body
+from ..releases import implication, read_of
 from ..sessions import desk_window
 
 ET = ZoneInfo("America/New_York")
@@ -280,6 +281,17 @@ def parse_day(doc: Any, day: date) -> list[dict[str, Any]]:
                 # never zero, which would read as "came in exactly on target".
                 "surprise": (actual - cons) if (actual is not None and cons is not None) else None,
                 "released": actual is not None,
+                # hot / cold / inline once it has printed (releases.read_of) —
+                # the economy's word, which the futures Calendar shows and
+                # the driver board counts; what it means per book is
+                # releases.implication, composed where it is read.
+                "read": read_of(event, actual - cons, cons)
+                if (actual is not None and cons is not None) else None,
+                # And what that read means for NQ, ES and GC, in the server's
+                # words (releases.implication), so the Calendar's click-through
+                # prints the same sentences the driver board counts.
+                "meaning": implication(read_of(event, actual - cons, cons), themes_of(event))
+                if (actual is not None and cons is not None) else None,
                 "score": sc,
                 # The plain-English gloss Nasdaq ships. Genuinely useful at
                 # 08:29 for a release you do not follow closely.

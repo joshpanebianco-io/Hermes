@@ -4,8 +4,9 @@ The scanner's feeds — bars, headlines and filings for every name on the watchl
 FREE, AND ENOUGH FOR THE STRATEGY. Yahoo's v8 chart endpoint gives any US stock
 five days of 5-minute OHLCV bars from 04:00 to 20:00 ET with no key — exactly
 what LE_Model.pine reads through `request.security(…, session.extended)`. The
-same endpoint at a daily interval gives three months of sessions for the daily
-ATR. Personal use only, like every other Yahoo read in this terminal.
+same endpoint at a daily interval gives a year of sessions for the daily ATR,
+the daily frame (frame.py) and the realised earnings moves. Personal use only,
+like every other Yahoo read in this terminal.
 
 THE REQUEST BUDGET, SAID OUT LOUD. One chart request per name, rotated: the job
 ticks every 15 s and refreshes at most five of the stalest names, aiming at
@@ -60,6 +61,7 @@ from typing import Any, NamedTuple
 
 from .. import scan
 from ..config import BROWSER_UA, CACHE_DIR, UA
+from ..frame import frame_of
 from ..holidays import is_trading_day
 from ..http import CACHE, SourceStatus, clean_text, feed_body, fetch, json_body, rss_items
 from ..scanscore import adv20
@@ -562,7 +564,9 @@ class ScanStore:
         now = time.time()
         for sym in self.symbols():
             for kind in ("5m", "1d"):
-                key = f"scan{kind}_{sym}"
+                # The daily copy is keyed by its range: "1y" since 2026-10-22,
+                # so a three-month copy on disk is never served as a year.
+                key = f"scan{kind}_{sym}" if kind == "5m" else f"scan1y_{sym}"
                 blob, age = CACHE.read(key), CACHE.age_sec(key)
                 if blob is None or age is None:
                     continue
@@ -643,8 +647,11 @@ class ScanStore:
         return bars, None if bars else "no bars"
 
     def _fetch_daily(self, sym: str) -> str | None:
-        url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="3mo", iv="1d")
-        r = fetch(url, key=f"scan1d_{sym}", ttl_sec=DAILY_TTL, ua=BROWSER_UA, timeout=15,
+        # A YEAR, NOT THREE MONTHS (2026-10-22): the daily frame wants the
+        # 200-day average and the 52-week extremes, and the earnings number
+        # wants the last four reports' reaction days. ~27 KB a name, six-hourly.
+        url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="1y", iv="1d")
+        r = fetch(url, key=f"scan1y_{sym}", ttl_sec=DAILY_TTL, ua=BROWSER_UA, timeout=15,
                   stale_max_sec=3 * 86400.0, validate=json_body)
         if not r.ok:
             self._failed(self.daily_fails, sym, r.status, time.time())
@@ -844,6 +851,9 @@ class ScanStore:
             row["sector"] = SECTOR.get(sym)
             row["adv20"] = adv20([d.volume for d in (self.daily.get(sym) or [])
                                   if d.day < clock.trading_day])
+            # The daily frame (frame.py): levels from the finished sessions;
+            # the read against the live print is done on the read path.
+            row["frame"] = frame_of(self.daily.get(sym) or [], clock.trading_day)
             if self.errors.get(sym) and not tech.ok:
                 row["error"] = self.errors[sym]
             rows[sym] = row

@@ -335,7 +335,7 @@ function Row({
     <tr {...handlers}>
       {lead}
       <td className={TD}>
-        <ScoreBar v={r.score.total} />
+        <ScoreBar v={r.score.total} record={r.record} />
       </td>
       <td className={cn(TD, "text-[12px] whitespace-nowrap")}>
         <span className={setupHue(r)}>{setupLabel(r)}</span>
@@ -464,7 +464,7 @@ function OptionsRow({
     <tr {...(handlers as React.HTMLAttributes<HTMLTableRowElement>)}>
       {lead}
       <td className={TD}>
-        <ScoreBar v={r.score.total} />
+        <ScoreBar v={r.score.total} record={r.record} />
       </td>
       <td className={cn(TD, "text-right")}>
         <Tick value={num(r.last)} className="fig text-[12.5px] text-ink" />
@@ -695,6 +695,15 @@ function flagShort(kind: ScanRow["flags"][number]["kind"], text: string): string
       return "Gap";
     case "halt":
       return "Halt";
+    case "frame":
+      // "Long into a daily downtrend: …" → "Vs daily": the setup is against the daily trend.
+      return "Vs daily";
+    case "catalyst":
+      // 'Against: Reuters: "Jefferies downgrades …" (2h)' → "Against: Jefferies downgrades".
+      return `Against: ${(text.replace(/^Against:\s*/, "").replace(/^[^"]*"/, "").split(/[\s"]+/).slice(0, 2).join(" ")) || "news"}`.slice(0, 22);
+    case "short_interest":
+      // "Squeeze risk: 22% of the float is short …" → "22% short".
+      return `${text.match(/(\d+)%/)?.[1] ?? ""}% short`.trim();
     case "news": {
       // "8 headlines in 24h" → "8 news": the count is the information, and
       // the long word was what pushed the column off a 1920 screen.
@@ -715,9 +724,17 @@ function setupHue(r: ScanRow): string {
 }
 
 /** The score as a figure over a flat bar — neutral ink, because a score is not a side. */
-function ScoreBar({ v }: { v: number }) {
+/** The record line's three figures for the score's hover (scanscore.record_for). */
+function recordTip(rec: ScanRow["record"]): string {
+  if (!rec) return "";
+  const win = rec.win_1r != null ? `${Math.round(rec.win_1r * 100)}%` : "—";
+  const close = rec.avg_close_r != null ? `${rec.avg_close_r >= 0 ? "+" : ""}${rec.avg_close_r.toFixed(1)} R` : "—";
+  return `\nSignals like this ((${rec.kind}) ${rec.side}s scored ${rec.band}): ${win} reached +1R, ${close} at the close, ${rec.n} signals over ${rec.sessions ?? "—"} sessions${rec.small ? " — small sample" : ""}`;
+}
+
+function ScoreBar({ v, record }: { v: number; record?: ScanRow["record"] }) {
   return (
-    <div className="flex items-center gap-2" title={`${v} of 100 — a heuristic rank, not a probability`}>
+    <div className="flex items-center gap-2" title={`${v} of 100 — a heuristic rank, not a probability${recordTip(record)}`}>
       <span className={cn("fig w-[22px] text-right text-[12.5px]", v >= 65 ? "text-ink" : v >= 40 ? "text-ink-2" : "text-ink-3")}>{v}</span>
       <span className="relative h-[4px] w-[48px] bg-[var(--qt-track,var(--ring))]">
         <span

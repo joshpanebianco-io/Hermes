@@ -52,7 +52,7 @@ def test_flow_on_the_real_spy_chain() -> None:
     assert [(t["strike"], t["right"], t["expiry"]) for t in f["top"]] == [
         (777.0, "P", "2026-10-13"), (778.0, "P", "2026-10-13"), (778.0, "C", "2026-10-13")]
     assert f["top"][0] == {"strike": 777.0, "right": "P", "expiry": "2026-10-13",
-                           "volume": 84852, "oi": 12096}
+                           "volume": 84852, "oi": 12096, "oi_chg": None}
 
 
 def test_flow_on_the_real_aapl_chain_leans_to_calls() -> None:

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Clock, Quote } from "@/types/terminal";
+import type { Clock, ImpliedBook, Quote, VolTerm } from "@/types/terminal";
 import { dir, feedNote, inMin, num, quoteChg } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Tick } from "@/components/ui/Tick";
@@ -51,6 +51,8 @@ function nyClock(clock: Clock | null): { label: string; value: string; title: st
 export function Header({
   clock: rawClock,
   quotes,
+  implied,
+  vixMonth,
   link,
   onRefresh,
   tab,
@@ -60,6 +62,10 @@ export function Header({
 }: {
   clock: Clock | null;
   quotes: Quote[];
+  /** The books' implied day (the terminal snapshot's volterm.books) for the VIX panel; the stocks desk passes none. */
+  implied?: ImpliedBook[];
+  /** The VIX against its own month (volterm.vix_month), for the same panel. */
+  vixMonth?: VolTerm["vix_month"];
   /**
    * The page's own link to its data: "live" while polls land, "lost" once
    * one has failed (the figures on screen are from the last poll that did),
@@ -96,7 +102,15 @@ export function Header({
   const vvix = quotes.find((q) => q.key === "VVIX")?.last ?? null;
   const vixFacts = (q: Quote): VixFacts => {
     const ratio = vix3m && vix3m > 0 ? q.last / vix3m : null;
-    return { last: q.last, pct: q.pct, ratio, shape: curveShape(ratio), vvix };
+    return {
+      last: q.last,
+      pct: q.pct,
+      ratio,
+      shape: curveShape(ratio),
+      vvix,
+      implied: implied ?? null,
+      month: vixMonth ?? null,
+    };
   };
   const vixTitle = (note: string | null) => [note, "Click for what the level means"].filter(Boolean).join("\n");
 

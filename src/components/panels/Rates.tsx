@@ -5,6 +5,7 @@ import { Module } from "@/components/ui/Module";
 import { Tick } from "@/components/ui/Tick";
 import { bp, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { RatesPopover } from "@/components/vol/RatesRead";
 
 /**
  * Rates — the curve, where policy is, and where it is priced to go.
@@ -81,7 +82,12 @@ export function Rates({
       {(pm?.meetings?.length ?? 0) > 0 && (
         <div className="border-b border-ring/40 px-3 py-1.5">
           <div className="mb-0.5 flex items-baseline justify-between">
-            <span className="eyebrow text-[9px]">FOMC path</span>
+            {/* The eyebrow opens what the path, the 10Y and the curve mean
+                (RatesRead) — the panel's one click-through, on the figure
+                that is the headline. */}
+            <RatesPopover rates={rates} pm={pm} className="-mx-1 px-1 py-0">
+              <span className="eyebrow text-[9px]">FOMC path · what it means</span>
+            </RatesPopover>
             {pm.anchor != null && (
               <span className="fig text-[9px] text-ink-3">
                 from {pm.anchor.toFixed(2)}% {pm.anchor_src}
@@ -142,7 +148,9 @@ export function Rates({
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-ring/40 px-3 py-1.5">
           {rates.spreads.map((s) => (
             <div key={s.key} className="flex items-baseline gap-1.5">
-              <span className="fig text-[10px] text-ink-3">{s.label}</span>
+              <RatesPopover rates={rates} pm={pm} className="-mx-1 px-1 py-0">
+                <span className="fig text-[10px] text-ink-3">{s.label}</span>
+              </RatesPopover>
               <span
                 className={cn(
                   "fig text-[11px]",

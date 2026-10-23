@@ -30,11 +30,23 @@ export interface PlanRegime {
   vix: number | null;
   vix_pct: number | null;
   band: string | null;
+  /** quiet / heavy inside normal, panic inside stressed. Plans before 2026-10-23 have none. */
+  sub?: string | null;
   shape: string | null;
   bias: "long" | "short" | null;
   confirm: string | null;
   spy_em_pct: number | null;
   tape: PlanTape[];
+}
+
+/** A contract at the first target: its value there and the option's own R (optcalc._target_fields). */
+export interface PlanAtTarget {
+  target: number | null;
+  target_label: string | null;
+  value_at_target: number | null;
+  reward_per_contract: number | null;
+  risk_per_contract: number | null;
+  r: number | null;
 }
 
 export interface PlanName {
@@ -67,9 +79,24 @@ export interface PlanName {
     em_front_lo?: number | null;
     liquidity: string | null;
     earnings_in: string | null;
-    long: { expiry: string; strike: number; right: string; mid: number; delta: number } | null;
-    spread: { expiry: string; strike: number; short_strike: number; mid: number } | null;
+    long: { expiry: string; strike: number; right: string; mid: number; delta: number; at_target?: PlanAtTarget | null } | null;
+    spread: { expiry: string; strike: number; short_strike: number; mid: number; at_target?: PlanAtTarget | null } | null;
+    /** Long or spread, by R at the first target when both are priced, else by premium. Plans before 2026-10-22 have none. */
+    structure?: { kind: "long" | "spread" | null; by: "r" | "premium" | null; long_r: number | null; spread_r: number | null } | null;
+    /** At-the-money IV per expiry, front to back. */
+    term?: Array<{ expiry: string | null; dte: number | null; iv: number | null }>;
+    /** The move the chain prices for the report against the last realised. */
+    earnings_move?: {
+      implied_pct: number | null;
+      implied_expiry: string | null;
+      event_pct: number | null;
+      realised_pct: Array<number | null>;
+      avg_abs_pct: number | null;
+    } | null;
   } | null;
+  /** The daily frame against the live print, and whether the setup is with it. Plans before 2026-10-22 have none. */
+  daily?: { trend: string | null; text: string | null; with_side: string | null } | null;
+  short_interest?: { pct_float: number | null; days_to_cover: number | null; as_of: string | null; squeeze_risk: boolean } | null;
   headlines: Array<{
     id: string;
     title: string;

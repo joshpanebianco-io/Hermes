@@ -31,10 +31,12 @@ from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import optcalc, releases
+from . import frame, marketctx, optcalc, releases, targets
 from .holidays import next_trading_day
 from .scan import Clock
+from .sources.shortint import squeeze_flag
 from .volterm import state as volterm_state
+from .volterm import vix_month
 
 #: Names whose own news feed is never read (the wire covers the index ETFs).
 _NO_OWN_NEWS = frozenset({"SPY", "QQQ", "IWM"})
@@ -86,7 +88,33 @@ PMVOL_MIN = 0.25  # % of ADV — nothing below it (Nasdaq's quiet names sit at 0
 PMVOL_FULL = 4.0  # % of ADV for the whole part; log-scaled between the two
 W_CATALYST = 6
 CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08:00)
-W_INPLAY = W_GAP + W_PMVOL + W_CATALYST
+# THE CATALYST IS ITS OWN PART NOW, ALL SESSION (owner, 2026-10-23: "i want
+# the rankings to be as high probability as possible"). It used to be a count
+# of fresh headlines inside the pre-open "in play" part; it now reads the
+# DIRECTION of four things against the side — a report's surprise sign, a
+# rating or target change, guidance raised or cut, an offering or a material
+# 8-K — and earns with the side, costs against it, and ignores a story that
+# only describes the price move. A prior, not a finding: logged on every
+# signal so tools/fit_score.py can keep it or throw it out.
+P_CATALYST = -6
+W_INPLAY = W_GAP + W_PMVOL
+# THE CLOCK AND THE TAPE, FROM THE RECORD (453 settled signals to 2026-10-21):
+# (L)/(E) signals in the first thirty minutes reached +1R 36% of the time and
+# in the last hour 37%, against 50–60% in between; longs on a short tape 41%
+# against shorts 58%. Both are penalties: they never push a name up.
+P_CLOCK = -10
+CLOCK_OPEN_MIN = 30
+CLOCK_CLOSE_MIN = 60
+RECORD_OPEN_WIN = 36
+RECORD_CLOSE_WIN = 37
+P_TAPE = -10
+TAPE_GRADES = ("moderate", "strong")
+#: The record line needs this many settled signals before it says a rate.
+RECORD_MIN = 10
+RECORD_SOLID = 30
+#: The daily frame (frame.py): the whole part with the daily trend, half of
+#: it between the averages, nothing against it — and a flag when against.
+W_FRAME = 6
 W_BIAS = 8
 W_CONFIRM = 4
 W_SECTOR = 3
@@ -105,6 +133,25 @@ P_FAILED = -15
 VIX_GRIND = 13.0
 VIX_NORMAL = 20.0
 VIX_STRESSED = 28.0
+# TWO SUB-LINES INSIDE THE BANDS (owner, 2026-10-23: "i hear people talking
+# specifically about being over 18"). The bands above score and stay; these
+# only change the words. 18 is the VIX's long-run median (about 17.6 since
+# 1990): over it the market pays more than usual for protection, the implied
+# S&P day crosses ±1.1% and the gamma flip tends to sit near spot. 35 is
+# panic: the VIX's own mean reversion becomes the trade, not the level.
+VIX_MEDIAN = 18.0
+VIX_PANIC = 35.0
+
+
+def vix_sub(last: float | None, band: str | None) -> str | None:
+    """quiet / heavy inside the normal band, panic inside stressed, else None. Pure."""
+    if last is None or band is None:
+        return None
+    if band == "normal":
+        return "heavy" if last >= VIX_MEDIAN else "quiet"
+    if band == "stressed" and last >= VIX_PANIC:
+        return "panic"
+    return None
 SPY_FLAT = 0.15  # % — below this SPY has not moved
 VIX_FLAT = 1.5  # % — below this VIX has not moved
 EVENT_HORIZON_MIN = 6 * 60
@@ -183,8 +230,10 @@ def next_event(calendar: list[dict[str, Any]], now: datetime) -> dict[str, Any] 
 
 
 def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | None],
-           calendar: list[dict[str, Any]], session: str, now: datetime) -> dict[str, Any]:
-    """VIX, its band, the tape and the bias — the context every row is scored in. Pure."""
+           calendar: list[dict[str, Any]], session: str, now: datetime,
+           context: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """VIX, its band, the tape and the bias — the context every row is scored in. Pure.
+    `context` is the daily-close block, for the VIX against its own month."""
     vq, vvq = _q(quotes, "VIX"), _q(quotes, "VVIX")
     vt = volterm_state(quotes)
     vix_last = vq.get("last") if vq else None
@@ -201,6 +250,8 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
             band = "normal"
         else:
             band = "elevated"
+    sub = vix_sub(vix_last, band)
+    month = vix_month(context or [], quotes)
     em = vix_last / math.sqrt(252.0) if vix_last is not None else None
 
     spy, qqq = tape_rows.get("SPY"), tape_rows.get("QQQ")
@@ -235,17 +286,41 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
     notes: list[str] = []
     if vix_last is not None:
         v = f"VIX {vix_last:.1f}"
+        # Mean reversion under the median, trend over it (owner, 2026-10-23):
+        # the words the VIX table (lib/vix) gives the same rows — its tape
+        # column, then after the dash its trade column, written for the desk's
+        # own break-and-retest. Change one side and change the other.
+        normal = (f"{v} is in the normal band, over the median of {VIX_MEDIAN:.0f}: moves carry, "
+                  "breaks run to the next level and trends hold into the close, 1%-plus days "
+                  "are normal — the best tape for break-and-retest: full size, stops one notch "
+                  "wider, let winners reach target."
+                  if sub == "heavy" else
+                  f"{v} is in the normal band, under the median of {VIX_MEDIAN:.0f}: moves fade "
+                  "inside the day, a break usually comes back to retest and the retest usually "
+                  "holds — break-and-retest at normal size and normal stops; wait for the "
+                  "retest, don't buy the first push.")
+        stressed = (f"{v} is in panic territory ({VIX_PANIC:.0f} and up): two to three percent "
+                    "a day and retests rarely hold — don't trade stock levels; the trade is the "
+                    "VIX itself coming back down once the curve flattens."
+                    if sub == "panic" else
+                    f"{v} with the curve "
+                    f"{'in backwardation' if shape == 'backwardation' else 'stressed'}: "
+                    "big ranges both ways, every stock trades as the index and stops get hit "
+                    "by noise — cut size hard or sit out; rallies are short-covering until the "
+                    "curve flattens.")
         notes.append({
-            "grind": f"{v} is in the grind band (under {VIX_GRIND:.0f}): tight ranges and "
-                     "breakouts that fail back into rotation — size down or take scalps.",
-            "normal": f"{v} is in the normal band: structured break-and-retest trades with "
-                      "normal stops.",
-            "elevated": f"{v} is elevated: wider ranges and noise — widen stops, take partials "
-                        "earlier, and don't fade strength.",
-            "stressed": f"{v} with the curve "
-                        f"{'in backwardation' if shape == 'backwardation' else 'stressed'}: "
-                        "levels hold less in this tape — cut size hard.",
+            "grind": f"{v} is in the grind band (under {VIX_GRIND:.0f}): small ranges, breakouts "
+                     "stall and fall back inside the range — fade the edges or take scalps, "
+                     "half size, don't chase a break.",
+            "normal": normal,
+            "elevated": f"{v} is elevated: big moves that extend then whip back, stocks move with "
+                        "the index not their own story — trade with the index direction only, "
+                        "wider stops, partials early, smaller size, don't fade strength.",
+            "stressed": stressed,
         }[band or "normal"])
+        if month is not None:
+            notes.append(f"Against its own month {v} sits at the {month['pctile']}th percentile "
+                         f"({month['lo']:.1f}–{month['hi']:.1f}).")
     if em is not None and spy and spy.get("last"):
         pts = em / 100.0 * float(spy["last"])
         notes.append(f"SPY's implied one-day move is ±{em:.2f}% (±{pts:.2f}).")
@@ -273,8 +348,13 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
             "last": vix_last, "pct": vix_pct, "chg": vq.get("chg") if vq else None,
             "ratio": vt.get("ratio"), "shape": shape,
             "vvix": vvq.get("last") if vvq else None, "vvix_pct": vvq.get("pct") if vvq else None,
+            # The VIX against its own month (volterm.vix_month): the other
+            # granularity — an 18 after a week at 13 is not an 18 after a week at 25.
+            "month": month,
         },
         "band": band,
+        # quiet / heavy inside normal, panic inside stressed — words, never score.
+        "sub": sub,
         "spy_em_pct": round(em, 3) if em is not None else None,
         "tape": {k: _tape(tape_rows.get(k), k) for k in ("SPY", "QQQ", "IWM")},
         "bias": bias,
@@ -474,12 +554,10 @@ def _part(key: str, label: str, pts: float, mx: int, note: str) -> dict[str, Any
     return {"key": key, "label": label, "pts": round(pts), "max": mx, "note": note}
 
 
-def in_play(row: dict[str, Any], premkt: dict[str, Any] | None,
-            earnings: dict[str, Any] | None,
-            news: list[dict[str, Any]] | None) -> tuple[float, str]:
-    """Before the bell: the gap, the pre-market volume, the catalyst → (points,
-    note). Side-blind on purpose — a name is in play whichever way it gapped,
-    and the side is RS's call. Pure."""
+def in_play(row: dict[str, Any], premkt: dict[str, Any] | None) -> tuple[float, str]:
+    """Before the bell: the gap and the pre-market volume → (points, note).
+    Side-blind on purpose — a name is in play whichever way it gapped, and the
+    side is RS's call. The catalyst is its own part (catalyst_read). Pure."""
     bits: list[str] = []
     pts = 0.0
 
@@ -503,36 +581,201 @@ def in_play(row: dict[str, Any], premkt: dict[str, Any] | None,
         bits.append(f"pre-market {pct:.2f}% of ADV")
     else:
         bits.append("no pre-market volume yet")
-
-    # The catalyst: a report since yesterday's close is the reason; a report
-    # today at an unconfirmed time half of one. Headlines count by number and
-    # only a little — the classifier's "rating" and "earnings" kinds were 13 of
-    # 31 names on 2026-10-14 (reiterations, and ASML's miss naming every chip
-    # name), so a kind is not a catalyst and the mega caps' constant coverage
-    # earns at most 2.
-    days, when = (earnings or {}).get("days"), (earnings or {}).get("when")
-    fresh = [n for n in news or []
-             if n.get("age_min") is not None and n["age_min"] <= CATALYST_FRESH_MIN]
-    if days == -1 or (days == 0 and when == "pre"):
-        pts += W_CATALYST
-        bits.append("reported since the close")
-    elif days == 0 and when != "after":
-        pts += W_CATALYST / 2
-        bits.append("reports today")
-    elif fresh:
-        pts += 2 if len(fresh) >= 3 else 1
-        bits.append(f"{len(fresh)} headline{'s' if len(fresh) != 1 else ''} since the close")
     return pts, " · ".join(bits)
+
+
+# ---- the catalyst, read for direction ---------------------------------------
+#
+# FOUR THINGS CARRY DIRECTION; A PRICE-MOVE STORY DOES NOT. A title can say
+# "upgraded" and "misses" at once — those are skipped as ambiguous rather than
+# netted. The kinds the headline classifier assigns (news_kind) were never
+# trusted as catalysts (13 of 31 names on 2026-10-14 were "rating" on
+# reiterations); these patterns are narrower and name the action.
+_BULL = re.compile(
+    r"upgrad|rais\w* (?:its |the |their )?(?:price )?target|"
+    r"lift\w* (?:its |the )?(?:price )?target|"
+    r"initiat\w*[^.]{0,40}\b(?:buy|outperform|overweight)\b|reiterat\w*[^.]{0,20}\bbuy\b|"
+    r"rais\w* (?:full[- ]year |fy ?\d* |annual |its |the )?(?:guidance|outlook|forecast)|"
+    r"hik\w* (?:its |the )?(?:guidance|outlook|forecast)|\bbeats?\b|"
+    r"\btops? (?:estimates|expectations)",
+    re.I)
+_BEAR = re.compile(
+    r"downgrad|cut\w* (?:its |the |their )?(?:price )?target|"
+    r"lower\w* (?:its |the )?(?:price )?target|"
+    r"trim\w* (?:its |the )?(?:price )?target|"
+    r"initiat\w*[^.]{0,40}\b(?:sell|underperform|underweight)\b|"
+    r"cut\w* (?:full[- ]year |fy ?\d* |annual |its |the )?(?:guidance|outlook|forecast)|"
+    r"lower\w* (?:its |the )?(?:guidance|outlook|forecast)|slash\w* (?:guidance|outlook|forecast)|"
+    r"withdraw\w* (?:its )?guidance|\bmiss(?:es|ed)?\b|\bfalls? short\b|"
+    r"\b(?:secondary|stock|share) offering|\bprobe\b|investigat|\brecall\b|lawsuit",
+    re.I)
+_OFFERING_FORMS = ("S-1", "S-3", "424B", "F-1", "F-3")
+
+
+def headline_direction(title: str) -> str | None:
+    """"bull", "bear", or None — the four catalyst kinds, by what the title says
+    was done, never by the price move it describes. Both ways at once is None."""
+    bull, bear = bool(_BULL.search(title)), bool(_BEAR.search(title))
+    if bull == bear:
+        return None
+    return "bull" if bull else "bear"
+
+
+def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
+                  news: list[dict[str, Any]] | None,
+                  filings: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """The catalyst part: {pts, note, against} — points with the side (up to
+    W_CATALYST), P_CATALYST against it with the item quoted in `against`, zero
+    with no directional item. Pure.
+
+    Items: a report since the close with its surprise sign (W_CATALYST); a
+    rating, target or guidance headline since the close (W_CATALYST); a beat or
+    miss headline (W_CATALYST); an offering filed in the last three days (3,
+    bear); a bankruptcy 8-K (W_CATALYST, bear). The strongest item each way
+    decides; against wins a tie, because the downside of ranking a name into
+    its own bad news is the larger one.
+    """
+    items: list[tuple[str, int, str]] = []  # (direction, weight, text)
+    days, when = (earnings or {}).get("days"), (earnings or {}).get("when")
+    sp = (earnings or {}).get("surprise_pct")
+    if earnings and (days == -1 or (days == 0 and when == "pre")):
+        when_txt = "after the close" if days == -1 else "this morning"
+        if isinstance(sp, (int, float)) and sp != 0:
+            items.append(("bull" if sp > 0 else "bear", W_CATALYST,
+                          f"reported {when_txt}, EPS {sp:+.1f}% vs estimate"))
+    fresh = [h for h in news or []
+             if isinstance(h, dict) and h.get("age_min") is not None
+             and h["age_min"] <= CATALYST_FRESH_MIN]
+    for h in fresh:
+        d = headline_direction(str(h.get("title") or ""))
+        if d is None:
+            continue
+        pub = str(h.get("publisher") or "").strip()
+        age = h.get("age_min")
+        age_txt = f"{round(age / 60)}h" if isinstance(age, (int, float)) and age >= 60 else (
+            f"{round(age)}m" if isinstance(age, (int, float)) else "")
+        text = f"{pub + ': ' if pub else ''}\"{str(h.get('title') or '').strip()[:90]}\""
+        items.append((d, W_CATALYST, f"{text} ({age_txt})" if age_txt else text))
+    for f in filings or []:
+        form = str((f or {}).get("form") or "")
+        desc = str((f or {}).get("desc") or form)
+        if form.startswith(_OFFERING_FORMS):
+            items.append(("bear", 3, f"offering filed: {desc[:60]}"))
+        elif form.startswith("8-K") and "bankruptcy" in desc.lower():
+            items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}"))
+    if side not in ("long", "short") or not items:
+        n_fresh = len(fresh)
+        why = ("no side" if side not in ("long", "short") else
+               f"no directional catalyst · {n_fresh} headline{'s' if n_fresh != 1 else ''} "
+               f"since the close" if n_fresh else "no directional catalyst · no headlines since "
+               "the close")
+        return {"pts": 0, "note": why, "against": None}
+    mine = "bull" if side == "long" else "bear"
+    with_items = sorted((it for it in items if it[0] == mine), key=lambda x: -x[1])
+    against_items = sorted((it for it in items if it[0] != mine), key=lambda x: -x[1])
+    best_with = with_items[0] if with_items else None
+    best_against = against_items[0] if against_items else None
+    if best_against and (best_with is None or best_against[1] >= best_with[1]):
+        note = f"against the {side} · {best_against[2]}"
+        if best_with:
+            note += f" · with it: {best_with[2]}"
+        return {"pts": P_CATALYST, "note": note, "against": best_against[2]}
+    assert best_with is not None
+    note = f"with the {side} · {best_with[2]}"
+    if best_against:
+        note += f" · against it: {best_against[2]}"
+    return {"pts": min(best_with[1], W_CATALYST), "note": note, "against": None}
+
+
+def _signal_minute(at_et: Any) -> int | None:
+    m = re.match(r"^(\d{1,2}):(\d{2})", str(at_et or ""))
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+
+def latest_trade_signal(signals: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The row's newest (L) or (E) today, or None. Pure."""
+    for sg in reversed(signals or []):
+        if isinstance(sg, dict) and sg.get("kind") in ("L", "E"):
+            return sg
+    return None
+
+
+def clock_penalty(signals: list[dict[str, Any]] | None) -> tuple[int, str] | None:
+    """P_CLOCK when the newest (L)/(E) fired in the first CLOCK_OPEN_MIN minutes
+    or the last CLOCK_CLOSE_MIN of the regular session, with the record's rate
+    in the note; None otherwise. Pure."""
+    sg = latest_trade_signal(signals)
+    if sg is None:
+        return None
+    m = _signal_minute(sg.get("at_et"))
+    if m is None:
+        return None
+    label = f"({sg['kind']}) at {sg.get('at_et')}"
+    if 9 * 60 + 30 <= m < 9 * 60 + 30 + CLOCK_OPEN_MIN:
+        return P_CLOCK, (f"{label}, first {CLOCK_OPEN_MIN} minutes: {RECORD_OPEN_WIN}% of "
+                         f"such signals reached +1R")
+    if m >= 16 * 60 - CLOCK_CLOSE_MIN:
+        return P_CLOCK, f"{label}, last hour: {RECORD_CLOSE_WIN}% of such signals reached +1R"
+    return None
+
+
+def tape_penalty(side: str | None, conviction: dict[str, Any] | None) -> tuple[int, str] | None:
+    """P_TAPE for a setup against the tape count's moderate or strong lean. Pure."""
+    if side not in ("long", "short") or not isinstance(conviction, dict):
+        return None
+    bias, grade = conviction.get("bias"), conviction.get("grade")
+    if bias in ("long", "short") and bias != side and grade in TAPE_GRADES:
+        return P_TAPE, (f"{side} against a {grade} {bias} tape, {conviction.get('agree')} of "
+                        f"{conviction.get('total')} agree")
+    return None
+
+
+def score_band(total: int | float | None) -> str | None:
+    """The record's bands: "<40", "40-59", "60+". Pure."""
+    if total is None:
+        return None
+    return "60+" if total >= 60 else "40-59" if total >= 40 else "<40"
+
+
+def record_for(row_kind: str | None, side: str | None, total: int | float | None,
+               table: dict[str, dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The record line: settled signals of this kind, side and band (scanlog
+    record_table), from RECORD_MIN of them, flagged small under RECORD_SOLID. Pure."""
+    band = score_band(total)
+    if not table or row_kind not in ("L", "E") or side not in ("long", "short") or band is None:
+        return None
+    r = table.get(f"{band}|{row_kind}|{side}")
+    if not r or (r.get("n") or 0) < RECORD_MIN:
+        return None
+    return {"kind": row_kind, "side": side, "band": band, "n": r["n"], "win_1r": r.get("win_1r"),
+            "avg_close_r": r.get("avg_close_r"), "sessions": r.get("sessions"),
+            "small": r["n"] < RECORD_SOLID}
+
+
+def implied_kind(row: dict[str, Any]) -> str | None:
+    """The signal kind a row's setup implies: today's newest (L)/(E), else (L)
+    for a retest or pullback and (E) for an extended name. Pure."""
+    sg = latest_trade_signal(row.get("signals"))
+    if sg is not None:
+        return str(sg.get("kind"))
+    state = (row.get("setup") or {}).get("state")
+    return "L" if state in ("retest", "pullback") else "E" if state == "extended" else None
 
 
 def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
               earnings: dict[str, Any] | None, event: dict[str, Any] | None,
               session: str = "rth", premkt: dict[str, Any] | None = None,
-              news: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The contract's score: five parts and the penalties, every one listed. Pure.
+              news: list[dict[str, Any]] | None = None,
+              frame_read: dict[str, Any] | None = None,
+              catalyst: dict[str, Any] | None = None,
+              conviction: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The contract's score: seven parts and the penalties, every one listed. Pure.
 
     Before the bell (and overnight) the volume part is IN PLAY instead — see
-    W_INPLAY. From 09:30 it is RVOL exactly as before.
+    W_INPLAY. From 09:30 it is RVOL exactly as before. The daily frame
+    (W_FRAME) and the catalyst (W_CATALYST, catalyst_read) are the sixth and
+    seventh; the clock and the tape (P_CLOCK, P_TAPE) are penalties from the
+    record. The total is capped at 100 as before.
     """
     setup = row.get("setup") or {}
     side = setup.get("side")
@@ -584,7 +827,7 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     # ---- volume (in play before the bell) -----------------------------------
     rvol = row.get("rvol")
     if session in ("pre", "closed"):
-        ip, inote = in_play(row, premkt, earnings, news)
+        ip, inote = in_play(row, premkt)
         parts.append(_part("inplay", "In play", ip, W_INPLAY, inote))
     else:
         pts = 0
@@ -610,7 +853,32 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         bits.append("sector tailwind")
     parts.append(_part("market", "Market", pts, 15, ", ".join(bits) or "no tailwind"))
 
+    # ---- the daily frame -----------------------------------------------------
+    ws = frame.with_side(frame_read, side)
+    ftext = (frame_read or {}).get("text") or ""
+    if ws == "with":
+        pts, note = W_FRAME, f"with the daily trend — {ftext}"
+    elif ws == "mixed":
+        pts, note = W_FRAME // 2, f"between the averages — {ftext}"
+    elif ws == "against":
+        pts, note = 0, f"against the daily trend — {ftext}"
+    else:
+        pts, note = 0, "no daily frame yet" if d else "no side"
+    parts.append(_part("frame", "Daily frame", pts, W_FRAME, note))
+
+    # ---- the catalyst, for direction ------------------------------------------
+    cat = catalyst if catalyst is not None else catalyst_read(side, earnings, news, None)
+    cpts = cat.get("pts") or 0
+    parts.append(_part("catalyst", "Catalyst", cpts, W_CATALYST if cpts >= 0 else 0,
+                       str(cat.get("note") or "")))
+
     # ---- penalties -----------------------------------------------------------
+    clk = clock_penalty(row.get("signals"))
+    if clk is not None:
+        parts.append(_part("clock", "Clock", clk[0], 0, clk[1]))
+    tp = tape_penalty(side, conviction)
+    if tp is not None:
+        parts.append(_part("tape", "Tape", tp[0], 0, tp[1]))
     ru = row.get("range_used")
     if ru is not None and ru >= FUEL_USED:
         parts.append(_part("fuel", "Range used", P_FUEL, 0, f"{ru:.1f}× daily ATR used"))
@@ -629,12 +897,27 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
 
 def flags_for(row: dict[str, Any], earnings: dict[str, Any] | None,
               event: dict[str, Any] | None, news: list[dict[str, Any]],
-              filings: list[dict[str, Any]], session: str) -> list[dict[str, Any]]:
+              filings: list[dict[str, Any]], session: str,
+              frame_read: dict[str, Any] | None = None,
+              short: dict[str, Any] | None = None,
+              catalyst: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The few things a reader must see before taking the trade. Pure."""
     out: list[dict[str, Any]] = []
 
     def add(kind: str, tone: str, text: str) -> None:
         out.append({"kind": kind, "tone": tone, "text": text})
+
+    if catalyst and catalyst.get("against"):
+        add("catalyst", "warn", f"Against: {catalyst['against']}")
+
+    side = (row.get("setup") or {}).get("side") or (row.get("score") or {}).get("side")
+    if frame.with_side(frame_read, side) == "against" and frame_read:
+        trend = "downtrend" if frame_read.get("trend") == "down" else "uptrend"
+        add("frame", "warn", f"{'Long' if side == 'long' else 'Short'} into a daily {trend}: "
+                             f"{frame_read.get('text')}")
+    sq = squeeze_flag(short, side)
+    if sq is not None:
+        add(sq["kind"], sq["tone"], sq["text"])
 
     if earnings is not None:
         days, when = earnings["days"], earnings["when"]
@@ -696,8 +979,21 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           closes: dict[str, list[float]] | None = None,
           iv_hist: dict[str, list[float]] | None = None,
           premkt: dict[str, dict[str, Any]] | None = None,
-          sector_map: dict[str, str] | None = None) -> dict[str, Any]:
+          sector_map: dict[str, str] | None = None,
+          daily: dict[str, list[Any]] | None = None,
+          shorts: dict[str, dict[str, Any]] | None = None,
+          earn_hist: dict[str, list[dict[str, Any]]] | None = None,
+          earn_next: dict[str, dict[str, Any]] | None = None,
+          flow_ctx: dict[str, dict[str, Any]] | None = None,
+          context: list[dict[str, Any]] | None = None,
+          constituents: dict[str, Any] | None = None,
+          record: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
+
+    `daily` is each name's daily bars (the realised earnings moves), `shorts`
+    its short interest (sources/shortint), `earn_hist` its past report dates
+    (sources/earnhist) and `flow_ctx` the previous session's open interest and
+    the chain's volume history (sources/options.OiLog) — all optional.
 
     THE SESSION IS THE CLOCK'S, read now — not whatever the last job tick
     stored. Before the first tick there is no stored block at all, and a payload
@@ -711,7 +1007,18 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
     td = clock.trading_day
 
     reg = regime(quotes, {k: rows_in.get(k) for k in ("SPY", "QQQ", "IWM")}, calendar,
-                 session, now)
+                 session, now, context=context)
+    # THE TAPE COUNT BEFORE THE SCORE (marketctx.conviction_for), on the
+    # technical rows as they stand: the tape penalty reads it, and the Market
+    # tab prints the same count. Its failure is a missing count, never a
+    # missing payload.
+    try:
+        reg["conviction"] = marketctx.conviction_for(
+            {"session": session, "trading_day": td.isoformat(),
+             "rows": [r for r in rows_in.values() if isinstance(r, dict)]},
+            quotes, sectors, constituents, now)
+    except (ValueError, TypeError, KeyError, ZeroDivisionError):
+        reg["conviction"] = None
     event = reg["event"]
     sector_rs = {s.get("key"): s.get("rs_day") for s in sectors}
 
@@ -729,7 +1036,10 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         srs = sector_rs.get(sector) if sector else None
         row["sector"] = sector
         row["sector_rs"] = round(srs, 3) if isinstance(srs, (int, float)) else None
-        earn = earnings_for(sym, earnings, td)
+        # The calendar's row for the name, else its next report as Nasdaq
+        # lists it (a week further out than the calendar feed reaches), so the
+        # options maths can price the report whenever the chain covers it.
+        earn = earnings_for(sym, earnings, td) or next_report((earn_next or {}).get(sym), td)
         nws = news_for(sym, news.get(sym) or [], wire, aliases.get(sym) or [], now)
         fil = [f for f in (filings.get(sym) or [])][:FILINGS_MAX]
         row["earnings"] = earn
@@ -747,17 +1057,39 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         adv = base.get("adv20")
         row["adv20"] = adv if isinstance(adv, (int, float)) else None
         row["premkt"] = premkt_for((premkt or {}).get(sym), row["adv20"])
+        # The daily frame against the live print (frame.read); the levels
+        # themselves (`frame`) ride along from the bars job.
+        row["frame_read"] = frame.read(base.get("frame"), row.get("last"))
+        row["short"] = (shorts or {}).get(sym)
+        side0 = (row.get("setup") or {}).get("side")
+        cat = catalyst_read(side0, earn, nws, fil)
         if row.get("ok"):
             row["score"] = score_row(row, reg, srs, earn, event, session,
-                                     premkt=row["premkt"], news=nws)
-            row["flags"] = flags_for(row, earn, event, nws, fil, session)
+                                     premkt=row["premkt"], news=nws,
+                                     frame_read=row["frame_read"], catalyst=cat,
+                                     conviction=reg.get("conviction"))
+            row["flags"] = flags_for(row, earn, event, nws, fil, session,
+                                     frame_read=row["frame_read"], short=row["short"],
+                                     catalyst=cat)
         else:
             row["score"] = {"total": 0, "side": None, "parts": []}
             row["flags"] = []
+        # The record line: settled signals of this kind, side and score band.
+        row["record"] = record_for(implied_kind(row), row["score"].get("side"),
+                                   row["score"].get("total"), record)
         if isinstance(row.get("setup"), dict):
             row["setup"] = {k: v for k, v in row["setup"].items() if k != "lost_vwap"}
         # After the score: the contract helper trades the row's side.
-        row["options"] = options_for(sym, row, options, closes, iv_hist, td, now)
+        fc = (flow_ctx or {}).get(sym) or {}
+        row["options"] = options_for(sym, row, options, closes, iv_hist, td, now,
+                                     reports=report_dates((earn_hist or {}).get(sym)),
+                                     daily=(daily or {}).get(sym),
+                                     oi_prev=fc.get("oi_prev"), vol_hist=fc.get("vol_hist"))
+        # The first targets by the plan's rule — the options maths computed
+        # them with the front straddle; without a chain, from the row alone.
+        o = row["options"]
+        row["targets"] = (o.get("targets") if isinstance(o, dict) and o.get("ok") else None) \
+            or targets.target_candidates(targets.view(row, None))
         # Context, never score: its sector's big caps reporting this week.
         row["peers"] = peers_for(sym, sector, earnings, td, sector_map or {})
         pf = peer_flag(row["peers"], td)
@@ -782,10 +1114,41 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
     }
 
 
+def next_report(nxt: dict[str, Any] | None, trading_day: date) -> dict[str, Any] | None:
+    """A name's next report from the history source (sources/earnhist.parse_next)
+    in the row's own `earnings` shape — the calendar feed reaches a week ahead,
+    this reaches as far as Nasdaq knows, with no estimate or actual. Pure."""
+    if not isinstance(nxt, dict):
+        return None
+    try:
+        d = date.fromisoformat(str(nxt.get("date")))
+    except (ValueError, TypeError):
+        return None
+    days = (d - trading_day).days
+    if days < 0:
+        return None
+    when = nxt.get("when") if nxt.get("when") in ("pre", "after", "unspecified") else "unspecified"
+    return {"date": d.isoformat(), "when": when, "days": days,
+            "eps_forecast": None, "eps_actual": None, "surprise_pct": None}
+
+
+def report_dates(rows: list[dict[str, Any]] | None) -> list[date]:
+    """The past report dates in a name's earnings history. Pure."""
+    out: list[date] = []
+    for r in rows or []:
+        try:
+            out.append(date.fromisoformat(str(r.get("date"))))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return out
+
+
 def options_for(sym: str, row: dict[str, Any],
                 options: dict[str, tuple[optcalc.Chain, float]] | None,
                 closes: dict[str, list[float]] | None, iv_hist: dict[str, list[float]] | None,
-                trading_day: date, now: datetime) -> dict[str, Any] | None:
+                trading_day: date, now: datetime, reports: list[date] | None = None,
+                daily: list[Any] | None = None, oi_prev: dict[str, Any] | None = None,
+                vol_hist: list[float] | None = None) -> dict[str, Any] | None:
     """The row's OptionsCtx (optcalc.options_ctx), or None before its first chain.
 
     A failure in the maths costs this one row its options, never the payload:
@@ -798,7 +1161,9 @@ def options_for(sym: str, row: dict[str, Any],
     age = round((now.timestamp() - fetched) / 60.0, 2) if fetched else None
     try:
         return optcalc.options_ctx(chain, row, (closes or {}).get(sym) or [],
-                                   (iv_hist or {}).get(sym) or [], trading_day, now, age)
+                                   (iv_hist or {}).get(sym) or [], trading_day, now, age,
+                                   reports=reports, daily=daily, oi_prev=oi_prev,
+                                   vol_hist=vol_hist)
     except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
         return optcalc.unavailable(f"options maths failed: {e.__class__.__name__}: {e}", age)
 
@@ -819,4 +1184,5 @@ def _empty(sym: str, age: float | None, why: str) -> dict[str, Any]:
         "signals": [], "score": {"total": 0, "side": None, "parts": []}, "flags": [],
         "earnings": None, "news": [], "filings": [], "options": None,
         "adv20": None, "premkt": None, "peers": [],
+        "frame": None, "frame_read": None, "short": None, "targets": [], "record": None,
     }

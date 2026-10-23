@@ -224,6 +224,23 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
         </p>
       )}
 
+      {/* THE DAILY FRAME (owner, 2026-10-22): a PDH break inside a downtrend
+          and one at new highs read the same on ten-minute bars and are not
+          the same trade. The words are the collector's (frame.read). */}
+      {r.frame_read?.text && (
+        <p className="mt-2 text-[12px] text-ink-3">
+          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">Daily</span>
+          <span
+            className={cn(
+              r.frame_read.trend === "up" ? "text-call-fig" : r.frame_read.trend === "down" ? "text-put-fig" : "text-ink-2",
+            )}
+          >
+            {r.frame_read.trend === "up" ? "uptrend" : r.frame_read.trend === "down" ? "downtrend" : "between the averages"}
+          </span>
+          <span className="text-ink-2"> · {r.frame_read.text}</span>
+        </p>
+      )}
+
       <div className="mt-3.5">
         <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">Signals today · confirmed 10-minute bars</p>
         {r.signals.length === 0 ? (
@@ -288,6 +305,25 @@ function Score({ r }: { r: ScanRow }) {
           );
         })}
       </ul>
+      {/* THE RECORD LINE (owner, 2026-10-23: "as high probability as
+          possible"): what logged signals of this kind, side and band did —
+          the only probability the rank can honestly show, with its sample. */}
+      {r.record && (
+        <p className="mt-3 border-t border-ring/60 pt-2 text-[11.5px] leading-[1.5] text-ink-3">
+          <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Signals like this</span>
+          <span className="text-ink-2">
+            ({r.record.kind}) {r.record.side}s scored {r.record.band}
+          </span>
+          {" · "}
+          <span className="fig text-ink">{r.record.win_1r != null ? `${Math.round(r.record.win_1r * 100)}%` : "—"}</span> reached +1R ·
+          average <span className={cn("fig", (r.record.avg_close_r ?? 0) >= 0 ? "text-ink" : "text-put-fig")}>
+            {r.record.avg_close_r != null ? `${r.record.avg_close_r >= 0 ? "+" : ""}${r.record.avg_close_r.toFixed(1)} R` : "—"}
+          </span>{" "}
+          at the close · <span className="fig">{r.record.n}</span> signals over{" "}
+          <span className="fig">{r.record.sessions ?? "—"}</span> sessions
+          {r.record.small && <span className="block text-ink-3">Small sample: a hint, not a rate, until there are 30.</span>}
+        </p>
+      )}
     </section>
   );
 }
@@ -427,6 +463,23 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
             <span className="text-ink-3">none in the window the calendar covers</span>
           )}
         </p>
+        {/* Short interest (sources/shortint): the squeeze a short can meet
+            that has nothing to do with the level. Amber past 15% of the float. */}
+        {r.short?.pct_float != null && (
+          <p className="text-[12px] text-ink-2">
+            <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Short interest</span>
+            <span className={cn("fig", r.short.pct_float >= 15 ? "text-flip-fig" : "text-ink")}>
+              {r.short.pct_float.toFixed(1)}%
+            </span>{" "}
+            of the float
+            {r.short.days_to_cover != null && (
+              <>
+                {" "}· <span className="fig">{r.short.days_to_cover.toFixed(1)}</span> days to cover
+              </>
+            )}
+            {r.short.as_of && <span className="text-ink-3"> · as of {r.short.as_of}</span>}
+          </p>
+        )}
         {r.peers && r.peers.length > 0 && (
           <p className="text-[12px] text-ink-2">
             <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Sector peers</span>

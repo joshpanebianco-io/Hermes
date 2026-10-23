@@ -108,7 +108,7 @@ export function MarketBoard({ data }: { data: TerminalData }) {
               <MIndexOptions rows={ctx?.index_options ?? null} />
             </>
           )}
-          <MVolatility vol={data.volterm} ageMin={age("quotes")} />
+          <MVolatility vol={data.volterm} ageMin={age("quotes")} putcall={data.putcall} />
           <MRotation
             rows={data.sectors ?? NONE}
             ageMin={age("sectors")}

@@ -125,6 +125,13 @@ export interface CalendarRow {
   /** 0–5; 5 is a release that stops the tape. */
   score: number;
   note: string | null;
+  /**
+   * Once printed: hot (the stronger economy), cold, or in line — the
+   * collector's read (releases.read_of). Absent from an older collector.
+   */
+  read?: "hot" | "cold" | "inline" | null;
+  /** What that read means for each book, in the collector's words (releases.implication). */
+  meaning?: Record<"NQ" | "ES" | "GC", string> | null;
 }
 
 export interface GexLevel {
@@ -273,6 +280,121 @@ export interface ExpiryState {
   note: string | null;
 }
 
+/* ------------------------------------------------------------------------ *
+ * The driver board (server/newsterminal/drivers.py) and the inputs it added.
+ * ------------------------------------------------------------------------ */
+
+export interface DriverVote {
+  key: string;
+  label: string;
+  /** Macro sets the direction, positioning how far a move runs, structure whether the tape accepts it. */
+  layer: "macro" | "positioning" | "structure";
+  /** The figure as printed: "4.10% +6.0bp", "negative γ · below flip 30,200". */
+  value: string;
+  vote: "long" | "short" | "neutral";
+  /** Why that reads as it does — or why it is neutral (closed, missing, inside the band). */
+  note: string;
+}
+
+/** What a move will find — positioning, the market-wide put/call, OpEx — never a vote. */
+export interface DriverContext {
+  key: string;
+  label: string;
+  value: string;
+  note: string;
+}
+
+export interface DriverBook {
+  key: string;
+  last: number | null;
+  bias: "long" | "short" | null;
+  agree: number;
+  against: number;
+  neutral: number;
+  total: number;
+  grade: "strong" | "moderate" | "weak" | "none";
+  /** The ceiling the Analysis brief's call is capped at. */
+  max_conviction: 1 | 2 | 3 | 4 | 5;
+  votes: DriverVote[];
+  macro_lean: "long" | "short" | null;
+  structure_lean: "long" | "short" | null;
+  /** Macro and structure disagree: lower conviction, trade the levels. */
+  conflict: boolean;
+  regime: "POS" | "NEG" | null;
+  /** One line on how to treat the count — the strip's sentence. */
+  treatment: string;
+  context: DriverContext[];
+}
+
+export interface Drivers {
+  built_utc: string;
+  /** The scanner's session, which says whether the cash-market reads may vote. */
+  session: string;
+  ny_open: boolean;
+  books: Record<string, DriverBook>;
+  error?: string;
+}
+
+/** A book's or a name's daily levels (frame.frame_of), from finished sessions only. */
+export interface Frame {
+  ok?: boolean;
+  error?: string | null;
+  as_of: string | null;
+  sessions: number;
+  prev_close: number | null;
+  sma20: number | null;
+  sma50: number | null;
+  sma200: number | null;
+  wk52_hi: number | null;
+  wk52_lo: number | null;
+  /** Last completed week's range. */
+  pw_hi: number | null;
+  pw_lo: number | null;
+  pw_close: number | null;
+}
+
+export interface History {
+  books: Record<string, Frame>;
+  today?: string;
+}
+
+/** One book's Commitments of Traders read (sources/cot.py). */
+export interface CotBook {
+  ok: boolean;
+  error?: string | null;
+  market?: string;
+  /** The Tuesday the report is as of. */
+  as_of?: string;
+  /** "Leveraged funds" for the index futures, "Managed money" for gold. */
+  spec?: string;
+  net?: number;
+  prev?: number | null;
+  chg?: number | null;
+  oi?: number | null;
+  pct_oi?: number | null;
+  /** The net's percentile over the last year of weeks. */
+  pctile?: number | null;
+  word?: "crowded long" | "crowded short" | "middling" | null;
+  read?: string;
+  other?: { label: string; net: number } | null;
+  weeks?: number;
+}
+
+export interface Cot {
+  books: Record<string, CotBook>;
+}
+
+/** Cboe's daily put/call ratios (sources/cboepc.py) with the log's averages. */
+export interface PutCall {
+  date: string;
+  ratios: Partial<Record<"total" | "index" | "equity" | "etp" | "vix" | "spx", number>>;
+  avg20: Partial<Record<"total" | "index" | "equity" | "etp" | "vix" | "spx", number | null>>;
+  pctile: Partial<Record<"total" | "index" | "equity" | "etp" | "vix" | "spx", number | null>>;
+  /** Days held in the log — the averages and percentiles are over these. */
+  days: number;
+  read: { equity: string | null; total: string | null };
+}
+
 export interface Mover {
   symbol: string;
   name: string;
@@ -302,6 +424,45 @@ export interface VolTermPoint {
   pct: number | null;
 }
 
+/**
+ * A book's implied day — volterm.implied_day. The one-sigma move in the book's
+ * own points from its own index, how much of it today's Globex range has used,
+ * and implied against realised; GEXYGEN's 0DTE band beside it when that is up.
+ * Every word (`fuel`, `premium`) is the server's, scored with the stocks desk's
+ * thresholds — lib/vix mirrors them for the tables behind the row.
+ */
+export interface ImpliedBook {
+  key: string;
+  /** Decimals the book is quoted to: NQ 0, ES 2, GC 1. */
+  dp: number;
+  last: number;
+  prev: number | null;
+  /** The index the day is read from: VXN, VIX or GVZ. */
+  vol_key: string;
+  vol: number | null;
+  vol_pct: number | null;
+  /** The one-sigma day in percent and in points, and the band it draws round the last print. */
+  sigma_pct: number | null;
+  sigma: number | null;
+  lo: number | null;
+  hi: number | null;
+  /** Today's range since the 18:00 ET reopen, in points and against the previous close. */
+  range: number | null;
+  range_pct: number | null;
+  /** range_pct ÷ sigma_pct, and marketctx's word for it. */
+  used: number | null;
+  fuel: "room" | "normal" | "stretched" | null;
+  /** Twenty-session realised, the day it implies in points, implied over it, and optcalc's word. */
+  rv20: number | null;
+  rv_day: number | null;
+  iv_rv: number | null;
+  premium: "cheap" | "fair" | "rich" | null;
+  /** GEXYGEN's own 0DTE expected-move band and regime; null while it is down. */
+  gex_lo: number | null;
+  gex_hi: number | null;
+  regime: string | null;
+}
+
 export interface VolTerm {
   points: VolTermPoint[];
   /** Near over far. Above 1.00 is backwardation — the stressed shape. */
@@ -311,6 +472,10 @@ export interface VolTerm {
   note: string | null;
   skew: number | null;
   skew_pct: number | null;
+  /** Each book's implied day — on the terminal snapshot; the scanner's own curve carries none. */
+  books?: ImpliedBook[];
+  /** The VIX against its own month (volterm.vix_month): percentile of the last twenty closes, their low and high. */
+  vix_month?: { pctile: number; lo: number; hi: number; days: number } | null;
 }
 
 export interface PolicyMeeting {
@@ -351,10 +516,40 @@ export interface VPRow {
   bars: number;
 }
 
+/** A profile window's market-profile shape; absent from an older collector. */
+export interface VPShape {
+  shape?: string | null;
+  poc_pos?: number | null;
+  second_node?: number | null;
+  open?: number | null;
+}
+
+/** The profile's reads (profile.reads): the facts the brief is handed and the panel's sentence. */
+export interface ProfileReads {
+  developing_profile_open?: {
+    price: number;
+    anchored_et: string | null;
+    this_is: string;
+    vs_prev_rth_value: "above_value" | "inside_value" | "below_value";
+  };
+  price_now?: {
+    price: number;
+    vs_prev_rth_value?: "above_value" | "inside_value" | "below_value";
+    vs_overnight_value?: "above_value" | "inside_value" | "below_value";
+  };
+  text?: string | null;
+}
+
 export interface VPAssets {
   assets: Record<
     string,
-    { ok: boolean; error?: string | null; rows: VPRow[]; last?: number | null }
+    {
+      ok: boolean;
+      error?: string | null;
+      rows: Array<VPRow & VPShape>;
+      last?: number | null;
+      reads?: ProfileReads | null;
+    }
   >;
 }
 
@@ -414,6 +609,15 @@ export interface Terminal {
   policy_meetings: PolicyMeetings;
   earnings: EarningsRow[];
   expiry: ExpiryState;
+  /**
+   * The driver board and its own inputs (2026-10-22): the engine's count per
+   * book, a year of daily levels per book, the CFTC's positioning and Cboe's
+   * daily put/call. Each absent from an older collector.
+   */
+  drivers?: Drivers;
+  history?: History;
+  cot?: Cot;
+  putcall?: PutCall | null;
   /** Set by the route handler when the collector could not be reached at all. */
   offline?: { reason: string; api: string };
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import type { GexAsset } from "@/types/terminal";
+import type { ExpiryState, GexAsset, ImpliedBook } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { GammaPopover, gammaLine } from "@/components/vol/GammaRead";
 import { Tick } from "@/components/ui/Tick";
 import { num, pct, signed } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -41,15 +42,23 @@ export function Gamma({
   enabled,
   ageMin,
   error,
+  implied,
+  expiry,
 }: {
   assets: Record<string, GexAsset>;
   enabled: boolean;
   ageMin?: number | null;
   error?: string | null;
+  /** Each book's one-sigma day (the Volatility panel's rows), so the flip's distance reads in sigma. */
+  implied?: ImpliedBook[] | null;
+  /** The expiry block, for the OpEx-week note on the read. */
+  expiry?: ExpiryState | null;
 }) {
   const keys = Object.keys(assets);
   const [sel, setSel] = usePersisted<string>("gex.asset", "NQ", oneOf("NQ", "ES", "GC"));
   const active = assets[sel] ?? assets[keys[0]];
+  const book = assets[sel] ? sel : keys[0];
+  const sigma = implied?.find((b) => b.key === book)?.sigma ?? null;
 
   return (
     <Module
@@ -93,7 +102,7 @@ export function Gamma({
           </span>
         </Note>
       ) : (
-        <Ladder a={active} />
+        <Ladder a={active} book={book} sigma={sigma} expiry={expiry} />
       )}
     </Module>
   );
@@ -109,8 +118,19 @@ const SIDE_HUE = {
   flip: "var(--flip)",
 } as const;
 
-function Ladder({ a }: { a: GexAsset }) {
+function Ladder({
+  a,
+  book,
+  sigma,
+  expiry,
+}: {
+  a: GexAsset;
+  book: string;
+  sigma: number | null;
+  expiry?: ExpiryState | null;
+}) {
   const spot = a.spot ?? 0;
+  const line = gammaLine(a, sigma, expiry);
   // Spot is spliced into the level list so the ladder has a "you are here"
   // rung rather than a colour the reader has to locate.
   const rungs: {
@@ -169,6 +189,20 @@ function Ladder({ a }: { a: GexAsset }) {
           </span>
         )}
       </div>
+      {/* THE READ (owner, 2026-10-22): spot against the flip in points and in
+          the book's own sigma, the regime's rule, the walls either side, OpEx
+          week — one sentence, and the trigger for the rules behind it. */}
+      {line && (
+        <GammaPopover
+          asset={a}
+          book={book}
+          sigma={sigma}
+          expiry={expiry}
+          className="block w-full border-b border-ring/40 px-3 py-1.5 text-left"
+        >
+          <span className="block text-[10.5px] leading-[1.45] text-ink-2">{line}</span>
+        </GammaPopover>
+      )}
       <ul>
         {rungs.map((r) => {
           const isSpot = r.kind === "spot";

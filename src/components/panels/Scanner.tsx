@@ -13,7 +13,7 @@ import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
-import { BAND_LABEL } from "@/lib/vix";
+import { BAND_LABEL, bandChip } from "@/lib/vix";
 import { VixPopover } from "@/components/vol/VixBands";
 import { nextEvent } from "@/lib/events";
 import { groupReleases } from "@/lib/releases";
@@ -475,11 +475,19 @@ function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRo
           {/* THE FIGURE IS THE BUTTON (owner, 2026-10-21): the card opens the
               four bands with this row marked. Spans inside, because it is a
               <button> now — see components/vol/VixBands. */}
-          <VixPopover facts={{ ...v, band: regime.band }} className="-mx-1.5 -my-1 block w-[calc(100%+12px)] px-1.5 py-1">
+          <VixPopover
+            facts={{ ...v, band: regime.band, sub: regime.sub ?? null, month: v.month ?? null }}
+            className="-mx-1.5 -my-1 block w-[calc(100%+12px)] px-1.5 py-1"
+          >
             <span className="flex items-baseline gap-2">
               <Tick value={num(v.last, 2)} className="fig text-[19px] leading-none text-ink" />
               <Tick value={pct(v.pct)} className={cn("fig text-[11.5px]", dir(v.pct))} />
-              {regime.band && <span className={cn("qt-cap text-[10.5px]", bandHue)}>{BAND_LABEL[regime.band]}</span>}
+              {/* The band word with its sub-line: "Normal · 18+" over the median. */}
+              {regime.band && (
+                <span className={cn("qt-cap text-[10.5px]", bandHue)}>
+                  {bandChip(regime.band, regime.sub ?? null) ?? BAND_LABEL[regime.band]}
+                </span>
+              )}
             </span>
             <span className="mt-1.5 block text-[11px] text-ink-3">
               VIX/VIX3M <span className="fig text-ink-2">{v.ratio != null ? v.ratio.toFixed(2) : "—"}</span>{" "}

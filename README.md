@@ -96,6 +96,23 @@ Japan Times, the ECB, the Bank of England, the RBA and more), merged into one ta
 - **Cross-feed dedupe** that keeps the desk that filed first, encoding repair for
   double-encoded publishers, and section-page detection for query feeds.
 
+### The driver board
+Across the top of the Terminal, one cell per book: which way the engine's count
+leans, how many reads agree, the grade, and one line on how to treat it. Each cell
+opens the full board — every driver a vote with its threshold and its reason, in
+three layers: **macro** sets the direction (the 10Y's day change, the dollar,
+credit, the VIX and its curve, today's inflation prints), **positioning** says how
+far a move runs (dealer gamma and spot against the flip), **structure** says
+whether the tape accepts it (prior value, the last session's range, the daily
+frame, breadth and the index leaders). A macro lean the structure rejects is named
+as a **conflict**, which lowers conviction rather than picking a side. Under the
+votes, the context rows that never vote: the CFTC's **Commitments of Traders**
+(leveraged funds for the index futures, managed money for gold, with the net's
+percentile of the year), Cboe's daily **put/call** ratios, and OpEx week. The
+thresholds are the stocks desk's own where one exists, the grade is its
+arithmetic, and the Analysis brief is handed the count and may not be more
+confident than it.
+
 ### Session ranges, volume profile & dealer gamma
 ![Levels](docs/media/levels.png)
 
@@ -111,13 +128,20 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
   **developing profile** anchored at 18:00 ET through Asia/London and re-anchored at
   09:30 at the cash open. Each row draws its value area as a band, its POC as a tick,
   and live price as a marker. Built from 5-minute bars and labelled `≈` because that
-  is what it is: zones, not ticks.
+  is what it is: zones, not ticks. Under the rows, **the read in words**: where the
+  session opened against prior value and where price trades now — acceptance,
+  the failed break and the 80% rule, the rotation day — with the prior session's
+  shape (P, b, D, two distributions). The sentence opens the market-profile rules
+  it is read by.
 - **Gamma levels** — the seven prices where dealer hedging turns: three call walls,
   three put walls and the gamma flip for the **0DTE book**, with the regime badge
   (positive γ dampens moves; negative amplifies). Rank is drawn as chevrons —
   `▲▲▲` is the heaviest wall, not a footnote number. Sourced from a separate options
   analytics service over HTTP; if that service is down, this panel says so and shows
-  nothing, because a stale gamma level is worse than none.
+  nothing, because a stale gamma level is worse than none. Under the regime, **one
+  sentence**: spot against the flip in points and in the book's own one-sigma day,
+  the regime's rule (fade into the walls, or trade the break), the walls either
+  side, OpEx week — and it opens the dealer-flow rules behind each.
 
 ### The session clock & the vol curve
 ![Clock and vol](docs/media/clock.png)
@@ -133,9 +157,15 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
   the day after closes at 13:00), countdowns skip weekends, and London's markers run
   on London's clock — so the weeks when the UK and the US change DST on different
   Sundays no longer put the London open an hour out.
-- **Vol term structure** — VIX9D → VIX → VIX3M → VIX6M plus SKEW, with the
+- **Volatility** — the VIX curve (VIX9D → VIX → VIX3M → VIX6M plus SKEW) with the
   VIX/VIX3M ratio drawn against 1.00: contango is the calm shape, backwardation the
   stressed one, and the crossover usually leads the index rather than following it.
+  Under it, the **implied day** per book: the one-sigma move in NQ, ES and GC's own
+  points from VXN, VIX and GVZ, how much of it today's Globex range has used
+  (room / normal / stretched) and implied against twenty-day realised (cheap / fair /
+  rich) — the stocks desk's own thresholds, so the two desks agree — with GEXYGEN's
+  narrower 0DTE band beside it when that is up. Each row, and every VIX figure, opens
+  the bands and what they mean for the desk.
 
 ### Rates, the policy path, and the FOMC meeting-by-meeting read
 ![Rates](docs/media/rates.png)
@@ -148,6 +178,11 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
   **basis points priced per meeting** (`Sep 16 +17bp → 3.79%`). Never "a 72% chance of
   a cut": probability framing needs an assumed move size, and this never assumes one.
   The one convention (day-count around mid-month decisions) is documented and tested.
+  The path and the spreads open **what they mean**: the next decision in words, what
+  the day's move in the 10Y does to each book, what the curve's shape says.
+- **Cboe put/call** — the daily total, index and equity ratios with the log's
+  twenty-day average, on the Volatility panel of both desks; a sentiment read for the
+  week, never a timing tool for the open, and it says so.
 
 ### The book, index movers & sector rotation
 ![Macro](docs/media/macro.png)
@@ -169,7 +204,10 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
   tagged with the trading session it lands in, and a `MINE` filter that narrows to
   releases that actually reach NQ, ES or GC. Three figures per row — `act · cons ·
   prev` — because markets move on the gap between actual and consensus, not on the
-  number itself.
+  number itself. Once a print lands it carries its **read** — hot (the stronger
+  economy), cold or in line — and the chip opens what that means for NQ, ES and GC,
+  by theme: a hot CPI through the discount rate, a hot payrolls through the Fed, in
+  the server's words, the same ones the driver board counts.
 - **Fed & Treasury** — one diary of scheduled US rates risk: FOMC meetings, the Beige
   Book, governor speeches and testimony from the Board's own calendar, merged
   chronologically with **coupon auction supply** (3Y/10Y/30Y, reopenings named what
@@ -282,17 +320,47 @@ far from the level for it to come back.
 - **The setup, in words** — retest live, pulling back, extended (so the entry
   reference becomes VWAP or the 8 EMA), near a break, failed, or inside and
   chopping — with the entry price and price's distance from it in ten-minute ATRs.
+- **The daily frame** — a year of daily bars per name: above or below the 20, 50
+  and 200-day, the distance from the 52-week high, last week's range. A sixth score
+  part (with the daily trend, between the averages, or against it), and a flag when
+  a setup runs against it: a PDH break inside a downtrend is not the same trade as
+  one at new highs.
+- **Short interest** — the share of the float sold short and the days to cover,
+  from FINRA via Yahoo; a short on a name past 15% carries a squeeze flag, a long
+  the fuel.
 - **The weather strip** — VIX, its curve (VIX/VIX3M) and VVIX, the one-day implied
   SPY move (VIX ÷ √252), SPY / QQQ / IWM against their *own* levels, the tape's
   bias (confirmed or contradicted by which way VIX is moving), and the next
   high-impact US print. **VIX never ranks a name by itself**: it is the weather,
-  and it reaches a score only through the market part.
+  and it reaches a score only through the market part. The four bands (13 / 20 /
+  28) score; two sub-lines inside them only change the words: **18**, the VIX's
+  long-run median, below which the tape tends to mean-revert inside the day
+  (dealers long gamma: the retest holds, fades work) and above which it tends to trend
+  (dealers short gamma: breaks run, stops a notch wider, 1%-plus days normal),
+  with the chip reading `Normal · 18+`; and **35**, panic, where the VIX's own
+  mean reversion is the trade. The level is a proxy for the gamma flip, which
+  the driver board reads directly, and the table says so. Every row of the table
+  has two columns, *what the tape does* and *how to trade it*, the second written
+  for the desk's own break-and-retest: does the retest hold, how wide the stop,
+  what size. Every VIX figure's click-through also
+  reads the level against its own month: the percentile of the last twenty closes,
+  because an 18 after a week at 13 is not an 18 after a week at 25.
 - **A ranked list, not a black box** — every score is a sum of named parts
-  (structure 30 · relative strength 25 · entry location 20 · relative volume 10 ·
-  market 15, less penalties for a spent daily range, a print inside 30 minutes, an
-  after-the-close report today, or a failed break), each listed with the points it
-  earned. It orders the list; it is a **heuristic rank, not a measured
-  probability**, and the page never calls it one.
+  (structure 30 · relative strength 25 · entry location 20 · relative volume 10,
+  or before the bell the gap and the pre-market volume · market 15 · the daily
+  frame 6 · the catalyst 6, less penalties for a spent daily range, a print inside
+  30 minutes, an after-the-close report today, a failed break, a signal in the
+  first thirty minutes or the last hour, a setup against a moderate or strong
+  tape, or a catalyst against the side), each listed with the points it earned.
+  The **catalyst** reads direction, never a count: a report's surprise sign, a
+  rating or target change, guidance raised or cut, an offering filed — with the
+  side it earns, against it it costs and the headline is quoted on the row. The
+  clock and tape penalties come from the signal log (36% of signals in the first
+  half hour reached +1R against 60% in the hour after; longs on a short tape 41%
+  against shorts 58%). It orders the list; it is a **heuristic rank, not a measured
+  probability**, and the page never calls it one. What it does show is **the
+  record**: under the parts, what logged signals of the same kind, side and score
+  band did, with their count, from ten of them and marked small under thirty.
 - **What the chart does not show** — each name's headlines (Yahoo's per-ticker
   feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
   AMC and the surprise, and its SEC filings from the last three days (8-K items,
@@ -315,7 +383,10 @@ far from the level for it to come back.
   on and at the close — and a record by group (kind, side, score band). A bar that
   touches both the stop and +1R counts as stopped. It is a record, not a forecast,
   and it says so while the sample is small; it is what the score's weights get
-  calibrated against.
+  calibrated against. Every signal now logs the score's parts, and
+  `server/tools/fit_score.py` reports the win rate by band, each part's lift and a
+  logistic slope — it never rewrites a weight; the record is read and the weights
+  changed by hand with its output beside the change.
 - **An editable watchlist** — the Pine's 21 names by default, up to 40, kept by the
   collector; SPY, QQQ and IWM are always fetched as the benchmarks. A symbol Yahoo
   does not know backs off instead of being retried every tick.
@@ -346,6 +417,24 @@ single names every ten, one request every ten seconds at most):
   (stop distance × delta × 100, an approximation it names). Set a risk per trade
   in Settings → Options and it also says how many contracts that buys. Rules, not
   advice.
+- **The reward half.** Each contract is also priced at the **first target** by the
+  plan's own rule — what it is worth there, the reward per contract after half the
+  bid-ask, and that against the risk: **the option's own R**, which the stock's
+  hides. The structure the engine picks is the one with the better R when both are
+  priced, the premium rule otherwise, and the card says which.
+- **The earnings number.** With a report ahead: the straddle covering it, net of the
+  expiry before it the event alone, against the name's close-to-close moves on its
+  last four reports (Nasdaq's dates, the reaction day picked by volume) — dear,
+  cheap or about right. And the **term structure**, at-the-money IV per expiry,
+  where event premium shows as a front priced above the back.
+- **Positioning on the name.** Open interest is logged per session, so the flow
+  line reads the change since yesterday on each side and on the busiest strikes,
+  and today's chain volume against the name's own twenty-session average —
+  **unusual** past twice it.
+- **Every figure opens what it means for this trade** — IV30, realised, the premium
+  verdict, the rank, the straddle, skew, liquidity, flow and earnings, each read with
+  the name's own state (rich says the spread, a rank still building says how many
+  sessions it has, a flow leaning against the side says so).
 
 ### The Game plan — the stocks desk's own brief
 ![Game plan](docs/media/plan.png)

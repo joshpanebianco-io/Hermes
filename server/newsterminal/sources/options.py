@@ -25,6 +25,12 @@ THE IV LOG. Cboe gives today's IV30 and no history, and an IV rank needs a
 year of it. So every chain's IV30 is recorded once per session day
 (cache/iv_history.jsonl) from the day this shipped; the rank appears once
 twenty days are in, and says how many it has until then.
+
+THE OI LOG (2026-10-22). Open interest is yesterday's positioning and Cboe
+gives only today's figure, so each chain's open interest per contract and
+its day's volume are kept per session day (cache/oi_log.jsonl: two sessions
+of contracts, forty of volumes). That is what "calls +12k since yesterday"
+and "volume 2.3× its 20-day average" are read from (optcalc.options_flow).
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import json
 import os
 import time
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from .. import optcalc
 from ..config import BROWSER_UA, CACHE_DIR
@@ -41,6 +48,10 @@ from ..http import CACHE, SourceStatus, fetch, json_body
 
 CBOE = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 IV_HISTORY_FILE = os.path.join(CACHE_DIR, "iv_history.jsonl")
+OI_LOG_FILE = os.path.join(CACHE_DIR, "oi_log.jsonl")
+#: Sessions of per-contract open interest kept, and of chain volumes.
+OI_KEEP_DAYS = 2
+VOL_KEEP_DAYS = 40
 
 TICK_SEC = 10.0
 #: Refresh cadence in the stocks session window, and outside it.
@@ -141,6 +152,96 @@ class IvHistory:
             pass
 
 
+# -------------------------------------------------------------------- OI log
+
+
+class OiLog:
+    """Per session day and name: each kept contract's open interest, the two
+    sides' totals and the chain's volume. JSON lines; the API thread reads
+    copies while the options thread writes."""
+
+    def __init__(self, path: str = OI_LOG_FILE) -> None:
+        self.path = path
+        #: sym → day → {"call_oi", "put_oi", "volume", "by": {contract: oi}}
+        self.data: dict[str, dict[str, dict[str, Any]]] = {}
+        self._dirty = False
+        self.load()
+
+    def load(self) -> None:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                        sym, day = str(r["sym"]), str(r["day"])
+                        row = {"call_oi": float(r.get("call_oi") or 0.0),
+                               "put_oi": float(r.get("put_oi") or 0.0),
+                               "volume": float(r.get("volume") or 0.0),
+                               "by": {str(k): float(v) for k, v in (r.get("by") or {}).items()}}
+                    except (ValueError, KeyError, TypeError, AttributeError):
+                        continue
+                    self.data.setdefault(sym, {})[day] = row
+        except OSError:
+            pass
+
+    def record(self, sym: str, day: date, chain: optcalc.Chain) -> None:
+        opts = [o for e in optcalc.near_expiries(chain) for o in chain.opts[e]]
+        if not opts:
+            return
+        row = {
+            "call_oi": float(sum(o.oi for o in opts if o.right == "C")),
+            "put_oi": float(sum(o.oi for o in opts if o.right == "P")),
+            "volume": float(sum(o.volume for o in opts)),
+            "by": {o.symbol: float(o.oi) for o in opts},
+        }
+        book = self.data.setdefault(sym, {})
+        k = day.isoformat()
+        if book.get(k) != row:
+            book[k] = row
+            self._dirty = True
+
+    def prev(self, sym: str, day: date) -> dict[str, Any] | None:
+        """The newest session before `day` with contracts logged."""
+        book = dict(self.data.get(sym) or {})
+        before = sorted(k for k in book if k < day.isoformat() and book[k].get("by"))
+        if not before:
+            return None
+        k = before[-1]
+        return {"day": k, **book[k]}
+
+    def volumes(self, sym: str, day: date) -> list[float]:
+        """End-of-day chain volumes for the sessions before `day`, oldest first."""
+        book = dict(self.data.get(sym) or {})
+        return [book[k]["volume"] for k in sorted(book) if k < day.isoformat()]
+
+    def save(self, today: date | None = None) -> None:
+        """Write if anything changed: contracts for OI_KEEP_DAYS sessions, the
+        totals and volume for VOL_KEEP_DAYS. Atomic."""
+        del today
+        if not self._dirty:
+            return
+        tmp = self.path + ".tmp"
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                for sym in sorted(self.data):
+                    days = sorted(self.data[sym])
+                    keep_by = set(days[-OI_KEEP_DAYS:])
+                    for day in days[-VOL_KEEP_DAYS:]:
+                        r = self.data[sym][day]
+                        out: dict[str, Any] = {"sym": sym, "day": day, "call_oi": r["call_oi"],
+                                               "put_oi": r["put_oi"], "volume": r["volume"]}
+                        if day in keep_by:
+                            out["by"] = {k: int(v) for k, v in r["by"].items()}
+                        f.write(json.dumps(out, separators=(",", ":")) + "\n")
+                        if day not in keep_by:
+                            r["by"] = {}
+            os.replace(tmp, self.path)
+            self._dirty = False
+        except OSError:
+            pass
+
+
 # ------------------------------------------------------------- chain summaries
 
 
@@ -188,13 +289,15 @@ class OptionsStore:
     read path takes a shallow copy (`view`), and a chain is replaced whole,
     never mutated, so a reader never sees half of one."""
 
-    def __init__(self, history_path: str = IV_HISTORY_FILE) -> None:
+    def __init__(self, history_path: str = IV_HISTORY_FILE,
+                 oi_path: str = OI_LOG_FILE) -> None:
         self.chains: dict[str, optcalc.Chain] = {}
         self.fetched: dict[str, float] = {}
         self.errors: dict[str, str] = {}
         self.fails: dict[str, tuple[int, float]] = {}
         self.pause_until = 0.0
         self.history = IvHistory(history_path)
+        self.oi = OiLog(oi_path)
         self.body_bytes: dict[str, int] = {}
         self._warm = False
 
@@ -227,8 +330,11 @@ class OptionsStore:
                 out.append((-lag, s))
         return [s for _, s in sorted(out)]
 
-    def fetch_one(self, sym: str, ref_day: date, now: datetime) -> str | None:
-        """Fetch, parse and keep one chain. Returns an error, or None."""
+    def fetch_one(self, sym: str, ref_day: date, now: datetime,
+                  keep_after: date | None = None) -> str | None:
+        """Fetch, parse and keep one chain. Returns an error, or None.
+        `keep_after` is the name's next report date, whose expiry the chain
+        keeps beyond the nearest four (optcalc.parse_chain)."""
         r = fetch(CBOE.format(sym=sym), key=f"cboe_{sym}", ttl_sec=0, ua=BROWSER_UA, timeout=40,
                   headers={"Accept": "application/json", "Accept-Encoding": "gzip"},
                   stale_ok=False, store=False, validate=json_body)
@@ -247,7 +353,7 @@ class OptionsStore:
         except ValueError as e:
             self.errors[sym] = f"Cboe sent an unreadable chain ({e})"
             return self.errors[sym]
-        c = optcalc.parse_chain(doc, sym, ref_day)
+        c = optcalc.parse_chain(doc, sym, ref_day, keep_after)
         if c.spot is None or not c.expiries:
             self.errors[sym] = "Cboe's chain has no price or no expiries"
             return self.errors[sym]
@@ -257,11 +363,14 @@ class OptionsStore:
         self.errors.pop(sym, None)
         self.body_bytes[sym] = len(r.body)
         self.history.record(sym, iv_day(c.asof, now), c.iv30)
+        self.oi.record(sym, iv_day(c.asof, now), c)
         CACHE.write(_summary_key(sym), dump_chain(c))
         return None
 
-    def tick(self, syms: list[str], ref_day: date, now: datetime | None = None) -> SourceStatus:
-        """One rotation step: at most MAX_PER_TICK chains, then the status."""
+    def tick(self, syms: list[str], ref_day: date, now: datetime | None = None,
+             reports: dict[str, date] | None = None) -> SourceStatus:
+        """One rotation step: at most MAX_PER_TICK chains, then the status.
+        `reports` maps a name to its next report date, when known."""
         now = now or datetime.now(UTC)
         if not self._warm:
             self._warm_start(syms)
@@ -273,11 +382,12 @@ class OptionsStore:
         done = 0
         if not paused:
             for sym in due[:MAX_PER_TICK]:
-                err = self.fetch_one(sym, ref_day, now)
+                err = self.fetch_one(sym, ref_day, now, (reports or {}).get(sym))
                 done += 1
                 if err:
                     errors.append(f"{sym}: {err}")
         self.history.save(now.astimezone(optcalc.ET).date())
+        self.oi.save()
 
         have = [s for s in syms if s in self.chains]
         st.items = len(have)

@@ -30,13 +30,15 @@ def _pm(pct: float) -> dict[str, Any]:
     return {"volume": 1, "pct_adv": pct}
 
 
-# (name, last, pdc, daily ATR, pre-market % of ADV, headlines) → in play, rounded
+# (name, last, pdc, daily ATR, pre-market % of ADV, headlines) → in play, rounded.
+# HEADLINES NO LONGER COUNT HERE (2026-10-23): the catalyst is its own part,
+# read for direction (test_catalyst.py), so in play is the gap and the volume.
 LIVE = [
-    ("DELL", 556.48, 572.47, 26.6644, 1.07, 2, 11),   # 6.15 + 4.20 + 1
-    ("SNDK", 1445.0, 1482.33, 92.6521, 1.95, 2, 11),  # 3.73 + 5.93 + 1
-    ("MU", 940.5663, 953.19, 45.1166, 1.25, 8, 9),    # 2.21 + 4.64 + 2
-    ("GME", 27.75, 27.22, 0.9851, 0.61, 4, 10),       # 5.39 + 2.57 + 2
-    ("NVDA", 229.05, 228.52, 5.4044, 0.48, 2, 3),     # 0 + 1.88 + 1
+    ("DELL", 556.48, 572.47, 26.6644, 1.07, 2, 10),   # 6.15 + 4.20
+    ("SNDK", 1445.0, 1482.33, 92.6521, 1.95, 2, 10),  # 3.73 + 5.93
+    ("MU", 940.5663, 953.19, 45.1166, 1.25, 8, 7),    # 2.21 + 4.64
+    ("GME", 27.75, 27.22, 0.9851, 0.61, 4, 8),        # 5.39 + 2.57
+    ("NVDA", 229.05, 228.52, 5.4044, 0.48, 2, 2),     # 0 + 1.88
 ]
 
 
@@ -46,58 +48,49 @@ def test_the_mornings_worked_examples(sym: str, last: float, pdc: float, atr: fl
     sc = scanscore.score_row(_row(last, pdc, atr), {"bias": None, "confirm": None}, None,
                              None, None, session="pre", premkt=_pm(pct), news=_news(heads))
     ip = next(p for p in sc["parts"] if p["key"] == "inplay")
-    assert (ip["pts"], ip["max"]) == (want, 22), sym
+    assert (ip["pts"], ip["max"]) == (want, 16), sym
 
 
 def test_dell_breaks_down_as_the_comment_says() -> None:
-    pts, note = scanscore.in_play(_row(556.48, 572.47, 26.6644), _pm(1.07), None, _news(2))
-    assert pts == pytest.approx(6.15 + 4.20 + 1, abs=0.01)
-    assert note == "gap 0.60 ATR · pre-market 1.07% of ADV · 2 headlines since the close"
+    pts, note = scanscore.in_play(_row(556.48, 572.47, 26.6644), _pm(1.07))
+    assert pts == pytest.approx(6.15 + 4.20, abs=0.01)
+    assert note == "gap 0.60 ATR · pre-market 1.07% of ADV"
 
 
-def test_a_reporter_gapping_on_volume_takes_the_whole_part() -> None:
-    # Reported after yesterday's close, gapped 0.75 ATR, 4% of its day traded.
-    pts, note = scanscore.in_play(_row(107.5, 100.0, 10.0), _pm(4.0),
-                                  {"days": -1, "when": "after"}, [])
-    assert pts == pytest.approx(22.0)
-    assert "reported since the close" in note
-    # More of each is still 22: every piece is capped.
-    pts, _ = scanscore.in_play(_row(130.0, 100.0, 10.0), _pm(25.0),
-                               {"days": 0, "when": "pre"}, _news(8))
-    assert pts == pytest.approx(22.0)
+def test_a_gapper_on_volume_takes_the_whole_part() -> None:
+    # Gapped 0.75 ATR, 4% of its day traded: both pieces full.
+    pts, _ = scanscore.in_play(_row(107.5, 100.0, 10.0), _pm(4.0))
+    assert pts == pytest.approx(16.0)
+    # More of each is still 16: every piece is capped.
+    pts, _ = scanscore.in_play(_row(130.0, 100.0, 10.0), _pm(25.0))
+    assert pts == pytest.approx(16.0)
 
 
 def test_floors_drift_and_quiet_names_score_nothing() -> None:
-    # 0.06 ATR is overnight drift; 0.2% of ADV is a quiet tape; no news.
-    pts, note = scanscore.in_play(_row(100.6, 100.0, 10.0), _pm(0.2), None, [])
+    # 0.06 ATR is overnight drift; 0.2% of ADV is a quiet tape.
+    pts, note = scanscore.in_play(_row(100.6, 100.0, 10.0), _pm(0.2))
     assert pts == 0.0
     assert note == "gap 0.06 ATR · pre-market 0.20% of ADV"
 
 
-def test_the_catalyst_tiers() -> None:
+def test_a_headline_count_earns_nothing_in_play_any_more() -> None:
     r, pm = _row(100.0, 100.0, 10.0), _pm(0.0)
-    assert scanscore.in_play(r, pm, {"days": 0, "when": "pre"}, [])[0] == 6
-    assert scanscore.in_play(r, pm, {"days": 0, "when": "unspecified"}, [])[0] == 3
-    # Reporting after today's close is not this morning's reason (and the
-    # score's own earnings penalty covers the holding risk).
-    assert scanscore.in_play(r, pm, {"days": 0, "when": "after"}, [])[0] == 0
-    assert scanscore.in_play(r, pm, {"days": 2, "when": "pre"}, _news(1))[0] == 1
-    assert scanscore.in_play(r, pm, None, _news(3))[0] == 2
-    # A headline older than the close does not count; a kind is not a catalyst.
-    assert scanscore.in_play(r, pm, None, _news(5, age_min=20 * 60))[0] == 0
-    rated = [{"title": "X reiterates", "age_min": 60.0, "kind": "rating"}]
-    assert scanscore.in_play(r, pm, None, rated)[0] == 1
+    assert scanscore.in_play(r, pm)[0] == 0
+    sc = scanscore.score_row(r, {"bias": None, "confirm": None}, None, None, None,
+                             session="pre", premkt=pm, news=_news(5))
+    assert next(p for p in sc["parts"] if p["key"] == "inplay")["pts"] == 0
+    assert next(p for p in sc["parts"] if p["key"] == "catalyst")["pts"] == 0
 
 
 def test_overnight_there_is_a_gap_but_no_pre_market_volume_yet() -> None:
-    pts, note = scanscore.in_play(_row(105.0, 100.0, 10.0), None, None, [])
+    pts, note = scanscore.in_play(_row(105.0, 100.0, 10.0), None)
     assert pts == pytest.approx(8 * (0.5 - 0.1) / 0.65)
     assert "no pre-market volume yet" in note
 
 
 def test_in_play_is_side_blind() -> None:
-    up = scanscore.in_play(_row(107.5, 100.0, 10.0, side="long"), _pm(2.0), None, [])
-    down = scanscore.in_play(_row(92.5, 100.0, 10.0, side="short"), _pm(2.0), None, [])
+    up = scanscore.in_play(_row(107.5, 100.0, 10.0, side="long"), _pm(2.0))
+    down = scanscore.in_play(_row(92.5, 100.0, 10.0, side="short"), _pm(2.0))
     assert up[0] == down[0]
 
 

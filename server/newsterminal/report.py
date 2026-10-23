@@ -30,6 +30,14 @@ WHAT IS DONE ANYWAY, BECAUSE IT COSTS NOTHING AND MAKES THE CALL CHECKABLE:
 NO KEY, NO REPORT. There is deliberately no fallback that fabricates a bias
 locally — a made-up view presented in the same panel as a real one is exactly
 the failure this project's sister README calls the worst thing it could do.
+
+THE ENGINE'S COUNT NOW SITS BESIDE THE MODEL'S VIEW (owner, 2026-10-22: "do
+everything you recommend"). The driver board (drivers.py) counts each book's
+drivers with stated thresholds and grades them; the digest hands the model
+that count, and `sanitize_brief` caps a call's conviction at the board's
+ceiling, and at 3 against the board's lean — the game plan's rule since
+2026-10-14, applied here. The model still forms the view (the decision above
+stands); it can no longer be more confident than the arithmetic.
 """
 
 from __future__ import annotations
@@ -52,7 +60,7 @@ from zoneinfo import ZoneInfo
 from . import releases
 from .config import CACHE_DIR, UA
 from .holidays import close_time, cme_closed, is_trading_day
-from .profile import value_position
+from .profile import reads as profile_reads
 from .sessions import (
     GLOBEX_REOPEN,
     LONDON_DESKS,
@@ -63,6 +71,7 @@ from .sessions import (
     london_at,
     overlap_end,
 )
+from .volterm import BOOK_DP, EM_VOL
 
 ET = ZoneInfo("America/New_York")
 
@@ -543,55 +552,18 @@ def _span(minutes: int) -> str:
 
 
 def _vp_reads(asset: dict[str, Any], session: str) -> dict[str, Any]:
-    """The open-vs-value and now-vs-value facts for one asset's profiles."""
-    rows = {r.get("key"): r for r in (asset.get("rows") or [])}
-    out: dict[str, Any] = {}
-    prev = rows.get("prev_rth")
-    dev = rows.get("dev")
-    last = asset.get("last")
+    """The open-vs-value and now-vs-value facts for one asset's profiles.
 
-    if dev is not None and prev is not None and dev.get("open") is not None:
-        pos = value_position(dev["open"], prev.get("vah"), prev.get("val"))
-        if pos:
-            # NAMED FOR WHAT IT IS, AFTER IT WAS CITED AS SOMETHING ELSE. This
-            # was `session_open`, and a London brief read that as London's open
-            # and printed "The London session opened at 29,263.75" — a real
-            # number from this very field, which was the 18:00 ET Globex open,
-            # because the developing profile is still anchored at 18:00 all the
-            # way to 09:30. The key now names its anchor, and says in-band what
-            # it is not.
-            out["developing_profile_open"] = {
-                "price": dev["open"],
-                "anchored_et": dev.get("start_et"),
-                "this_is": (
-                    f"the opening print of the profile developing since "
-                    f"{dev.get('start_et')} ET — NOT the open of the session this "
-                    f"note is written for. For that, use session_ranges[].open."
-                ),
-                "vs_prev_rth_value": pos,
-            }
-
-    if last is not None:
-        now: dict[str, Any] = {"price": last}
-        for key, name in (
-            ("prev_rth", "vs_prev_rth_value"),
-            ("overnight", "vs_overnight_value"),
-        ):
-            # THE OVERNIGHT ROW USED TO BE DROPPED OUTSIDE NEW YORK, because
-            # `windows()` only emitted one during RTH and a note written for
-            # Asia would otherwise have cited a window that was still forming.
-            # It now emits the last COMPLETED overnight at every hour, which is
-            # a real reference in every session — so price is read against it in
-            # every session too.
-            r = rows.get(key)
-            if r is None:
-                continue
-            pos = value_position(last, r.get("vah"), r.get("val"))
-            if pos:
-                now[name] = pos
-        if len(now) > 1:
-            out["price_now"] = now
-    return out
+    PROFILE'S NOW (2026-10-22): the source attaches `reads` to every asset
+    (profile.reads) so the Volume profile panel prints the same facts this
+    digest carries; a snapshot from an older collector is read the same way.
+    `session` is unused and kept for the call sites.
+    """
+    del session
+    got = asset.get("reads")
+    if isinstance(got, dict):
+        return {k: v for k, v in got.items() if k != "text"}
+    return {k: v for k, v in profile_reads(asset).items() if k != "text"}
 
 
 # --------------------------------------------------------------------------
@@ -609,15 +581,14 @@ def _vp_reads(asset: dict[str, Any], session: str) -> dict[str, Any]:
 
 BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
 BOOK_LABELS = {"NQ": "NQ", "ES": "ES", "GC": "Gold (GC)"}
-# Decimals a level is quoted to: NQ in whole points, ES in quarters, gold in
-# tenths. A ladder printing 29,408.00 carries three characters of noise a row.
-BOOK_DP = {"NQ": 0, "ES": 2, "GC": 1}
-
-# The implied vol that stands in for the expected move when GEXYGEN is not
-# answering: a one-day, one-standard-deviation move. Labelled as exactly that
-# on the page, because it is wider than an options desk's own band and must not
-# be mistaken for it.
-EM_VOL = {"NQ": "VXN", "ES": "VIX", "GC": "GVZ"}
+# BOOK_DP AND EM_VOL ARE VOLTERM'S NOW (imported above): the Terminal's
+# implied-day rows quote the same decimals and read the same index per book, so
+# the two maps are stated once, there. BOOK_DP: NQ in whole points, ES in
+# quarters, gold in tenths — a ladder printing 29,408.00 carries three
+# characters of noise a row. EM_VOL: the implied vol that stands in for the
+# expected move when GEXYGEN is not answering — a one-day, one-standard-deviation
+# move, labelled as exactly that on the page because it is wider than an options
+# desk's own band and must not be mistaken for it.
 
 # Rank-2 and rank-3 walls make the ladder only within this many expected moves
 # of price. All seven gamma levels plus the ranges would bury the three prices
@@ -1239,7 +1210,36 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         "catalysts": _catalysts(snap, books, now),
         "rotation": _rotation(snap, books),
         "headlines": _headlines(snap, session, now),
+        # The driver board's count per book (drivers.py): what the page prints
+        # beside the call, and the ceiling the call's conviction is capped at.
+        "drivers": _drivers(snap, books),
     }
+
+
+def _drivers(snap: dict[str, Any], books: list[str]) -> dict[str, Any]:
+    """Each book's driver count, cut to what the brief prints and caps by."""
+    boards = ((snap.get("drivers") or {}).get("books") or {}) if isinstance(
+        snap.get("drivers"), dict) else {}
+    out: dict[str, Any] = {}
+    for b in books:
+        bd = boards.get(b)
+        if not isinstance(bd, dict) or not bd.get("votes"):
+            continue
+        out[b] = {
+            "bias": bd.get("bias"), "grade": bd.get("grade"),
+            "agree": bd.get("agree"), "against": bd.get("against"),
+            "neutral": bd.get("neutral"), "total": bd.get("total"),
+            "max_conviction": bd.get("max_conviction"),
+            "macro_lean": bd.get("macro_lean"), "structure_lean": bd.get("structure_lean"),
+            "conflict": bool(bd.get("conflict")),
+            "treatment": bd.get("treatment"),
+            "votes": [{"label": v.get("label"), "layer": v.get("layer"),
+                       "value": v.get("value"), "vote": v.get("vote"), "note": v.get("note")}
+                      for v in bd.get("votes") or [] if isinstance(v, dict)],
+            "context": [{"label": c.get("label"), "value": c.get("value"), "note": c.get("note")}
+                        for c in bd.get("context") or [] if isinstance(c, dict)],
+        }
+    return out
 
 
 # The board rows the digest prints, for `price_feed`'s list of what is not current.
@@ -1561,6 +1561,13 @@ def build_digest(
         # already taken out the Asia high" is one number here and an inference
         # from four elsewhere.
         "session_ranges": ranges,
+        # THE ENGINE'S OWN COUNT, per book: every driver a vote with its
+        # threshold and reason, the grade, the macro-against-structure
+        # conflict and the treatment line. The call's conviction may not
+        # exceed `max_conviction`, nor 3 against `bias`; the page prints the
+        # board beside the call, so narrate it, never re-derive it.
+        "engine_driver_board": {k: v for k, v in facts.get("drivers", {}).items()
+                                if wanted(k)},
         "expiry": snap.get("expiry") or {},
         "earnings": [
             {
@@ -1997,6 +2004,15 @@ means hedging amplifies them and ranges extend. Spot's position against the \
 gamma flip and the expected move is the single most important structural fact \
 on the page. If `expiry` says it is OpEx week, say what that does to the walls.
 
+THE ENGINE HAS ALREADY COUNTED THE DRIVERS. `engine_driver_board` is, per \
+book, every macro, positioning and structure read as a vote with its threshold \
+and its reason, graded, with a `treatment` line and a `conflict` flag when the \
+macro layer and the structure layer disagree. Read it first and cite it: the \
+call's `conviction` may not exceed the book's `max_conviction`, and may not \
+exceed 3 when the call runs against the board's `bias` — the server enforces \
+both, so rank inside that ceiling. Where you disagree with a vote, say which \
+and why, with the figure; never re-derive the count.
+
 THE PAGE IS ALREADY BUILT AROUND YOUR WORDS. The snapshot, the levels ladder, \
 the dealer gamma card, the catalyst list, the ratio table and the headline \
 list are printed from `brief_tables`, `catalysts` and `headlines` exactly as \
@@ -2209,6 +2225,17 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
             conviction = int(c.get("conviction") or 0)
         except (TypeError, ValueError):
             conviction = 1
+        # THE BOARD'S CEILING (module docstring): the engine's max for the
+        # book, and 3 against its lean. A bias is "against" when it points the
+        # other way from the count's side; neutral is never against.
+        board = (facts.get("drivers") or {}).get(book) or {}
+        cap = board.get("max_conviction")
+        if isinstance(cap, int):
+            conviction = min(conviction, cap)
+            lean = board.get("bias")
+            way = "long" if "bullish" in bias else "short" if "bearish" in bias else None
+            if lean in ("long", "short") and way is not None and way != lean:
+                conviction = min(conviction, 3)
         calls[book] = {
             "book": book,
             "open_bias": bias,

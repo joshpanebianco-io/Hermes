@@ -349,13 +349,15 @@ function Regime({ r }: { r: PlanRegime }) {
             plan was written from — so the band it names is explained where
             it is read. */}
         <VixPopover
-          facts={{ last: r.vix, pct: r.vix_pct, ratio: null, shape: r.shape, vvix: null, band: r.band }}
+          facts={{ last: r.vix, pct: r.vix_pct, ratio: null, shape: r.shape, vvix: null, band: r.band, sub: r.sub ?? null }}
           className="-mx-1.5 -my-1 block w-[calc(100%+12px)] px-1.5 py-1"
         >
           <span className="fig text-[17px] text-ink">{num(r.vix, 2)}</span>{" "}
           <span className={cn("fig text-[11.5px]", dir(r.vix_pct))}>{pct(r.vix_pct)}</span>
           <span className="mt-1 block text-[11.5px] text-ink-3">
-            {[r.band, r.shape].filter(Boolean).join(" · ") || "—"}
+            {[r.band && (r.sub === "heavy" ? `${r.band} · 18+` : r.sub === "panic" ? `${r.band} · 35+` : r.band), r.shape]
+              .filter(Boolean)
+              .join(" · ") || "—"}
           </span>
         </VixPopover>
       </Cell>
@@ -849,6 +851,84 @@ function Facts({ n }: { n: PlanName }) {
         </>,
       ]);
     }
+    // The option's own R at the first target, per structure, and which one
+    // the engine picks (optcalc.structure_pick) — plans before 2026-10-22
+    // carry none of it.
+    const lr = o.long?.at_target?.r ?? null;
+    const sr = o.spread?.at_target?.r ?? null;
+    if (lr != null || sr != null) {
+      const label = o.long?.at_target?.target_label ?? o.spread?.at_target?.target_label ?? "the target";
+      const tp = o.long?.at_target?.target ?? o.spread?.at_target?.target ?? null;
+      rows.push([
+        "R at target",
+        <>
+          {lr != null && (
+            <>
+              long <span className={lr >= 1 ? "text-ink" : "text-put-fig"}>{lr.toFixed(1)} R</span>
+            </>
+          )}
+          {lr != null && sr != null && " · "}
+          {sr != null && (
+            <>
+              spread <span className={sr >= 1 ? "text-ink" : "text-put-fig"}>{sr.toFixed(1)} R</span>
+            </>
+          )}
+          <span className="text-ink-3">
+            {" "}
+            to {label} {tp != null ? num(tp) : ""}
+            {o.structure?.kind && o.structure.by === "r" && ` · the ${o.structure.kind} pays better`}
+          </span>
+        </>,
+        "Reward over risk per contract, both from the entry to the stop and to the first target — the option's own R",
+      ]);
+    }
+    if (o.earnings_move && (o.earnings_move.implied_pct != null || o.earnings_move.realised_pct.length > 0)) {
+      rows.push([
+        "Earnings move",
+        <>
+          {o.earnings_move.implied_pct != null && (
+            <>
+              implied <span className="text-ink">±{o.earnings_move.implied_pct.toFixed(1)}%</span>
+              {o.earnings_move.event_pct != null && <span className="text-ink-3"> (event ≈ ±{o.earnings_move.event_pct.toFixed(1)}%)</span>}
+            </>
+          )}
+          {o.earnings_move.implied_pct != null && o.earnings_move.realised_pct.length > 0 && " · "}
+          {o.earnings_move.realised_pct.length > 0 && (
+            <span className="text-ink-3">
+              realised {o.earnings_move.realised_pct.map((p) => (p == null ? "—" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`)).join(", ")}
+              {o.earnings_move.avg_abs_pct != null && ` (avg ±${o.earnings_move.avg_abs_pct.toFixed(1)}%)`}
+            </span>
+          )}
+        </>,
+        "The straddle covering the report against the name's close-to-close moves on its last reports",
+      ]);
+    }
+  }
+  if (n.daily?.text) {
+    rows.push([
+      "Daily",
+      <>
+        <span className={n.daily.with_side === "against" ? "text-flip-fig" : "text-ink"}>
+          {n.daily.with_side === "with" ? "with the trend" : n.daily.with_side === "against" ? "against the trend" : n.daily.trend ?? "—"}
+        </span>
+        <span className="text-ink-3"> · {n.daily.text}</span>
+      </>,
+      "The daily frame against the live print: the 20, 50 and 200-day, the 52-week high, last week's range",
+    ]);
+  }
+  if (n.short_interest?.pct_float != null) {
+    rows.push([
+      "Short interest",
+      <>
+        <span className={n.short_interest.squeeze_risk ? "text-flip-fig" : "text-ink"}>{n.short_interest.pct_float.toFixed(1)}%</span>
+        <span className="text-ink-3">
+          {" "}
+          of the float{n.short_interest.days_to_cover != null ? ` · ${n.short_interest.days_to_cover.toFixed(1)} days to cover` : ""}
+          {n.short_interest.squeeze_risk ? " · squeeze risk" : ""}
+        </span>
+      </>,
+      "FINRA's short interest via Yahoo, twice a month",
+    ]);
   }
   if (n.flow) {
     rows.push([

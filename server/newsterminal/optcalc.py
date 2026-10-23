@@ -69,11 +69,13 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
-from typing import Any
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from . import targets
 from .holidays import close_minute, is_trading_day
 
 ET = ZoneInfo("America/New_York")
@@ -205,12 +207,14 @@ def parse_asof(v: Any) -> datetime | None:
         return None
 
 
-def parse_chain(doc: Any, sym: str, ref_day: date) -> Chain:
+def parse_chain(doc: Any, sym: str, ref_day: date, keep_after: date | None = None) -> Chain:
     """A Cboe delayed-quotes document → a Chain. Pure.
 
     Expiries before the trading day are dropped (the feed keeps yesterday's
     0DTE listed); so is every strike outside ±STRIKE_BAND of spot, which is
-    all a 0.25 delta or an ATM straddle ever needs.
+    all a 0.25 delta or an ATM straddle ever needs. `keep_after` keeps one
+    more expiry — the first on or after that date, the one that prices a
+    report — when it lies beyond the nearest KEEP_EXPIRIES.
     """
     data = (doc or {}).get("data") if isinstance(doc, dict) else None
     if not isinstance(data, dict):
@@ -239,9 +243,19 @@ def parse_chain(doc: Any, sym: str, ref_day: date) -> Chain:
             theta=_f(o.get("theta")), oi=_f(o.get("open_interest")) or 0.0,
             volume=_f(o.get("volume")) or 0.0, gamma=_f(o.get("gamma"))))
     expiries = sorted(by_exp)
-    keep = {e: sorted(by_exp[e], key=lambda x: (x.right, x.strike))
-            for e in expiries[:KEEP_EXPIRIES]}
+    kept = list(expiries[:KEEP_EXPIRIES])
+    if keep_after is not None:
+        extra = next((e for e in expiries if e >= keep_after), None)
+        if extra is not None and extra not in kept:
+            kept.append(extra)
+    keep = {e: sorted(by_exp[e], key=lambda x: (x.right, x.strike)) for e in kept}
     return Chain(sym, spot, iv30, asof, expiries, keep)
+
+
+def near_expiries(chain: Chain) -> list[date]:
+    """The nearest KEEP_EXPIRIES the chain holds — the flow's window, which an
+    extra report expiry (parse_chain's `keep_after`) must not widen. Pure."""
+    return sorted(chain.opts)[:KEEP_EXPIRIES]
 
 
 # -------------------------------------------------------------------- expiries
@@ -368,6 +382,98 @@ def skew25(opts: list[Opt]) -> float | None:
     return round((p.iv - c.iv) * 100.0, 2)
 
 
+def term_structure(chain: Chain, spot: float, ref_day: date) -> list[dict[str, Any]]:
+    """At-the-money implied volatility per kept expiry, in percent — the
+    name's own term structure, front to back. Pure. Event premium shows here
+    as a near expiry priced above the ones behind it."""
+    out: list[dict[str, Any]] = []
+    for e in sorted(chain.opts):
+        pair = atm_pair(chain.opts[e], spot)
+        if pair is None:
+            continue
+        ivs = [o.iv for o in pair if o.iv]
+        if not ivs:
+            continue
+        out.append({"expiry": e.isoformat(), "dte": (e - ref_day).days,
+                    "iv": round(sum(ivs) / len(ivs) * 100.0, 1)})
+    return out
+
+
+def earnings_move(chain: Chain, spot: float, report: date, when: str | None,
+                  ref_day: date) -> dict[str, Any] | None:
+    """What the chain prices for a report: the at-the-money straddle of the
+    first expiry that covers the reaction day, as a share of spot — and, net
+    of the straddle of the last expiry before it, the event alone (the usual
+    variance subtraction; "about", since the days between are ignored). Pure.
+
+    A pre-market report reacts on its own day, so that day's expiry covers
+    it; an after-hours or untimed report reacts the next session.
+    """
+    reacts = report if when == "pre" else report + timedelta(days=1)
+    exps = sorted(chain.opts)
+    covering = next((e for e in exps if e >= reacts), None)
+    if covering is None:
+        return None
+    em = expected_move(chain.opts[covering], spot)
+    if em is None:
+        return None
+    before = [e for e in exps if e < reacts]
+    clean = before_pct = None
+    before_exp: date | None = None
+    if before:
+        bm = expected_move(chain.opts[before[-1]], spot)
+        if bm is not None:
+            before_exp, before_pct = before[-1], bm["pct"]
+            clean = round(math.sqrt(max(em["pct"] ** 2 - bm["pct"] ** 2, 0.0)), 2)
+    return {
+        "report": report.isoformat(), "when": when,
+        "expiry": covering.isoformat(), "dte": (covering - ref_day).days,
+        "pct": em["pct"], "straddle": em["straddle"],
+        "clean_pct": clean,
+        "before_expiry": before_exp.isoformat() if before_exp else None,
+        "before_pct": before_pct,
+    }
+
+
+class _DayLike(Protocol):
+    """A daily bar as the realised moves read it — scan.DayBar fits."""
+
+    @property
+    def day(self) -> date: ...
+    @property
+    def close(self) -> float: ...
+    @property
+    def volume(self) -> float: ...
+
+
+def realised_earnings_moves(days: Sequence[_DayLike], reports: list[date],
+                            keep: int = 4) -> list[dict[str, Any]]:
+    """The close-to-close move across each past report, newest first. Pure.
+
+    THE REACTION DAY IS PICKED BY VOLUME. The report table gives the date and
+    not the hour, and a report after the close moves the NEXT session: of the
+    report day and the session after it, the one that traded more volume is
+    the reaction, and the move is its close against the close before it.
+    """
+    out: list[dict[str, Any]] = []
+    if not days:
+        return out
+    for rep in sorted(reports, reverse=True):
+        i = next((j for j, d in enumerate(days) if d.day >= rep), None)
+        if i is None or i == 0:
+            continue
+        cands = [i] + ([i + 1] if i + 1 < len(days) else [])
+        react = max(cands, key=lambda j: days[j].volume)
+        prev = days[react - 1].close
+        if not prev:
+            continue
+        out.append({"date": rep.isoformat(), "reaction": days[react].day.isoformat(),
+                    "pct": round((days[react].close / prev - 1.0) * 100.0, 2)})
+        if len(out) >= keep:
+            break
+    return out
+
+
 def liquidity(opts: list[Opt], spot: float) -> dict[str, Any]:
     """The ATM legs' spread as a % of mid, open interest and volume, graded. Pure."""
     pair = atm_pair(opts, spot)
@@ -381,8 +487,19 @@ def liquidity(opts: list[Opt], spot: float) -> dict[str, Any]:
             "grade": grade}
 
 
-def options_flow(chain: Chain) -> dict[str, Any] | None:
+#: Today's chain volume at or past this multiple of its 20-day average, with at
+#: least FLOW_MIN_VOL contracts, reads as unusual.
+UNUSUAL_X = 2.0
+
+
+def options_flow(chain: Chain, prev: dict[str, Any] | None = None,
+                 vol_hist: list[float] | None = None) -> dict[str, Any] | None:
     """Today's volume against open interest, over every contract the chain keeps. Pure.
+
+    `prev` is the previous session's open interest for the same name — its
+    totals and a {contract: oi} map (sources/options.OiLog) — for the change
+    in positioning since yesterday; `vol_hist` the chain's end-of-day volumes
+    over the sessions before today, for whether today is unusual.
 
     The window is the compact summary's: the first KEEP_EXPIRIES expiries from
     the trading day on, strikes within ±STRIKE_BAND of spot — so a summary
@@ -390,7 +507,7 @@ def options_flow(chain: Chain) -> dict[str, Any] | None:
     Cboe's volume is the session's so far (delayed); before the open it can
     be zero, and then there is no lean to read. Null when nothing is kept.
     """
-    opts = [o for exp in chain.opts.values() for o in exp]
+    opts = [o for exp in near_expiries(chain) for o in chain.opts[exp]]
     if not opts:
         return None
     call_vol = sum(o.volume for o in opts if o.right == "C")
@@ -406,13 +523,30 @@ def options_flow(chain: Chain) -> dict[str, Any] | None:
         lean = "calls" if ratio < FLOW_CALLS else "puts" if ratio > FLOW_PUTS else "balanced"
     busiest = sorted((o for o in opts if o.volume > 0),
                      key=lambda o: (-o.volume, o.expiry, o.right, o.strike))[:FLOW_TOP]
+    by_prev: dict[str, float] = (prev or {}).get("by") or {}
+    pc_oi = _f((prev or {}).get("call_oi")), _f((prev or {}).get("put_oi"))
+    hist = [v for v in (vol_hist or []) if v and v > 0]
+    avg20 = sum(hist[-20:]) / len(hist[-20:]) if hist else None
+    vol_x = round(vol / avg20, 2) if avg20 else None
     return {
         "call_vol": int(call_vol), "put_vol": int(put_vol), "pc_vol": pc,
         "call_oi": int(call_oi), "put_oi": int(put_oi),
         "vol_oi": round(vol / oi, 3) if oi > 0 else None,
         "lean": lean,
         "top": [{"strike": o.strike, "right": o.right, "expiry": o.expiry.isoformat(),
-                 "volume": int(o.volume), "oi": int(o.oi)} for o in busiest],
+                 "volume": int(o.volume), "oi": int(o.oi),
+                 "oi_chg": int(o.oi - by_prev[o.symbol]) if o.symbol in by_prev else None}
+                for o in busiest],
+        # Since the previous session: the change in open interest on each side
+        # (null before a second session is logged), and today's volume against
+        # the name's own 20-session average.
+        "oi_chg_calls": int(call_oi - pc_oi[0]) if pc_oi[0] is not None else None,
+        "oi_chg_puts": int(put_oi - pc_oi[1]) if pc_oi[1] is not None else None,
+        "oi_prev_day": (prev or {}).get("day"),
+        "vol_avg20": round(avg20) if avg20 else None,
+        "vol_x": vol_x,
+        "vol_days": len(hist),
+        "unusual": bool(vol_x is not None and vol_x >= UNUSUAL_X and vol >= FLOW_MIN_VOL),
     }
 
 
@@ -573,15 +707,49 @@ def _plan_fields(plan: Plan | None, stock_risk: float | None,
     }
 
 
+def _intrinsic(o: Opt, price: float) -> float:
+    return max(0.0, price - o.strike) if o.right == "C" else max(0.0, o.strike - price)
+
+
+def _target_fields(target: tuple[float, str] | None, value_at: Any,
+                   floor_at: Any, entry_mid: float | None, rpc: float | None,
+                   half: float) -> dict[str, Any]:
+    """The contract at the first target: its value there (delta and gamma
+    inside REMARK_MAX of the chain's spot, intrinsic value as a floor beyond
+    it), the reward per contract after half the bid-ask to get out, and that
+    against the risk — the option's own R. Pure."""
+    out: dict[str, Any] = {"target_price": None, "target_label": None, "target_mid": None,
+                           "target_basis": None, "reward_per_contract": None,
+                           "r_multiple": None}
+    if target is None or entry_mid is None:
+        return out
+    price, label = target
+    at = value_at(price)
+    if at is not None:
+        t_mid, basis = at[0], "delta and gamma"
+    else:
+        t_mid = floor_at(price)
+        basis = "intrinsic value — the target is beyond the re-mark range"
+    reward = max(t_mid - entry_mid - half, 0.0) * 100.0
+    out.update({
+        "target_price": round(price, 4), "target_label": label, "target_mid": round(t_mid, 4),
+        "target_basis": basis, "reward_per_contract": round(reward, 2),
+        "r_multiple": round(reward / rpc, 2) if rpc else None,
+    })
+    return out
+
+
 def _label(dte: int, exp: date) -> str:
     return "0DTE" if dte == 0 else f"{exp.strftime('%a %b')} {exp.day} ({dte}DTE)"
 
 
 def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
                   move: tuple[float, float] | None = None,
-                  plan: Plan | None = None) -> dict[str, Any]:
+                  plan: Plan | None = None,
+                  target: tuple[float, str] | None = None) -> dict[str, Any]:
     """The 0.60Δ long. `move` (live_move) re-marks it to the live stock price;
-    `plan` prices its risk from the entry to the stop (module docstring)."""
+    `plan` prices its risk from the entry to the stop (module docstring);
+    `target` (price, label) prices it at the first target for its R."""
     dte = (o.expiry - ref_day).days
     mid = o.mid or 0.0
     est = remark(o, *move) if move else None
@@ -598,6 +766,10 @@ def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
         rpc = min(stock_risk * abs(dl) + half, px) * 100.0
     word = "call" if o.right == "C" else "put"
     theta = f" — theta {o.theta:+.2f}/day" if o.theta is not None else ""
+    tf = _target_fields(target if plan is not None else None,
+                        lambda price: _at(o, price, plan.spot) if plan else None,
+                        lambda price: _intrinsic(o, price),
+                        entry_mid if entry_mid is not None else px, rpc, half)
     return {
         "key": key, "kind": "long", "right": o.right, "expiry": o.expiry.isoformat(), "dte": dte,
         "strike": o.strike, "short_strike": None, "symbol": o.symbol, "short_symbol": None,
@@ -608,6 +780,7 @@ def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
         "max_value": None,
         **_plan_fields(plan, stock_risk, entry_mid),
         "risk_per_contract": round(rpc, 2) if rpc is not None else None,
+        **tf,
         **_est(est, move),
         "note": f"{abs(o.delta or 0):.2f}Δ {word}, {_label(dte, o.expiry)}{theta}",
     }
@@ -615,7 +788,8 @@ def contract_long(o: Opt, key: str, ref_day: date, stock_risk: float | None,
 
 def contract_spread(lo: Opt, sh: Opt, key: str, ref_day: date, stock_risk: float | None,
                     move: tuple[float, float] | None = None,
-                    plan: Plan | None = None) -> dict[str, Any] | None:
+                    plan: Plan | None = None,
+                    target: tuple[float, str] | None = None) -> dict[str, Any] | None:
     """Buy the 0.60Δ, sell the 0.30Δ, same expiry — a debit vertical. Pure.
 
     THE SPREAD'S OWN FIGURES, NOT ITS LONG LEG'S (audit, 2026-10-14: the card
@@ -656,6 +830,11 @@ def contract_spread(lo: Opt, sh: Opt, key: str, ref_day: date, stock_risk: float
         rpc = min(stock_risk * abs(dl) + half, px) * 100.0
     theta = (lo.theta - sh.theta) if lo.theta is not None and sh.theta is not None else None
     word = "call" if lo.right == "C" else "put"
+    tf = _target_fields(target if plan is not None else None,
+                        lambda price: net_at(price, plan.spot) if plan else None,
+                        lambda price: min(max(_intrinsic(lo, price) - _intrinsic(sh, price), 0.0),
+                                          width),
+                        entry_mid if entry_mid is not None else px, rpc, half)
     return {
         "key": key, "kind": "spread", "right": lo.right, "expiry": lo.expiry.isoformat(),
         "dte": dte, "strike": lo.strike, "short_strike": sh.strike, "symbol": lo.symbol,
@@ -668,6 +847,7 @@ def contract_spread(lo: Opt, sh: Opt, key: str, ref_day: date, stock_risk: float
         "max_value": round(width, 4),
         **_plan_fields(plan, stock_risk, entry_mid),
         "risk_per_contract": round(rpc, 2) if rpc is not None else None,
+        **tf,
         **_est(est, move),
         "note": (f"{lo.strike:g}/{sh.strike:g} {word} debit spread, {_label(dte, lo.expiry)}"
                  f" — {debit:.2f} for up to {width:.2f}"),
@@ -684,19 +864,45 @@ def unavailable(error: str, age_min: float | None = None) -> dict[str, Any]:
         "rv20": None, "iv_rv": None, "premium": None, "iv_rank": None, "iv_pct": None,
         "iv_days": 0, "skew": None, "em": [],
         "liquidity": {"spread_pct": None, "oi": None, "volume": None, "grade": None},
-        "zero_dte": False, "pick": None, "earnings_in": None, "contracts": [], "flow": None,
+        "zero_dte": False, "pick": None, "earnings_in": None, "contracts": [],
+        "structure": None, "targets": [], "term": [], "earnings_move": None, "flow": None,
     }
 
 
+def structure_pick(contracts: list[dict[str, Any]], pick: str,
+                   prem: str | None) -> dict[str, Any]:
+    """Long option or debit spread, for the expiry the rule picks: whichever
+    has the better R at the first target when both are priced, else the
+    premium rule — the spread when premium is rich, the long otherwise. Pure.
+    A difference inside 0.05 R is a tie, settled by premium."""
+    mine = {c["kind"]: c for c in contracts if c.get("key") == pick}
+    lr = (mine.get("long") or {}).get("r_multiple")
+    sr = (mine.get("spread") or {}).get("r_multiple")
+    if lr is not None and sr is not None and abs(lr - sr) > 0.05:
+        return {"kind": "long" if lr > sr else "spread", "by": "r", "long_r": lr, "spread_r": sr}
+    return {"kind": "spread" if prem == "rich" else "long", "by": "premium",
+            "long_r": lr, "spread_r": sr}
+
+
 def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history: list[float],
-                ref_day: date, now: datetime, age_min: float | None) -> dict[str, Any]:
-    """The contract's OptionsCtx for one scanner row. Pure."""
+                ref_day: date, now: datetime, age_min: float | None,
+                reports: list[date] | None = None,
+                daily: list[Any] | None = None,
+                oi_prev: dict[str, Any] | None = None,
+                vol_hist: list[float] | None = None) -> dict[str, Any]:
+    """The contract's OptionsCtx for one scanner row. Pure.
+
+    `reports` are the name's past report dates and `daily` its daily bars,
+    for the realised earnings moves; `oi_prev` and `vol_hist` the previous
+    session's open interest and the chain's volume history (options_flow).
+    All optional.
+    """
     spot = chain.spot or _f(row.get("last"))
     if spot is None or not chain.opts:
         out = unavailable("no contracts in the chain" if spot else "no spot price", age_min)
         out["asof"] = chain.asof.isoformat() if chain.asof else None
         out["iv30"] = chain.iv30
-        out["flow"] = options_flow(chain)
+        out["flow"] = options_flow(chain, oi_prev, vol_hist)
         return out
     minute = minute_on(ref_day, now)
     picks = pick_expiries(chain.sym, chain.expiries, ref_day, minute)
@@ -730,11 +936,47 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
             earnings_in = e.isoformat()
             break
 
+    # THE EARNINGS NUMBER: what the chain prices for the report against what
+    # the name did on its last few. Only with a report ahead and a date.
+    implied_earn = None
+    if earnings:
+        try:
+            rep_day = date.fromisoformat(str(earnings.get("date")))
+            implied_earn = earnings_move(chain, spot, rep_day, earnings.get("when"), ref_day)
+        except ValueError:
+            implied_earn = None
+    realised = realised_earnings_moves(daily or [], reports or []) if daily and reports else []
+    abs_moves = [abs(m["pct"]) for m in realised]
+    earn_block = None
+    if implied_earn is not None or realised:
+        earn_block = {
+            "implied": implied_earn, "realised": realised,
+            "avg_abs": round(sum(abs_moves) / len(abs_moves), 2) if abs_moves else None,
+            "max_abs": round(max(abs_moves), 2) if abs_moves else None,
+        }
+
     side = (row.get("setup") or {}).get("side") or (row.get("score") or {}).get("side")
-    contracts: list[dict[str, Any]] = []
+    entry: float | None = None
+    stop: float | None = None
+    how = ""
     if side in ("long", "short"):
-        right = "C" if side == "long" else "P"
         entry, stop, how = trade_plan(row, side)
+
+    # THE FIRST TARGET, by the plan's own rule (targets.py), from the row and
+    # the front straddle — measured from the SAME ENTRY the contract is
+    # priced from (trade_plan: today's signal where there is one, else the
+    # setup's reference), so the target the card prices at is on the right
+    # side of the entry it prices from.
+    em_front = next((e for e in em if e["key"] == "front"), None)
+    tv = targets.view(row, em_front)
+    if entry is not None:
+        tv["entry"] = {"price": entry}
+    tgts = targets.target_candidates(tv)
+    target = (float(tgts[0]["price"]), str(tgts[0]["label"])) if tgts else None
+
+    contracts: list[dict[str, Any]] = []
+    if side in ("long", "short") and entry is not None:
+        right = "C" if side == "long" else "P"
         last = _f(row.get("last"))
         risk = abs(entry - stop) if (stop is not None and entry is not None) else None
         plan = (Plan(entry, stop, how, spot)
@@ -750,14 +992,19 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
             lo = nearest_delta(opts, right, LONG_DELTA)
             if lo is None:
                 continue
-            contracts.append(contract_long(lo, key, ref_day, risk, move, plan))
+            contracts.append(contract_long(lo, key, ref_day, risk, move, plan, target))
             sh = nearest_delta([o for o in opts if (o.strike > lo.strike if right == "C"
                                                     else o.strike < lo.strike)],
                                right, SHORT_DELTA)
             if sh is not None:
-                sp = contract_spread(lo, sh, key, ref_day, risk, move, plan)
+                sp = contract_spread(lo, sh, key, ref_day, risk, move, plan, target)
                 if sp is not None:
                     contracts.append(sp)
+    pick = pick_key(chain.sym)
+    structure = structure_pick(contracts, pick, premium(iv_rv)) if contracts else None
+    for c in contracts:
+        c["better_r"] = bool(structure and structure["by"] == "r" and c["key"] == pick
+                             and c["kind"] == structure["kind"])
 
     return {
         "ok": True, "error": None,
@@ -768,7 +1015,14 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
         "skew": skew, "em": em, "liquidity": liq,
         "zero_dte": ref_day in chain.expiries,
         # The contract the expiry rule picks for this name (expiry_rule).
-        "pick": pick_key(chain.sym),
+        "pick": pick,
         "earnings_in": earnings_in, "contracts": contracts,
-        "flow": options_flow(chain),
+        # Long or spread, by R at the first target when both are priced
+        # (structure_pick); the targets the row's plan may take; the name's
+        # own term structure; and the earnings number.
+        "structure": structure,
+        "targets": tgts,
+        "term": term_structure(chain, spot, ref_day),
+        "earnings_move": earn_block,
+        "flow": options_flow(chain, oi_prev, vol_hist),
     }

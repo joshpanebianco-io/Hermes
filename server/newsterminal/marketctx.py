@@ -47,8 +47,10 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import releases
 from .holidays import next_trading_day
 from .policy import HOLD_BAND_BP
+from .volterm import SQRT252, fuel_word
 from .volterm import state as volterm_state
 
 ET = ZoneInfo("America/New_York")
@@ -78,16 +80,18 @@ MODERATE_AGREE = 4
 MAX_CONVICTION = {"strong": 5, "moderate": 4, "weak": 3, "none": 2}
 
 # ---- fuel: how much of the implied move the index has used ------------------------
-SQRT252 = math.sqrt(252.0)
-FUEL_ROOM = 0.6  # used below this: room left
-FUEL_STRETCHED = 1.0  # above this: the day has run past its implied move
+# The thresholds (volterm.FUEL_ROOM / FUEL_STRETCHED) and the word are volterm's,
+# which reads the same rule for the futures books: one rule, stated once, and
+# imported here because this module already imports volterm for the curve.
 FUEL_VOL = {"SPY": "VIX", "QQQ": "VXN"}  # the index vol each ETF's implied move is read from
 
 # ---- prints -----------------------------------------------------------------------
 PRINT_SCORE = 3
-INLINE_REL = 0.005  # a surprise within 0.5% of the consensus reads in line
-#: Releases where a number above consensus is the WEAKER economy.
-_INVERTED = re.compile(r"unemploy|jobless|claims|inventor", re.I)
+# THE READ IS RELEASES' NOW (hot / cold / inline, and what each means per
+# book): the futures Calendar and the driver board read the same prints, so
+# the rule is stated once, there. Re-exported for the tests that pin it.
+INLINE_REL = releases.INLINE_REL
+read_of = releases.read_of
 
 INDEX_ETFS = ("SPY", "QQQ", "IWM")
 _NOT_SECTORS = frozenset({"SPY", "RSP"})
@@ -517,8 +521,7 @@ def fuel(scan: dict[str, Any], quotes: list[dict[str, Any]]) -> list[dict[str, A
                     if op is not None:
                         gap = (op - prev) / prev * 100.0
         used = rng / implied if rng is not None and implied else None
-        state = None if used is None else (
-            "room" if used < FUEL_ROOM else "normal" if used <= FUEL_STRETCHED else "stretched")
+        state = fuel_word(used)
         out.append({
             "sym": sym, "implied_pct": _r(implied, 3), "range_pct": _r(rng, 3),
             "used": _r(used, 2), "gap_pct": _r(gap, 3),
@@ -536,23 +539,6 @@ def _fmt(v: Any, raw: Any) -> str | None:
         return raw.strip()
     x = _num(v)
     return None if x is None else f"{x:g}"
-
-
-def read_of(title: str, surprise: float | None, consensus: float | None) -> str | None:
-    """hot / cold / inline from the sign of the surprise. Pure.
-
-    "hot" is the stronger economy: a beat on inflation, jobs or growth — and a
-    MISS on unemployment, jobless claims or inventories, where the higher number
-    is the weaker one. Within 0.5% of the consensus is in line.
-    """
-    if surprise is None or consensus is None:
-        return None
-    if abs(surprise) <= max(INLINE_REL * abs(consensus), 1e-9):
-        return "inline"
-    hot = surprise > 0
-    if _INVERTED.search(title):
-        hot = not hot
-    return "hot" if hot else "cold"
 
 
 #: Series no one trades off: the CPI's index levels and its unadjusted twins,

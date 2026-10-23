@@ -379,3 +379,108 @@ def assemble(
             "end_et": "now" if w["kind"] == "live" else end.strftime("%H:%M"),
         })
     return rows
+
+
+# --------------------------------------------------------------------------
+# The reads — the facts the panel prints and the brief is handed.
+#
+# THEY USED TO LIVE IN report.py (`_vp_reads`) AND REACH THE MODEL ONLY. The
+# classifier decided where the session opened against prior value and where
+# price trades now, the digest carried it, and the Volume profile panel drew
+# three bars and said nothing (owner, 2026-10-22). One function now writes
+# both: the keyed facts for the digest and the sentence for the panel.
+# --------------------------------------------------------------------------
+
+_WHERE = {"above_value": "above", "inside_value": "inside", "below_value": "below"}
+
+
+def _shape_line(label: str, row: dict[str, Any] | None) -> str | None:
+    if not row or not row.get("shape"):
+        return None
+    shape = str(row["shape"])
+    if shape.startswith("P"):
+        return f"{label} was a P: buyers accepted the highs."
+    if shape.startswith("b"):
+        return f"{label} was a b: sellers accepted the lows."
+    if shape.startswith("double"):
+        node = row.get("second_node")
+        return (f"{label} was two distributions"
+                + (f"; the valley near {node:,.0f} is the reference" if node else "") + ".")
+    return f"{label} was balanced: a D, value in the middle."
+
+
+def reads(asset: dict[str, Any]) -> dict[str, Any]:
+    """Where the developing session opened against prior value, where price
+    trades now against the prior RTH and overnight value areas, and the
+    sentence the panel prints. Pure. Empty when the rows are missing."""
+    rows = {r.get("key"): r for r in (asset.get("rows") or [])}
+    prev, dev, on = rows.get("prev_rth"), rows.get("dev"), rows.get("overnight")
+    last = asset.get("last")
+    out: dict[str, Any] = {}
+    opened: str | None = None
+    if dev is not None and prev is not None and dev.get("open") is not None:
+        opened = value_position(dev["open"], prev.get("vah"), prev.get("val"))
+        if opened:
+            out["developing_profile_open"] = {
+                "price": dev["open"],
+                "anchored_et": dev.get("start_et"),
+                "this_is": (
+                    f"the opening print of the profile developing since "
+                    f"{dev.get('start_et')} ET — NOT the open of the session this "
+                    f"note is written for. For that, use session_ranges[].open."
+                ),
+                "vs_prev_rth_value": opened,
+            }
+    now_prev: str | None = None
+    if last is not None:
+        now: dict[str, Any] = {"price": last}
+        for key, name, r in (("prev_rth", "vs_prev_rth_value", prev),
+                             ("overnight", "vs_overnight_value", on)):
+            if r is None:
+                continue
+            pos = value_position(last, r.get("vah"), r.get("val"))
+            if pos:
+                now[name] = pos
+                if key == "prev_rth":
+                    now_prev = pos
+        if len(now) > 1:
+            out["price_now"] = now
+
+    # ---- the sentence -------------------------------------------------------
+    bits: list[str] = []
+    poc = prev.get("poc") if prev else None
+    magnet = f" The prior POC {poc:,.0f} is the magnet." if poc else ""
+    if opened and now_prev:
+        o, n = _WHERE[opened], _WHERE[now_prev]
+        if opened == now_prev and opened != "inside_value":
+            bits.append(f"Opened {o} prior value and trades {n} it: acceptance "
+                        f"{'higher' if o == 'above' else 'lower'}, trend odds up."
+                        + magnet)
+        elif opened != "inside_value" and now_prev == "inside_value":
+            bits.append(f"Opened {o} prior value and is back inside it: the move failed to "
+                        f"hold. The 80% rule says a session that re-enters value tends to "
+                        f"traverse it to the other side." + magnet)
+        elif opened == "inside_value" and now_prev == "inside_value":
+            bits.append("Opened inside prior value and trades inside it: a rotation day. "
+                        "VAH and VAL are the edges to fade until one is accepted." + magnet)
+        elif opened == "inside_value":
+            way = "higher" if n == "above" else "lower"
+            bits.append(f"Opened inside prior value and has left it {way}: wait for "
+                        f"acceptance, two closes outside, before trusting the break.")
+        else:
+            bits.append(f"Opened {o} prior value and now trades {n} it: the auction has "
+                        f"crossed value, the POC decides.")
+    elif now_prev:
+        bits.append(f"Price trades {_WHERE[now_prev]} prior value." + magnet)
+    on_pos = (out.get("price_now") or {}).get("vs_overnight_value")
+    if on_pos and on_pos != now_prev:
+        bits.append(f"Against the overnight it is {_WHERE[on_pos]} value.")
+    line = _shape_line("Prior RTH", prev)
+    if line:
+        bits.append(line)
+    if dev and dev.get("shape") and (dev.get("bars") or 0) >= 24:
+        line = _shape_line("The developing session", dev)
+        if line:
+            bits.append(line.replace(" was ", " is "))
+    out["text"] = " ".join(bits) if bits else None
+    return out

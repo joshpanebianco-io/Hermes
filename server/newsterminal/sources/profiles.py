@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
 from ..http import SourceStatus, fetch, json_body
-from ..profile import assemble
+from ..profile import assemble, reads
 
 ET = ZoneInfo("America/New_York")
 
@@ -79,11 +79,16 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
         if not rows:
             assets[key] = {"ok": False, "error": "no window had enough traded bars", "rows": []}
             continue
-        assets[key] = {
+        asset = {
             "ok": True,
             "rows": rows,
             "last": meta.get("regularMarketPrice"),
         }
+        # The reads (profile.reads): the open against prior value, price
+        # against value now, and the sentence — stated here once, so the
+        # panel and the brief print the same facts.
+        asset["reads"] = reads(asset)
+        assets[key] = asset
 
     ok_count = sum(1 for v in assets.values() if v.get("ok"))
     st.items = ok_count

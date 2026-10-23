@@ -56,20 +56,25 @@ from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import config, marketctx
+from . import config, drivers, marketctx
 from . import scan as scan_mod
 from .expiry import state as expiry_state
 from .http import CACHE, SourceStatus
 from .policy import meetings_priced
 from .scanlog import EventLog
 from .scanscore import build as scanner_build
+from .scanscore import earnings_for, next_report
 from .sessions import session_state
 from .sources import auctions as auc_src
 from .sources import calendar as cal_src
+from .sources import cboepc as pc_src
 from .sources import constituents as cons_src
+from .sources import cot as cot_src
+from .sources import earnhist as eh_src
 from .sources import earnings as earn_src
 from .sources import fedcal as fed_src
 from .sources import gex as gex_src
+from .sources import history as hist_src
 from .sources import options as opt_src
 from .sources import premarket as pre_src
 from .sources import profiles as prof_src
@@ -77,7 +82,9 @@ from .sources import quotes as quotes_src
 from .sources import ranges as ranges_src
 from .sources import rates as rates_src
 from .sources import scanner as scan_src
+from .sources import shortint as short_src
 from .sources import wire as wire_src
+from .volterm import implied_day, vix_month
 from .volterm import state as volterm_state
 
 ET = ZoneInfo("America/New_York")
@@ -131,6 +138,9 @@ class Collector:
             "profiles": {"assets": {}},
             "gex": {"assets": {}, "enabled": bool(config.GEXYGEN_API)},
             "scanner": {}, "scan_news": {}, "scan_sec": {}, "scan_earn": [],
+            # The driver board's own inputs (2026-10-22): a year of daily bars
+            # per book, the CFTC's positioning, Cboe's daily put/call.
+            "history": {"books": {}}, "cot": {"books": {}}, "putcall": None,
         }
         self.scan = scan_src.ScanStore()
         # The bars job and the live job both rebuild the scanner block; one at a
@@ -152,6 +162,11 @@ class Collector:
         self.options = opt_src.OptionsStore()
         # Each name's pre-market from Nasdaq (sources/premarket.py), kept for the day.
         self.premarket = pre_src.PremarketStore()
+        # Cboe's daily put/call log, each name's short interest and its past
+        # report dates (sources/cboepc, shortint, earnhist).
+        self.putcall = pc_src.PutCallStore()
+        self.shorts = short_src.ShortStore()
+        self.earnhist = eh_src.EarnHistStore()
 
         now = time.monotonic()
         # The board, on a thread of its own (module docstring): it is the block
@@ -185,6 +200,13 @@ class Collector:
             # Daily bars for the session brief. The sectors' clock, because
             # the week and month changes it feeds move no faster than theirs.
             "context": (self._do_context, config.QUOTES_SEC * 15, now + 4.4),
+            # A year of daily bars per book, hourly: the frame moves once a day.
+            "history": (self._do_history, hist_src.TTL_SEC, now + 6.0),
+            # The CFTC publishes once a week; six-hourly catches Friday's.
+            "cot": (self._do_cot, cot_src.TTL_SEC, now + 7.0),
+            # Cboe's daily file: a minute between ticks while the log backfills,
+            # and the same minute catches today's file once it is published.
+            "putcall": (self._do_putcall, 60.0, now + 8.5),
         }
         # The scanner's own thread runs these (see the module docstring). Each
         # rotates its names inside a tick — sources/scanner.py has the budget.
@@ -192,6 +214,9 @@ class Collector:
             "scanner": (self._do_scanner, scan_src.TICK_SEC, now + 1.0),
             "scan_news": (self._do_scan_news, 60.0, now + 6.0),
             "scan_sec": (self._do_scan_sec, 60.0, now + 9.0),
+            # Short interest from Yahoo's summary: one name a tick, twelve
+            # hours between reads of the same name.
+            "scan_short": (self._do_shorts, short_src.TICK_SEC, now + 12.0),
         }
         # The chains, on their own thread (module docstring); one per tick.
         self._option_jobs: dict[str, Job] = {
@@ -201,6 +226,8 @@ class Collector:
         # whole timeout, and that must not hold up a chain or a quote.
         self._premarket_jobs: dict[str, Job] = {
             "premarket": (self._do_premarket, pre_src.TICK_SEC, now + 5.0),
+            # The same host: each name's past report dates, one a tick, daily.
+            "scan_earnhist": (self._do_earnhist, eh_src.TICK_SEC, now + 7.5),
         }
         # The live layer, alone (module docstring); it paces itself.
         self._live_jobs: dict[str, Job] = {
@@ -233,6 +260,43 @@ class Collector:
     def _do_context(self) -> None:
         rows, st = quotes_src.collect_context()
         self._commit("context", rows if st.ok else None, st)
+
+    def _do_history(self) -> None:
+        data, st = hist_src.collect()
+        self._commit("history", data if st.ok else None, st)
+
+    def _do_cot(self) -> None:
+        data, st = cot_src.collect()
+        self._commit("cot", data if st.ok else None, st)
+
+    def _do_putcall(self) -> None:
+        summary, st = self.putcall.tick()
+        self._commit("putcall", summary if st.ok else None, st)
+
+    def _do_shorts(self) -> None:
+        st = self.shorts.tick(self.scan.watchlist())
+        # Like the chains: the reads stay in the store and join the rows on read.
+        self._commit("scan_short", None, st)
+
+    def _do_earnhist(self) -> None:
+        st = self.earnhist.tick(self.scan.watchlist())
+        self._commit("scan_earnhist", None, st)
+
+    def _reports_ahead(self, td: date) -> dict[str, date]:
+        """Each watchlist name's next report date, from the earnings rows held —
+        what the chain store keeps the covering expiry for."""
+        with self._lock:
+            rows = list(self._state.get("scan_earn") or [])
+        nxt = self.earnhist.view_next()
+        out: dict[str, date] = {}
+        for sym in self.scan.watchlist():
+            e = earnings_for(sym, rows, td) or next_report(nxt.get(sym), td)
+            if e and isinstance(e.get("days"), int) and e["days"] >= 0:
+                try:
+                    out[sym] = date.fromisoformat(str(e.get("date")))
+                except ValueError:
+                    continue
+        return out
 
     def _do_wire(self) -> None:
         items, feeds = wire_src.collect()
@@ -375,7 +439,8 @@ class Collector:
 
     def _do_options(self) -> None:
         clock = self.scan.clock(datetime.now(UTC))
-        st = self.options.tick(self.scan.watchlist(), clock.trading_day)
+        st = self.options.tick(self.scan.watchlist(), clock.trading_day,
+                               reports=self._reports_ahead(clock.trading_day))
         # Nothing goes into state: the chains stay in the store and are joined
         # into the scanner's rows on read (`scanner_payload`) — only the status
         # row, for the rail.
@@ -505,7 +570,8 @@ class Collector:
         # Orphaned cache files go at startup: a removed watchlist name's bars,
         # a past day's calendar, the spark keys the old per-process hash left.
         gone = CACHE.prune(7 * 86400.0, keep=("scanner_watchlist.json", "scanner_events.jsonl",
-                                              "iv_history.jsonl"))
+                                              "iv_history.jsonl", "oi_log.jsonl",
+                                              "cboe_pc.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
         self._thread = threading.Thread(target=self._run, name="collector", daemon=True)
@@ -545,7 +611,7 @@ class Collector:
         now = time.time()
         ages = {k: round((now - t) / 60.0, 2) for k, t in updated.items()}
         ready = bool(state.get("quotes"))
-        return {
+        snap = {
             "ok": ready,
             "built_utc": datetime.now(UTC).isoformat(),
             "started_utc": self.started_utc,
@@ -557,7 +623,18 @@ class Collector:
             "expiry": expiry_state(),
             # Arithmetic on the board, like `expiry` — no upstream to be
             # stale against, so it is computed on read rather than polled.
-            "volterm": volterm_state(state.get("quotes") or []),
+            "volterm": {
+                **volterm_state(state.get("quotes") or []),
+                # Each book's one-sigma day in its own points, how much of it
+                # today has used, and implied against realised — the same
+                # arithmetic on the same board, plus the context closes and
+                # GEXYGEN's band, both already in state.
+                "books": implied_day(
+                    state.get("quotes") or [], state.get("context") or [], state.get("gex") or {}
+                ),
+                # The VIX against its own month, for the header's popover.
+                "vix_month": vix_month(state.get("context") or [], state.get("quotes") or []),
+            },
             # The strip and the meeting schedule are both already in state, so
             # what each FOMC has priced into it is arithmetic on read — the
             # same standing as `volterm` and `expiry`.
@@ -568,7 +645,14 @@ class Collector:
             "age_min": ages,
             **state,
         }
-
+        # The driver board (drivers.py): arithmetic on the blocks above, so it
+        # is computed on read like volterm and expiry. The scanner's session
+        # says whether the cash-market reads may vote.
+        try:
+            snap["drivers"] = drivers.build(snap, self.scan.clock(datetime.now(UTC)).session)
+        except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
+            snap["drivers"] = {"books": {}, "error": f"{e.__class__.__name__}: {e}"}
+        return snap
 
     def scanner_payload(self) -> dict[str, Any]:
         """The Scanner tab's whole read — technicals joined with the macro now."""
@@ -576,13 +660,16 @@ class Collector:
             scan = self._state.get("scanner") or {}
             parts = {k: self._state.get(k) for k in
                      ("quotes", "sectors", "calendar", "scan_earn", "wire", "scan_news",
-                      "scan_sec")}
+                      "scan_sec", "context")}
             cons = self._state.get("constituents")
             st = self._status.get("scanner")
         watch = self.scan.watchlist()
         clock = self.scan.clock(datetime.now(UTC))
         td = clock.trading_day
         closes = {s: [d.close for d in (self.scan.daily.get(s) or []) if d.day < td] for s in watch}
+        daily = {s: list(self.scan.daily.get(s) or []) for s in watch}
+        flow_ctx = {s: {"oi_prev": self.options.oi.prev(s, td),
+                        "vol_hist": self.options.oi.volumes(s, td)} for s in watch}
         payload = scanner_build(
             scan,
             quotes=parts["quotes"] or [],
@@ -601,15 +688,17 @@ class Collector:
             iv_hist={sym: self.options.history.series(sym) for sym in watch},
             premkt=self.premarket.view(td),
             sector_map=scan_src.SECTOR,
+            daily=daily,
+            shorts=self.shorts.view(),
+            earn_hist=self.earnhist.view(),
+            earn_next=self.earnhist.view_next(),
+            flow_ctx=flow_ctx,
+            context=parts["context"] or [],
+            # The tape count is computed inside the build now (the tape penalty
+            # reads it), from the constituents; the record line reads the log.
+            constituents=cons if isinstance(cons, dict) else None,
+            record=self.events.record_table(),
         )
-        # The tape count, the same function the Market tab prints. Never costs
-        # the Scanner its payload: a failure here is a missing count, no more.
-        try:
-            payload["regime"]["conviction"] = marketctx.conviction_for(
-                payload, parts["quotes"] or [], parts["sectors"] or [],
-                cons if isinstance(cons, dict) else None)
-        except (ValueError, TypeError, KeyError, ZeroDivisionError):
-            payload["regime"]["conviction"] = None
         return payload
 
     def market_payload(self) -> dict[str, Any]:

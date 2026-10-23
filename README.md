@@ -1,8 +1,6 @@
 <div align="center">
-  <h1>
-    <img src="docs/media/hermesx-icon.png" alt="" height="40" width="40" align="center" />
-    &nbsp;HermesX
-  </h1>
+  <img src="docs/media/hermesx-icon.png" alt="" width="128" height="128" />
+  <h1>HermesX</h1>
 
   <p><strong>Financial Markets &amp; Macro News Terminal</strong> with two desks.
   One for <strong>US stocks and ETFs traded through options</strong>: the

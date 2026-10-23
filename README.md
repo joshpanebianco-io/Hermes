@@ -221,16 +221,18 @@ failure) then writes only the words.
   conviction, and the setups worth taking. Under it the regime in a paragraph, then
   the facts as cards: VIX, the implied SPY day, the index lean, the tape, breadth,
   fuel, gamma and the flip, the next FOMC, macro today and the prints that matter.
-- **Per name:** the side and a conviction (never above the tape's cap), the plan in
-  one sentence, the trigger, the invalidation, the first target, **how to express it
-  in options** (long or spread from implied vs realised, which expiry, earnings
-  inside it) and why — each reason naming its layer.
+- **Per name, last and closed:** the plans come after everything that describes the
+  session, one closed row each — the side, the name, the conviction (never above
+  the tape's cap) and the plan cut to one line — and a click opens the card: the
+  plan in full, the trigger, the invalidation, the first target, **how to express
+  it in options** (long or spread from implied vs realised, which expiry, earnings
+  inside it), why — each reason naming its layer — and the scanner's facts beside it.
 - **The facts beside the prose are the server's**, printed from the scanner, never
   from the model; a plan for a name that is not in the facts is dropped, and every
   number in the prose is checked against the data — any it cannot find is listed in
   an Unverified banner (the same guard as the futures brief).
-- Also: the names to leave alone, the clock (prints, the open, lunch, the close),
-  and the risks.
+- Also: the clock (prints, the open, lunch, the close) and the risks, read before
+  the plans; the names to leave alone and on watch, after them.
 - **Past plans** are kept to judge against the day, with the facts they were written
   from; select several and delete those, or every one. A plan written for a session
   that has passed says so in red at the top — its levels and prices are not today's.

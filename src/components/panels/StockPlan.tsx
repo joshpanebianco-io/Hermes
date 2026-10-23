@@ -48,6 +48,17 @@ const stateWord = (s: string) => STATE_WORD[s] ?? s;
  * A PLAN, NOT A SIGNAL. It is written before the open from the scanner's
  * ranking, which is a heuristic; the scanner's live (L) / (E) signals and its
  * alerts are what say a setup actually triggered.
+ *
+ * THE SESSION FIRST, THE NAMES LAST, EACH CLOSED (owner, 2026-10-23: "have all
+ * the info before the plans and then have the plans in dropdowns ... pre
+ * closed"). Everything that describes the session — the lead, the regime and
+ * its cards, macro today, the prints, the clock and the risks — reads top to
+ * bottom before a single name, so the tape is understood before the trades
+ * in it. The plans come after, one closed row per name: the header line and
+ * the plan sentence cut to one line, so eight names fit on a screen; a click
+ * opens the full card. The other names (leave alone, on watch, also scanned)
+ * stay after the plans, since they are the plans' complement. Nothing is
+ * remembered between visits — every plan starts closed.
  */
 
 const STAGES = [
@@ -268,6 +279,17 @@ function PlanView({ p }: { p: Plan }) {
         </Section>
       )}
 
+      {b.timing.length > 0 && (
+        <Section title="The clock">
+          <Bullets items={b.timing} />
+        </Section>
+      )}
+      {risks.length > 0 && (
+        <Section title="Risks">
+          <Bullets items={risks} />
+        </Section>
+      )}
+
       <Section title={`The plans · ${b.plans.length}`}>
         {f.conviction && f.conviction.total > 0 && <TapeCount c={f.conviction} />}
         {b.plans.length === 0 ? (
@@ -324,17 +346,6 @@ function PlanView({ p }: { p: Plan }) {
               </span>
             ))}
           </p>
-        </Section>
-      )}
-
-      {b.timing.length > 0 && (
-        <Section title="The clock">
-          <Bullets items={b.timing} />
-        </Section>
-      )}
-      {risks.length > 0 && (
-        <Section title="Risks">
-          <Bullets items={risks} />
         </Section>
       )}
     </article>
@@ -589,12 +600,29 @@ function TapeCount({ c }: { c: Conviction }) {
 }
 
 /** One name's plan: the model's words on the left, the collector's facts on the right. */
+/**
+ * One name's plan: a closed row — the header line and the plan sentence cut
+ * to one line — that a click (or Enter / Space, it is a button) opens into
+ * the full card: the whole sentence, the four terms, the why, and the
+ * scanner's facts beside them. Opening one leaves the others as they are.
+ */
 function PlanCard({ x, n }: { x: PlanItem; n: PlanName | null }) {
+  const [open, setOpen] = useState(false);
   const hue = sideHue(x.side);
+  const panel = `plan-${x.sym}`;
   return (
-    <section className="grid gap-x-10 gap-y-4 border-b border-ring/60 py-5 first:pt-1 last:border-b-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,1fr)]" aria-label={`${x.sym} plan`}>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <section className="border-b border-ring/60 last:border-b-0" aria-label={`${x.sym} plan`}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={panel}
+        className="hit flex w-full cursor-pointer flex-col gap-y-1.5 rounded-[4px] py-3.5 text-left hover:bg-surface-2/40"
+      >
+        <span className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span aria-hidden className="w-[10px] text-[11px] text-ink-3">
+            {open ? "▾" : "▸"}
+          </span>
           <span className="text-[13px]" style={{ color: hue }}>
             {x.side === "long" ? "▲" : "▼"}
           </span>
@@ -615,49 +643,58 @@ function PlanCard({ x, n }: { x: PlanItem; n: PlanName | null }) {
             {x.conviction >= 4 ? "high" : x.conviction === 3 ? "moderate" : "low"} conviction
             <Pips n={x.conviction} hue={hue} />
           </span>
-        </div>
-        {x.capped && (
-          <p className="mt-1.5 flex items-baseline justify-end gap-1.5 text-[11.5px] text-ink-3">
-            <span aria-hidden className="h-[5px] w-[5px] shrink-0 -translate-y-px bg-warn" />
-            {cappedText(x)}
-          </p>
-        )}
-        <p className="mt-3 text-[14px] leading-[1.5] font-semibold text-ink">{x.plan}</p>
-        <dl className="mt-3 grid gap-x-6 gap-y-3 text-[13px] leading-[1.5] sm:grid-cols-2">
-          <Term k="Trigger" v={x.trigger} />
-          <Term k="Invalidation" v={x.invalidation} strong />
-          <Term k="Target" v={x.target} />
-          <Term k="Options" v={x.options} />
-        </dl>
-        {x.fixes && x.fixes.length > 0 && (
-          <p className="mt-2.5 flex items-baseline gap-1.5 text-[11.5px] leading-[1.5] text-ink-3">
-            <span aria-hidden className="h-[5px] w-[5px] shrink-0 -translate-y-px bg-flip" />
-            <span>
-              Set by the collector —{" "}
-              {x.fixes.map((f, i) => (
-                <span key={f.field} title={`The model wrote: ${f.was || "nothing"}`}>
-                  {i > 0 && "; "}
-                  {f.field}: {f.why}
-                </span>
-              ))}
-              .
-            </span>
-          </p>
-        )}
-        {x.why.length > 0 && (
-          <ul className="mt-3.5 flex flex-col gap-1.5">
-            {x.why.map((w) => (
-              <li key={w} className="flex gap-2 text-[12.5px] leading-[1.5] text-ink-2">
-                <span aria-hidden className="mt-[7px] h-[5px] w-[5px] shrink-0 rounded-[1px]" style={{ background: hue }} />
+        </span>
+        {/* Closed, the plan on one line — enough to know what the name is for
+            without opening it; the whole sentence is the first thing inside. */}
+        {!open && <span className="block w-full min-w-0 truncate pl-[22px] text-[13px] leading-[1.4] text-ink-2">{x.plan}</span>}
+      </button>
+      {open && (
+        <div id={panel} className="grid gap-x-10 gap-y-4 pb-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,1fr)]">
+          <div className="min-w-0">
+            {x.capped && (
+              <p className="flex items-baseline justify-end gap-1.5 text-[11.5px] text-ink-3">
+                <span aria-hidden className="h-[5px] w-[5px] shrink-0 -translate-y-px bg-warn" />
+                {cappedText(x)}
+              </p>
+            )}
+            <p className={cn("text-[14px] leading-[1.5] font-semibold text-ink", x.capped && "mt-2")}>{x.plan}</p>
+            <dl className="mt-3 grid gap-x-6 gap-y-3 text-[13px] leading-[1.5] sm:grid-cols-2">
+              <Term k="Trigger" v={x.trigger} />
+              <Term k="Invalidation" v={x.invalidation} strong />
+              <Term k="Target" v={x.target} />
+              <Term k="Options" v={x.options} />
+            </dl>
+            {x.fixes && x.fixes.length > 0 && (
+              <p className="mt-2.5 flex items-baseline gap-1.5 text-[11.5px] leading-[1.5] text-ink-3">
+                <span aria-hidden className="h-[5px] w-[5px] shrink-0 -translate-y-px bg-flip" />
                 <span>
-                  <Layered text={w} />
+                  Set by the collector —{" "}
+                  {x.fixes.map((f, i) => (
+                    <span key={f.field} title={`The model wrote: ${f.was || "nothing"}`}>
+                      {i > 0 && "; "}
+                      {f.field}: {f.why}
+                    </span>
+                  ))}
+                  .
                 </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      {n ? <Facts n={n} /> : <p className="text-[12px] text-ink-3">No scanner facts for {x.sym}.</p>}
+              </p>
+            )}
+            {x.why.length > 0 && (
+              <ul className="mt-3.5 flex flex-col gap-1.5">
+                {x.why.map((w) => (
+                  <li key={w} className="flex gap-2 text-[12.5px] leading-[1.5] text-ink-2">
+                    <span aria-hidden className="mt-[7px] h-[5px] w-[5px] shrink-0 rounded-[1px]" style={{ background: hue }} />
+                    <span>
+                      <Layered text={w} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {n ? <Facts n={n} /> : <p className="text-[12px] text-ink-3">No scanner facts for {x.sym}.</p>}
+        </div>
+      )}
     </section>
   );
 }

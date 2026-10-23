@@ -4,14 +4,15 @@
     &nbsp;HermesX
   </h1>
 
-  <p><strong>Financial Markets &amp; Macro News Terminal</strong> for trading Nasdaq,
-  S&amp;P 500 and Gold futures across the Asia, London and New York sessions —
-  a live news wire, sector rotation, dealer options positioning and gamma levels,
-  the economic calendar, earnings, and a Fed &amp; Treasury diary — with
-  <strong>AI-powered session reads</strong> built from facts the engine computed — and a
-  second desk for <strong>US stocks and ETFs traded through options</strong>: the
-  break-and-retest scanner, Cboe's option chains read for the trade, and a pre-open
-  game plan.</p>
+  <p><strong>Financial Markets &amp; Macro News Terminal</strong> with two desks.
+  One for <strong>US stocks and ETFs traded through options</strong>: the
+  break-and-retest scanner, Cboe's option chains read for the trade, a tape count
+  that caps conviction, a pre-open game plan written from the scanner's own facts,
+  and Hermes to explain any figure on the screen. One for trading Nasdaq,
+  S&amp;P 500 and Gold futures across the Asia, London and New York sessions — a
+  live news wire, the driver board, dealer options positioning and gamma levels, the
+  economic calendar, earnings, and a Fed &amp; Treasury diary — with
+  <strong>AI-powered session reads</strong> built from facts the engine computed.</p>
 
   <p>
     <img alt="Next.js 15" src="https://img.shields.io/badge/Next.js-15-black" />
@@ -19,7 +20,7 @@
     <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6" />
     <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-collector-009688" />
     <img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776ab" />
-    <img alt="Tests" src="https://img.shields.io/badge/tests-316%20passing-2ea44f" />
+    <img alt="Tests" src="https://img.shields.io/badge/tests-778%20passing-2ea44f" />
     <img alt="Personal use" src="https://img.shields.io/badge/data-personal%20use%20only-orange" />
   </p>
 </div>
@@ -28,55 +29,249 @@
 
 ---
 
-## Why this exists
+## The stocks & options desk
 
-I trade **NQ, ES and GC** futures across the **Asia, London and New York** sessions.
-Going into any of them, the questions are always the same: what happened while I was
-away, what is scheduled to happen while I'm trading, where are the levels that matter,
-and what regime am I stepping into? Answering that meant a dozen tabs — news sites, an
-economic calendar, a rates page, a charting platform, an options dashboard.
+The desk for the US stocks and ETFs I trade **through options** in the New York
+session — a different instrument, a different clock and a different risk unit from
+the futures, so it gets its own header strip (SPY, QQQ, IWM, VIX, VVIX, the 10Y and
+a countdown to the New York open or close) and its own three tabs: **Macro**,
+**Scanner** and **Analysis**. The wire, the calendar, the vol curve and rotation are
+shared — macro moves both books — but arranged here for an equity trader.
 
-I also trade US stocks and ETFs through options in the New York session, on one
-strategy: a break of the pre-market or previous-day high (low), entered on the
-retest — or on VWAP / the 8 EMA when price runs too far. Those questions are
-different: which names are strongest against the market, which levels they are
-about to break, and what the options are pricing.
+Every part of it is built the same way, and this section walks them in order: the
+engine computes a figure, the figure opens a read of what it means for this trade,
+and only at the end does a model write anything — the Analysis tab's game plan, and
+Hermes when asked.
 
-HermesX folds all of it into one screen, in the spirit of an institutional terminal:
-**everything states its own age, its own source, and its own limitations.** Every
-figure that changes flashes. Every panel answers exactly one question. And an LLM
-writes a session note at the end — but only from facts the engine has already
-computed, never from vibes.
+### Macro — is the tape with me?
+![Macro](docs/media/market.png)
 
-It is named for Hermes: god of messages, information and speed, which is the whole
-job description.
+- **Tape conviction** — eleven independent reads of the tape (SPY and QQQ against
+  their own levels, which way VIX is moving and its curve, sectors moving, equal
+  weight against SPY, credit, the 10Y, the dollar, index volume, index leaders), each
+  a vote with its threshold stated. The count is graded weak / moderate / strong and
+  **caps the game plan's convictions**: one read agreeing caps a plan at 3 of 5, and
+  strong is six or more agreeing with at most one against.
+- **Breadth** — sectors up against down, equal weight against the cap-weighted
+  index, and how many of the NDX and SPX names are up with what the top three carry.
+- **Fuel** — how much of the implied day SPY and QQQ have already used, from the gap
+  and the pre-market, so a break into a spent range reads as one.
+- **Prints & the Fed** — the session's US releases against consensus, and the FOMC
+  path meeting by meeting. **Cross-asset** — the 2Y, the 10Y, 2s10s, credit, the
+  dollar, long bonds, oil, gold and bitcoin: what stocks lean on today.
+- **The wire and the calendar**, shared with the futures desk; the calendar's `MINE`
+  filter here means *US releases that move stocks*.
 
----
+### The Scanner — break and retest, ranked
+![Scanner](docs/media/scanner.png)
 
-## The screen
+The **Scanner** tab is the `LE_Model.pine` scanner, computed by the engine instead
+of drawn by TradingView, for the New York strategy it was written for: a name
+breaks its **pre-market** or **previous-day** high (low), and the trade is the
+**retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
+far from the level for it to come back.
 
-Two desks behind one switch in the header — **Futures** (Terminal · Report) and
-**Stocks & Options** (Market · Scanner · Game plan) — with Settings on both. Each desk
-remembers the tab you left it on; `1`–`4` move between a desk's tabs and `D` switches
-desk. On the futures Terminal, three columns on one session clock:
+- **Every column the Pine's scanner has** — Price, Volume, % Change, Pre/Post %,
+  RS vs SPY, PDH / PDL / PMH / PML Break (the script's ten-segment bars, a filled
+  square once broken, dots while the pre-market range forms, amber at 90% where its
+  "about to break" alert fires) and Trend (▲ ▼ ⚠) — under the script's own names,
+  with the engine's score, setup and entry in front of them. An **Options** column
+  set swaps them for the options read below; the ticker column stays pinned while
+  the rest scroll sideways on a narrow screen.
+- **The Pine, ported faithfully** — PDH / PDL from the previous regular session,
+  PMH / PML from 04:00–09:29, break progress toward each level (a bar, or a filled
+  square once broken), the Pine's trend and wave state, the 8/9/10 EMA wave on
+  ten-minute bars, and **relative strength vs SPY and QQQ** with each move scaled by
+  that name's own daily ATR. The `(L)` level-retest and `(E)` 8-EMA signals are
+  replayed on confirmed ten-minute bars, in the script's own order of operations.
+- **The setup, in words** — retest live, pulling back, extended (so the entry
+  reference becomes VWAP or the 8 EMA), near a break, failed, or inside and
+  chopping — with the entry price and price's distance from it in ten-minute ATRs.
+- **The daily frame** — a year of daily bars per name: above or below the 20, 50
+  and 200-day, the distance from the 52-week high, last week's range. A sixth score
+  part (with the daily trend, between the averages, or against it), and a flag when
+  a setup runs against it: a PDH break inside a downtrend is not the same trade as
+  one at new highs.
+- **Short interest** — the share of the float sold short and the days to cover,
+  from FINRA via Yahoo; a short on a name past 15% carries a squeeze flag, a long
+  the fuel.
+- **The weather strip** — VIX, its curve (VIX/VIX3M) and VVIX, the one-day implied
+  SPY move (VIX ÷ √252), SPY / QQQ / IWM against their *own* levels, the tape's
+  bias (confirmed or contradicted by which way VIX is moving), and the next
+  high-impact US print. **VIX never ranks a name by itself**: it is the weather,
+  and it reaches a score only through the market part. The four bands (13 / 20 /
+  28) score; two sub-lines inside them only change the words: **18**, the VIX's
+  long-run median, below which the tape tends to mean-revert inside the day
+  (dealers long gamma: the retest holds, fades work) and above which it tends to trend
+  (dealers short gamma: breaks run, stops a notch wider, 1%-plus days normal),
+  with the chip reading `Normal · 18+`; and **35**, panic, where the VIX's own
+  mean reversion is the trade. The level is a proxy for the gamma flip, which
+  the driver board reads directly, and the table says so. Every row of the table
+  has two columns, *what the tape does* and *how to trade it*, the second written
+  for the desk's own break-and-retest: does the retest hold, how wide the stop,
+  what size. Every VIX figure's click-through also
+  reads the level against its own month: the percentile of the last twenty closes,
+  because an 18 after a week at 13 is not an 18 after a week at 25.
 
-| Column | Question it answers |
-|---|---|
-| **Left** | *Where are we?* — session ranges, volume profile, dealer gamma, the session clock, the vol curve, rates & the policy path |
-| **Middle** | *What is happening?* — the wire: ~40 feeds, classified, deduplicated, impact-ranked |
-| **Right** | *What is the market doing, and what's scheduled?* — the book, index movers, sector rotation, the economic calendar, Fed & Treasury diary, earnings, the macro board |
+  ![The VIX bands](docs/media/vix-bands.png)
+- **A ranked list, not a black box** — every score is a sum of named parts
+  (structure 30 · relative strength 25 · entry location 20 · relative volume 10,
+  or before the bell the gap and the pre-market volume · market 15 · the daily
+  frame 6 · the catalyst 6, less penalties for a spent daily range, a print inside
+  30 minutes, an after-the-close report today, a failed break, a signal in the
+  first thirty minutes or the last hour, a setup against a moderate or strong
+  tape, or a catalyst against the side), each listed with the points it earned.
+  The **catalyst** reads direction, never a count: a report's surprise sign, a
+  rating or target change, guidance raised or cut, an offering filed — with the
+  side it earns, against it it costs and the headline is quoted on the row. The
+  clock and tape penalties come from the signal log (36% of signals in the first
+  half hour reached +1R against 60% in the hour after; longs on a short tape 41%
+  against shorts 58%). It orders the list; it is a **heuristic rank, not a measured
+  probability**, and the page never calls it one. What it does show is **the
+  record**: under the parts, what logged signals of the same kind, side and score
+  band did, with their count, from ten of them and marked small under thirty.
+- **What the chart does not show** — each name's headlines (Yahoo's per-ticker
+  feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
+  AMC and the surprise, and its SEC filings from the last three days (8-K items,
+  offerings, 10-Q / 10-K) straight from EDGAR.
+- **A chart for the selected name** — ten-minute candles with PDH / PDL (solid) and
+  PMH / PML (dashed) as the Pine draws them, the 8 EMA wave tinted by the level
+  state, VWAP, the signals where they fired, and extended hours shaded — plus a
+  one-click **open in TradingView**.
 
-Above them: the desk's instrument strip (with the time in New York *and* in your own zone),
-and a crawl of only the **high-impact** headlines. Below: a status rail listing
-**every** data source — a dot for a healthy one, and anything down or serving a
-**stale** cached copy expanded with its error and age (red, or amber for stale) —
-because a terminal that hides a dead feed is lying to you.
+  ![Scanner detail](docs/media/scanner-detail.png)
+- **Alerts on every tab** — the Pine's alerts, raised by the terminal: a toast, a
+  chime (rising for a long, falling for a short) and, once allowed, a desktop
+  notification when a name fires an `(L)`, an `(E)`, a ◆ breakout, or gets 90% of
+  the way to a level. Only live events alert — a reload or a collector restart never
+  replays the morning. What fires, the minimum score and the sound are in
+  Settings → Alerts.
+- **The signal log** — every signal the engine saw, kept for 30 days with what it
+  did afterwards **in R**, where R is the Pine's own stop idea: the best and worst
+  excursion, whether +1R came before the stop, and where it stood 30 and 60 minutes
+  on and at the close — and a record by group (kind, side, score band). A bar that
+  touches both the stop and +1R counts as stopped. It is a record, not a forecast,
+  and it says so while the sample is small; it is what the score's weights get
+  calibrated against. Every signal now logs the score's parts, and
+  `server/tools/fit_score.py` reports the win rate by band, each part's lift and a
+  logistic slope — it never rewrites a weight; the record is read and the weights
+  changed by hand with its output beside the change.
+- **An editable watchlist** — the Pine's 21 names by default, up to 40, kept by the
+  collector; SPY, QQQ and IWM are always fetched as the benchmarks. A symbol Yahoo
+  does not know backs off instead of being retried every tick.
+- **Keyboard** — the rows are in the tab order, Enter picks one, ↑ / ↓ walk the list.
+
+Relative volume starts at the open: Yahoo's pre-market bars carry no volume, and
+the column says so rather than guessing.
+
+### Options — Cboe's chains, read the way a trade is decided
+![Scanner options](docs/media/scanner-options.png)
+
+Every scanner name carries its options context, from **Cboe's free delayed chains**
+(about fifteen minutes behind, read directly — the index ETFs every five minutes,
+single names every ten, one request every ten seconds at most):
+
+- **Is premium cheap or rich?** IV30 against 20-day realised volatility — under
+  0.90 cheap, over 1.25 rich — and an **IV rank** that builds from a daily log
+  (it says how many of the twenty sessions it needs it has).
+- **How far does the market expect it to go?** The front expiry's at-the-money
+  straddle as a dollar and percentage band — **0DTE on SPY, QQQ and IWM** when
+  one is listed — and the weekly's, drawn on the chart as a dotted band.
+- **Can it be traded, and should it be held?** The at-the-money spread and open
+  interest graded good / ok / poor, the 25-delta skew, and a warning when earnings
+  land before the expiry (implied volatility collapses after the report).
+- **The contract.** For the setup's side: a long option at the strike nearest
+  0.60 delta, and a debit spread selling the 0.30 delta, each with its premium,
+  delta, theta and spread — and **the premium at risk to the setup's own stop**
+  (stop distance × delta × 100, an approximation it names). Set a risk per trade
+  in Settings → Options and it also says how many contracts that buys. Rules, not
+  advice.
+- **The reward half.** Each contract is also priced at the **first target** by the
+  plan's own rule — what it is worth there, the reward per contract after half the
+  bid-ask, and that against the risk: **the option's own R**, which the stock's
+  hides. The structure the engine picks is the one with the better R when both are
+  priced, the premium rule otherwise, and the card says which.
+- **The earnings number.** With a report ahead: the straddle covering it, net of the
+  expiry before it the event alone, against the name's close-to-close moves on its
+  last four reports (Nasdaq's dates, the reaction day picked by volume) — dear,
+  cheap or about right. And the **term structure**, at-the-money IV per expiry,
+  where event premium shows as a front priced above the back.
+- **Positioning on the name.** Open interest is logged per session, so the flow
+  line reads the change since yesterday on each side and on the busiest strikes,
+  and today's chain volume against the name's own twenty-session average —
+  **unusual** past twice it.
+- **Every figure opens what it means for this trade** — IV30, realised, the premium
+  verdict, the rank, the straddle, skew, liquidity, flow and earnings, each read with
+  the name's own state (rich says the spread, a rank still building says how many
+  sessions it has, a flow leaning against the side says so).
+
+  ![What the options figures mean](docs/media/options-read.png)
+
+### Analysis — the game plan, written from the scanner's facts
+![Game plan](docs/media/plan.png)
+
+A pre-open plan for the New York session, generated on demand: pick how many names
+(4 / 6 / 8 / 10) and press **Generate**. The collector reads the live scanner into
+`facts` — levels, relative strength, the setup, each name's option chain, the tape
+count, the weather and today's prints — and the page shows the stages as they run:
+*reading the scanner's top names · placing price against PDH and PMH · reading the
+option chains · weighing the prints and the tape · writing the plans*. The same
+model chain as the futures brief (OpenRouter, free models first, falling through on
+failure) then writes only the words.
+
+- **The lead** — one line on the tape and what it allows: the count, the cap on
+  conviction, and the setups worth taking. Under it the regime in a paragraph, then
+  the facts as cards: VIX, the implied SPY day, the index lean, the tape, breadth,
+  fuel, gamma and the flip, the next FOMC, macro today and the prints that matter.
+- **Per name:** the side and a conviction (never above the tape's cap), the plan in
+  one sentence, the trigger, the invalidation, the first target, **how to express it
+  in options** (long or spread from implied vs realised, which expiry, earnings
+  inside it) and why — each reason naming its layer.
+- **The facts beside the prose are the server's**, printed from the scanner, never
+  from the model; a plan for a name that is not in the facts is dropped, and every
+  number in the prose is checked against the data — any it cannot find is listed in
+  an Unverified banner (the same guard as the futures brief).
+- Also: the names to leave alone, the clock (prints, the open, lunch, the close),
+  and the risks.
+- **Past plans** are kept to judge against the day, with the facts they were written
+  from; select several and delete those, or every one. A plan written for a session
+  that has passed says so in red at the top — its levels and prices are not today's.
+
+### Hermes — ask about any part of it
+![Hermes](docs/media/hermes.png)
+
+The terminal's assistant, in a panel beside the page rather than over it: the **Ask
+Hermes** key on the status rail, or `A`. It answers from the desk's live digest —
+the same facts the plan is written from, plus the tab on screen and the Scanner's
+selected name — and streams the answer as it is written.
+
+- **Openers follow the tab.** On Macro: *what is the tape count saying, and why? is
+  breadth confirming the move? how should VIX shape my stops today?* On the Scanner
+  with a name selected: *explain its setup · what would trigger and invalidate it ·
+  which contract fits it and why · why does it rank where it does.* On Analysis:
+  *summarise the game plan · which name has the best context · what would change the
+  plan at the open · explain the conviction cap.*
+- **Every figure in an answer is checked** against the data the model was shown; any
+  it cannot find is named under the answer, shown and marked rather than passed off.
+- The thread survives closing the panel, and which model answered, and how long it
+  took, is printed under each reply.
+
+### What the engine computes and what a model writes
+
+| Part | The engine computes | A model writes |
+|---|---|---|
+| **Macro** | the eleven tape reads, their grade and the conviction cap; breadth, fuel, the prints against consensus | nothing |
+| **Scanner** | levels, breaks, the setup state and entry, the score and its parts, the daily frame, the catalyst's direction, the signal log | nothing |
+| **Options** | implied against realised, the straddles, liquidity, skew, flow, the earnings number, the contract and its R | nothing |
+| **Every click-through** | the read of each figure for this name's trade, from stated rules | nothing |
+| **Analysis** | the facts: every card and every number beside the prose | the plan — lead, regime, per-name plans, what to leave alone, the clock, the risks |
+| **Hermes** | the live digest the answer must quote | the answer, every figure in it checked |
 
 ---
 
 ## The futures desk
 
-NQ, ES and GC across Asia, London and New York: the **Terminal** and the **Report**.
+NQ, ES and GC across Asia, London and New York: the **Macro** tab and the **Analysis** tab.
 
 ### The Wire
 ![The wire](docs/media/wire.png)
@@ -97,7 +292,7 @@ Japan Times, the ECB, the Bank of England, the RBA and more), merged into one ta
   double-encoded publishers, and section-page detection for query feeds.
 
 ### The driver board
-Across the top of the Terminal, one cell per book: which way the engine's count
+Across the top of the futures Macro tab, one cell per book: which way the engine's count
 leans, how many reads agree, the grade, and one line on how to treat it. Each cell
 opens the full board — every driver a vote with its threshold and its reason, in
 three layers: **macro** sets the direction (the 10Y's day change, the dollar,
@@ -220,7 +415,7 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
 ### The AI session read
 ![Session report](docs/media/report.png)
 
-The Report tab generates a **pre-session brief** on demand: pick the session (Asia /
+The Analysis tab generates a **pre-session brief** on demand: pick the session (Asia /
 London / New York / auto-by-clock) and the book (NQ / ES / GC / all three). The
 collector computes every table on the page from the live snapshot, then an LLM (via
 OpenRouter, with a model-and-mode fallback chain) writes the read around them. Top to
@@ -279,181 +474,54 @@ The design principle throughout: **the engine computes, the model narrates.**
 Reports persist to disk with their full digest attached, so any note can be audited
 against exactly the data it saw.
 
-## The stocks & options desk
+---
 
-![Market](docs/media/market.png)
+## Why this exists
 
-The second desk is for the US stocks and ETFs I trade **through options** in the New
-York session — a different instrument, a different clock and a different risk unit
-from the futures, so it gets its own header strip (SPY, QQQ, IWM, VIX, VVIX, the 10Y
-and a countdown to the New York open or close) and its own tabs: **Market**,
-**Scanner** and **Game plan**. The wire, the calendar, the vol curve and rotation are
-shared — macro moves both books — but arranged here for an equity trader:
+I trade US stocks and ETFs through options in the New York session, on one
+strategy: a break of the pre-market or previous-day high (low), entered on the
+retest — or on VWAP / the 8 EMA when price runs too far. The questions before the
+open are always the same: is the tape with me, which names are strongest against the
+market, which levels are they about to break, and what are the options pricing?
 
-- **Market** — the vol curve, sector rotation and index movers; the wire; and a
-  calendar whose `MINE` filter means *US releases that move stocks* (the futures
-  desk keeps its NQ · ES · GC reading), earnings with the watchlist's names marked,
-  and rates.
+I also trade **NQ, ES and GC** futures across the **Asia, London and New York**
+sessions, where the questions are different: what happened while I was away, what is
+scheduled to happen while I'm trading, where are the levels that matter, and what
+regime am I stepping into? Answering either set meant a dozen tabs — news sites, an
+economic calendar, a rates page, a charting platform, an options dashboard.
 
-### The Scanner — break and retest, ranked
-![Scanner](docs/media/scanner.png)
+HermesX folds all of it into one screen, in the spirit of an institutional terminal:
+**everything states its own age, its own source, and its own limitations.** Every
+figure that changes flashes. Every panel answers exactly one question. And an LLM
+writes a session note at the end — but only from facts the engine has already
+computed, never from vibes.
 
-The **Scanner** tab is the `LE_Model.pine` scanner, computed by the engine instead
-of drawn by TradingView, for the New York strategy it was written for: a name
-breaks its **pre-market** or **previous-day** high (low), and the trade is the
-**retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
-far from the level for it to come back.
+It is named for Hermes: god of messages, information and speed, which is the whole
+job description.
 
-- **Every column the Pine's scanner has** — Price, Volume, % Change, Pre/Post %,
-  RS vs SPY, PDH / PDL / PMH / PML Break (the script's ten-segment bars, a filled
-  square once broken, dots while the pre-market range forms, amber at 90% where its
-  "about to break" alert fires) and Trend (▲ ▼ ⚠) — under the script's own names,
-  with the engine's score, setup and entry in front of them. An **Options** column
-  set swaps them for the options read below; the ticker column stays pinned while
-  the rest scroll sideways on a narrow screen.
-- **The Pine, ported faithfully** — PDH / PDL from the previous regular session,
-  PMH / PML from 04:00–09:29, break progress toward each level (a bar, or a filled
-  square once broken), the Pine's trend and wave state, the 8/9/10 EMA wave on
-  ten-minute bars, and **relative strength vs SPY and QQQ** with each move scaled by
-  that name's own daily ATR. The `(L)` level-retest and `(E)` 8-EMA signals are
-  replayed on confirmed ten-minute bars, in the script's own order of operations.
-- **The setup, in words** — retest live, pulling back, extended (so the entry
-  reference becomes VWAP or the 8 EMA), near a break, failed, or inside and
-  chopping — with the entry price and price's distance from it in ten-minute ATRs.
-- **The daily frame** — a year of daily bars per name: above or below the 20, 50
-  and 200-day, the distance from the 52-week high, last week's range. A sixth score
-  part (with the daily trend, between the averages, or against it), and a flag when
-  a setup runs against it: a PDH break inside a downtrend is not the same trade as
-  one at new highs.
-- **Short interest** — the share of the float sold short and the days to cover,
-  from FINRA via Yahoo; a short on a name past 15% carries a squeeze flag, a long
-  the fuel.
-- **The weather strip** — VIX, its curve (VIX/VIX3M) and VVIX, the one-day implied
-  SPY move (VIX ÷ √252), SPY / QQQ / IWM against their *own* levels, the tape's
-  bias (confirmed or contradicted by which way VIX is moving), and the next
-  high-impact US print. **VIX never ranks a name by itself**: it is the weather,
-  and it reaches a score only through the market part. The four bands (13 / 20 /
-  28) score; two sub-lines inside them only change the words: **18**, the VIX's
-  long-run median, below which the tape tends to mean-revert inside the day
-  (dealers long gamma: the retest holds, fades work) and above which it tends to trend
-  (dealers short gamma: breaks run, stops a notch wider, 1%-plus days normal),
-  with the chip reading `Normal · 18+`; and **35**, panic, where the VIX's own
-  mean reversion is the trade. The level is a proxy for the gamma flip, which
-  the driver board reads directly, and the table says so. Every row of the table
-  has two columns, *what the tape does* and *how to trade it*, the second written
-  for the desk's own break-and-retest: does the retest hold, how wide the stop,
-  what size. Every VIX figure's click-through also
-  reads the level against its own month: the percentile of the last twenty closes,
-  because an 18 after a week at 13 is not an 18 after a week at 25.
-- **A ranked list, not a black box** — every score is a sum of named parts
-  (structure 30 · relative strength 25 · entry location 20 · relative volume 10,
-  or before the bell the gap and the pre-market volume · market 15 · the daily
-  frame 6 · the catalyst 6, less penalties for a spent daily range, a print inside
-  30 minutes, an after-the-close report today, a failed break, a signal in the
-  first thirty minutes or the last hour, a setup against a moderate or strong
-  tape, or a catalyst against the side), each listed with the points it earned.
-  The **catalyst** reads direction, never a count: a report's surprise sign, a
-  rating or target change, guidance raised or cut, an offering filed — with the
-  side it earns, against it it costs and the headline is quoted on the row. The
-  clock and tape penalties come from the signal log (36% of signals in the first
-  half hour reached +1R against 60% in the hour after; longs on a short tape 41%
-  against shorts 58%). It orders the list; it is a **heuristic rank, not a measured
-  probability**, and the page never calls it one. What it does show is **the
-  record**: under the parts, what logged signals of the same kind, side and score
-  band did, with their count, from ten of them and marked small under thirty.
-- **What the chart does not show** — each name's headlines (Yahoo's per-ticker
-  feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
-  AMC and the surprise, and its SEC filings from the last three days (8-K items,
-  offerings, 10-Q / 10-K) straight from EDGAR.
-- **A chart for the selected name** — ten-minute candles with PDH / PDL (solid) and
-  PMH / PML (dashed) as the Pine draws them, the 8 EMA wave tinted by the level
-  state, VWAP, the signals where they fired, and extended hours shaded — plus a
-  one-click **open in TradingView**.
+---
 
-  ![Scanner detail](docs/media/scanner-detail.png)
-- **Alerts on every tab** — the Pine's alerts, raised by the terminal: a toast, a
-  chime (rising for a long, falling for a short) and, once allowed, a desktop
-  notification when a name fires an `(L)`, an `(E)`, a ◆ breakout, or gets 90% of
-  the way to a level. Only live events alert — a reload or a collector restart never
-  replays the morning. What fires, the minimum score and the sound are in
-  Settings → Alerts.
-- **The signal log** — every signal the engine saw, kept for 30 days with what it
-  did afterwards **in R**, where R is the Pine's own stop idea: the best and worst
-  excursion, whether +1R came before the stop, and where it stood 30 and 60 minutes
-  on and at the close — and a record by group (kind, side, score band). A bar that
-  touches both the stop and +1R counts as stopped. It is a record, not a forecast,
-  and it says so while the sample is small; it is what the score's weights get
-  calibrated against. Every signal now logs the score's parts, and
-  `server/tools/fit_score.py` reports the win rate by band, each part's lift and a
-  logistic slope — it never rewrites a weight; the record is read and the weights
-  changed by hand with its output beside the change.
-- **An editable watchlist** — the Pine's 21 names by default, up to 40, kept by the
-  collector; SPY, QQQ and IWM are always fetched as the benchmarks. A symbol Yahoo
-  does not know backs off instead of being retried every tick.
-- **Keyboard** — the rows are in the tab order, Enter picks one, ↑ / ↓ walk the list.
+## The screen
 
-Relative volume starts at the open: Yahoo's pre-market bars carry no volume, and
-the column says so rather than guessing.
+Two desks behind one switch in the header — **Stocks & Options** (Macro · Scanner ·
+Analysis) and **Futures** (Macro · Analysis) — with Settings on both. Each desk
+remembers the tab you left it on; `1`–`4` move between a desk's tabs, `D` switches
+desk and `A` opens Hermes. Both desks are walked above. On the futures Macro tab,
+three columns on one session clock:
 
-### Options — Cboe's chains, read the way a trade is decided
-![Scanner options](docs/media/scanner-options.png)
+| Column | Question it answers |
+|---|---|
+| **Left** | *Where are we?* — session ranges, volume profile, dealer gamma, the session clock, the vol curve, rates & the policy path |
+| **Middle** | *What is happening?* — the wire: ~40 feeds, classified, deduplicated, impact-ranked |
+| **Right** | *What is the market doing, and what's scheduled?* — the book, index movers, sector rotation, the economic calendar, Fed & Treasury diary, earnings, the macro board |
 
-Every scanner name carries its options context, from **Cboe's free delayed chains**
-(about fifteen minutes behind, read directly — the index ETFs every five minutes,
-single names every ten, one request every ten seconds at most):
+Above them: the desk's instrument strip (with the time in New York *and* in your own zone),
+and a crawl of only the **high-impact** headlines. Below: a status rail listing
+**every** data source — a dot for a healthy one, and anything down or serving a
+**stale** cached copy expanded with its error and age (red, or amber for stale) —
+because a terminal that hides a dead feed is lying to you.
 
-- **Is premium cheap or rich?** IV30 against 20-day realised volatility — under
-  0.90 cheap, over 1.25 rich — and an **IV rank** that builds from a daily log
-  (it says how many of the twenty sessions it needs it has).
-- **How far does the market expect it to go?** The front expiry's at-the-money
-  straddle as a dollar and percentage band — **0DTE on SPY, QQQ and IWM** when
-  one is listed — and the weekly's, drawn on the chart as a dotted band.
-- **Can it be traded, and should it be held?** The at-the-money spread and open
-  interest graded good / ok / poor, the 25-delta skew, and a warning when earnings
-  land before the expiry (implied volatility collapses after the report).
-- **The contract.** For the setup's side: a long option at the strike nearest
-  0.60 delta, and a debit spread selling the 0.30 delta, each with its premium,
-  delta, theta and spread — and **the premium at risk to the setup's own stop**
-  (stop distance × delta × 100, an approximation it names). Set a risk per trade
-  in Settings → Options and it also says how many contracts that buys. Rules, not
-  advice.
-- **The reward half.** Each contract is also priced at the **first target** by the
-  plan's own rule — what it is worth there, the reward per contract after half the
-  bid-ask, and that against the risk: **the option's own R**, which the stock's
-  hides. The structure the engine picks is the one with the better R when both are
-  priced, the premium rule otherwise, and the card says which.
-- **The earnings number.** With a report ahead: the straddle covering it, net of the
-  expiry before it the event alone, against the name's close-to-close moves on its
-  last four reports (Nasdaq's dates, the reaction day picked by volume) — dear,
-  cheap or about right. And the **term structure**, at-the-money IV per expiry,
-  where event premium shows as a front priced above the back.
-- **Positioning on the name.** Open interest is logged per session, so the flow
-  line reads the change since yesterday on each side and on the busiest strikes,
-  and today's chain volume against the name's own twenty-session average —
-  **unusual** past twice it.
-- **Every figure opens what it means for this trade** — IV30, realised, the premium
-  verdict, the rank, the straddle, skew, liquidity, flow and earnings, each read with
-  the name's own state (rich says the spread, a rank still building says how many
-  sessions it has, a flow leaning against the side says so).
-
-### The Game plan — the stocks desk's own brief
-![Game plan](docs/media/plan.png)
-
-A pre-open plan for the New York session, written by the same model chain as the
-futures brief but from the **scanner's** facts: the top four to ten names by score,
-SPY and QQQ for the tape, the regime, the day's US prints, each name's headlines and
-its options context.
-
-- **Per name:** the side and a conviction, the plan in one sentence, the trigger,
-  the invalidation, the first target, **how to express it in options** (long or
-  spread from implied vs realised, which expiry, earnings inside it) and why —
-  each reason naming its layer.
-- **The facts beside the prose are the server's**, printed from the scanner, never
-  from the model; a plan for a name that is not in the facts is dropped, and every
-  number in the prose is checked against the data (the same guard as the futures
-  brief).
-- Also: the names to leave alone, the clock (prints, the open, lunch, the close),
-  and the risks. Past plans are kept to judge against the day.
+---
 
 ## The chassis
 

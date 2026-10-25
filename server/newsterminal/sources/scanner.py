@@ -96,10 +96,13 @@ SEC_DOC = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 # five cents wide. GOOGL for GOOG (same screen): one company, but the class A
 # line lists four expiries inside seven days to GOOG's one and trades about
 # three times the contracts — the weekly and same-day strikes live there.
+# ARM and SHOP by name (owner, 2026-10-26: "can we add ARM, SHOP, SMCI" — SMCI
+# was already here), not screened; both already had a sector and a logo.
 DEFAULT_WATCHLIST = [
     "SPY", "QQQ", "IWM", "AMD", "SPCX", "COIN", "PLTR", "HOOD", "DELL", "IBM", "AAPL",
     "NVDA", "TSLA", "AMZN", "META", "MSFT", "GOOGL", "NFLX", "ADBE", "PYPL", "INTC",
     "MU", "AVGO", "ORCL", "MSTR", "MRVL", "SNDK", "CRWV", "NBIS", "SMCI", "GME",
+    "ARM", "SHOP",
 ]
 # Always fetched: RS is measured against SPY and QQQ, and the tape reads IWM.
 BENCHMARKS = ("SPY", "QQQ", "IWM")
@@ -221,7 +224,7 @@ ALIASES: dict[str, list[str]] = {
     "GS": ["Goldman Sachs"], "BA": ["Boeing"], "WMT": ["Walmart"], "COST": ["Costco"],
     "DIS": ["Disney"], "XOM": ["Exxon"], "LLY": ["Eli Lilly"], "UNH": ["UnitedHealth"],
     "MRVL": ["Marvell"], "SNDK": ["Sandisk", "SanDisk"], "CRWV": ["CoreWeave"],
-    "NBIS": ["Nebius"], "GME": ["GameStop"],
+    "NBIS": ["Nebius"], "GME": ["GameStop"], "SHOP": ["Shopify"],
 }
 
 # EDGAR form types worth a line under a stock. Form 4 (insider trades) and 144

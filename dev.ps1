@@ -1,7 +1,7 @@
-# Start HERMESX — every half somewhere of its own, then the terminal on screen.
+# Start HERMES — every half somewhere of its own, then the terminal on screen.
 #
 #   .\dev.ps1                 everything, skipping whatever is already up — as
-#                             tabs in one Windows Terminal window, "hermesx"
+#                             tabs in one Windows Terminal window, "hermes"
 #   .\dev.ps1 -Restart        the collector again, in the tab it already has
 #   .\dev.ps1 -Windows        a window per service instead of tabs
 #   .\dev.ps1 -Force          start anyway (will fail on a port clash)
@@ -84,7 +84,7 @@ function Test-Port([int]$Port) {
 # guaranteed — a machine without it gets told once and gets a window per service,
 # because a launcher that refuses to launch over its own cosmetics is worse than
 # one that looks untidy.
-$WT_WINDOW = "hermesx"
+$WT_WINDOW = "hermes"
 $useTabs = $false
 if (-not $Windows) {
     if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
@@ -124,7 +124,7 @@ function Start-InWindow([string[]]$PsArgs, [string]$Title, [string]$WorkDir, [sw
     }
 
     # -w names the window, which is what collects the services instead of
-    # scattering them: the first call creates "hermesx", every later one — this
+    # scattering them: the first call creates "hermes", every later one — this
     # run or the next click — drops its tab into the same window. -d is the
     # tab's own working directory, so each half starts where it belongs.
     $wtArgs = @("-w", $WT_WINDOW, "new-tab", "--title", "`"$Title`"")
@@ -216,7 +216,7 @@ if ($Restart) {
         Write-Host "  (it did not come back in place - starting a fresh one; close the old $place)" -ForegroundColor Yellow
     }
     Start-InWindow @("-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $here 'server\run.ps1')`"") `
-        -Title "HERMESX collector" -WorkDir (Join-Path $here "server")
+        -Title "HERMES collector" -WorkDir (Join-Path $here "server")
     for ($i = 0; $i -lt 60 -and -not (Test-Port 8100); $i++) { Start-Sleep -Milliseconds 500 }
     if (Test-Port 8100) { Write-Host "Collector -> http://127.0.0.1:8100" -ForegroundColor Green }
     else { Write-Host "  (still binding - check the collector $place)" -ForegroundColor Yellow }
@@ -231,7 +231,7 @@ if ($collectorUp -and -not $Force) {
 } else {
     Write-Host "Collector -> http://127.0.0.1:8100  (live source feed, $place of its own)" -ForegroundColor Green
     Start-InWindow @("-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $here 'server\run.ps1')`"") `
-        -Title "HERMESX collector" -WorkDir (Join-Path $here "server")
+        -Title "HERMES collector" -WorkDir (Join-Path $here "server")
 
     # The terminal reads the collector on first paint, so give it a moment to
     # bind. Without this the first load lands on the offline banner and then
@@ -247,7 +247,7 @@ if ($collectorUp -and -not $Force) {
 #
 # The Levels panel borrows seven gamma numbers per asset from GEXYGEN's compute
 # service on 8000 (sources\gex.py). Those two projects are separate and stay
-# separate: HERMESX runs standalone, every other panel works with GEXYGEN gone,
+# separate: HERMES runs standalone, every other panel works with GEXYGEN gone,
 # and the panel already has a designed offline state for exactly this. What was
 # missing was only that starting the terminal meant remembering to go and click
 # a second shortcut first.
@@ -349,7 +349,7 @@ if ($webUp -and -not $Force) {
     # stay that way for wt too, whose parser would take the `;` for its own.
     # The build-then-start chain for -Prod lives in package.json for the same
     # reason.
-    Start-InWindow @("-Command", $webCmd) -Title "HERMESX web" -WorkDir $here -PinTitle
+    Start-InWindow @("-Command", $webCmd) -Title "HERMES web" -WorkDir $here -PinTitle
 }
 
 # Open the terminal. This runs whether or not the web half was already up: you
@@ -368,7 +368,7 @@ if (-not $NoBrowser) {
         # ?tab=terminal RATHER THAN THE BARE URL, and it has to be explicit: the
         # app remembers the tab you were last on, so a bare address reopens the
         # report or the settings pane if that is where you left off. Clicking a
-        # thing called HERMESX asks for the terminal.
+        # thing called HERMES asks for the terminal.
         Write-Host "Terminal  -> opening http://localhost:3100/?tab=terminal" -ForegroundColor Green
         Start-Process "http://localhost:3100/?tab=terminal"
     } else {

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/media/hermesx-icon.png" alt="" width="128" height="128" />
+  <img src="docs/media/hermes-icon.png" alt="" width="128" height="128" />
   <h1>Hermes</h1>
 
   <p><strong>Financial Markets &amp; Macro News Terminal</strong> with two desks.
@@ -23,7 +23,7 @@
   </p>
 </div>
 
-![HermesX terminal](docs/media/hero.png)
+![Hermes terminal](docs/media/hero.png)
 
 ---
 
@@ -31,17 +31,21 @@
 
 The desk for the US stocks and ETFs I trade **through options** in the New York
 session — a different instrument, a different clock and a different risk unit from
-the futures, so it gets its own header strip (SPY, QQQ, IWM, VIX, VVIX, the 10Y and
-a countdown to the New York open or close) and its own three tabs: **Macro**,
-**Scanner** and **Analysis**. The wire, the calendar, the vol curve and rotation are
-shared — macro moves both books — but arranged here for an equity trader.
+the futures — so it has panels of its own: the Scanner, the game plan, the tape
+count. The wire, the calendar, the vol curve and rotation are shared, because macro
+moves both books. Since 2026-10-30 both desks share **one tab bar** and one header
+strip, cut by what a page is for rather than which book it is about: **Macro** (what
+is happening and what is scheduled), **Structure** (where price is and how it is
+positioned — the book, session ranges, the volume profile, dealer gamma, the vol
+curve, the tape count), **Scanner**, **Analysis** (the futures brief or the stocks
+game plan, behind one switch on that tab), **Hermes AI** and **Settings**.
 
 Every part of it is built the same way, and this section walks them in order: the
 engine computes a figure, the figure opens a read of what it means for this trade,
 and only at the end does a model write anything — the Analysis tab's game plan, and
 Hermes when asked.
 
-### Macro — is the tape with me?
+### Structure — is the tape with me?
 ![Macro](docs/media/market.png)
 
 - **Tape conviction** — eleven independent reads of the tape (SPY and QQQ against
@@ -154,9 +158,19 @@ far from the level for it to come back.
   `server/tools/fit_score.py` reports the win rate by band, each part's lift and a
   logistic slope — it never rewrites a weight; the record is read and the weights
   changed by hand with its output beside the change.
-- **An editable watchlist** — the Pine's 21 names by default, up to 40, kept by the
-  collector; SPY, QQQ and IWM are always fetched as the benchmarks. A symbol Yahoo
-  does not know backs off instead of being retried every tick.
+- **A pinned list, and a pool behind it** — the Pine's names by default, up to 40,
+  kept by the collector; SPY, QQQ and IWM are always fetched as the benchmarks. A
+  symbol Yahoo does not know backs off instead of being retried every tick. What the
+  pinned list leaves of the 40 is filled from **the pool**: every US common line and
+  DR at $5bn+ (about 1,600 names) read in one request from TradingView's public
+  screener, gated to the ~250 that trade $500m+ a day with a 1.5%+ ATR, ranked by
+  the scanner's own in-play arithmetic (the gap in the name's ATRs, the pre-market
+  volume against an average day, a report in play) and promoted at four marks:
+  08:00, 09:00 and 09:25 ET replace the pre-market list whole, 10:00 fills the slots
+  they leave for the opening drive, and from then the list holds until the day
+  rolls. A promoted row says so, with the mark and the reason; the editor shows
+  today's promotions with a pin for any you want to keep, the names in play that
+  did not make the cut, and a switch to turn promotion off.
 - **Keyboard** — the rows are in the tab order, Enter picks one, ↑ / ↓ walk the list.
 
 Relative volume starts at the open: Yahoo's pre-market bars carry no volume, and
@@ -267,11 +281,45 @@ selected name — and streams the answer as it is written.
 | **Analysis** | the facts: every card and every number beside the prose | the plan — lead, regime, per-name plans, what to leave alone, the clock, the risks |
 | **Hermes** | the live digest the answer must quote | the answer, every figure in it checked |
 
+### Hermes AI — the whole terminal in one chat
+
+The side panel (`A`) answers beside the tab you have open. The **Hermes AI** tab, after
+Analysis, is the same assistant on a page of its own, laid out like
+the chats you know — past chats down the left, the thread in the middle, the box at
+the bottom. It opens on the desk at a glance — the clock, the strip, each book's
+driver board, event risk, the index heavyweights, earnings, the top headlines, the
+scanner's leaders and the latest notes, a few thousand tokens in all — and reaches
+for the rest with **tools**: a scanner name's whole row, a book's live levels, the
+wire, the calendar, the heavyweights, the sessions, a chart's last bars, a whole
+desk's digest, the latest brief or plan. Each call shows under the answer while it
+runs ("Reading AMZN's scanner row"). A question about a trade is answered in four
+parts: what the data says, what the strategy needs to see, where it is wrong, what
+would change the read. Answers may run longer here and carry headings, bullets and
+tables; every figure is still checked against the data the model was shown or
+fetched, and any it cannot find is named under the answer. Past the last
+twenty-four turns a chat's older turns are folded into a short summary the next
+question carries, so an earlier thread still means something. Chats are kept in
+this browser only. `NT_HERMES_MODEL` runs this tab alone on a model you name; by
+default it uses the same free chain as the notes and the panel. The footer under
+each answer shows the model, the time, the tokens it took and how many came from
+the provider's cache.
+
+A router in front of the model decides how much a question gets. A handful of checks
+— the phase, whether a box is open, a strip quote — are answered from the glance
+without a model at all. A quick check gets the glance, no tools and no thinking. A
+name, a level, a why or a comparison gets the full kit, with the tool set of the
+desk the question names (the futures set or the stocks set, not both). Tool answers
+are written for a model to read, one line per headline, release or bar, so a row
+costs a third of what the panel's JSON would. The fixed start of the prompt is
+marked for the provider's cache, which an Anthropic model needs telling about.
+`npm test` runs the router's tests; `scripts/hermes-bakeoff.mjs` compares models.
+
 ---
 
 ## The futures desk
 
-NQ, ES and GC across Asia, London and New York: the **Macro** tab and the **Analysis** tab.
+NQ, ES and GC across Asia, London and New York: the **Macro** and **Structure** tabs,
+and the futures half of **Analysis** — one bar with the stocks desk (above).
 
 ### The Wire
 ![The wire](docs/media/wire.png)
@@ -299,7 +347,7 @@ three layers: **macro** sets the direction (the 10Y's day change, the dollar,
 credit, the VIX and its curve, today's inflation prints), **positioning** says how
 far a move runs (dealer gamma and spot against the flip), **structure** says
 whether the tape accepts it (prior value, the last session's range, the daily
-frame, breadth and the index leaders). A macro lean the structure rejects is named
+frame, the daily 200 EMA, the ten-minute 200 EMA, breadth and the index leaders). A macro lean the structure rejects is named
 as a **conflict**, which lowers conviction rather than picking a side. Under the
 votes, the context rows that never vote: the CFTC's **Commitments of Traders**
 (leveraged funds for the index futures, managed money for gold, with the net's
@@ -313,10 +361,14 @@ confident than it.
 
 The left column's core: three panels, one price ladder each, `NQ / ES / GC` pickers on all.
 
-- **Session ranges** — what Asia, London, Europe midday, pre-NY and New York each traded,
-  from true 5-minute highs and lows, every bar on one shared price axis with the current price as a single line through all
+- **Session ranges** — the four boxes a trader draws, in ET: Asia 20:00–00:00, London
+  02:00–05:00 (on London's clock, 07:00–10:00), the pre-market 04:00–09:30 and New York
+  09:30–16:00 — what each traded, from true 5-minute highs and lows, every bar on one shared price axis with the current price as a single line through all
   of them. A staircase is a trend, a stack is a range; a high or low printed in amber has
-  been taken out — the handover read. Rows that are still yesterday's are dimmed.
+  been taken out — the handover read. Rows that are still yesterday's are dimmed. Under
+  the rows, **fuel**: today's range so far against the 14-day ATR and the expected move,
+  and whether it was spent overnight or in New York — has the book already done its day's
+  work before the open?
 - **Volume profile** — POC, VAH and VAL for three windows cut the way sessions are
   actually traded: the **previous RTH** (09:30–16:00 ET) as every session's reference,
   the **completed overnight** (18:00–09:30) once New York is trading, and a
@@ -341,13 +393,13 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
 ### The session clock & the vol curve
 ![Clock and vol](docs/media/clock.png)
 
-- **Sessions** — seven venues with local times and open/close countdowns, a phase
-  headline (*"London session — Europe repricing the overnight"*) **derived from which
-  desks are actually open**, not from a hardcoded table — so it can never contradict
-  the rows beneath it, survives both hemispheres' DST changes, and the week is bounded
-  by Globex (Sunday 18:00 ET is Monday morning, not the weekend). The NEXT marker
-  counts down to real session moments — and shows an FOMC entry **only when the Fed's
-  own calendar says there is one**. NYSE **holidays and half days** come from one
+- **Sessions** — the same four boxes as the session ranges, each with its ET window,
+  the window on your own clock, and a countdown to its open or close; a phase headline
+  (*"London into the pre-market — both boxes open"*) **read off the same boxes**, so it
+  can never contradict the rows beneath it, and the week is bounded by Globex (Sunday
+  18:00 ET is Monday morning, not the weekend). The NEXT marker counts down to the box
+  boundaries — and shows an FOMC entry **only when the Fed's own calendar says there is
+  one**. NYSE **holidays and half days** come from one
   table checked against the exchange's own calendar (Thanksgiving reads as a holiday,
   the day after closes at 13:00), countdowns skip weekends, and London's markers run
   on London's clock — so the weeks when the UK and the US change DST on different
@@ -490,7 +542,7 @@ scheduled to happen while I'm trading, where are the levels that matter, and wha
 regime am I stepping into? Answering either set meant a dozen tabs — news sites, an
 economic calendar, a rates page, a charting platform, an options dashboard.
 
-HermesX folds all of it into one screen, in the spirit of an institutional terminal:
+Hermes folds all of it into one screen, in the spirit of an institutional terminal:
 **everything states its own age, its own source, and its own limitations.** Every
 figure that changes flashes. Every panel answers exactly one question. And an LLM
 writes a session note at the end — but only from facts the engine has already
@@ -503,17 +555,29 @@ job description.
 
 ## The screen
 
-Two desks behind one switch in the header — **Stocks & Options** (Macro · Scanner ·
-Analysis) and **Futures** (Macro · Analysis) — with Settings on both. Each desk
-remembers the tab you left it on; `1`–`4` move between a desk's tabs, `D` switches
-desk and `A` opens Hermes. Both desks are walked above. On the futures Macro tab,
+One tab bar for both desks — **Macro** · **Structure** · **Scanner** · **Analysis** ·
+**Hermes AI** · **Settings**. Structure and Analysis carry the one desk switch — the
+futures or the stocks & options read — and remember it as one choice; `1`–`6` move
+between tabs, `D` flips the desk and `A` opens Hermes. Both desks are walked above. On the Macro tab,
 three columns on one session clock:
 
 | Column | Question it answers |
 |---|---|
-| **Left** | *Where are we?* — session ranges, volume profile, dealer gamma, the session clock, the vol curve, rates & the policy path |
+| **Left** | *What is the market doing?* — the macro board, rates & the policy path, sector rotation, index movers |
 | **Middle** | *What is happening?* — the wire: ~40 feeds, classified, deduplicated, impact-ranked |
-| **Right** | *What is the market doing, and what's scheduled?* — the book, index movers, sector rotation, the economic calendar, Fed & Treasury diary, earnings, the macro board |
+| **Right** | *What is scheduled?* — the economic calendar, today's prints and the Fed path, the Fed & Treasury diary, earnings with the watchlist marked, the sector peers reporting, cross-asset moves |
+
+The Structure tab is the other three questions, one desk at a time behind the same
+**Futures / Stocks & options** switch Analysis wears: *where are we?* — the book, session ranges,
+the volume profile (with **yesterday's shape** under it: trend day or range day, the
+close in its range, the gap at the reopen) and a live **levels ladder** per book (prior
+settle, prior RTH, the overnight, today's opens, VWAP from 18:00 and from 09:30, the
+opening range, the expected move, the walls, the ten-minute 200 EMA), with **confluence
+bands** bracketed where three or more rows sit inside a quarter of an ATR and the daily
+200 EMA beneath it as the regime line, and the index ETFs' own levels; *how is it positioned?* —
+dealer gamma for the futures and in ETF prices, and the index ETFs' options; *is the
+tape with me?* — the vol curve, the tape count, breadth, fuel and the session clock,
+under the driver board.
 
 Above them: the desk's instrument strip (with the time in New York *and* in your own zone),
 and a crawl of only the **high-impact** headlines. Below: a status rail listing
@@ -556,6 +620,7 @@ the whole board is keyboard-free by design — it is meant to be *read*.
 | TreasuryDirect | Upcoming coupon auctions | 6 h |
 | iShares holdings CSVs | NDX/SPX constituent weights → contribution math | daily |
 | Yahoo Finance (chart, per stock) | 5-minute bars 04:00–20:00 for every watchlist name → the Scanner's levels, wave, VWAP and signals; daily bars for the ATR | ~90 s a name in session (SPY/QQQ/IWM 30 s), 15 min closed; daily 6 h |
+| TradingView (public screener, one POST) | Every US common line and DR at $5bn+ with close, change, volume, 30-day average volume, 14-day ATR, pre-market change and volume, report dates → the Scanner's pool and its promotions | 5 min 04:00–10:30 ET, 30 min otherwise |
 | Yahoo Finance (per-ticker RSS) | Each watchlist name's headlines | 10 min a name |
 | Cboe (delayed option chains) | Each watchlist name's chain → IV, the straddle's expected move, skew, liquidity, the suggested contracts; a daily IV log for IV rank | 5 min SPY/QQQ/IWM, 10 min singles, in session; hourly otherwise |
 | SEC EDGAR | Each watchlist name's filings from the last three days | 30 min a name |
@@ -614,9 +679,9 @@ npm run shortcut               # optional: the same thing, on the desktop
   `.next-prod` rather than `next dev` — lighter for a screen left open all day;
   `npm run prod` does the same by hand). Everything already listening is left alone, so a second
   run restarts nothing and is simply how you get the browser tab back.
-- `npm run shortcut` puts a **HERMESX** launcher on the desktop, winged helm and all,
+- `npm run shortcut` puts a **HERMES** launcher on the desktop, winged helm and all,
   pointed at `dev.ps1`; `npm run shortcut:collector` adds a feed-only one beside it.
-  The icon is `public/hermesx.ico`, rendered from the same traced path as the header
+  The icon is `public/hermes.ico`, rendered from the same traced path as the header
   by `npm run icon` — re-run that only if the mark or its hues change.
 
 Checks: `npm run check` runs TypeScript, ESLint, Ruff, mypy (strict) and the pytest

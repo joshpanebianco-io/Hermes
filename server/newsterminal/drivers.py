@@ -38,8 +38,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from . import events as events_mod
 from . import frame as frame_mod
-from . import marketctx, releases, volterm
+from . import marketctx, releases, structure, volterm
 from .profile import value_position
 
 BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
@@ -326,6 +327,54 @@ def _session(ranges: dict[str, Any] | None, book: str, last: float | None) -> di
                  f"inside {label}'s range, {pos * 100:.0f}% of the way up it")
 
 
+def _trend10m(ranges: dict[str, Any] | None, book: str, last: float | None) -> dict[str, Any]:
+    """The ten-minute 200 EMA as a side: the strategy's own filter (2026-10-30)."""
+    a = ((ranges or {}).get("assets") or {}).get(book) if isinstance(ranges, dict) else None
+    e = (a or {}).get("ema200_10m") if isinstance(a, dict) else None
+    line = _num(e.get("value")) if isinstance(e, dict) else None
+    if line is None or last is None:
+        return _vote("trend10m", "10m trend", "structure", "—", "neutral",
+                     "no ten-minute history yet — the 200 EMA needs two days of bars")
+    slope = str(e.get("slope") or "flat") if isinstance(e, dict) else "flat"
+    px = f"{line:,.0f}" if line >= 1000 else f"{line:,.2f}"
+    side = structure.side_of(last, line)
+    if side == "above":
+        return _vote("trend10m", "10m trend", "structure", f"above {px}", "long",
+                     f"above the 10-minute 200 EMA ({px}), and it is {slope} — "
+                     "longs have the line under them; a short retest into it tends to fail")
+    if side == "below":
+        return _vote("trend10m", "10m trend", "structure", f"below {px}", "short",
+                     f"below the 10-minute 200 EMA ({px}), and it is {slope} — "
+                     "shorts have the line over them; a long retest into it tends to fail")
+    return _vote("trend10m", "10m trend", "structure", f"on {px}", "neutral",
+                 f"sitting on the 10-minute 200 EMA ({px}) — the line itself decides")
+
+
+def _regime200(frames: dict[str, Any] | None, book: str, last: float | None) -> dict[str, Any]:
+    """The daily 200 EMA as a vote (owner, 2026-10-30: the 200s "accounted for"
+    in the bias). The daily frame's vote is decided by the 20 and the 50 and
+    only names the 200; this one is the 200's own — the regime, above or
+    below, with half a percent either side reading as "on it"."""
+    fr = ((frames or {}).get("books") or {}).get(book) if isinstance(frames, dict) else None
+    line = _num(fr.get("ema200")) if isinstance(fr, dict) and fr.get("ok") else None
+    if line is None or last is None:
+        return _vote("daily200", "Daily 200", "structure", "—", "neutral",
+                     "no daily history yet — the 200-day EMA needs a year of sessions")
+    pct = (last - line) / line * 100.0
+    px = f"{line:,.0f}" if line >= 1000 else f"{line:,.2f}"
+    side = structure.side_of(last, line, structure.DAILY_ON_PCT)
+    if side == "above":
+        return _vote("daily200", "Daily 200", "structure", f"above {px}", "long",
+                     f"{pct:.1f}% above the 200-day EMA ({px}) — the daily regime is up; "
+                     "dips are bought until it breaks")
+    if side == "below":
+        return _vote("daily200", "Daily 200", "structure", f"below {px}", "short",
+                     f"{abs(pct):.1f}% below the 200-day EMA ({px}) — the daily regime is down; "
+                     "rallies are sold until it is reclaimed")
+    return _vote("daily200", "Daily 200", "structure", f"on {px}", "neutral",
+                 f"within half a percent of the 200-day EMA ({px}) — the regime is being decided")
+
+
 def _frame(frames: dict[str, Any] | None, book: str, last: float | None) -> dict[str, Any]:
     fr = ((frames or {}).get("books") or {}).get(book) if isinstance(frames, dict) else None
     rd = frame_mod.read(fr if isinstance(fr, dict) and fr.get("ok") else None, last)
@@ -363,6 +412,47 @@ def _leaders(constituents: dict[str, Any] | None, book: str, cash_open: bool) ->
             "short": f"only {pct:.0f}% of the leaders up — the weight is selling",
             "neutral": f"{pct:.0f}% up — split leadership"}[v]
     return _vote("leaders", label, "structure", value, v, note)
+
+
+# ---- the catalysts (events.py) ------------------------------------------------
+
+
+def _heavyweight_prints(heavy: list[dict[str, Any]], book: str) -> dict[str, Any]:
+    """The index points supplied by the names that just reported — a macro vote
+    past ±PRINTS_VOTE_POINTS, since a megacap's print is the largest scheduled
+    macro an index future has (2026-10-30)."""
+    label = f"{INDEX_OF.get(book, 'Index')} prints"
+    net, who = events_mod.net_print_points(heavy)
+    if not who:
+        return _vote("hw_prints", label, "macro", "—", "neutral",
+                     "no heavyweight has reported in the last day and a half")
+    value = f"{net:+.2f} pts · {', '.join(who[:4])}"
+    if abs(net) < events_mod.PRINTS_VOTE_POINTS:
+        return _vote("hw_prints", label, "macro", value, "neutral",
+                     f"inside ±{events_mod.PRINTS_VOTE_POINTS:.2f} index points — "
+                     "the prints net out")
+    v = "long" if net > 0 else "short"
+    return _vote("hw_prints", label, "macro", value, v,
+                 f"the names that just reported are {'carrying' if v == 'long' else 'dragging'} "
+                 f"the index by {abs(net):.2f} points")
+
+
+def _event_risk(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Event risk since the close — a DAMPER, not a direction (events.py): the
+    vote is always neutral, and when an event is on the board the count's
+    ceiling drops a notch (book_board)."""
+    if not events:
+        v = _vote("event_risk", "Event risk", "macro", "none", "neutral",
+                  "no high-impact geopolitics, policy or energy story since the close")
+        v["damper"] = False
+        return v
+    lead = events[0]
+    reach = ", ".join(lead.get("channels") or []) or "the tape"
+    n = len(events)
+    v = _vote("event_risk", "Event risk", "macro", f"{n} since the close", "neutral",
+              f"{lead.get('title')} ({reach}) — risk on the tape caps conviction a notch lower")
+    v["damper"] = True
+    return v
 
 
 # ---- context rows ------------------------------------------------------------
@@ -448,7 +538,9 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
                sectors: list[dict[str, Any]], constituents: dict[str, Any] | None,
                cot: dict[str, Any] | None, putcall: dict[str, Any] | None,
                expiry: dict[str, Any] | None, fed: dict[str, Any] | None,
-               sigma: float | None, scan_session: str, now: datetime) -> dict[str, Any]:
+               sigma: float | None, scan_session: str, now: datetime,
+               heavy: list[dict[str, Any]] | None = None,
+               events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     q = _q(quotes, book)
     last = _num(q.get("last")) if q else None
     cash_open = scan_session == "rth"
@@ -462,13 +554,22 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
     votes += [_vix_dir(quotes, book), _vix_curve(quotes, book), _prints(calendar, now, book),
               _gamma(gex, book, last, sigma),
               _value(profiles, book, last), _session(ranges, book, last),
-              _frame(frames, book, last)]
+              _frame(frames, book, last), _regime200(frames, book, last),
+              _trend10m(ranges, book, last)]
     if book != "GC":
         sv = marketctx._sectors_vote(sectors, scan_session)
         sv["layer"] = "structure"
         votes.append(sv)
         votes.append(_leaders(constituents, book, cash_open))
+        votes.append(_heavyweight_prints(heavy or [], book))
+    risk = _event_risk(events or [])
+    votes.append(risk)
     count = marketctx.conviction(votes)
+    # THE DAMPER (events.py): an event on the tape is not a side, it is a
+    # reason to be a notch less sure of any side — the same treatment a
+    # macro-against-structure conflict gets, applied to the ceiling.
+    if risk.get("damper"):
+        count["max_conviction"] = max(1, int(count["max_conviction"]) - 1)
     macro, structure = _lean(votes, "macro"), _lean(votes, "structure")
     a = ((gex or {}).get("assets") or {}).get(book) if isinstance(gex, dict) else None
     regime = a.get("regime") if isinstance(a, dict) and a.get("ok") and a.get("regime") in (
@@ -481,7 +582,10 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
         "macro_lean": macro, "structure_lean": structure,
         "conflict": bool(macro and structure and macro != structure),
         "regime": regime,
-        "treatment": treatment(book, count, macro, structure, regime, ny_open),
+        "event_risk": bool(risk.get("damper")),
+        "treatment": treatment(book, count, macro, structure, regime, ny_open)
+        + (f" Event risk since the close ({len(events or [])}): conviction capped a notch lower."
+           if risk.get("damper") else ""),
         "context": _context(book, cot, putcall, expiry, fed),
     }
 
@@ -496,6 +600,7 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
                    if isinstance(b, dict)}
     fed = marketctx.fed(snap.get("policy_meetings") if isinstance(snap.get("policy_meetings"),
                                                                   dict) else None)
+    events = events_mod.event_risk(snap, now)
     boards = {
         book: book_board(
             book, quotes=quotes,
@@ -511,6 +616,8 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
             putcall=snap.get("putcall") if isinstance(snap.get("putcall"), dict) else None,
             expiry=snap.get("expiry") if isinstance(snap.get("expiry"), dict) else None,
             fed=fed, sigma=books_sigma.get(book), scan_session=scan_session, now=now,
+            heavy=events_mod.heavyweights(snap, book, now) if book != "GC" else None,
+            events=events,
         )
         for book in BOOKS
     }

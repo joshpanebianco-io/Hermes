@@ -48,8 +48,10 @@ def _snap(**over: Any) -> dict[str, Any]:
         "ranges": {"assets": {"NQ": {"last": 29408.0, "sessions": [
             _sess("asia", 29495.0, 29300.0),
             _sess("london", 29420.0, 29231.0),
-            _sess("preny", 29440.0, 29380.0),
+            _sess("premkt", 29440.0, 29380.0),
             {"key": "ny", "ok": False},
+            # The ladder's overnight is this one row (2026-10-30), not the boxes' union.
+            _sess("overnight", 29495.0, 29231.0),
         ]}}},
     }
     snap.update(over)
@@ -76,7 +78,7 @@ def test_far_secondary_walls_are_left_off() -> None:
     assert "Put wall 2" in labels  # 108 points out, inside one
 
 
-def test_overnight_range_spans_asia_london_and_pre_ny() -> None:
+def test_overnight_range_is_the_overnight_box() -> None:
     rows = {r["label"]: r for r in _nq(_snap())["rows"]}
     assert rows["ON high"]["price"] == 29495.0
     assert rows["ON low"]["price"] == 29231.0

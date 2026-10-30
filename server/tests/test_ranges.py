@@ -1,12 +1,19 @@
 """
-Session windows and what each row admits about itself.
+The session boxes, and what each row admits about itself.
 
-THE BUG THESE ARE WRITTEN AGAINST. A London brief printed "The London session
-opened at 29,263.75" — a real number lifted out of the digest's volume-profile
-block, where it was the 18:00 ET Globex open, because the session rows carried
-no open of their own and nothing said which day they were from. Two of these
-tests are about the boundary; the rest are about a row being unable to pass
-itself off as today's when it is not.
+THE ROWS ARE THE FOUR BOXES A TRADER DRAWS (owner, 2026-10-30): Asia 20:00 to
+midnight ET, London 02:00 to 05:00 (on London's clock), the pre-market 04:00
+to 09:30, New York 09:30 to 16:00 — plus the overnight, 18:00 to the cash open,
+which the brief's ladder reads and the panel does not draw. They overlap and
+they leave gaps, so the old guarantees ("every minute in exactly one window",
+"the rows after the newest are yesterday's") are gone, and these tests pin
+what replaced them: each box collects its own bars, and a row is the previous
+day's by Globex trade date.
+
+THE OLDER BUG THEY STILL GUARD AGAINST. A London brief once printed "The
+London session opened at 29,263.75" — the 18:00 Globex open lifted from the
+volume-profile block, because the rows carried no open of their own and
+nothing said which day they were from.
 """
 
 from __future__ import annotations
@@ -37,101 +44,122 @@ def rows(now: datetime, start: datetime, count: int) -> dict[str, dict[str, Any]
     return {r["key"]: r for r in out if r["ok"]}
 
 
-def test_london_is_the_open_window_0200_to_0500() -> None:
-    """European futures open 08:00 CET — 02:00 ET — and the hour is theirs.
-
-    It used to be counted as Asia, which described a European hour as thin
-    Globex drift and disagreed with `resolve_session` by exactly one hour. It
-    ENDS at 05:00 because "London took out the Asia high" is a claim about the
-    open move, and a window running to 08:00 absorbs three hours of midday
-    drift and stops meaning it.
-    """
-    r = rows(datetime(2026, 9, 16, 6, 0, tzinfo=ET), datetime(2026, 9, 15, 18, 0, tzinfo=ET), 52)
-    assert r["asia"]["end_et"] == "01:45"      # last bar before the handover
-    assert r["london"]["start_et"] == "02:00"
-    assert r["london"]["end_et"] == "04:45"    # and it stops at 05:00
-    assert r["euro_mid"]["start_et"] == "05:00"
+def upto(now: datetime, start: datetime) -> dict[str, dict[str, Any]]:
+    """Bars from `start` to the last quarter-hour at or before `now`."""
+    count = int((now - start) / timedelta(minutes=15)) + 1
+    return rows(now, start, count)
 
 
-def test_a_row_says_which_day_it_is_from() -> None:
-    """Asia begins the evening BEFORE the session it feeds, so the dates differ."""
-    r = rows(datetime(2026, 9, 16, 4, 0, tzinfo=ET), datetime(2026, 9, 15, 18, 0, tzinfo=ET), 40)
-    assert r["asia"]["date"] == "Tue 15"
-    assert r["london"]["date"] == "Wed 16"
+TUE_1800 = datetime(2026, 9, 15, 18, 0, tzinfo=ET)
 
 
-def test_status_tracks_the_clock_not_the_bars() -> None:
-    """The window containing `now` is live; every other one is complete.
-
-    Without this the range still being built reads exactly like a finished one,
-    which is the same trap the volume profile's developing row was given labels
-    to avoid.
-    """
-    start = datetime(2026, 9, 15, 18, 0, tzinfo=ET)
-    during_asia = rows(datetime(2026, 9, 16, 1, 0, tzinfo=ET), start, 40)
-    assert during_asia["asia"]["status"] == "live"
-
-    during_london = rows(datetime(2026, 9, 16, 4, 0, tzinfo=ET), start, 40)
-    assert during_london["asia"]["status"] == "complete"
-    assert during_london["london"]["status"] == "live"
+def test_the_rows_are_the_four_boxes_and_the_overnight() -> None:
+    """Read at 10:00 Wednesday with bars from Tuesday's reopen."""
+    r = upto(datetime(2026, 9, 16, 10, 0, tzinfo=ET), TUE_1800)
+    assert set(r) == {"asia", "london", "premkt", "ny", "overnight"}
+    assert (r["asia"]["start_et"], r["asia"]["end_et"]) == ("20:00", "23:45")
+    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("02:00", "04:45")
+    assert (r["premkt"]["start_et"], r["premkt"]["end_et"]) == ("04:00", "09:15")
+    assert (r["ny"]["start_et"], r["ny"]["end_et"]) == ("09:30", "10:00")
+    assert (r["overnight"]["start_et"], r["overnight"]["end_et"]) == ("18:00", "09:15")
+    assert [x["label"] for x in (r["asia"], r["london"], r["premkt"], r["ny"], r["overnight"])] == [
+        "Asia", "London", "Pre-market", "New York", "Overnight",
+    ]
 
 
-def test_a_window_that_has_not_come_round_again_is_the_prior_days() -> None:
-    """Two days of bars, read at three instants of the second day.
+def test_each_box_opens_on_its_own_print() -> None:
+    """The field whose absence sent a model looking elsewhere for one."""
+    r = upto(datetime(2026, 9, 16, 10, 0, tzinfo=ET), TUE_1800)
+    assert r["overnight"]["open"] == 29200.0     # the 18:00 print
+    assert r["asia"]["open"] == 29240.0          # the 20:00 print — not Globex's reopen
+    assert r["london"]["open"] == 29360.0        # the 02:00 print
+    assert r["premkt"]["open"] == 29400.0        # the 04:00 print
+    assert r["asia"]["date"] == "Tue 15" and r["london"]["date"] == "Wed 16"
 
-    The panel draws every row on one price axis, which reads as a timeline —
-    so a row that is yesterday's has to say so or the staircase lies.
-    """
-    start = datetime(2026, 9, 14, 18, 0, tzinfo=ET)          # Monday's Asia open
+
+def test_london_and_the_premarket_share_an_hour() -> None:
+    """04:30 ET: both boxes are live, and each holds the 04:00-04:30 bars as its own."""
+    r = upto(datetime(2026, 9, 16, 4, 30, tzinfo=ET), TUE_1800)
+    assert r["london"]["status"] == "live" and r["premkt"]["status"] == "live"
+    assert r["london"]["high"] == r["premkt"]["high"]     # the 04:30 print, in both
+    assert r["london"]["low"] == 29360.0 and r["premkt"]["low"] == 29400.0
+
+
+def test_the_gaps_have_no_live_box() -> None:
+    """19:30, 00:30 and 16:30 ET belong to no box; only the overnight is live at night."""
+    live = lambda now: {k for k, x in upto(now, TUE_1800).items() if x["status"] == "live"}  # noqa: E731
+    assert live(datetime(2026, 9, 16, 19, 30, tzinfo=ET)) == {"overnight"}
+    assert live(datetime(2026, 9, 16, 0, 30, tzinfo=ET)) == {"overnight"}
+    assert live(datetime(2026, 9, 16, 16, 30, tzinfo=ET)) == set()
+    assert live(datetime(2026, 9, 16, 23, 0, tzinfo=ET)) == {"asia", "overnight"}
+
+
+def test_the_overnight_keeps_what_falls_between_the_boxes() -> None:
+    """A spike at 01:00 ET — after Asia's box, before London's — is nobody's high
+    but the overnight's, which is what the ladder's ON high is read from."""
+    stamps, highs, lows, closes = bars(TUE_1800, 45)                  # to 05:00 Wed
+    at_0100 = int(datetime(2026, 9, 16, 1, 0, tzinfo=ET).timestamp())
+    closes[stamps.index(at_0100)] = 31000.0
+    out = {r["key"]: r for r in segment(stamps, highs, lows, closes, closes[-1],
+                                        datetime(2026, 9, 16, 5, 30, tzinfo=ET)) if r["ok"]}
+    assert out["overnight"]["high"] == 31000.0
+    assert out["asia"]["high"] < 31000.0 and out["london"]["high"] < 31000.0
+
+
+def test_a_row_is_the_prior_days_by_globex_trade_date() -> None:
+    """Two days of bars, read at instants of the second day."""
+    start = datetime(2026, 9, 14, 18, 0, tzinfo=ET)                   # Monday's reopen
 
     def prior(now: datetime) -> dict[str, bool]:
-        count = int((now - start) / timedelta(minutes=15)) + 1
-        return {k: r["prior_day"] for k, r in rows(now, start, count).items()}
+        return {k: r["prior_day"] for k, r in upto(now, start).items()}
 
-    # 03:00 Wednesday, London trading: Asia and London are this cycle's, and
-    # the three windows still to come are Tuesday's.
+    # 03:00 Wednesday, London live: tonight's Asia, London and overnight are
+    # this trade date's; Tuesday's pre-market and New York are not.
     assert prior(datetime(2026, 9, 16, 3, 0, tzinfo=ET)) == {
-        "asia": False, "london": False, "euro_mid": True, "preny": True, "ny": True,
-        "post": True,
+        "asia": False, "london": False, "premkt": True, "ny": True, "overnight": False,
     }
-    # 17:00 Wednesday, the post-close lull: one whole day, nothing stale.
+    # 17:00 Wednesday, the maintenance hour: one whole day, nothing stale.
     assert not any(prior(datetime(2026, 9, 16, 17, 0, tzinfo=ET)).values())
-    # 18:15 Wednesday, Asia has reopened: everything else is now the day before.
+    # 18:15 Wednesday: the Globex day has turned, so every box is Wednesday's
+    # and only the overnight — begun at 18:00 — is tonight's.
     assert prior(datetime(2026, 9, 16, 18, 15, tzinfo=ET)) == {
-        "asia": False, "london": True, "euro_mid": True, "preny": True, "ny": True,
-        "post": True,
+        "asia": True, "london": True, "premkt": True, "ny": True, "overnight": False,
     }
 
 
-def test_a_live_window_with_no_bar_yet_is_still_last_nights() -> None:
-    """18:05, the clock is in Asia but the 18:00 bar has not printed.
+def test_a_live_box_with_no_bar_yet_is_still_last_nights() -> None:
+    """20:05, the clock is in Asia's box but its 20:00 bar has not printed.
 
     The row says "live" because the clock says so, and its numbers are last
-    night's. It is the stale one; today's London-to-New-York rows are not.
-    """
+    night's — and it says that too."""
     start = datetime(2026, 9, 14, 18, 0, tzinfo=ET)
-    stamps, highs, lows, closes = bars(start, 184)            # last bar Wed 15:45
-    out = segment(stamps, highs, lows, closes, closes[-1], datetime(2026, 9, 16, 18, 5, tzinfo=ET))
+    stamps, highs, lows, closes = bars(start, 200)                    # last bar Wed 19:45
+    out = segment(stamps, highs, lows, closes, closes[-1], datetime(2026, 9, 16, 20, 5, tzinfo=ET))
     r = {x["key"]: x for x in out}
     assert r["asia"]["status"] == "live" and r["asia"]["date"] == "Tue 15"
     assert r["asia"]["prior_day"] is True
-    assert not any(r[k]["prior_day"] for k in ("london", "euro_mid", "preny", "ny"))
+    assert r["overnight"]["prior_day"] is False and r["overnight"]["status"] == "live"
 
 
-def test_every_row_carries_an_open() -> None:
-    """The field whose absence sent a model looking elsewhere for one."""
-    r = rows(datetime(2026, 9, 16, 4, 0, tzinfo=ET), datetime(2026, 9, 15, 18, 0, tzinfo=ET), 40)
-    assert r["asia"]["open"] == 29200.0          # the 18:00 print
-    assert r["london"]["open"] == 29360.0        # the 02:00 print, a different number
-    assert r["asia"]["open"] != r["london"]["open"]
+def test_london_keeps_londons_clock_in_the_mismatch_week() -> None:
+    """Mon 2026-10-26: the UK is on GMT, the US still on EDT, so London's 07:00
+    is 03:00 ET. The pre-market box is ET's and stays at 04:00."""
+    r = upto(datetime(2026, 10, 26, 7, 0, tzinfo=ET), datetime(2026, 10, 25, 18, 0, tzinfo=ET))
+    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("03:00", "05:45")
+    assert r["premkt"]["start_et"] == "04:00"
+    # A week later both are on standard time and it is 02:00 again.
+    r = upto(datetime(2026, 11, 2, 7, 0, tzinfo=ET), datetime(2026, 11, 1, 18, 0, tzinfo=ET))
+    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("02:00", "04:45")
 
 
-def test_windows_do_not_overlap_or_leave_a_gap() -> None:
-    """Every minute of a Globex day belongs to exactly one window, in the order
-    the day runs them — in a normal week and in the mismatch week alike."""
+def test_the_tagging_windows_still_cover_the_day_once_each() -> None:
+    """The calendar's "prints in the X session" tag is the contiguous partition
+    (sessions.desk_window): every minute of a Globex day belongs to exactly one,
+    in the order the day runs them — in a normal week and in the mismatch week."""
     from newsterminal.sessions import DESK_WINDOWS, desk_window
 
     order = [k for k, _ in DESK_WINDOWS]
+    assert order == ["asia", "london", "premkt", "ny", "post"]
     for day in (datetime(2026, 10, 19, 18, 0, tzinfo=ET), datetime(2026, 10, 26, 18, 0, tzinfo=ET)):
         seen: list[str] = []
         for m in range(0, 24 * 60, 5):
@@ -145,31 +173,9 @@ def test_windows_do_not_overlap_or_leave_a_gap() -> None:
         assert seen == order, (day, seen)
 
 
-def test_london_keeps_londons_clock_in_the_mismatch_week() -> None:
-    """Mon 2026-10-26: the UK is on GMT, the US still on EDT, so London's 07:00
-    is 03:00 ET. The window used to open at 02:00 ET regardless, filing the
-    last hour of Asia as London's open."""
-    start = datetime(2026, 10, 25, 18, 0, tzinfo=ET)
-    r = rows(datetime(2026, 10, 26, 7, 0, tzinfo=ET), start, 52)
-    assert r["asia"]["end_et"] == "02:45"
-    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("03:00", "05:45")
-    assert r["euro_mid"]["start_et"] == "06:00"
-    # A week later both are on standard time and it is 02:00 again.
-    r = rows(datetime(2026, 11, 2, 7, 0, tzinfo=ET), datetime(2026, 11, 1, 18, 0, tzinfo=ET), 52)
-    assert (r["london"]["start_et"], r["london"]["end_et"]) == ("02:00", "04:45")
-
-
-def test_the_post_close_hour_is_its_own_row() -> None:
-    """16:00-17:00, where after-hours earnings land, used to belong to nothing."""
-    start = datetime(2026, 9, 15, 18, 0, tzinfo=ET)
-    r = rows(datetime(2026, 9, 16, 16, 50, tzinfo=ET), start, 92)  # to Wed 16:45
-    assert (r["post"]["start_et"], r["post"]["end_et"]) == ("16:00", "16:45")
-    assert r["post"]["status"] == "live" and r["ny"]["status"] == "complete"
-
-
-def test_nothing_is_live_while_globex_is_shut() -> None:
-    """Saturday 10:00 is inside the clock's "ny" hours, and Friday's New York
-    row is complete — it used to read live all weekend."""
-    start = datetime(2026, 10, 15, 18, 0, tzinfo=ET)
-    r = rows(datetime(2026, 10, 17, 10, 0, tzinfo=ET), start, 92)  # to Fri 16:45
+def test_nothing_is_live_or_stale_while_globex_is_shut() -> None:
+    """Saturday 10:00 is inside the clock's New York hours, and Friday's rows are
+    complete and Friday's — not live, and not dimmed as last week's."""
+    r = upto(datetime(2026, 10, 17, 10, 0, tzinfo=ET), datetime(2026, 10, 15, 18, 0, tzinfo=ET))
     assert all(x["status"] == "complete" for x in r.values())
+    assert not any(x["prior_day"] for x in r.values())

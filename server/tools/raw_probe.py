@@ -37,7 +37,7 @@ def ask(payload: dict) -> None:
             "Authorization": f"Bearer {KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost:3100",
-            "X-Title": "HERMESX",
+            "X-Title": "HERMES",
         },
     )
     try:

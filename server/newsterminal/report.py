@@ -57,7 +57,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import releases
+from . import events as events_mod
+from . import releases, structure
 from .config import CACHE_DIR, UA
 from .holidays import close_time, cme_closed, is_trading_day
 from .profile import reads as profile_reads
@@ -156,24 +157,49 @@ MAX_ATTEMPTS = 10
 
 # A WALL-CLOCK CEILING, because the attempt count alone does not bound anything.
 #
-# Ten attempts at up to ninety seconds each is fifteen minutes, and a GC report
-# generated during a saturated afternoon ran past the route handler's own 290s
-# timeout — the browser gave up on a generation the collector was still paying
-# for. Attempts are only STARTED while there is budget left, so the last one
-# can still overrun by its own timeout; 210 plus a 70s request fits inside the
-# route's window with room to return the failure.
-BUDGET_SEC = 210.0
+# Ten attempts at up to ninety seconds each is fifteen minutes. Attempts are
+# only STARTED while there is budget left (`_ATTEMPT_RESERVE` below), and each
+# one is cut off at ATTEMPT_WALL_SEC, so the whole run is bounded at
+# BUDGET_SEC - _ATTEMPT_RESERVE + ATTEMPT_WALL_SEC: eight minutes at the very
+# worst, with a note at the end of it more often than not.
+#
+# 330 AND NOT 210 (2026-10-27). The budget used to fit inside the web proxy's
+# 290s window, because the browser held the POST open for the whole
+# generation. It no longer does — the POST starts a job and the page polls it
+# (jobs.py) — so the budget is what a reader will wait, not what a proxy
+# allows. And 210 with a 240s attempt cap would be worse than no cap at all:
+# an attempt abandoned at 240s would leave no room to try the next model, and
+# the one run that went long that morning (332s) was a VALID brief.
+BUDGET_SEC = 330.0
 REQUEST_TIMEOUT_SEC = 70
+
+# HOW LONG ONE ATTEMPT MAY RUN, wall clock, before it is abandoned and the
+# chain moves on to the next model.
+#
+# REQUEST_TIMEOUT_SEC does not bound this and cannot: it is passed to
+# `urlopen`, whose timeout applies to each socket read, and OpenRouter keeps
+# the connection alive with an 11-byte whitespace chunk every three seconds
+# while the provider is still writing (measured 2026-10-27). A free pool that
+# has slowed to a crawl therefore never idles for 70 seconds — one brief ran
+# 332s and a second generation the same morning ran nine minutes and produced
+# nothing, with nothing in this file able to stop either. `_post` reads the
+# body a chunk at a time and checks this deadline between chunks, which the
+# keep-alive turns into a check every three seconds.
+#
+# 240 IS ABOVE EVERY GOOD REPORT ON RECORD. The eight stored before the cap
+# took 92, 97, 130, 141, 163, 179 and 213 seconds, and then 332. A cap has to
+# sit clearly above the normal range so that it only fires on a run that has
+# gone wrong; 150 — the first figure proposed — would have cut three briefs
+# that were fine.
+ATTEMPT_WALL_SEC = 240.0
 
 # What one attempt is assumed to cost when deciding whether to start another.
 #
-# Larger than REQUEST_TIMEOUT_SEC on purpose. That constant is passed to
-# `urlopen`, whose timeout applies to each socket operation rather than to the
-# request as a whole, so a response that arrives slowly but steadily can run
-# far past it — observed at ~150s per attempt against a saturated free pool
-# while the socket option said 70. This is the figure the budget reserves, so
-# the endpoint's worst case is roughly BUDGET_SEC rather than BUDGET_SEC plus
-# one unbounded request.
+# The TYPICAL cost, not the cap. Reserving ATTEMPT_WALL_SEC would let a second
+# attempt follow only a quick refusal, never a slow one — and a slow first
+# attempt is exactly when the fallback is wanted. Measured at ~150s against a
+# saturated free pool; 90 leaves the budget room for one fallback after an
+# attempt that ran to the cap.
 _ATTEMPT_RESERVE = 90.0
 
 
@@ -818,9 +844,15 @@ def _expected_move(
 
 
 def _ladder(
-    snap: dict[str, Any], book: str, session: str, now: datetime
+    snap: dict[str, Any], book: str, session: str, now: datetime, live: bool = False
 ) -> dict[str, Any] | None:
-    """Every price the session trades against, in price order, measured from last."""
+    """Every price the session trades against, in price order, measured from last.
+
+    `live` is the Structure tab's ladder (2026-10-30): the brief's rows plus
+    the ones a note does not need but a desk watching the tape does — VWAP
+    from the reopen and from the cash open, the opening range, and today's
+    two opens — read from the ranges source, which computes them from the
+    same bars as the session boxes."""
     q = _q(snap.get("quotes") or [], book) or {}
     rng = ((snap.get("ranges") or {}).get("assets") or {}).get(book) or {}
     last = q.get("last") if q.get("last") is not None else rng.get("last")
@@ -845,19 +877,22 @@ def _ladder(
         add(em_lo, "Expected move low", "em")
 
     # WHICH RANGE IS "THE OVERNIGHT" DEPENDS ON THE SESSION BEING WRITTEN FOR.
-    # New York opens into everything traded since 18:00; London opens into
-    # Asia. An Asia note's handover is the New York day, which the prior-RTH
-    # rows below already carry, so it gets no range row of its own.
+    # New York opens into everything traded since 18:00 — the ranges' own
+    # `overnight` box (sessions.OVERNIGHT), one row from the reopen to the
+    # cash open, so a print in the gap between the Asia and London boxes still
+    # counts; London opens into Asia. An Asia note's handover is the New York
+    # day, which the prior-RTH rows below already carry, so it gets no range
+    # row of its own.
     sessions = {s.get("key"): s for s in rng.get("sessions") or [] if s.get("ok")}
     handover = {
-        "ny": (("asia", "london", "euro_mid", "preny"), "ON"),
+        "ny": (("overnight",), "ON"),
         "london": (("asia",), "Asia"),
     }
     if session in handover:
         keys, prefix = handover[session]
-        # TODAY'S WINDOWS ONLY (review, 2026-10-14). At 07:50 ET the Pre-NY row
-        # is yesterday's — its window has not come round again — and it went
-        # into the max with the rest, so the ladder printed yesterday's high,
+        # TODAY'S WINDOWS ONLY (review, 2026-10-14). A row that has not come
+        # round again is yesterday's — at 07:50 ET the old Pre-NY row went into
+        # the max with the rest, and the ladder printed yesterday's high,
         # 31,089, as the "ON high" against a true overnight high of 30,906.
         # The ranges flag such rows `prior_day`; they are not the overnight.
         picked = [sessions[k] for k in keys
@@ -870,6 +905,26 @@ def _ladder(
             and not sessions["ny"].get("prior_day")):
         add(sessions["ny"]["high"], "RTH high so far", "range")
         add(sessions["ny"]["low"], "RTH low so far", "range")
+
+    if live:
+        vw = rng.get("vwap") or {}
+        add(vw.get("globex"), "VWAP since 18:00", "vwap")
+        add(vw.get("rth"), "VWAP since 09:30", "vwap")
+        orange = rng.get("opening_range") or {}
+        if orange.get("high") is not None:
+            tag = "" if orange.get("complete") else " so far"
+            add(orange["high"], f"Opening range high{tag}", "range")
+            add(orange["low"], f"Opening range low{tag}", "range")
+        on = sessions.get("overnight")
+        if on and not on.get("prior_day"):
+            add(on.get("open"), "Globex open 18:00", "open")
+        ny = sessions.get("ny")
+        if ny and not ny.get("prior_day"):
+            add(ny.get("open"), "RTH open 09:30", "open")
+    # The ten-minute 200 EMA is a level the note can use too (owner, 2026-10-30:
+    # "does the analysis generate take into consideration the EMAs?").
+    e200 = rng.get("ema200_10m") or {}
+    add(e200.get("value"), "200 EMA (10m)", "ema")
 
     prof = ((snap.get("profiles") or {}).get("assets") or {}).get(book) or {}
     prev = next((r for r in prof.get("rows") or [] if r.get("key") == "prev_rth"), None)
@@ -894,6 +949,23 @@ def _ladder(
     out.insert(at, {"price": float(last), "label": "Last", "kind": "last",
                     "dist": None, "inside_em": True})
 
+    # THE BANDS, THE FUEL, YESTERDAY'S SHAPE AND THE REGIME LINE (structure.py,
+    # 2026-10-30). The band width and the fuel's yardstick are the book's own
+    # daily ATR (history.py); without one, the expected move stands in for the
+    # width and the fuel line says only what it can.
+    frame = ((snap.get("history") or {}).get("books") or {}).get(book) or {}
+    atr = frame.get("atr14") if isinstance(frame, dict) and frame.get("ok") else None
+    bands = structure.confluence(out, atr or em, last, dp)
+    # The cards ride with every ladder, the note's included: the brief reads
+    # fuel, yesterday's shape and the regime line the same way the tab does.
+    cards: dict[str, Any] = {
+        "confluence": bands,
+        "fuel": structure.fuel(rng.get("sessions") or [], atr, em, dp),
+        "yesterday": structure.yesterday(rng.get("sessions") or [], atr, q.get("prev"), dp),
+        "regime": structure.regime(frame if isinstance(frame, dict) else None, last, dp),
+        "ema200_10m": rng.get("ema200_10m"),
+    }
+
     notes: list[str] = []
     if not g.get("ok"):
         notes.append("No gamma levels for this book: GEXYGEN is not answering for it.")
@@ -908,8 +980,22 @@ def _ladder(
     return {
         "book": book, "label": BOOK_LABELS[book], "last": float(last), "dp": dp,
         "em": round(em, dp) if em is not None else None, "em_basis": em_basis,
-        "rows": out, "note": " ".join(notes) or None,
+        "rows": out, "note": " ".join(notes) or None, **cards,
     }
+
+
+def live_ladders(snap: dict[str, Any]) -> dict[str, Any]:
+    """The Structure tab's levels, one ladder per book, off the snapshot's own
+    clock — computed per request (api.py /api/terminal), never stored, so the
+    page and Hermes read the same figures the brief would."""
+    now = _now_et(snap)
+    out: dict[str, Any] = {}
+    for book in BOOK_LABELS:
+        try:
+            out[book] = _ladder(snap, book, "ny", now, live=True)
+        except (ValueError, TypeError, KeyError, AttributeError, ZeroDivisionError):
+            out[book] = None
+    return out
 
 
 def _gamma_card(
@@ -1036,16 +1122,11 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
         for e in snap.get("earnings") or []:
             if not e.get("bellwether") and (e.get("market_cap") or 0) < 200e9:
                 continue
-            try:
-                day = datetime.strptime(str(e.get("date")), "%Y-%m-%d")
-            except ValueError:
+            when = _earnings_moment(e)
+            if when is None or not lo <= when.timestamp() <= now_ts + 2 * 86400:
                 continue
-            timing = str(e.get("when") or "")
-            hh, mm = {"pre": (8, 0), "after": (16, 5)}.get(timing, (12, 0))
-            when = day.replace(hour=hh, minute=mm, tzinfo=ET)
-            if not lo <= when.timestamp() <= now_ts + 2 * 86400:
-                continue
-            said = {"pre": "before the open", "after": "after the close"}.get(timing, "time TBC")
+            said = {"pre": "before the open", "after": "after the close"}.get(
+                str(e.get("when") or ""), "time TBC")
             items.append(_cat(
                 "earnings", when, now, f"{e.get('symbol')} earnings",
                 when=f"{_when_label(when, now).split(' ')[0]} {said}",
@@ -1213,6 +1294,11 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         # The driver board's count per book (drivers.py): what the page prints
         # beside the call, and the ceiling the call's conviction is capped at.
         "drivers": _drivers(snap, books),
+        # THE CATALYSTS THE BIAS WAS BLIND TO (events.py, 2026-10-30): the names
+        # moving each equity index, with their prints and headlines, and the
+        # high-impact events since the close. The call's `catalyst` cites them.
+        "heavyweights": {b: events_mod.heavyweights(snap, b, now) for b in books if b != "GC"},
+        "event_risk": events_mod.event_risk(snap, now),
     }
 
 
@@ -1269,6 +1355,81 @@ def _price_feed(quotes: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
         "futures": FUTURES_DELAY_NOTE,
         "delayed": delayed,
         "not_current": stopped,
+    }
+
+
+# --------------------------------------------------------------------------
+# Earnings in the digest — the latest prints and the next scheduled.
+# --------------------------------------------------------------------------
+
+#: How many of the most recent prints the digest carries, newest day first and
+#: biggest first within it.
+EARNINGS_REPORTED = 8
+#: How many of the reports still to come it carries, soonest first.
+EARNINGS_AHEAD = 8
+
+#: Where in the ET day a report lands, by Nasdaq's timing field: before the
+#: open prints around 08:00, after the close in the first minutes past 16:00,
+#: and an unspecified one is placed at noon so it sorts inside its own day.
+_EARNINGS_HOUR = {"pre": (8, 0), "after": (16, 5)}
+
+
+def _earnings_moment(e: dict[str, Any]) -> datetime | None:
+    """When a report row prints, in ET; None for a row with no readable date. Pure.
+    The table is events.py's (PRINT_HOUR), read from there so the heavyweights
+    block and this agree on when a print landed."""
+    return events_mod.print_moment(e)
+
+
+def _earnings_row(e: dict[str, Any], printed: bool) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "symbol": e.get("symbol"), "name": e.get("name"), "date": e.get("date"),
+        "when": e.get("when"), "eps_forecast": e.get("eps_forecast"),
+    }
+    if printed:
+        row["eps_actual"] = e.get("eps_actual")
+        row["surprise_pct"] = e.get("surprise_pct")
+    return row
+
+
+def digest_earnings(
+    rows: list[dict[str, Any]], now: datetime
+) -> dict[str, list[dict[str, Any]]]:
+    """The reports a session note needs: what printed most recently, and what
+    is still to come. Pure.
+
+    NOT THE FIRST FOURTEEN ROWS (owner, 2026-10-30: "yesterday we had all
+    these GOOG ... MSFT", after Hermes said they were not in the table). The
+    collector keeps two days back and four ahead, sorted oldest first, so a
+    plain `[:14]` was always the oldest day's rows: Visa and Coca-Cola from
+    Monday, while Alphabet's Wednesday miss — the thing actually moving NQ —
+    sat at row 25 and never reached the model. The slice has to be anchored
+    on now, from both sides.
+
+    `reported` is the latest prints, newest day first and biggest first
+    within it, so "what did Alphabet do" is answered from the top. `ahead` is
+    every report still unprinted from today on, soonest first and biggest
+    first within a day: tonight's after-close names lead it, which is the gap
+    risk a note for Asia is written around, and they stay there until the
+    feed carries their actuals, which lags the print. A row from a past day
+    that never printed is a no-show on the feed, not a scheduled risk, and is
+    dropped. Both lists are capped — eight of each is the old budget of
+    fourteen, spent where the reader is looking.
+    """
+    today = now.astimezone(ET).date().isoformat()
+    kept = [e for e in rows if isinstance(e, dict) and _earnings_moment(e) is not None]
+
+    def when_and_size(e: dict[str, Any]) -> tuple[str, float]:
+        return str(e.get("date")), float(e.get("market_cap") or 0)
+
+    printed = sorted((e for e in kept if e.get("eps_actual")), key=when_and_size, reverse=True)
+    due = sorted(
+        (e for e in kept if not e.get("eps_actual") and str(e.get("date")) >= today),
+        key=lambda e: (when_and_size(e)[0], -when_and_size(e)[1]),
+    )
+    return {
+        "reported": [_earnings_row(e, printed=True) for e in printed[:EARNINGS_REPORTED]],
+        "ahead": [_earnings_row(e, printed=False) for e in due[:EARNINGS_AHEAD]],
     }
 
 
@@ -1381,6 +1542,9 @@ def build_digest(
             continue
         ranges[name] = {
             "last": v.get("last"),
+            # The entry levels the strategy uses, from the same bars (2026-10-30).
+            "vwap": v.get("vwap"),
+            "opening_range": v.get("opening_range"),
             "sessions": [
                 {
                     "session": r["label"],
@@ -1569,17 +1733,9 @@ def build_digest(
         "engine_driver_board": {k: v for k, v in facts.get("drivers", {}).items()
                                 if wanted(k)},
         "expiry": snap.get("expiry") or {},
-        "earnings": [
-            {
-                "symbol": e.get("symbol"),
-                "name": e.get("name"),
-                "date": e.get("date"),
-                "when": e.get("when"),
-                "eps_forecast": e.get("eps_forecast"),
-                "eps_actual": e.get("eps_actual"),
-            }
-            for e in (snap.get("earnings") or [])[:14]
-        ],
+        # The latest prints and the next scheduled, anchored on now — not the
+        # first rows of a week-long list (digest_earnings says what went wrong).
+        "earnings": digest_earnings(snap.get("earnings") or [], now),
         # WHAT ACTUALLY MOVED THE INDEX, name by name. The rotation block
         # says which sectors are being bought; this says which individual
         # weights supplied today's move, which on a cap-weighted index is
@@ -1618,6 +1774,13 @@ def build_digest(
         "catalysts": [{k: v for k, v in c.items() if k != "ts"} for c in facts["catalysts"]],
         # The material wire, each with the `id` the brief picks headlines by.
         "headlines": [{k: v for k, v in h.items() if k != "url"} for h in facts["headlines"]],
+        # WHAT THE INDEX IS BEING MOVED BY, NAME BY NAME: the biggest weights
+        # and the biggest movers, each with its index points, its print if it
+        # just reported, and the headline that explains it. Cite by id.
+        "heavyweights": facts.get("heavyweights") or {},
+        # The high-impact geopolitics, policy and energy wire since the last
+        # close, one row per story, with the channels it reaches. Cite by id.
+        "event_risk": facts.get("event_risk") or [],
         # THE TABLES THE PAGE PRINTS, exactly as it prints them. Levels named in
         # prose should come from these ladders so the words and the table agree.
         "brief_tables": {k: facts[k] for k in ("snapshot", "ladders", "gamma", "rotation")},
@@ -1678,6 +1841,15 @@ SCHEMA: dict[str, Any] = _obj({
             },
             2, 4,
         ),
+        # THE CATALYST (2026-10-30): the heavyweight print or the event moving
+        # this book, cited by id from `heavyweights` / `event_risk` so the
+        # sanitiser can check it points at something on the board.
+        "catalyst": {**_STR, "description": (
+            "One sentence: the heavyweight print or the event moving this book, "
+            "with its figure. Empty string when neither is on the board. The ids "
+            "go in catalyst_ids, not in this sentence."
+        )},
+        "catalyst_ids": _arr(_STR, 0, 3),
     }), 1, 3),
     "snapshot_watch": _arr(_obj({"key": _STR, "note": _STR}), 0, 5),
     "gamma_read": _STR,
@@ -2011,7 +2183,10 @@ macro layer and the structure layer disagree. Read it first and cite it: the \
 call's `conviction` may not exceed the book's `max_conviction`, and may not \
 exceed 3 when the call runs against the board's `bias` — the server enforces \
 both, so rank inside that ceiling. Where you disagree with a vote, say which \
-and why, with the figure; never re-derive the count.
+and why, with the figure; never re-derive the count. Two structure votes are the \
+200 EMAs — "Daily 200" (the daily chart's regime) and "10m trend" (the strategy's \
+side filter on ten-minute bars): when either runs against a call, the call's `why` \
+names it, and a call against both is capped at 2 by you even where the board allows 3.
 
 THE PAGE IS ALREADY BUILT AROUND YOUR WORDS. The snapshot, the levels ladder, \
 the dealer gamma card, the catalyst list, the ratio table and the headline \
@@ -2060,6 +2235,13 @@ positioning for.
 print or event means (a miss, a beat, what is priced). Skip the rest. A data \
 catalyst's `also` lists the other series of the same release (core and \
 headline, monthly and annual): one note covers the release.
+  catalyst        On each call: one sentence naming the heavyweight print or \
+the event moving THAT book, with its figure from `heavyweights` (weight, move, \
+index points, the print) or `event_risk` (the story and what it reaches), and \
+its ids in `catalyst_ids` — only there, never written into the sentence. When \
+a heavyweight has just reported or an event is on the board, the thesis names \
+it too — it is the largest scheduled macro an index future has. Empty when \
+neither is on the board; never invent one.
   reads           Exactly one per book in scope:
     regime        The regime in a few words ("Hike repricing / inflation \
 scare", "Real-yield primacy").
@@ -2159,6 +2341,16 @@ def _text(v: Any) -> str:
     return v.strip() if isinstance(v, str) else ""
 
 
+# "catalyst_ids: w8, w10." written into the sentence — the first live note
+# did it (2026-10-30 02:46 ET) despite the ids having their own field. The
+# ids are the sanitiser's to check, not the reader's to see; cut the tail.
+_IDS_TAIL = re.compile(r"\s*\(?\bcatalyst_ids?\s*:.*$", re.IGNORECASE | re.DOTALL)
+
+
+def _catalyst_text(v: Any) -> str:
+    return _IDS_TAIL.sub("", _text(v)).rstrip(" ;,—-").strip()
+
+
 def _texts(v: Any, cap: int) -> list[str]:
     if not isinstance(v, list):
         return []
@@ -2215,6 +2407,10 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(obj, dict):
         return None
     books: list[str] = list(facts.get("books") or BOOKS)
+    catalyst_ids = {r["id"] for rows in (facts.get("heavyweights") or {}).values()
+                    for r in rows if isinstance(r, dict) and r.get("id")}
+    catalyst_ids |= {e["id"] for e in facts.get("event_risk") or []
+                     if isinstance(e, dict) and e.get("id")}
 
     calls: dict[str, dict[str, Any]] = {}
     for c in _dicts(obj.get("calls")):
@@ -2246,6 +2442,12 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
             "rest_of_day_bias": norm_bias(c.get("rest_of_day_bias")) or bias,
             "wrong_if": _text(c.get("wrong_if")),
             "why": _texts(c.get("why"), 4),
+            # The catalyst, and only ids that point at a heavyweight row or an
+            # event on the board — a cited id that exists is the whole point.
+            "catalyst": _catalyst_text(c.get("catalyst")),
+            "catalyst_ids": [x for x in (c.get("catalyst_ids") or []) if isinstance(x, str)
+                             and x in catalyst_ids][:3]
+            if isinstance(c.get("catalyst_ids"), list) else [],
         }
 
     reads: dict[str, dict[str, Any]] = {}
@@ -2496,8 +2698,15 @@ def loose_ask(messages: list[dict[str, str]]) -> dict[str, str]:
     }
 
 
+class AttemptTimeout(TimeoutError):
+    """An attempt abandoned at ATTEMPT_WALL_SEC while the provider was still writing."""
+
+
 def _post(
-    payload: dict[str, Any], key: str, timeout: int = REQUEST_TIMEOUT_SEC
+    payload: dict[str, Any],
+    key: str,
+    timeout: int = REQUEST_TIMEOUT_SEC,
+    wall_sec: float = ATTEMPT_WALL_SEC,
 ) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -2511,11 +2720,47 @@ def _post(
             # they are not secret and not required, but sending them is the
             # polite side of a free tier.
             "HTTP-Referer": "http://localhost:3100",
-            "X-Title": "HERMESX",
+            "X-Title": "HERMES",
         },
     )
+    deadline = time.monotonic() + wall_sec
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+        return json.loads(_read_by(r, deadline, wall_sec).decode("utf-8"))
+
+
+def _read_by(r: Any, deadline: float, wall_sec: float) -> bytes:
+    """The whole body, or AttemptTimeout once `deadline` has passed.
+
+    `read1` hands back whatever one socket read delivered instead of filling a
+    buffer — `read(n)` on a chunked body keeps taking chunks until it holds `n`
+    bytes, which with 11-byte keep-alives is the whole wait. So the clock is
+    checked at the pace bytes arrive: every three seconds while OpenRouter
+    keeps the connection alive, and a true stall still raises the socket's own
+    timeout as before. A fake response without `read1` (the tests') is read
+    whole.
+    """
+    read1 = getattr(r, "read1", None)
+    if read1 is None:
+        whole: bytes = r.read()
+        return whole
+    parts: list[bytes] = []
+    while True:
+        if time.monotonic() > deadline:
+            r.close()
+            raise AttemptTimeout(
+                f"abandoned after {wall_sec:.0f}s — the provider was still writing"
+            )
+        chunk: bytes = read1(65536)
+        if not chunk:
+            return b"".join(parts)
+        parts.append(chunk)
+
+
+def note_id(now: datetime) -> str:
+    """The id a note minted at `now` gets — ET to the second. It is the file's
+    name, and since jobs.py the id of the job that writes it, so the two are
+    minted from one clock reading rather than two."""
+    return f"{now.astimezone(ET):%Y%m%d-%H%M%S}"
 
 
 def generate(
@@ -2524,10 +2769,15 @@ def generate(
     label: str = "manual",
     session: str = "auto",
     asset: str = "all",
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build the digest, ask the model, store and return the report."""
+    """Build the digest, ask the model, store and return the report.
+
+    `now` is the moment the note is dated from; the job runner passes the one
+    it minted the job id from (api.py), so the report's id is the job's.
+    """
     key = _key()
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     et = now.astimezone(ET)
     model = model or DEFAULT_MODEL
     sess = resolve_session(snap.get("clock") or {}, session)
@@ -2535,7 +2785,7 @@ def generate(
 
     base: dict[str, Any] = {
         "ok": False,
-        "id": f"{et:%Y%m%d-%H%M%S}",
+        "id": note_id(now),
         "created_utc": now.isoformat(),
         "created_et": et.isoformat(),
         "et_label": et.strftime("%a %d %b, %H:%M ET"),
@@ -2620,9 +2870,15 @@ def generate(
     plan = [pair for pair in plan for _ in range(TRIES_PER_PAIR)]
 
     started = time.monotonic()
+    # Models abandoned at the wall clock. A pool that crawled for four minutes
+    # is not going to be quick on its second try, so its other entries in the
+    # plan are passed over rather than spent.
+    slow: set[str] = set()
     for candidate, mode in plan:
         if len(attempts) >= MAX_ATTEMPTS:
             break
+        if candidate in slow:
+            continue
         # RESERVE ROOM FOR THE ATTEMPT, do not merely check the budget is
         # unspent.
         #
@@ -2713,6 +2969,12 @@ def generate(
             base["error"] = f"OpenRouter {err}"
             base["attempts"] = attempts
             return base
+        except AttemptTimeout as e:
+            # Not unreachable — the provider was answering, too slowly to wait
+            # for. The next model gets what is left of the budget.
+            attempts.append({"model": candidate, "mode": mode, "error": str(e)})
+            slow.add(candidate)
+            continue
         except (urllib.error.URLError, OSError, ValueError) as e:
             attempts.append({"model": candidate, "mode": mode, "error": f"unreachable: {e}"})
             continue

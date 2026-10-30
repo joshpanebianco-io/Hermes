@@ -146,8 +146,9 @@ def fetch(
     stale_max_sec: float | None = None,
     validate: Callable[[bytes], str | None] | None = None,
     store: bool = True,
+    data: bytes | None = None,
 ) -> FetchResult:
-    """GET a URL through the disk cache, and never raise.
+    """GET a URL through the disk cache, and never raise. With `data`, POST it.
 
     `ttl_sec` is how long a cached copy is served without going upstream at
     all. On a failed fetch the stale copy is served instead when `stale_ok`,
@@ -171,7 +172,14 @@ def fetch(
     `store=False` skips the disk write for a body too big to be worth keeping
     raw — the options chains (up to 6 MB each, every few minutes) keep a small
     parsed summary of their own instead (sources/options.py).
+
+    `data` MAKES IT A POST (the pool, sources/pool.py: TradingView's screener
+    takes its query as a JSON body). Everything else is the same — the cache,
+    the stale fallback, the validator — but the URL alone no longer names the
+    request, so a POST must pass its own `key`.
     """
+    if data is not None and key is None:
+        raise ValueError("a POST needs its own cache key — the URL does not name it")
     k = key or url
     age = CACHE.age_sec(k)
     # `ttl_sec <= 0` means always go upstream — and must, even when the file's
@@ -184,6 +192,7 @@ def fetch(
 
     req = urllib.request.Request(
         url,
+        data=data,
         headers={
             "User-Agent": ua,
             "Accept": "*/*",

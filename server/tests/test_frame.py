@@ -34,12 +34,14 @@ def test_frame_uses_finished_sessions_only_and_names_the_averages() -> None:
     assert fr["sma200"] == pytest.approx(sum(closes[-200:]) / 200, abs=1e-6)
     assert fr["wk52_hi"] == pytest.approx(max(d.high for d in days[:-1][-252:]))
     assert fr["prev_close"] == closes[-1]
+    # The 200 EMA and the 14-day ATR ride with the frame (structure.py, 2026-10-30).
+    assert fr["ema200"] is not None and fr["atr14"] is not None
 
 
 def test_short_history_has_no_long_average_wearing_the_name() -> None:
     fr = frame.frame_of(_days(60), date(2026, 12, 31))
     assert fr["sma20"] is not None and fr["sma50"] is not None
-    assert fr["sma200"] is None
+    assert fr["sma200"] is None and fr["ema200"] is None
 
 
 def test_last_week_is_the_completed_week_before_today() -> None:

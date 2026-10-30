@@ -198,17 +198,18 @@ REGIONS: dict[str, str] = {
     "Malaysia": "apac", "Thailand": "apac", "Philippines": "apac", "Vietnam": "apac",
 }
 
-# The trading session a release prints into — the range panel's windows
-# (sessions.desk_window), with its two European windows folded into one
-# "london", so "prints in the London session" means one thing across the
-# terminal. They were four ET constants here, with London from 03:00 ET: UK
-# GDP at 07:00 London (02:00 ET) printed "in the Asia session" (review,
-# 2026-10-14), and every boundary was an hour out in the mismatch weeks.
+# The trading session a release prints into — the clock's partition
+# (sessions.desk_window): Asia from the reopen, London 07:00-10:00 London, the
+# pre-market from there to the cash open, New York. They were four ET
+# constants here, with London from 03:00 ET: UK GDP at 07:00 London (02:00 ET)
+# printed "in the Asia session" (review, 2026-10-14), and every boundary was
+# an hour out in the mismatch weeks. The ranges panel draws the owner's boxes
+# instead (sessions.BOXES), which overlap and leave gaps; a print needs one
+# answer, so the tag keeps the partition and the 04:00-05:00 hour is London's.
 _SESSION_OF_WINDOW: dict[str | None, str] = {
     "asia": "asia",
     "london": "london",
-    "euro_mid": "london",
-    "preny": "preny",
+    "premkt": "premkt",
     "ny": "ny",
 }
 

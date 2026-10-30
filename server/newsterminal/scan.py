@@ -46,6 +46,7 @@ from datetime import date, datetime
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
+from . import structure
 from .holidays import close_minute, early_close, is_trading_day, next_trading_day
 
 ET = ZoneInfo("America/New_York")
@@ -580,6 +581,10 @@ class Tech:
     wave_hi: float | None = None
     wave_lo: float | None = None
     ema8: float | None = None
+    #: The ten-minute 200 EMA — the side filter (structure.py, 2026-10-30).
+    ema200: float | None = None
+    ema200_slope: str | None = None
+    trend200: int = 0
     day_hi: float | None = None
     day_lo: float | None = None
     open: float | None = None
@@ -758,6 +763,9 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     atr10 = atr(bars10)
     if bars10:
         tech.ema8, tech.wave_hi, tech.wave_lo = e1[-1], w_top[-1], w_bot[-1]
+        e200 = structure.ema_read(closes)
+        if e200:
+            tech.ema200, tech.ema200_slope = e200["value"], e200["slope"]
         tech.atr_b = atr10[-1]
         tech.bar_low, tech.bar_high = bars10[-1].low, bars10[-1].high
         if len(bars10) > RS_BARS and tech.atr_b:
@@ -779,6 +787,7 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     pml_live = tech.pml if tech.pm_done else None
     tech.lvl_state = lvl_state_of(last, tech.pdh, tech.pdl, pmh_live, pml_live)
     tech.trend = trend_of(last, tech.pdh, tech.pdl, pmh_live, pml_live)
+    tech.trend200 = structure.trend_of_line(last, tech.ema200)
     tech.progress, tech.broken = _pairs(last, tech.pdh, tech.pdl, pmh_live, pml_live)
     if rth and tech.atr_d and tech.day_hi is not None and tech.day_lo is not None:
         tech.range_used = (tech.day_hi - tech.day_lo) / tech.atr_d
@@ -922,6 +931,7 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         return _empty_chart(tf, "no bars")
     closes = [b.close for b in bars]
     e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
+    e200 = ema(closes, structure.EMA_LEN) if len(closes) >= structure.EMA_LEN else []
 
     # From the previous session's 09:30 (the PDH/PDL day) — or the start of the
     # download if that day is not in it — and never more than CHART_MAX bars.
@@ -972,6 +982,7 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         "bars": [{"t": b.t, "o": round(b.open, 4), "h": round(b.high, 4), "l": round(b.low, 4),
                   "c": round(b.close, 4), "v": b.volume} for b in bars[start:]],
         "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
+        "ema200": cut(e200) if e200 else [None] * (len(bars) - start),
         "vwap": vwap,
         "levels": _levels_out(tech),
         "history": history_levels(bars5, td, bars[start].t),
@@ -1023,6 +1034,7 @@ def _daily_chart(daily: list[DayBar], bars5: list[Bar], clock: Clock, tech: Tech
         return _empty_chart("D", "no daily bars")
     closes = [x.close for x in days]
     e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
+    e200 = ema(closes, structure.EMA_LEN) if len(closes) >= structure.EMA_LEN else []
     start = max(0, len(days) - CHART_DAYS)
 
     def cut(xs: list[float]) -> list[float | None]:
@@ -1038,6 +1050,7 @@ def _daily_chart(daily: list[DayBar], bars5: list[Bar], clock: Clock, tech: Tech
                   "l": round(x.low, 4), "c": round(x.close, 4), "v": x.volume}
                  for x in days[start:]],
         "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
+        "ema200": cut(e200) if e200 else [None] * (len(days) - start),
         "vwap": [None] * (len(days) - start),
         "levels": _levels_out(tech),
         "sessions": [],
@@ -1279,8 +1292,10 @@ def row_of(sym: str, t: Tech, spy: Tech | None, qqq: Tech | None,
             "pmh": _r(t.pmh), "pml": _r(t.pml), "pm_done": t.pm_done,
             "vwap": _r(t.vwap), "wave_hi": _r(t.wave_hi), "wave_lo": _r(t.wave_lo),
             "ema8": _r(t.ema8), "day_hi": _r(t.day_hi), "day_lo": _r(t.day_lo),
-            "open": _r(t.open),
+            "open": _r(t.open), "ema200": _r(t.ema200),
         },
+        "trend200": t.trend200,
+        "ema200_slope": t.ema200_slope,
         "progress": {k: _r(v, 3) for k, v in t.progress.items()} if t.progress else
         {"pdh": None, "pdl": None, "pmh": None, "pml": None},
         "broken": t.broken or {"pdh": False, "pdl": False, "pmh": False, "pml": False},

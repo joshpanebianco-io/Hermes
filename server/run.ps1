@@ -1,4 +1,4 @@
-# Start the HERMESX collector.
+# Start the HERMES collector.
 #   .\server\run.ps1
 #
 # The window this opens IS the feed: one row per source per refresh, with the
@@ -67,7 +67,7 @@ while ($true) {
     $gex = if ($env:NT_GEXYGEN_API) { $env:NT_GEXYGEN_API } else { "http://127.0.0.1:8000" }
     $port = if ($env:NT_PORT) { $env:NT_PORT } else { "8100" }
 
-    Write-Host "HERMESX collector -> http://127.0.0.1:$port" -ForegroundColor Green
+    Write-Host "HERMES collector -> http://127.0.0.1:$port" -ForegroundColor Green
     Write-Host "Gamma levels from       $gex  (GEXYGEN; panel says so if it is down)" -ForegroundColor DarkGray
     Write-Host "PERSONAL USE ONLY - Yahoo quotes and publisher RSS are not redistributable." -ForegroundColor Yellow
     Write-Host "Ctrl-C to stop. One row per source per refresh below." -ForegroundColor DarkGray

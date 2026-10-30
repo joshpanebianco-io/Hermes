@@ -45,7 +45,7 @@ def try_budget(n: int, reasoning: dict | None) -> str:
             "Authorization": f"Bearer {KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost:3100",
-            "X-Title": "HERMESX",
+            "X-Title": "HERMES",
         },
     )
     try:

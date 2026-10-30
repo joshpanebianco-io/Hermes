@@ -516,6 +516,12 @@ class ScanStore:
         self._lock = threading.Lock()
         self._path = watchlist_path
         self._watch = load_watchlist(watchlist_path)
+        #: Today's promotions from the pool (sources/pool.py): the day they are
+        #: for, the names, and the sector the pool gave each. Behind the lock
+        #: with the pinned list; `watchlist()` is the union the jobs fetch.
+        self._promoted: list[str] = []
+        self._promoted_day: date | None = None
+        self.pool_sectors: dict[str, str] = {}
         self.bars: dict[str, list[scan.Bar]] = {}
         self.meta: dict[str, dict[str, Any]] = {}
         self.fetched: dict[str, float] = {}
@@ -544,9 +550,33 @@ class ScanStore:
 
     # ---- watchlist ----------------------------------------------------------
 
-    def watchlist(self) -> list[str]:
+    def pinned(self) -> list[str]:
+        """The owner's list — what the editor edits and the file holds."""
         with self._lock:
             return list(self._watch)
+
+    def watchlist(self, now: datetime | None = None) -> list[str]:
+        """What the jobs fetch: the pinned names, then today's promotions from
+        the pool, inside MAX_SYMBOLS. Promotions for another day are not
+        today's — the scanner's day rolls at 20:00 (scan.clock_at) and the
+        list rolls with it, whether or not the pool has ticked since."""
+        td = scan.clock_at(now or datetime.now(UTC)).trading_day
+        with self._lock:
+            pinned = list(self._watch)
+            if self._promoted_day != td:
+                return pinned
+            room = max(0, MAX_SYMBOLS - len(pinned))
+            return pinned + [s for s in self._promoted if s not in pinned][:room]
+
+    def set_promoted(self, day: date | None, symbols: Iterable[str],
+                     sectors: dict[str, str] | None = None) -> bool:
+        """Replace the promotions. True when they changed."""
+        syms = [s for s in symbols if _SYM.match(s)]
+        with self._lock:
+            before = (self._promoted_day, list(self._promoted))
+            self._promoted, self._promoted_day = syms, day
+            self.pool_sectors = dict(sectors or {})
+        return before != (day, syms)
 
     def set_watchlist(self, symbols: Iterable[Any]) -> tuple[list[str], list[str]]:
         ok, bad = save_watchlist(symbols, self._path)
@@ -851,7 +881,9 @@ class ScanStore:
         rows: dict[str, dict[str, Any]] = {}
         for sym, tech in techs.items():
             row = scan.row_of(sym, tech, techs.get("SPY"), techs.get("QQQ"), clock)
-            row["sector"] = SECTOR.get(sym)
+            # The static table first; a promoted name the table does not know
+            # takes the pool's sector (sources/pool.TV_SECTOR), else none.
+            row["sector"] = SECTOR.get(sym) or self.pool_sectors.get(sym)
             row["adv20"] = adv20([d.volume for d in (self.daily.get(sym) or [])
                                   if d.day < clock.trading_day])
             # The daily frame (frame.py): levels from the finished sessions;

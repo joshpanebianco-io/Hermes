@@ -29,6 +29,8 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any, Protocol
 
+from . import structure
+
 SMA_LENS: tuple[int, ...] = (20, 50, 200)
 #: Sessions in a trading year — the 52-week window.
 YEAR = 252
@@ -68,6 +70,13 @@ def frame_of(days: Sequence[_Day], today: date) -> dict[str, Any]:
     for n in SMA_LENS:
         m = _mean(closes[-n:]) if len(closes) >= n else None
         out[f"sma{n}"] = round(m, 4) if m is not None else None
+    # The 200 the owner reads is the EMA (2026-10-30); the read names it as
+    # "the 200-day" and the simple one stays in the payload beside it. The ATR
+    # is the fuel line's yardstick (structure.fuel) and the ladder's band width.
+    e200 = structure.ema_read(closes, structure.EMA_LEN)
+    out["ema200"] = e200["value"] if e200 else None
+    atr = structure.atr14(done)
+    out["atr14"] = round(atr, 4) if atr is not None else None
     year = done[-YEAR:]
     out["wk52_hi"] = round(max(float(d.high) for d in year), 4) if year else None
     out["wk52_lo"] = round(min(float(d.low) for d in year), 4) if year else None
@@ -105,6 +114,9 @@ def read(frame: dict[str, Any] | None, last: float | None) -> dict[str, Any] | N
     if not frame or last is None or last <= 0:
         return None
     above = {n: _above(last, frame.get(f"sma{n}")) for n in SMA_LENS}
+    # The 200 is the EMA when the frame carries one (structure.py).
+    if frame.get("ema200") is not None:
+        above[200] = _above(last, frame.get("ema200"))
     known = [n for n in SMA_LENS if above[n] is not None]
     if 20 in known and 50 in known:
         # The 20 and the 50 decide; the 200 is named in the text only.

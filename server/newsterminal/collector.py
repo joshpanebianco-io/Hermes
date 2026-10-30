@@ -76,6 +76,7 @@ from .sources import fedcal as fed_src
 from .sources import gex as gex_src
 from .sources import history as hist_src
 from .sources import options as opt_src
+from .sources import pool as pool_src
 from .sources import premarket as pre_src
 from .sources import profiles as prof_src
 from .sources import quotes as quotes_src
@@ -167,6 +168,12 @@ class Collector:
         self.putcall = pc_src.PutCallStore()
         self.shorts = short_src.ShortStore()
         self.earnhist = eh_src.EarnHistStore()
+        # The pool (sources/pool.py): hundreds of large caps read in one
+        # request, the names in play promoted into the scanner's list. Its
+        # saved promotions reach the scanner before the warm start, so a
+        # restart repaints them beside the pinned names.
+        self.pool = pool_src.PoolStore()
+        self.scan.set_promoted(*self.pool.for_scan())
 
         now = time.monotonic()
         # The board, on a thread of its own (module docstring): it is the block
@@ -228,6 +235,10 @@ class Collector:
             "premarket": (self._do_premarket, pre_src.TICK_SEC, now + 5.0),
             # The same host: each name's past report dates, one a tick, daily.
             "scan_earnhist": (self._do_earnhist, eh_src.TICK_SEC, now + 7.5),
+            # The pool: one POST to TradingView's screener every five minutes
+            # in the morning, half-hourly otherwise; the tick is short so a
+            # mark (08:00, 09:00, 09:25, 10:00 ET) is met within seconds.
+            "pool": (self._do_pool, pool_src.TICK_SEC, now + 4.0),
         }
         # The live layer, alone (module docstring); it paces itself.
         self._live_jobs: dict[str, Job] = {
@@ -460,19 +471,53 @@ class Collector:
         self._commit("scan_sec", dict(self.scan.filings), st)
 
     def set_watchlist(self, symbols: list[str]) -> tuple[list[str], list[str]]:
-        """Save the scanner's list and make the new names the next thing fetched.
+        """Save the scanner's pinned list and make the new names the next thing
+        fetched.
 
         Called from the API thread. Only the job clocks are touched here — the
         fetching itself stays on the collector thread, where every other
         upstream call lives.
         """
         ok, bad = self.scan.set_watchlist(symbols)
+        self._wake_scan_jobs()
+        return ok, bad
+
+    def _wake_scan_jobs(self) -> None:
+        """Make whatever the list now holds the next thing every scanner job fetches."""
         now = time.monotonic()
         for jobs, name in ((self._scan_jobs, "scanner"), (self._scan_jobs, "scan_news"),
                            (self._scan_jobs, "scan_sec"), (self._jobs, "earnings")):
             fn, interval, _due = jobs[name]
             jobs[name] = (fn, interval, now)
-        return ok, bad
+
+    def _do_pool(self) -> None:
+        st, read, changed = self.pool.tick(self.scan.pinned())
+        if self._apply_promotions() or changed:
+            self._wake_scan_jobs()
+        # One row per READ, not per tick: the job ticks every twenty seconds
+        # to meet a mark on time and reads every five minutes at most.
+        if read:
+            self._commit("pool", self.pool.view(self.scan.pinned()), st)
+
+    def _apply_promotions(self) -> bool:
+        """The pool's promotions into the scanner's list. True when it changed."""
+        day, syms, sectors = self.pool.for_scan()
+        return self.scan.set_promoted(day, syms, sectors)
+
+    def set_promotion(self, on: bool) -> None:
+        """Switch the pool's promotion (API thread). Off takes today's promoted
+        names off the list at once; on makes the pool's next tick a read."""
+        if self.pool.set_enabled(on):
+            self._apply_promotions()
+            self._wake_scan_jobs()
+            fn, interval, _due = self._premarket_jobs["pool"]
+            self._premarket_jobs["pool"] = (fn, interval, time.monotonic())
+
+    def watchlist_payload(self, rejected: list[str] | None = None) -> dict[str, Any]:
+        """The /api/scanner/watchlist read: the pinned list and the pool's view."""
+        pinned = self.scan.pinned()
+        return {"symbols": pinned, "default": list(scan_src.DEFAULT_WATCHLIST),
+                "rejected": list(rejected or []), "pool": self.pool.view(pinned)}
 
     def _do_constituents(self) -> None:
         data, st = cons_src.collect()
@@ -569,9 +614,9 @@ class Collector:
             return
         # Orphaned cache files go at startup: a removed watchlist name's bars,
         # a past day's calendar, the spark keys the old per-process hash left.
-        gone = CACHE.prune(7 * 86400.0, keep=("scanner_watchlist.json", "scanner_events.jsonl",
-                                              "iv_history.jsonl", "oi_log.jsonl",
-                                              "cboe_pc.jsonl"))
+        gone = CACHE.prune(7 * 86400.0, keep=("scanner_watchlist.json", "scanner_pool.json",
+                                              "scanner_events.jsonl", "iv_history.jsonl",
+                                              "oi_log.jsonl", "cboe_pc.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
         self._thread = threading.Thread(target=self._run, name="collector", daemon=True)
@@ -664,6 +709,10 @@ class Collector:
             cons = self._state.get("constituents")
             st = self._status.get("scanner")
         watch = self.scan.watchlist()
+        pinned = self.scan.pinned()
+        pool_view = self.pool.view(pinned)
+        promoted = {p["symbol"]: {k: p.get(k) for k in ("score", "reason", "at", "mark")}
+                    for p in pool_view["promoted"]}
         clock = self.scan.clock(datetime.now(UTC))
         td = clock.trading_day
         closes = {s: [d.close for d in (self.scan.daily.get(s) or []) if d.day < td] for s in watch}
@@ -698,6 +747,9 @@ class Collector:
             # reads it), from the constituents; the record line reads the log.
             constituents=cons if isinstance(cons, dict) else None,
             record=self.events.record_table(),
+            promoted=promoted,
+            pool=pool_view,
+            pinned=pinned,
         )
         return payload
 

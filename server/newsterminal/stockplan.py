@@ -375,6 +375,19 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
         "rs_spy": None if sym == "SPY" else _r((row.get("rs") or {}).get("SPY")),
         "rvol": _r(row.get("rvol"), 1),
         "levels": {k: _r(lv.get(k)) for k in ("pdh", "pdl", "pmh", "pml", "pdc")},
+        # The ten-minute 200 EMA as a side — the strategy's filter on its own
+        # timeframe (structure.py, 2026-10-30): a long under it or a short over
+        # it is fighting the line, and the plan should say so.
+        "ema200_10m": _line_side(
+            {1: "above", -1: "below"}.get(int(row.get("trend200") or 0), "on"),
+            score.get("side") or setup.get("side"),
+            value=_r(lv.get("ema200")), slope=row.get("ema200_slope"),
+        ) if lv.get("ema200") is not None else None,
+        # And the daily 200 EMA, from the frame (frame.read names it; the EMA since 2026-10-30).
+        "ema200_daily": _line_side(
+            "above" if (row.get("frame_read") or {}).get("above200") else "below",
+            score.get("side") or setup.get("side"),
+        ) if isinstance((row.get("frame_read") or {}).get("above200"), bool) else None,
         # The scanner's own word on whether PMH / PML have locked; without it,
         # the session says (they lock at 09:30).
         "pm_forming": (not lv["pm_done"]) if isinstance(lv.get("pm_done"), bool)
@@ -420,6 +433,17 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
     n["invalid_if"] = invalid_if(n)
     n["open_if"] = open_if(n) if session in OPEN_SESSIONS else None
     return n
+
+
+def _line_side(side: str, setup_side: Any, **extra: Any) -> dict[str, Any]:
+    """A name against a line: which side it is on, and whether the setup is
+    with the line (a long above it, a short below) or against it."""
+    out: dict[str, Any] = {"side": side, **extra}
+    if setup_side in ("long", "short") and side in ("above", "below"):
+        out["with_side"] = "with" if (side == "above") == (setup_side == "long") else "against"
+    else:
+        out["with_side"] = None
+    return out
 
 
 def _daily(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -899,7 +923,10 @@ and debit spread), today's options flow (`flow`: put/call volume, which way it l
 busiest strike), its pre-market volume against its 20-day average (`premkt`), big caps in its \
 sector reporting this week (`peers`), its sector SPDR against SPY (`sector`), its daily frame \
 (`daily`: the trend on the daily chart, whether the setup is with it or against it, the \
-distance from the 52-week high), its short interest (`short_interest`: the share of the float \
+distance from the 52-week high), its side of the 200-day EMA and of the ten-minute 200 EMA \
+(`ema200_daily`, `ema200_10m`: above or below, and whether the setup is with the line or \
+against it — a long above or a short below is with it), its short interest \
+(`short_interest`: the share of the float \
 sold short and whether that is squeeze risk for a short), the macro drivers \
 it answers to with today's move and whether that is a headwind or a tailwind FOR THE STOCK \
 (`macro` — computed for you; for a short, a headwind helps), up to five of its own headlines \
@@ -948,7 +975,9 @@ printed, and whether it backs the side (e.g. "Options: premium rich, so a debit 
 lead at put/call 0.37, which backs the long"). Leave the flow out when the name has none. A \
 name with `earnings_move` says the move priced for the report against its realised ones.
 - "Structure:" also says the daily frame (`daily.text`) and whether the setup is with the \
-daily trend or against it; a setup against it is a reason for lower conviction, said so. A \
+daily trend or against it; a setup against it is a reason for lower conviction, said so. The \
+same for the two 200 EMAs (`ema200_daily`, `ema200_10m`): a setup against either line names \
+which, and that too is a reason for lower conviction; with both lines, say so in a word. A \
 short on a name whose `short_interest.squeeze_risk` is true names the squeeze risk.
 - "Macro:" ties the name to today's macro: its sector against SPY (as printed — an index ETF \
 has no `sector`, so leave the sector out rather than calling it null) and the drivers \
@@ -1437,15 +1466,17 @@ def configured() -> dict[str, Any]:
 
 
 def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
-             model: str | None = None) -> dict[str, Any]:
-    """Build the facts, ask the model, store and return the plan."""
+             model: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+    """Build the facts, ask the model, store and return the plan. `now` is the
+    moment the plan is dated from — the job runner's (api.py), so its id is
+    the job's."""
     key = rp._key()
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     et = now.astimezone(ET)
     model = model or rp.DEFAULT_MODEL
     base: dict[str, Any] = {
         "ok": False,
-        "id": f"{et:%Y%m%d-%H%M%S}",
+        "id": rp.note_id(now),
         "created_utc": now.isoformat(),
         "et_label": et.strftime("%a %d %b, %H:%M ET"),
         "model": model,
@@ -1495,9 +1526,12 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
     pairs += [(m, "json") for m in rp.model_chain(model)]
     pairs = [p for p in pairs for _ in range(rp.TRIES_PER_PAIR)]
     started = time.monotonic()
+    slow: set[str] = set()  # abandoned at the wall clock — passed over after (report.py)
     for candidate, mode in pairs:
         if len(attempts) >= rp.MAX_ATTEMPTS:
             break
+        if candidate in slow:
+            continue
         elapsed = time.monotonic() - started
         if elapsed + rp._ATTEMPT_RESERVE > rp.BUDGET_SEC:
             attempts.append({"model": candidate, "mode": mode,
@@ -1543,6 +1577,11 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             base["error"] = f"OpenRouter {err}"
             base["attempts"] = attempts
             return base
+        except rp.AttemptTimeout as e:
+            # Answering, too slowly to wait for — the next model's turn.
+            attempts.append({"model": candidate, "mode": mode, "error": str(e)})
+            slow.add(candidate)
+            continue
         except (urllib.error.URLError, OSError, ValueError) as e:
             attempts.append({"model": candidate, "mode": mode, "error": f"unreachable: {e}"})
             continue

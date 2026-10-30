@@ -5,7 +5,9 @@ Every route is a read of the collector's current snapshot. There is no fetching
 on the request path at all, so a route cannot be slow and cannot fail because
 an upstream is down: it returns what the collector holds, with the age of each
 block beside it, and the client decides how to present something eleven minutes
-old.
+old. The one upstream call a reader can ask for — a report or a game plan from
+a model — runs on a thread of its own and is polled by id (jobs.py), so even
+that never holds a request open.
 
 WHY /api/terminal EXISTS. The dashboard wants every block on first paint. Nine
 round trips to nine routes would be nine chances to render a half-page, and the
@@ -19,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import re
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Path, Query, Request, Response
@@ -27,12 +30,12 @@ from pydantic import BaseModel
 from starlette.middleware.base import RequestResponseEndpoint
 
 from . import ask as ask_mod
-from . import config, optcalc
+from . import config, jobs, optcalc
 from . import report as report_mod
 from . import stockplan as plan_mod
+from . import tools as tools_mod
 from .collector import COLLECTOR
 from .sessions import session_state
-from .sources import scanner as scan_src
 
 
 @contextlib.asynccontextmanager
@@ -44,7 +47,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         COLLECTOR.stop()
 
 
-app = FastAPI(title="HERMESX", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="HERMES", version="0.1.0", lifespan=lifespan)
 
 # The Next server component calls this from the same machine; the browser never
 # does. Localhost only, and only the dev ports — this service holds nothing
@@ -102,8 +105,11 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/terminal")
 def terminal() -> dict[str, Any]:
-    """Everything, one request. What the dashboard's first paint reads."""
-    return COLLECTOR.snapshot()
+    """Everything, one request. What the dashboard's first paint reads. The
+    levels ladders are arithmetic on the snapshot (report.live_ladders), done
+    here per request rather than stored, so they are never older than it."""
+    snap = COLLECTOR.snapshot()
+    return {**snap, "ladders": report_mod.live_ladders(snap)}
 
 
 @app.get("/api/clock")
@@ -186,20 +192,44 @@ def _note_ids(ids: list[str] | None) -> list[str]:
 
 # ---------------------------------------------------------------- report
 #
-# The one place in this service that does work on the request path, and it has
-# to: generating a report is an explicit act by the reader, it takes ten to
-# thirty seconds, and running it on the collector's timer would burn a free
-# tier's daily quota on reports nobody asked for.
+# Generating a report is an explicit act by the reader — running it on the
+# collector's timer would burn a free tier's daily quota on reports nobody
+# asked for — and it takes one to five minutes on a free model. It used to run
+# ON the request path, and the POST was held open for the whole of it; since
+# 2026-10-27 the POST starts a job and answers at once, and the page polls
+# `/api/report/job/{id}` until the note is written (jobs.py says why). One
+# report and one game plan at a time: a second press joins the running job.
+
+_REPORTS = jobs.Runner("report")
+_PLANS = jobs.Runner("game plan")
+
+
+def _report_feed() -> dict[str, Any]:
+    return {"config": report_mod.configured(), "latest": report_mod.latest(),
+            "history": report_mod.history()}
 
 
 @app.get("/api/report")
 def report_latest() -> dict[str, Any]:
-    """The most recent report, plus the history list and whether a key is set."""
-    return {
-        "config": report_mod.configured(),
-        "latest": report_mod.latest(),
-        "history": report_mod.history(),
-    }
+    """The most recent report, the history list, whether a key is set — and
+    the job being written right now, if there is one, so a page that loads
+    mid-generation picks the clock back up rather than showing the old note
+    as though nothing had been asked for."""
+    return {**_report_feed(), "job": _REPORTS.running()}
+
+
+@app.get("/api/report/job/{job_id}")
+def report_job(job_id: str = Path(..., pattern=_NOTE_ID)) -> dict[str, Any]:
+    """Where a generation stands. Done, `latest` is the note it wrote — stored
+    and first in `history` when it succeeded, the failed envelope when it did
+    not — which is exactly what the POST used to answer with. Running, `latest`
+    is still the last stored note, so the page has something under the clock.
+    Lost (the collector restarted underneath it), the page says so."""
+    view, result = _REPORTS.get(job_id)
+    feed = _report_feed()
+    if result is not None:
+        feed["latest"] = result
+    return {**feed, "job": view}
 
 
 @app.get("/api/report/{report_id}")
@@ -259,16 +289,33 @@ def report_generate(
     session: str = Query("auto", pattern="^(auto|asia|london|ny)$"),
     asset: str = Query("all", pattern="^(all|NQ|ES|GC)$"),
 ) -> dict[str, Any]:
-    """Generate a new report against the collector's current snapshot.
+    """Start writing a report against the collector's current snapshot and
+    answer at once with the job; the page polls `/api/report/job/{id}` for the
+    note. A report already being written is handed back instead of a second
+    one being started.
 
     `session` picks which trading session the note is written for; `auto`
     resolves it from the ET clock, which is what pressing Generate almost
-    always means.
+    always means. The snapshot is taken HERE, on the request, so the note
+    describes the terminal as it stood when Generate was pressed.
     """
-    rep = report_mod.generate(
-        COLLECTOR.snapshot(), label=label, session=session, asset=asset
+    snap = COLLECTOR.snapshot()
+    now = datetime.now(UTC)
+    sess = report_mod.resolve_session(snap.get("clock") or {}, session)
+    book = report_mod.resolve_asset(asset)
+    # What the page may show while it waits, and what a crash envelope is
+    # captioned with (jobs.Runner): the same fields the note itself carries.
+    meta = {
+        "model": report_mod.DEFAULT_MODEL, "label": label,
+        "session": sess, "session_label": report_mod.SESSIONS[sess]["label"],
+        "asset": book, "asset_label": report_mod.ASSETS[book]["label"],
+        "et_label": now.astimezone(report_mod.ET).strftime("%a %d %b, %H:%M ET"),
+    }
+    job = _REPORTS.start(
+        report_mod.note_id(now), meta,
+        lambda: report_mod.generate(snap, label=label, session=session, asset=asset, now=now),
     )
-    return {"config": report_mod.configured(), "latest": rep, "history": report_mod.history()}
+    return {**_report_feed(), "job": job}
 
 
 @app.get("/api/ranges")
@@ -313,6 +360,10 @@ class WatchlistIn(BaseModel):
     symbols: list[str]
 
 
+class PromotionIn(BaseModel):
+    on: bool
+
+
 @app.get("/api/scanner")
 def scanner() -> dict[str, Any]:
     return COLLECTOR.scanner_payload()
@@ -320,10 +371,10 @@ def scanner() -> dict[str, Any]:
 
 @app.get("/api/scanner/watchlist")
 def scanner_watchlist() -> dict[str, Any]:
-    # The options expiry rule rides along for Settings' copy: one rule, worded
-    # once (optcalc.expiry_rule), on the scanner's lightest read.
-    return {"symbols": COLLECTOR.scan.watchlist(), "default": list(scan_src.DEFAULT_WATCHLIST),
-            "rejected": [], "options_rule": optcalc.expiry_rule()}
+    """The pinned list, the pool's view (today's promotions, the names in play,
+    the marks) and, for Settings' copy, the options expiry rule — one rule,
+    worded once (optcalc.expiry_rule), on the scanner's lightest read."""
+    return {**COLLECTOR.watchlist_payload(), "options_rule": optcalc.expiry_rule()}
 
 
 @app.get("/api/scanner/events")
@@ -354,10 +405,20 @@ def scanner_bars(sym: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|D)$")
 
 @app.post("/api/scanner/watchlist")
 def scanner_watchlist_set(body: WatchlistIn) -> dict[str, Any]:
-    """Replace the list. Invalid entries come back in `rejected` rather than
-    failing the whole save; an empty or all-invalid list keeps the old one."""
-    ok, bad = COLLECTOR.set_watchlist(body.symbols)
-    return {"symbols": ok, "default": list(scan_src.DEFAULT_WATCHLIST), "rejected": bad}
+    """Replace the pinned list. Invalid entries come back in `rejected` rather
+    than failing the whole save; an empty or all-invalid list keeps the old one.
+    The pool's promotions are not part of it — they come and go on their own."""
+    _ok, bad = COLLECTOR.set_watchlist(body.symbols)
+    return {**COLLECTOR.watchlist_payload(bad), "options_rule": optcalc.expiry_rule()}
+
+
+@app.post("/api/scanner/promotion")
+def scanner_promotion(body: PromotionIn) -> dict[str, Any]:
+    """Switch the pool's promotion on or off (sources/pool.py). Off takes
+    today's promoted names off the list at once; on reads the pool again and
+    re-runs today's latest mark. Answers with the watchlist read."""
+    COLLECTOR.set_promotion(body.on)
+    return {**COLLECTOR.watchlist_payload(), "options_rule": optcalc.expiry_rule()}
 
 
 # ---------------------------------------------------------------- market
@@ -376,9 +437,9 @@ def market() -> dict[str, Any]:
 # ---------------------------------------------------------------- game plan
 #
 # The stocks desk's brief (stockplan.py): its own routes and storage, so the
-# futures report's history never carries a stock plan and the reverse. Like
-# the report, generating is the one thing here that works on the request
-# path — an explicit act by the reader, a minute or three on a free model.
+# futures report's history never carries a stock plan and the reverse. Written
+# as the report is — a job started by the POST and polled by id — because it
+# is the same minutes on the same free model.
 
 _PLAN_ID = _NOTE_ID
 
@@ -390,8 +451,19 @@ def _plan_feed() -> dict[str, Any]:
 
 @app.get("/api/plan")
 def plan_latest() -> dict[str, Any]:
-    """The most recent game plan, the history list, and whether a key is set."""
-    return _plan_feed()
+    """The most recent game plan, the history list, whether a key is set, and
+    the job being written right now, if any (see report_latest)."""
+    return {**_plan_feed(), "job": _PLANS.running()}
+
+
+@app.get("/api/plan/job/{job_id}")
+def plan_job(job_id: str = Path(..., pattern=_PLAN_ID)) -> dict[str, Any]:
+    """Where a game plan's generation stands (see report_job)."""
+    view, result = _PLANS.get(job_id)
+    feed = _plan_feed()
+    if result is not None:
+        feed["latest"] = result
+    return {**feed, "job": view}
 
 
 @app.get("/api/plan/{plan_id}")
@@ -418,21 +490,68 @@ def plan_delete_many(
 
 @app.get("/api/ask/context")
 def ask_context(
-    tab: str = Query("terminal", pattern="^(terminal|report|market|scanner|plan|settings)$"),
+    tab: str = Query("terminal",
+                     pattern="^(terminal|structure|tape|report|market|scanner|plan|settings|hermes)$"),
     sym: str | None = Query(None, max_length=12),
+    desk: str | None = Query(None, pattern="^(futures|stocks)$"),
+    slim: bool = Query(False),
 ) -> dict[str, Any]:
     """What the assistant reads for a question asked on `tab` (ask.py): the
-    desk's brief digest, the selected scanner row, the latest note. A read of
-    what the collector holds — the model is called by the web app, not here."""
+    desk's brief digest, the selected scanner row, the latest note. On its own
+    tab (`hermes`) it reads both desks, every scanner name and both notes;
+    `desk` is then the one the reader came from. A read of what the collector
+    holds — the model is called by the web app, not here."""
     snap = COLLECTOR.snapshot()
+    if tab == ask_mod.HERMES_TAB and slim:
+        # The tab's opening picture (ask.slim_context); the tools fill the rest.
+        return {"tab": tab, "desk": desk, "slim": ask_mod.slim_context(
+            snap, COLLECTOR.scanner_payload(), report_mod.latest(), plan_mod.latest()),
+            "selected": ask_mod.selected_row(COLLECTOR.scanner_payload(), sym)}
+    if tab == ask_mod.HERMES_TAB:
+        return ask_mod.whole_context(snap, COLLECTOR.scanner_payload(), sym,
+                                     report_mod.latest(), plan_mod.latest(), desk)
     scan = COLLECTOR.scanner_payload() if tab in ask_mod.STOCKS_TABS else None
     note = report_mod.latest() if tab == "report" else plan_mod.latest() if tab == "plan" else None
     return ask_mod.context(tab, snap, scan, sym, note)
 
 
+@app.get("/api/ask/tools")
+def ask_tools(desk: str | None = Query(None, pattern="^(futures|stocks|both)$")) -> dict[str, Any]:
+    """What Hermes may ask for (tools.py), in the shape a model is shown —
+    one desk's set when the web's router names a desk, else all of it."""
+    return {"tools": tools_mod.spec_for(desk)}
+
+
+class ToolIn(BaseModel):
+    name: str
+    args: dict[str, Any] | None = None
+
+
+@app.post("/api/ask/tool")
+def ask_tool(body: ToolIn) -> dict[str, Any]:
+    """Answer one of Hermes's tool calls from what the collector holds. Never
+    a 500: a bad name or argument comes back as an `error` the model reads."""
+    snap = COLLECTOR.snapshot()
+    return tools_mod.run(
+        body.name[:40], body.args,
+        snap=snap, scan=COLLECTOR.scanner_payload(), bars=COLLECTOR.scanner_bars,
+        brief=lambda i: report_mod.load(i) if i else report_mod.latest(),
+        plan=lambda i: plan_mod.load(i) if i else plan_mod.latest(),
+    )
+
+
 @app.post("/api/plan")
 def plan_generate(top: int = Query(plan_mod.TOP_DEFAULT, ge=plan_mod.TOP_MIN,
                                    le=plan_mod.TOP_MAX)) -> dict[str, Any]:
-    """Write a game plan for the top `top` scanner names, against the live state."""
-    rep = plan_mod.generate(COLLECTOR.scanner_payload(), COLLECTOR.snapshot(), top=top)
-    return {"config": plan_mod.configured(), "latest": rep, "history": plan_mod.history()}
+    """Start writing a game plan for the top `top` scanner names against the
+    live state, and answer at once with the job (see report_generate)."""
+    scan, snap = COLLECTOR.scanner_payload(), COLLECTOR.snapshot()
+    now = datetime.now(UTC)
+    meta = {
+        "model": report_mod.DEFAULT_MODEL, "top": top,
+        "et_label": now.astimezone(report_mod.ET).strftime("%a %d %b, %H:%M ET"),
+    }
+    job = _PLANS.start(
+        report_mod.note_id(now), meta, lambda: plan_mod.generate(scan, snap, top=top, now=now)
+    )
+    return {**_plan_feed(), "job": job}

@@ -156,3 +156,24 @@ def test_empty_snapshot_is_all_neutral_with_reasons() -> None:
         assert b["bias"] is None and b["grade"] == "none"
         assert all(v["vote"] == "neutral" and v["note"] for v in b["votes"])
         assert b["treatment"].startswith(f"No lean on {book}:")
+
+
+def test_the_ten_minute_200_ema_votes_a_side() -> None:
+    from newsterminal.drivers import _trend10m
+    ranges = {"assets": {"NQ": {"ema200_10m": {"value": 29_800.0, "slope": "falling"}}}}
+    above = _trend10m(ranges, "NQ", 30_000.0)
+    assert above["vote"] == "long" and above["value"] == "above 29,800"
+    assert "falling" in above["note"]
+    assert _trend10m(ranges, "NQ", 29_500.0)["vote"] == "short"
+    assert _trend10m(ranges, "NQ", 29_805.0)["vote"] == "neutral"       # on the line
+    assert _trend10m({"assets": {"NQ": {}}}, "NQ", 30_000.0)["vote"] == "neutral"
+
+
+def test_the_daily_200_ema_votes_the_regime() -> None:
+    from newsterminal.drivers import _regime200
+    frames = {"books": {"NQ": {"ok": True, "ema200": 28_000.0}}}
+    up = _regime200(frames, "NQ", 29_000.0)
+    assert up["vote"] == "long" and up["value"] == "above 28,000" and "3.6% above" in up["note"]
+    assert _regime200(frames, "NQ", 27_000.0)["vote"] == "short"
+    assert _regime200(frames, "NQ", 28_100.0)["vote"] == "neutral"      # within half a percent
+    assert _regime200({"books": {"NQ": {"ok": True}}}, "NQ", 29_000.0)["vote"] == "neutral"

@@ -3,7 +3,7 @@ The stocks desk's option chains — Cboe's free delayed quotes, one name at a ti
 
 WHY CBOE, AND WHY DIRECTLY. Cboe publishes every listed name's whole chain —
 bid, ask, IV, the greeks, open interest — as a public JSON document, delayed
-fifteen minutes and free to read for personal use. HERMESX reads it itself:
+fifteen minutes and free to read for personal use. HERMES reads it itself:
 GEXYGEN reads the same feed, but this terminal never depends on that project
 for anything but its optional gamma levels (owner's standing rule).
 

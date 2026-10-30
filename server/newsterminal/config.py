@@ -76,7 +76,7 @@ EIA_KEY = os.environ.get("EIA_API_KEY", "").strip()
 
 UA = os.environ.get(
     "NT_USER_AGENT",
-    "HERMESX/0.1 (personal market terminal; joshpanebianco@protonmail.com)",
+    "HERMES/0.1 (personal market terminal; joshpanebianco@protonmail.com)",
 )
 
 # Publisher RSS is served to browsers; a few CDNs vary their response on a

@@ -337,11 +337,30 @@ def routed(monkeypatch: Any, tmp_path: Any) -> None:
     monkeypatch.setattr(rp, "_post", lambda payload, key, timeout=0: _answer(GOOD))
 
 
+def _settled(path: str, tries: int = 100) -> dict[str, Any]:
+    """Poll a job route until the job is no longer running (jobs.py)."""
+    import time
+
+    for _ in range(tries):
+        code, body = _asgi("GET", path)
+        assert code == 200
+        if body["job"]["state"] != "running":
+            return body
+        time.sleep(0.02)
+    raise AssertionError(f"{path} still running")
+
+
 def test_routes_generate_read_and_delete(routed: None) -> None:
+    # The POST answers with the job at once; the plan arrives by polling it.
     code, body = _asgi("POST", "/api/plan", "top=4")
-    assert code == 200 and body["latest"]["ok"] is True and body["config"]["enabled"] is True
+    assert code == 200 and body["config"]["enabled"] is True
+    assert body["job"]["state"] in ("running", "done") and body["job"]["top"] == 4
+    body = _settled(f"/api/plan/job/{body['job']['id']}")
+    assert body["job"]["state"] == "done" and body["latest"]["ok"] is True
     pid = body["latest"]["id"]
+    assert pid == body["job"]["id"]
     code, feed = _asgi("GET", "/api/plan")
+    assert feed["job"] is None
     assert code == 200 and feed["history"][0]["id"] == pid and feed["latest"]["id"] == pid
     code, one = _asgi("GET", f"/api/plan/{pid}")
     assert code == 200 and one["latest"]["plan"]["headline"] == GOOD["headline"]
@@ -353,6 +372,8 @@ def test_routes_validate_top_and_ids(routed: None) -> None:
     assert _asgi("POST", "/api/plan", "top=99")[0] == 422
     assert _asgi("POST", "/api/plan", "top=3")[0] == 422
     assert _asgi("GET", "/api/plan/not-an-id")[0] == 422
+    assert _asgi("GET", "/api/plan/job/not-an-id")[0] == 422
+    assert _asgi("GET", "/api/plan/job/20260101-000000")[1]["job"]["state"] == "lost"
     assert _asgi("DELETE", "/api/plan/..%2F..%2Fx")[0] in (404, 422)
 
 
@@ -602,3 +623,18 @@ def test_the_plan_takes_the_expiry_rules_pick_and_prints_the_rule() -> None:
     assert sp._options(row)["long"]["expiry"] == "2026-10-13"
     assert optcalc.expiry_rule()["text"] in sp.STRATEGY
     assert "0DTE only on" not in sp.system_prompt("rth")
+
+
+def test_a_name_carries_its_side_of_the_ten_minute_200_ema() -> None:
+    row = {"sym": "AMZN", "score": {"total": 77, "side": "short"}, "setup": {"state": "forming"},
+           "levels": {"pdh": 249.14, "pdl": 241.24, "ema200": 243.05}, "trend200": -1,
+           "ema200_slope": "falling", "rs": {}, "news": []}
+    n = sp._name(row)
+    assert n["ema200_10m"] == {"side": "below", "value": 243.05, "slope": "falling",
+                               "with_side": "with"}                   # a short below the line
+    assert sp._name({**row, "levels": {}})["ema200_10m"] is None
+    assert n["ema200_daily"] is None                                   # no frame on the row
+    framed = sp._name({**row, "frame_read": {"above200": True, "trend": "up", "text": "t"}})
+    assert framed["ema200_daily"] == {"side": "above", "with_side": "against"}
+    long_row = {**row, "score": {"total": 60, "side": "long"}}
+    assert sp._name(long_row)["ema200_10m"]["with_side"] == "against"

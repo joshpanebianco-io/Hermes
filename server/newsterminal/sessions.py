@@ -57,8 +57,8 @@ LONDON = ZoneInfo("Europe/London")
 #   18:00 ET       Globex reopens: the futures day, and Asia, begin
 #   07:00 London   European futures and the London desks are in (Eurex opens
 #                  08:00 CET); an hour before the LSE's cash bell
-#   10:00 London   the London OPEN window ends — where its damage is done
-#   08:00 ET       the overlap and the 08:30 US data window
+#   10:00 London   the London OPEN window ends — where its damage is done;
+#                  the pre-market tag runs from here to the cash open
 #   09:30 ET       US cash
 #   16:00 ET       US cash close; ES and NQ settle on this minute
 #   17:00 ET       Globex halts for its maintenance hour
@@ -71,15 +71,66 @@ PRE_NY = time(8, 0)
 NY_OPEN = time(9, 30)
 NY_CLOSE = REGULAR_CLOSE
 
-# The windows that split one Globex day, in the order it runs them.
+# The windows that split one Globex day, in the order it runs them — the
+# TAGGING partition: every minute belongs to exactly one, so a calendar print
+# can say which session it lands in. Not the ranges panel's rows any more;
+# those are the BOXES below (2026-10-30). Europe midday and Pre-NY merged into
+# one pre-market tag the same day, since the boxes know no such split.
 DESK_WINDOWS: list[tuple[str, str]] = [
     ("asia", "Asia"),
-    ("london", "London open"),
-    ("euro_mid", "Europe midday"),
-    ("preny", "Pre-NY"),
+    ("london", "London"),
+    ("premkt", "Pre-market"),
     ("ny", "New York"),
     ("post", "Post-close"),
 ]
+
+# ---------------------------------------------------------------- the boxes
+#
+# THE FOUR SESSION BOXES (owner, 2026-10-30: "Asia 20:00 - 0:00 est, London
+# 2:00 - 5:00, pre market 4:00 - 9:30, NY 9:30 - 16:00"). These are the
+# windows a trader draws on the chart, and they are NOT a partition: London
+# and the pre-market overlap for an hour, and nothing claims 18:00-20:00,
+# 00:00-02:00 or the after-hours. The ranges panel draws these, one row each
+# (sources/ranges.py), and each row's high and low are its own. The ladder's
+# "overnight" is a fifth box, 18:00 to the cash open, so a print in a gap still
+# counts toward the ON high — computed, never drawn as a row.
+#
+# IN ET, EXCEPT LONDON. Three of the boxes are ET's by nature: the pre-market
+# because NYSE's own begins at 04:00 ET, New York because it is the cash
+# session, Asia because 20:00 ET is the box every chart draws (Tokyo's 09:00 is
+# 19:00 or 20:00 ET by the season, and a box that moved with it would not be
+# the one on the chart). London keeps London's clock, 07:00 to 10:00, for the
+# reason desk_window does: in the weeks the two countries' clocks disagree,
+# 02:00 ET is 06:00 London and London's desks are not in yet. That hour is
+# not empty, though — it is Frankfurt's (owner, 2026-10-30: "2:00 - 3:00 est
+# should be Frankfurt"), and the phase headline says so (_phase). It is a
+# headline, not a fifth box: the owner draws four.
+ASIA_BOX_OPEN = time(20, 0)
+PREMARKET_OPEN = time(4, 0)
+BOXES: list[tuple[str, str]] = [
+    ("asia", "Asia"),
+    ("london", "London"),
+    ("premkt", "Pre-market"),
+    ("ny", "New York"),
+]
+OVERNIGHT: tuple[str, str] = ("overnight", "Overnight")
+
+
+def in_box(key: str, when: datetime) -> bool:
+    """Is this instant inside the box? The clock only — `globex_open` says
+    whether anything traded. Pure."""
+    et = _hours(when.astimezone(ET))
+    if key == "asia":
+        return et >= 20.0
+    if key == "london":
+        return 7.0 <= _hours(when.astimezone(LONDON)) < 10.0
+    if key == "premkt":
+        return 4.0 <= et < 9.5
+    if key == "ny":
+        return 9.5 <= et < 16.0
+    if key == "overnight":
+        return et >= 18.0 or et < 9.5
+    return False
 
 
 def _hours(t: datetime) -> float:
@@ -102,14 +153,12 @@ def desk_window(when: datetime) -> str | None:
         return "post"
     if et >= 9.5:
         return "ny"
-    if et >= 8.0:
-        return "preny"
-    # Before 08:00 ET the boundaries are London's. ET 00:00-08:00 is London
-    # 04:00/05:00-12:00/13:00, so London's hour never wraps here.
+    # Before 09:30 ET the boundaries are London's. ET 00:00-09:30 is London
+    # 04:00/05:00-13:30/14:30, so London's hour never wraps here.
     lon = _hours(when.astimezone(LONDON))
     if lon < 7.0:
         return "asia"
-    return "london" if lon < 10.0 else "euro_mid"
+    return "london" if lon < 10.0 else "premkt"
 
 
 def london_at(d: date, t: time) -> datetime:
@@ -182,30 +231,32 @@ SESSIONS: list[tuple[str, str, str, time, time, int]] = [
 # futures week's.
 #
 #   kind      zone              which days
-#   globex    New York          Sun–Thu evenings (the reopen for the next session)
+#   globex    New York          Sun–Thu evenings (the reopen, and Asia's box)
+#   night     New York          Mon–Fri, just after midnight (Asia's box ends)
 #   london    London            UK weekdays
 #   nyse      New York          NYSE trading days (holidays skipped)
 #   cme       New York          NYSE trading days
 #   halt      New York          Globex weekdays, at the early halt on holidays
 MARKERS: list[tuple[str, time, str, str]] = [
+    # THE BOX BOUNDARIES (owner, 2026-10-30): the Sessions panel counts down to
+    # the same four boxes the ranges panel draws. London's two are London
+    # times; Asia's and the pre-market's are ET, as the boxes are.
     ("globex", time(18, 0), "Globex open", "Futures reopen; the new session's first print"),
-    ("london", time(7, 0), "London pre-open",
-     "European desks arrive; overnight range often breaks"),
-    ("london", time(8, 0), "London open", "Cash equities open in London"),
-    ("nyse", time(8, 0), "London/NY overlap",
-     "Both major pools open — the day's deepest liquidity"),
+    ("globex", time(20, 0), "Asia opens", "Tokyo's morning — the Asia box"),
+    ("night", time(0, 0), "Asia closes", "The Asia box ends; Globex only until London"),
+    ("london", time(7, 0), "London opens", "European desks are in — the London box"),
+    ("nyse", time(4, 0), "Pre-market opens", "NYSE's pre-market; London's last hour"),
+    ("london", time(10, 0), "London closes", "The London box ends; the pre-market carries on"),
     ("nyse", time(8, 30), "US data window", "CPI, PCE, payrolls and claims print at this minute"),
-    ("nyse", time(9, 30), "NYSE open", "US cash equities open"),
+    ("nyse", time(9, 30), "New York opens", "US cash equities open"),
     ("nyse", time(10, 0), "Late data window",
      "ISM, consumer confidence, JOLTS print at this minute"),
-    ("london", time(16, 30), "London close",
-     "The LSE's closing auction; European desks square up"),
     ("nyse", time(15, 0), "Final hour", "Closing imbalances begin building"),
     # WHAT 16:00 AND 17:00 ACTUALLY ARE (review, 2026-10-14). 17:00 used to be
     # "CME settlement", which it is not: ES and NQ settle off the 30 seconds
     # to 16:00 ET, gold off the minute to 13:30 ET. 17:00 is only the halt.
     ("cme", time(13, 30), "Gold settlement", "COMEX gold settles on this minute"),
-    ("nyse", time(16, 0), "NYSE close", "US cash close; ES and NQ settle on this minute"),
+    ("nyse", time(16, 0), "New York closes", "US cash close; ES and NQ settle on this minute"),
     ("halt", time(17, 0), "Globex halt",
      "Futures stop for the maintenance hour; the trade date rolls at 18:00"),
 ]
@@ -222,6 +273,74 @@ def _local_window(now_utc: datetime, zone: str, o: time, c: time) -> tuple[datet
     start = local.replace(hour=o.hour, minute=o.minute, second=0, microsecond=0)
     end = local.replace(hour=c.hour, minute=c.minute, second=0, microsecond=0)
     return start.astimezone(UTC), end.astimezone(UTC)
+
+
+#: Each ET box's open and length. New York's close is the NYSE's day's.
+_BOX_SPAN: dict[str, tuple[time, timedelta]] = {
+    "asia": (ASIA_BOX_OPEN, timedelta(hours=4)),
+    "premkt": (PREMARKET_OPEN, timedelta(hours=5, minutes=30)),
+}
+
+
+def _box_occurrence(key: str, now: datetime) -> tuple[datetime, datetime] | None:
+    """The occurrence of a box that contains `now`, or the next one — as instants.
+
+    Walked by date on the box's own clock, skipping days the market does not
+    trade: Asia's box on a Friday evening is Sunday's, New York's on a holiday
+    is the next trading day's and on a half day ends at 13:00."""
+    if key == "london":
+        base = now.astimezone(LONDON).date()
+        for k in range(-1, 10):
+            d = base + timedelta(days=k)
+            start = datetime.combine(d, LONDON_DESKS, tzinfo=LONDON)
+            end = datetime.combine(d, LONDON_OPEN_END, tzinfo=LONDON)
+            if end <= now or d.weekday() >= 5 or not globex_open(start):
+                continue
+            return start, end
+        return None
+    base = now.astimezone(ET).date()
+    for k in range(-1, 10):
+        d = base + timedelta(days=k)
+        if key == "ny":
+            if not is_trading_day(d):
+                continue
+            start = datetime.combine(d, NY_OPEN, tzinfo=ET)
+            end = datetime.combine(d, close_time(d), tzinfo=ET)
+        else:
+            open_t, span = _BOX_SPAN[key]
+            start = datetime.combine(d, open_t, tzinfo=ET)
+            end = start + span
+        if end <= now or not globex_open(start):
+            continue
+        return start, end
+    return None
+
+
+def box_state(now: datetime) -> list[dict[str, Any]]:
+    """The four boxes: which is open, and how long until each opens or closes.
+    The instants ride along so the page can print each box in the reader's own
+    zone without a second clock table."""
+    shut = not globex_open(now)
+    out: list[dict[str, Any]] = []
+    for key, label in BOXES:
+        occ = _box_occurrence(key, now)
+        if occ is None:
+            continue
+        start, end = occ
+        open_now = start <= now < end and not shut
+        mins = ((end if open_now else start) - now).total_seconds() / 60.0
+        out.append({
+            "key": key,
+            "label": label,
+            "open": open_now,
+            "start_et": start.astimezone(ET).strftime("%H:%M"),
+            "end_et": end.astimezone(ET).strftime("%H:%M"),
+            "next": "closes" if open_now else "opens",
+            "next_min": round(mins),
+            "opens_utc": start.astimezone(UTC).isoformat(),
+            "closes_utc": end.astimezone(UTC).isoformat(),
+        })
+    return out
 
 
 def session_state(
@@ -302,8 +421,10 @@ def session_state(
         "sessions": rows,
         "open_count": sum(1 for r in rows if r["open"]),
         "overlap": overlap,
-        "phase": _phase(et, rows),
+        "phase": _phase(et),
         "markers": _markers(now, fed),
+        # The four boxes the panel draws (owner, 2026-10-30), with countdowns.
+        "boxes": box_state(now),
     }
 
 
@@ -313,7 +434,7 @@ _ASIA = {"sydney", "tokyo", "hongkong", "shanghai"}
 _EUROPE = {"london", "frankfurt"}
 
 
-def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
+def _phase(et: datetime) -> dict[str, str]:
     """
     The one-line answer to "where are we in the day".
 
@@ -337,9 +458,9 @@ def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
     sound for the CME and NYSE boundaries it was written about, because those
     ARE defined in New York time; it does not transfer to Tokyo.
 
-    So the overnight phases are read off `rows`, which already resolve each city
-    in its own zone against its own local weekday. One computation now feeds
-    both the headline and the list beneath it, so they cannot disagree again.
+    So the overnight phases were read off the city rows — and since 2026-10-30
+    off the session BOXES, which is what the panel draws under the headline.
+    One definition feeds both, so they cannot disagree.
     """
     wd = et.weekday()
     m = et.hour * 60 + et.minute
@@ -373,8 +494,6 @@ def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
     # New York, in New York's own clock — shortened on a half day.
     close_m = close_minute(d)
     half = close_m < 16 * 60
-    if 8 * 60 <= m < 9 * 60 + 30:
-        return {"key": "preopen", "label": "US pre-open", "note": "Data window and the overlap"}
     if 9 * 60 + 30 <= m < min(11 * 60 + 30, close_m):
         return {"key": "open", "label": "NY morning", "note": "Deepest liquidity of the day"}
     if 11 * 60 + 30 <= m < min(14 * 60, close_m - 60):
@@ -385,34 +504,48 @@ def _phase(et: datetime, rows: list[dict[str, Any]]) -> dict[str, str]:
             "label": "NY final hour" if half else "NY final hours",
             "note": "Early close at 13:00 ET" if half else "Imbalances and positioning",
         }
-    if close_m <= m < 18 * 60:
+    if close_m <= m < 17 * 60:
         return {
             "key": "post",
             "label": "Post-close",
             "note": ("Early close today — cash shut at 13:00 ET" if half
                      else "Cash shut; futures run to the 17:00 ET halt"),
         }
+    if 17 * 60 <= m < 18 * 60:
+        return {"key": "halt", "label": "Globex halt",
+                "note": "The maintenance hour; the trade date rolls at 18:00 ET"}
 
-    # Overnight: whoever is actually trading says what this is.
-    live = {r["key"] for r in rows if r.get("open")}
-    asia = bool(live & _ASIA)
-    europe = bool(live & _EUROPE)
-
-    if asia and europe:
-        return {
-            "key": "handover",
-            "label": "Asia into London",
-            "note": "Hong Kong still trading as Europe arrives",
-        }
-    if europe:
-        return {
-            "key": "london",
-            "label": "London session",
-            "note": "Europe repricing the overnight",
-        }
+    # THE OVERNIGHT AND THE PRE-MARKET ARE THE BOXES' (owner, 2026-10-30). The
+    # headline is read off the same `in_box` the rows beneath it are, so the
+    # two cannot disagree — the invariant tests/test_sessions.py holds. It used
+    # to be read off which cities were open, which put "Asia" wherever Sydney
+    # was awake; the box is the one on the chart, 20:00 ET in every season.
+    asia, london, pre = in_box("asia", et), in_box("london", et), in_box("premkt", et)
+    if london and pre:
+        return {"key": "handover", "label": "London into the pre-market",
+                "note": "Both boxes open — London's last hour, NYSE's first"}
+    if london:
+        return {"key": "london", "label": "London session",
+                "note": "Europe repricing the overnight"}
+    if pre:
+        return {"key": "preopen", "label": "US pre-market",
+                "note": "The 08:30 data window, then the open"}
     if asia:
         return {"key": "asia", "label": "Asia session", "note": "Tokyo and Hong Kong lead"}
-    return {"key": "globex", "label": "Globex", "note": "Futures only; no cash market open"}
+    if m >= 18 * 60:
+        return {"key": "globex", "label": "Globex reopen",
+                "note": "Futures only — Asia's box opens at 20:00 ET"}
+    # FRANKFURT IS THE HOUR BEFORE LONDON (owner, 2026-10-30: "2:00 - 3:00 est
+    # should be Frankfurt not between asia and london"). Europe's day starts
+    # at 02:00 ET on the owner's clock; in most weeks that is also 07:00
+    # London and the London box takes the headline above. In the weeks the
+    # UK's clock and the US's disagree, London's box is an hour away and this
+    # is what fills it. Read in ET, because that is how the owner reads it.
+    if m >= 2 * 60:
+        return {"key": "frankfurt", "label": "Frankfurt session",
+                "note": "Europe's first hour — London's box opens at 07:00 London"}
+    return {"key": "globex", "label": "Between Asia and London",
+            "note": "Globex only — Frankfurt from 02:00 ET, London's box from 07:00 London"}
 
 
 # The Fed releases that land AT A MINUTE and stop the tape, keyed by the
@@ -468,7 +601,7 @@ def _marker_day_ok(kind: str, d: date) -> bool:
         if d.weekday() not in (6, 0, 1, 2, 3):
             return False
         return not cme_closed(globex_trade_date(datetime.combine(d, GLOBEX_REOPEN, tzinfo=ET)))
-    if kind in ("london", "halt"):
+    if kind in ("london", "halt", "night"):
         return d.weekday() < 5 and not cme_closed(d)
     return is_trading_day(d)  # nyse, cme
 
@@ -481,7 +614,7 @@ def _marker_time(kind: str, label: str, t: time, d: date) -> time:
     if kind != "nyse":
         return t
     close = close_time(d)
-    if label == "NYSE close":
+    if label == "New York closes":
         return close
     if label == "Final hour":
         return time(close.hour - 1, close.minute)

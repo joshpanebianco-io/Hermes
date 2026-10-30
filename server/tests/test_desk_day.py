@@ -103,7 +103,7 @@ def test_an_ordinary_weekday_keeps_its_old_switches(when: datetime, session: str
         (at(2026, 10, 26, 2, 30), "asia", "asia"),
         (at(2026, 10, 26, 3, 0), "london", "london"),
         (at(2026, 10, 26, 5, 30), "london", "london"),
-        (at(2026, 10, 26, 6, 0), "euro_mid", "london"),
+        (at(2026, 10, 26, 6, 0), "premkt", "london"),
         # Mon 2 Nov: both on standard time — back to 02:00 ET.
         (at(2026, 11, 2, 2, 30), "london", "london"),
         # Tue 16 Mar 2027: US on EDT, UK still on GMT — 03:00 ET again.
@@ -143,7 +143,9 @@ def test_the_calendar_files_uk_gdp_under_london() -> None:
     assert session_of(at(2026, 10, 26, 3, 0)) == "london"
     assert session_of(at(2026, 10, 26, 2, 0)) == "asia"  # 06:00 London that week
     assert session_of(at(2026, 10, 14, 19, 50)) == "asia"
-    assert session_of(at(2026, 10, 14, 8, 30)) == "preny"
+    assert session_of(at(2026, 10, 14, 8, 30)) == "premkt"
+    # The hour London and the pre-market share is London's for a print.
+    assert session_of(at(2026, 10, 14, 4, 30)) == "london"
     assert session_of(at(2026, 10, 14, 16, 30)) == "closed"
 
 
@@ -177,7 +179,7 @@ def test_the_markers_name_the_settlements_and_the_halt() -> None:
     assert "CME settlement" not in labels
     assert labels["Gold settlement"]["et"] == "13:30"
     assert labels["Globex halt"]["et"] == "17:00"
-    assert "settle" in labels["NYSE close"]["note"]
+    assert "settle" in labels["New York closes"]["note"]
     # The half day halts early, and the marker says when.
     half = {m["label"]: m for m in sessions.session_state(at(2026, 11, 27, 12, 0))["markers"]}
     assert half["Globex halt"]["et"] == "13:15"
@@ -199,16 +201,18 @@ def _range(key: str, hi: float, lo: float, prior: bool) -> dict[str, Any]:
 
 
 def test_the_ladder_leaves_yesterdays_windows_out_of_the_overnight() -> None:
-    """07:50 ET: Pre-NY is yesterday's. Its 31,089 high is not the ON high."""
+    """07:50 ET: the ON high is the overnight box's, 30,906 — not the stale
+    pre-market row's 31,089, and not the Asia box's alone (2026-10-30: the
+    boxes leave gaps the overnight row exists to cover)."""
     snap = {
         "clock": {"et": at(2026, 10, 14, 7, 50).isoformat()},
         "quotes": [{"key": "NQ", "last": 30800.0, "prev": 30700.0, "pct": 0.3}],
         "ranges": {"assets": {"NQ": {"last": 30800.0, "sessions": [
-            _range("asia", 30906.0, 30604.75, False),
+            _range("asia", 30880.0, 30604.75, False),
             _range("london", 30850.0, 30700.0, False),
-            _range("euro_mid", 30880.0, 30760.0, False),
-            _range("preny", 31089.0, 30950.0, True),
+            _range("premkt", 31089.0, 30950.0, True),
             _range("ny", 31100.0, 30900.0, True),
+            _range("overnight", 30906.0, 30604.75, False),
         ]}}},
     }
     ladder = report.build_facts(snap, "ny", "NQ")["ladders"][0]

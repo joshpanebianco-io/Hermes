@@ -9,42 +9,33 @@ London as well as New York, so the question is not only "what happened
 overnight" — it is "what happened in the session I am about to trade, and in
 the one that just handed over to it".
 
-SIX WINDOWS, AND THEY DO NOT OVERLAP. Normal weeks, in ET:
+FOUR BOXES, AND THEY ARE ALLOWED TO OVERLAP (owner, 2026-10-30). In ET:
 
-  asia      18:00 → 02:00   Globex reopens; Tokyo and Hong Kong lead
-  london    02:00 → 05:00   the London OPEN window, where Europe does its damage
-  euro_mid  05:00 → 08:00   European midday; US premarket starts building
-  preny     08:00 → 09:30   the overlap and the 08:30 data window
-  ny        09:30 → 16:00   US cash
-  post      16:00 → 17:00   after the bell: the after-hours earnings reaction,
-                            until Globex halts
+  asia       20:00 → 00:00   the box every chart draws for Tokyo and Hong Kong
+  london     02:00 → 05:00   07:00-10:00 London — the open window, where Europe
+                             does its damage
+  premkt     04:00 → 09:30   NYSE's own pre-market, overlapping London's last hour
+  ny         09:30 → 16:00   US cash
 
-The boundaries are the handovers a trader actually uses, not the exchanges'
-own hours — London cash runs to 16:30 London but by 09:30 ET the flow is
-American, and a "London range" that included the US open would describe
-neither.
+  overnight  18:00 → 09:30   the ladder's, not a row: everything traded since
+                             Globex reopened, so a print in a gap between the
+                             boxes still counts toward the ON high
+
+These are the session boxes a trader draws, not a partition of the clock —
+nothing claims 18:00-20:00, 00:00-02:00 or the after-hours, and London and the
+pre-market share an hour. For a fortnight before this the panel cut one
+contiguous Globex day into six windows (Asia from 18:00, London open, Europe
+midday, pre-NY, New York, post-close), which answered "where did every minute
+go" at the cost of rows nobody draws on a chart. The calendar's "prints in the
+X session" tag still needs a partition and keeps one (sessions.desk_window);
+the boxes live beside it (sessions.BOXES, in_box).
 
 LONDON IS 07:00-10:00 LONDON, AND IT STARTS BEFORE THE CASH BELL. The LSE opens
 at 08:00 London, but European flow is already in by then: Eurex futures open at
 08:00 CET and the London desks are at their screens an hour before the cash
-open. The hour from 07:00 London is European-driven, and counting it as Asia
-described it as thin Globex drift when it is nothing of the kind.
-
-THOSE ARE LONDON TIMES, NOT ET (review, 2026-10-14). This said "03:00 ET all
-year (the two hemispheres shift together for this pair)", which is true except
-for the week between the UK's clock change and the US's and the three weeks
-the other way every March — when London's 07:00 is 03:00 ET and the window
-ran an hour early, filing London's open as Asia. The boundaries now come from
-`sessions.desk_window`, the one definition the calendar and the brief read
-too.
-
-IT ENDS AT 10:00 LONDON BECAUSE THAT IS WHERE THE DAMAGE IS DONE. "London took
-out the Asia high" is a claim about the OPEN move; run the window to 08:00 ET
-and it absorbs three hours of midday drift and stops meaning that. So the
-leftovers get their own window rather than diluting this one — euro_mid exists
-to be somewhere else for them to go. The report's LONDON SESSION note runs from
-the same 07:00 London to 08:00 ET; this row is labelled "London open" so two
-different spans are never both called London.
+open. Written on London's clock (review, 2026-10-14) because "02:00 ET all
+year" is an hour out for the week between the UK's clock change and the US's,
+and the three weeks the other way every March.
 
 TRUE HIGHS AND LOWS, FROM v8 BARS (review, 2026-10-13). This used to read the
 batched spark endpoint, which returns closes only — so every "high" was the
@@ -59,13 +50,24 @@ one-minute clock, so the profiles' five-minute job mostly finds them cached.
 from __future__ import annotations
 
 import urllib.parse
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .. import structure
 from ..config import BROWSER_UA
+from ..holidays import is_trading_day
 from ..http import SourceStatus, fetch, json_body
-from ..sessions import DESK_WINDOWS, desk_window, globex_open
+from ..sessions import (
+    BOXES,
+    GLOBEX_REOPEN,
+    NY_CLOSE,
+    NY_OPEN,
+    OVERNIGHT,
+    globex_open,
+    globex_trade_date,
+    in_box,
+)
 from .profiles import CHART as V8_CHART
 
 ET = ZoneInfo("America/New_York")
@@ -83,35 +85,48 @@ def segment(
     stamps: list[int], highs: list[float | None], lows: list[float | None],
     closes: list[float | None], last: float | None, now_et: datetime,
 ) -> list[dict[str, Any]]:
-    """Bars → one row per session window. Pure, so it is the testable part.
+    """Bars → one row per session box, and one for the overnight. Pure, so it
+    is the testable part.
 
-    Only the MOST RECENT occurrence of each window is kept. A two-day pull
-    spans two Asia sessions on a Tuesday, and merging them into one high and low
+    Only the MOST RECENT occurrence of each box is kept. A two-day pull spans
+    two Asia sessions on a Tuesday, and merging them into one high and low
     would describe a range that never traded as a single session.
 
-    EACH ROW SAYS WHEN IT WAS AND WHETHER IT IS FINISHED, which it did not used
-    to. "Most recent" means yesterday's for every window that has not come round
-    again: at 01:00 ET the London, Pre-NY and New York rows are all the previous
-    day's, and with only `%H:%M` on them nothing said so. A model handed a row
-    labelled "London 03:00-07:45" at one in the morning reads it as today's and
-    writes about a session that has not happened yet. `date` and `status` are
-    what make a stale row admit to being stale, and `prior_day` is the same
-    admission as one boolean, for the panel that draws every row on a shared
-    axis and would otherwise invite reading yesterday's rows as a timeline.
+    A BAR MAY SIT IN TWO BOXES. London and the pre-market share 04:00-05:00
+    ET, and the overnight contains the night's boxes; each box collects its
+    own run of bars independently, so the London high is London's whether or
+    not the pre-market also saw it.
+
+    EACH ROW SAYS WHEN IT WAS AND WHETHER IT IS FINISHED, which it did not use
+    to. "Most recent" means yesterday's for every box that has not come round
+    again: at 01:00 ET the London, pre-market and New York rows are all the
+    previous day's, and with only `%H:%M` on them nothing said so. A model
+    handed a row labelled "London 03:00-07:45" at one in the morning reads it
+    as today's and writes about a session that has not happened yet. `date`
+    and `status` are what make a stale row admit to being stale, and
+    `prior_day` is the same admission as one boolean, for the panel that draws
+    every row on a shared axis and would otherwise invite reading yesterday's
+    rows as a timeline.
+
+    PRIOR DAY IS BY GLOBEX TRADE DATE. The boxes are not a partition, so "the
+    rows listed after the newest one are yesterday's" no longer holds. A row is
+    the previous day's when the trade date its window opened in is behind the
+    trade date the clock is in — Thursday's New York row once Thursday 18:00
+    has turned the day to Friday. While Globex is shut (the weekend, the
+    maintenance hour) the reference is the newest row's own day, so Friday's
+    rows read as Friday's all weekend rather than as stale.
     """
-    # The window the clock is in — None while Globex is shut, so Friday's New
-    # York row does not read "live" all weekend.
-    now_key = desk_window(now_et) if globex_open(now_et) else None
-    keys = [desk_window(datetime.fromtimestamp(t, ET)) for t in stamps]
+    open_now = globex_open(now_et)
+    when = [datetime.fromtimestamp(t, ET) for t in stamps]
     out: list[dict[str, Any]] = []
-    for key, label in DESK_WINDOWS:
+    for key, label in [*BOXES, OVERNIGHT]:
         # Walk backwards and stop at the first gap, so what is collected is the
-        # latest contiguous run inside this window rather than every bar that
+        # latest contiguous run inside this box rather than every bar that
         # ever fell in it.
         picked: list[tuple[int, float, float, float]] = []
         seen_any = False
         for i in range(len(stamps) - 1, -1, -1):
-            if keys[i] == key:
+            if in_box(key, when[i]):
                 hi, lo, cl = highs[i], lows[i], closes[i]
                 # A bar with a close but no high/low (a hole in a thin futures
                 # minute) falls back to its close rather than being dropped.
@@ -159,23 +174,90 @@ def segment(
             # The calendar day the window STARTED on — not the day it ended,
             # because Asia begins the evening before the session it feeds.
             "date": datetime.fromtimestamp(picked[0][0], ET).strftime("%a %d"),
-            # "live" while the clock is still inside this window, so a range
-            # that is still being built is never read as a finished one.
-            "status": "live" if now_key == key else "complete",
+            # "live" while the clock is inside this box AND the market trades,
+            # so a range still being built is never read as a finished one —
+            # and Friday's New York row does not read "live" all weekend.
+            "status": "live" if open_now and in_box(key, now_et) else "complete",
             "start_ts": picked[0][0],
         })
 
-    # WHICH ROWS ARE THE PREVIOUS DAY'S. The windows are listed in the order a
-    # Globex day runs them, so anything listed AFTER the newest row has not come
-    # round again yet and is yesterday's. The second clause is the quarter-hour
-    # after a handover: the clock is inside the window but its first bar has
-    # not printed, so the row wearing "live" is still last night's.
-    dated = [i for i, r in enumerate(out) if r["ok"]]
+    def day_of(r: dict[str, Any]) -> date:
+        return globex_trade_date(datetime.fromtimestamp(r["start_ts"], ET))
+
+    dated = [r for r in out if r["ok"]]
     if dated:
-        newest = max(dated, key=lambda i: out[i]["start_ts"])
-        for i in dated:
-            out[i]["prior_day"] = i > newest or (out[i]["status"] == "live" and i != newest)
+        ref = globex_trade_date(now_et) if open_now else max(day_of(r) for r in dated)
+        for r in dated:
+            r["prior_day"] = day_of(r) < ref
     return out
+
+
+# --------------------------------------------------------------------------
+# VWAP and the opening range — the levels the strategy enters on, from the
+# same bars (owner, 2026-10-30: the Structure tab's live levels ladder).
+# --------------------------------------------------------------------------
+
+#: The opening range is the cash session's first half hour.
+OPENING_RANGE_MIN = 30
+
+
+def vwap_since(
+    stamps: list[int], highs: list[float | None], lows: list[float | None],
+    closes: list[float | None], volumes: list[float | None],
+    start_ts: float, end_ts: float | None = None,
+) -> float | None:
+    """The volume-weighted average of the typical price over the bars from
+    `start_ts` (to `end_ts`, exclusive, when given). Pure.
+
+    A bar without volume weighs nothing; if no bar in the window carries any,
+    the plain mean of the typical prices stands in and is still a fair
+    "where has it traded" — Yahoo's futures bars carry volume, its ETF bars
+    sometimes do not."""
+    num = den = 0.0
+    plain: list[float] = []
+    for t, h, lo, c, v in zip(stamps, highs, lows, closes, volumes, strict=False):
+        if c is None or t < start_ts or (end_ts is not None and t >= end_ts):
+            continue
+        tp = ((h if h is not None else c) + (lo if lo is not None else c) + c) / 3.0
+        plain.append(tp)
+        if v:
+            num += tp * v
+            den += v
+    if den > 0:
+        return round(num / den, 2)
+    return round(sum(plain) / len(plain), 2) if plain else None
+
+
+def opening_range(
+    stamps: list[int], highs: list[float | None], lows: list[float | None],
+    closes: list[float | None], open_ts: float, now_ts: float,
+) -> dict[str, Any] | None:
+    """The high and low of the cash session's first thirty minutes, and whether
+    the half hour is over. None before its first bar. Pure."""
+    end_ts = open_ts + OPENING_RANGE_MIN * 60
+    hi = lo = None
+    for t, h, l_, c in zip(stamps, highs, lows, closes, strict=False):
+        if c is None or not open_ts <= t < end_ts:
+            continue
+        bh, bl = (h if h is not None else c), (l_ if l_ is not None else c)
+        hi = bh if hi is None else max(hi, bh)
+        lo = bl if lo is None else min(lo, bl)
+    if hi is None or lo is None:
+        return None
+    return {"high": round(hi, 2), "low": round(lo, 2), "complete": now_ts >= end_ts}
+
+
+def anchors(now_et: datetime) -> tuple[datetime, datetime | None]:
+    """Where today's VWAPs start: the most recent Globex reopen (18:00 ET on a
+    trading evening — Thursday's, all weekend), and the cash open if New York
+    is trading today and has opened. Pure."""
+    g = datetime.combine(now_et.date(), GLOBEX_REOPEN, tzinfo=ET)
+    if now_et < g:
+        g -= timedelta(days=1)
+    while not globex_open(g + timedelta(minutes=1)):
+        g -= timedelta(days=1)
+    rth = datetime.combine(now_et.date(), NY_OPEN, tzinfo=ET)
+    return g, rth if (is_trading_day(now_et.date()) and now_et >= rth) else None
 
 
 def collect() -> tuple[dict[str, Any], SourceStatus]:
@@ -208,16 +290,30 @@ def collect() -> tuple[dict[str, Any], SourceStatus]:
         if not stamps or not closes:
             continue
         n = min(len(stamps), len(closes))
+        st_, hi_, lo_, cl_ = (
+            list(stamps[:n]),
+            list((q.get("high") or [None] * n)[:n]),
+            list((q.get("low") or [None] * n)[:n]),
+            list(closes[:n]),
+        )
+        vol = list((q.get("volume") or [None] * n)[:n])
+        g, rth = anchors(now_et)
+        rth_close = (datetime.combine(rth.date(), NY_CLOSE, tzinfo=ET).timestamp()
+                     if rth is not None else None)
         assets[key] = {
             "last": last,
-            "sessions": segment(
-                list(stamps[:n]),
-                list((q.get("high") or [None] * n)[:n]),
-                list((q.get("low") or [None] * n)[:n]),
-                list(closes[:n]),
-                last,
-                now_et,
-            ),
+            "sessions": segment(st_, hi_, lo_, cl_, last, now_et),
+            # The levels the strategy enters on, from the same bars (2026-10-30).
+            "vwap": {
+                "globex": vwap_since(st_, hi_, lo_, cl_, vol, g.timestamp()),
+                "rth": (vwap_since(st_, hi_, lo_, cl_, vol, rth.timestamp(), rth_close)
+                        if rth is not None else None),
+            },
+            "opening_range": (opening_range(st_, hi_, lo_, cl_, rth.timestamp(), now_et.timestamp())
+                              if rth is not None else None),
+            # The strategy's side filter on its own timeframe (2026-10-30), from
+            # the same five days of bars, bucketed to ten minutes.
+            "ema200_10m": structure.ema200_10m(st_, cl_),
         }
 
     st.items = len(assets)

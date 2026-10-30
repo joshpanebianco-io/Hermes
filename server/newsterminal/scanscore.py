@@ -987,8 +987,15 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           flow_ctx: dict[str, dict[str, Any]] | None = None,
           context: list[dict[str, Any]] | None = None,
           constituents: dict[str, Any] | None = None,
-          record: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+          record: dict[str, dict[str, Any]] | None = None,
+          promoted: dict[str, dict[str, Any]] | None = None,
+          pool: dict[str, Any] | None = None,
+          pinned: list[str] | None = None) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
+
+    `promoted` is {symbol: why} for the names the pool put on the list today
+    (sources/pool.py), `pool` the pool's own view and `pinned` the owner's
+    list — `watchlist` is the union the rows are built for.
 
     `daily` is each name's daily bars (the realised earnings moves), `shorts`
     its short interest (sources/shortint), `earn_hist` its past report dates
@@ -1028,7 +1035,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         base = rows_in.get(sym)
         age = round((now_ts - fetched[sym]) / 60.0, 2) if sym in fetched else None
         if base is None:
-            out_rows.append(_empty(sym, age, "waiting for the first fetch"))
+            empty = _empty(sym, age, "waiting for the first fetch")
+            empty["promoted"] = (promoted or {}).get(sym)
+            out_rows.append(empty)
             continue
         row = {k: v for k, v in base.items() if k not in ("pdh_day", "sector")}
         row["age_min"] = age
@@ -1061,6 +1070,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         # themselves (`frame`) ride along from the bars job.
         row["frame_read"] = frame.read(base.get("frame"), row.get("last"))
         row["short"] = (shorts or {}).get(sym)
+        row["promoted"] = (promoted or {}).get(sym)
         side0 = (row.get("setup") or {}).get("side")
         cat = catalyst_read(side0, earn, nws, fil)
         if row.get("ok"):
@@ -1109,6 +1119,8 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         "pm_locked": clock.pm_locked,
         "bench": "SPY",
         "watchlist": watchlist,
+        "pinned": list(pinned) if pinned is not None else list(watchlist),
+        "pool": pool,
         "regime": reg,
         "rows": out_rows,
     }
@@ -1185,4 +1197,5 @@ def _empty(sym: str, age: float | None, why: str) -> dict[str, Any]:
         "earnings": None, "news": [], "filings": [], "options": None,
         "adv20": None, "premkt": None, "peers": [],
         "frame": None, "frame_read": None, "short": None, "targets": [], "record": None,
+        "promoted": None,
     }

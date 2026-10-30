@@ -70,14 +70,15 @@ def test_next_and_previous_skip_holidays_and_weekends() -> None:
 
 
 def test_london_keeps_londons_clock_in_the_dst_mismatch_week() -> None:
-    """2026-10-26: the UK is on GMT, the US still on EDT — London's 08:00 is 04:00 ET.
-    The marker used to say 5 minutes beside a London row that said 65."""
+    """2026-10-26: the UK is on GMT, the US still on EDT — London's 08:00 is 04:00 ET
+    and its 07:00, where the London box opens, is 03:00. The marker used to say 5
+    minutes beside a London row that said 65."""
     st = st_at(2026, 10, 26, 2, 55)
-    assert row(st, "london")["next_min"] == 65
-    m = marker(st, "London open")
-    assert m is not None and (m["in_min"], m["et"]) == (65, "04:00")
-    normal = marker(st_at(2026, 10, 19, 2, 55), "London open")
-    assert normal is not None and (normal["in_min"], normal["et"]) == (5, "03:00")
+    assert row(st, "london")["next_min"] == 65           # the LSE's cash open, 08:00 London
+    m = marker(st, "London opens")                        # the box, 07:00 London
+    assert m is not None and (m["in_min"], m["et"]) == (5, "03:00")
+    normal = marker(st_at(2026, 10, 19, 1, 55), "London opens")
+    assert normal is not None and (normal["in_min"], normal["et"]) == (5, "02:00")
 
 
 def test_elapsed_time_counts_the_repeated_hour() -> None:
@@ -108,7 +109,7 @@ def test_the_half_day_closes_at_one() -> None:
     before = st_at(2026, 11, 27, 12, 59)
     assert before["phase"]["key"] == "close"
     assert row(before, "newyork")["open"] is True
-    m = marker(before, "NYSE close")
+    m = marker(before, "New York closes")
     assert m is not None and (m["in_min"], m["et"]) == (1, "13:00")
     after = st_at(2026, 11, 27, 13, 30)
     assert after["phase"]["key"] == "post"

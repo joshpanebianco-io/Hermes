@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { describeTool, readNdjson } from "@/lib/ask/stream";
+import { alertPrefsNow } from "@/lib/alerts";
+import { optionsPrefsNow } from "@/lib/optionsPrefs";
 import type { Desk } from "@/lib/tabs";
 
 /**
@@ -243,7 +245,9 @@ export function useHermes(): HermesController {
           const res = await fetch("/api/ask", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ tab: "hermes", sym, desk, messages: history, summary }),
+            // The reader's settings ride along, so "how many contracts" or
+            // "what alerts am I getting" has the page's own answer (2026-10-31).
+            body: JSON.stringify({ tab: "hermes", sym, desk, messages: history, summary, prefs: { options: optionsPrefsNow(), alerts: alertPrefsNow() } }),
             signal: ctrl.signal,
             cache: "no-store",
           });

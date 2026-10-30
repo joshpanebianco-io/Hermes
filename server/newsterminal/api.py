@@ -527,16 +527,30 @@ class ToolIn(BaseModel):
     args: dict[str, Any] | None = None
 
 
+def _recent_events(n: int = 200) -> list[dict[str, Any]]:
+    """The signal log's newest `n` events, oldest first — the panel's read."""
+    latest = int(COLLECTOR.events.since(1 << 62, 1)["latest"])
+    return list(COLLECTOR.events.since(max(0, latest - n), n)["events"])
+
+
 @app.post("/api/ask/tool")
 def ask_tool(body: ToolIn) -> dict[str, Any]:
     """Answer one of Hermes's tool calls from what the collector holds. Never
-    a 500: a bad name or argument comes back as an `error` the model reads."""
+    a 500: a bad name or argument comes back as an `error` the model reads.
+    `more` is what the panel tool reads from the collector's own state rather
+    than the snapshot: the pool, the signal log, the record, the past notes."""
     snap = COLLECTOR.snapshot()
     return tools_mod.run(
         body.name[:40], body.args,
         snap=snap, scan=COLLECTOR.scanner_payload(), bars=COLLECTOR.scanner_bars,
         brief=lambda i: report_mod.load(i) if i else report_mod.latest(),
         plan=lambda i: plan_mod.load(i) if i else plan_mod.latest(),
+        more={
+            "watchlist": COLLECTOR.watchlist_payload,
+            "events": _recent_events,
+            "stats": lambda: COLLECTOR.events.stats(20),
+            "history": lambda: {"briefs": report_mod.history(), "plans": plan_mod.history()},
+        },
     )
 
 

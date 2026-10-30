@@ -98,6 +98,11 @@ export function setAlertPrefs(patch: Partial<AlertPrefs>): void {
   for (const fn of subs) fn();
 }
 
+/** The settings now, outside React — what a request to Hermes carries. Browser only. */
+export function alertPrefsNow(): AlertPrefs {
+  return read();
+}
+
 export function useAlertPrefs(): AlertPrefs {
   return useSyncExternalStore(subscribe, read, () => DEFAULT_ALERTS);
 }

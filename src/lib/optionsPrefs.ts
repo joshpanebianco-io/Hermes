@@ -73,6 +73,11 @@ export function setOptionsPrefs(patch: Partial<OptionsPrefs>): void {
   for (const fn of subs) fn();
 }
 
+/** The settings now, outside React — what a request to Hermes carries. Browser only. */
+export function optionsPrefsNow(): OptionsPrefs {
+  return read();
+}
+
 export function useOptionsPrefs(): OptionsPrefs {
   return useSyncExternalStore(subscribe, read, () => DEFAULT_OPTIONS);
 }

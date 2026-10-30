@@ -284,6 +284,39 @@ def _material(snap: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda h: (rank.get(str(h.get("impact")), 2), -(h.get("ts") or 0)))
 
 
+def _slim_name(r: dict[str, Any]) -> dict[str, Any]:
+    """A top scanner name in the glance: enough to see that the entry and the
+    options read exist (2026-10-31: the model answered "the options read is
+    not in reach" with the scanner tool unused), the rest a tool call away."""
+    score, setup, opt = _dict(r.get("score")), _dict(r.get("setup")), _dict(r.get("options"))
+    entry, liq = _dict(setup.get("entry")), _dict(opt.get("liquidity"))
+    return {
+        "sym": r.get("sym"), "score": score.get("total"), "side": score.get("side"),
+        "setup": setup.get("note"),
+        "entry": (f"{entry.get('kind')} {entry.get('price')} ({entry.get('dist_atr')} ATR)"
+                  if entry.get("price") is not None else None),
+        "options": (f"IV/RV {opt.get('iv_rv')} {opt.get('premium') or ''}, liquidity "
+                    f"{liq.get('grade')}".replace("  ", " ") if opt.get("ok") else None),
+    }
+
+
+def _sources_down(snap: dict[str, Any]) -> list[str]:
+    """The status rail's red and amber: a source that is down, or serving a
+    cached copy, with its age — so an answer can say a figure is missing or
+    old before it quotes around it."""
+    out: list[str] = []
+    for k, s in (snap.get("status") or {}).items():
+        if not isinstance(s, dict):
+            continue
+        if not s.get("ok"):
+            out.append(f"{s.get('name') or k}: down — {str(s.get('error') or 'no answer')[:100]}")
+        elif s.get("source") not in (None, "live"):
+            age = s.get("stale_age_min") or s.get("age_min")
+            old = f", {round(age)} min old" if isinstance(age, int | float) else ""
+            out.append(f"{s.get('name') or k}: serving a {s.get('source')} copy{old}")
+    return out
+
+
 def slim_context(
     snap: dict[str, Any],
     scan: dict[str, Any] | None = None,
@@ -331,6 +364,7 @@ def slim_context(
         ],
         "scanner": None,
         "notes": {"brief": None, "plan": None},
+        "sources_down": _sources_down(snap),
         "gaps": [],
     }
     if scan is not None:
@@ -344,12 +378,7 @@ def slim_context(
             "regime": {"vix": vix.get("last"), "band": reg.get("band"),
                        "shape": vix.get("shape"), "spy_em_pct": reg.get("spy_em_pct")},
             "tape": {f: conv.get(f) for f in ("bias", "grade", "agree", "total", "max_conviction")},
-            "top": [
-                {"sym": r.get("sym"), "score": (r.get("score") or {}).get("total"),
-                 "side": (r.get("score") or {}).get("side"),
-                 "setup": (r.get("setup") or {}).get("note")}
-                for r in rows[:SLIM_NAMES]
-            ],
+            "top": [_slim_name(r) for r in rows[:SLIM_NAMES]],
             "watchlist": [r.get("sym") for r in rows],
         }
     else:

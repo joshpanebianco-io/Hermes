@@ -38,9 +38,57 @@ export function tokens(n: number): string {
 export const shortModel = (m: string) => m.split("/").pop()?.replace(/:free$/, " (free)") ?? m;
 
 /** What a tool call is doing, in the words the pending line shows. */
+const SORT_WORDS: Record<string, string> = {
+  break: "nearest a break",
+  entry: "nearest its entry",
+  rs: "relative strength",
+  rvol: "relative volume",
+  move: "the day's move",
+};
+
+/** The panel tool's names (server tools.py PANELS) as the activity line says them. */
+const PANEL_WORDS: Record<string, string> = {
+  driver_board: "the driver board",
+  the_book: "the book",
+  session_ranges: "the session ranges",
+  volume_profile: "the volume profile",
+  gamma: "dealer gamma",
+  volatility: "the vol curve",
+  expiry: "the expiries",
+  cot: "the COT",
+  tape_count: "the tape count",
+  breadth: "breadth",
+  fuel: "fuel",
+  index_options: "the index options",
+  prints: "today's prints",
+  rates: "rates and the Fed path",
+  fed_diary: "the Fed & Treasury diary",
+  cross_asset: "cross-asset",
+  sector_rotation: "sector rotation",
+  index_movers: "the index movers",
+  sector_peers: "the sector peers",
+  catalysts: "the catalysts",
+  pool: "the scanner's pool",
+  signal_log: "the signal log",
+  record: "the signal record",
+  past_notes: "past notes",
+  sources: "source health",
+};
+
 export function describeTool(name: string, args: Record<string, unknown>): string {
   const s = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : "");
   switch (name) {
+    case "scanner": {
+      const side = s("side") ? ` for ${s("side")}s` : "";
+      const sort = s("sort");
+      return sort && sort !== "score" ? `Ranking the scanner by ${SORT_WORDS[sort] ?? sort}${side}` : `Reading the scanner${side}`;
+    }
+    case "panel": {
+      const n = s("name");
+      if (!n) return "Reading the list of panels";
+      const who = s("sym") ? ` for ${s("sym").toUpperCase()}` : s("book") ? ` for ${s("book")}` : "";
+      return `Reading ${PANEL_WORDS[n] ?? n.replace(/_/g, " ")}${who}`;
+    }
     case "scanner_row":
       return `Reading ${s("sym").toUpperCase() || "the"} scanner row`;
     case "bars":

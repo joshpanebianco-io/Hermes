@@ -21,6 +21,7 @@ import {
   numeralsIn,
   splitUnverified,
   type AskContext,
+  type ReaderPrefs,
   type SlimContext,
 } from "@/lib/ask/prompt";
 import { localAnswer, routeQuestion, type GlanceLike, type Route } from "@/lib/ask/router";
@@ -91,6 +92,30 @@ const asTab = (v: unknown): string => (typeof v === "string" && TABS.has(v) ? v 
 const asSym = (v: unknown): string | null =>
   typeof v === "string" && /^[A-Z0-9.\-]{1,12}$/.test(v.toUpperCase()) ? v.toUpperCase() : null;
 const asDesk = (v: unknown): "futures" | "stocks" | null => (v === "futures" || v === "stocks" ? v : null);
+
+const ALERT_KINDS = new Set(["L", "E", "BO", "NEAR"]);
+
+/** The reader's settings as the page sent them, checked field by field; null when absent. */
+function asPrefs(v: unknown): ReaderPrefs | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as { options?: unknown; alerts?: unknown };
+  const opt = o.options && typeof o.options === "object" ? (o.options as Record<string, unknown>) : {};
+  const al = o.alerts && typeof o.alerts === "object" ? (o.alerts as Record<string, unknown>) : null;
+  const b = opt.budget;
+  return {
+    budget: typeof b === "number" && Number.isFinite(b) && b > 0 ? Math.round(b * 100) / 100 : null,
+    zeroDte: opt.zeroDte !== false,
+    alerts: al
+      ? {
+          on: al.on !== false,
+          desktop: al.desktop === true,
+          sound: al.sound !== false,
+          kinds: Array.isArray(al.kinds) ? al.kinds.filter((k): k is string => typeof k === "string" && ALERT_KINDS.has(k)) : [],
+          minScore: typeof al.minScore === "number" && Number.isFinite(al.minScore) ? al.minScore : 0,
+        }
+      : null,
+  };
+}
 
 async function fromCollector<T>(path: string, timeoutMs = 20_000, init?: RequestInit): Promise<T | null> {
   try {
@@ -198,7 +223,7 @@ type Done = Extract<ChatEvent, { t: "done" }> & {
 type Line = ChatEvent | Done;
 
 export async function POST(req: Request) {
-  let body: { tab?: unknown; sym?: unknown; desk?: unknown; messages?: unknown; summary?: unknown } = {};
+  let body: { tab?: unknown; sym?: unknown; desk?: unknown; messages?: unknown; summary?: unknown; prefs?: unknown } = {};
   try {
     body = await req.json();
   } catch {
@@ -210,6 +235,7 @@ export async function POST(req: Request) {
   const hermes = tab === HERMES;
   const history = takeHistory(body.messages, hermes ? HERMES_TURNS : MAX_TURNS);
   const summary = hermes && typeof body.summary === "string" ? body.summary.trim().slice(0, MAX_SUMMARY_CHARS) : "";
+  const prefs = hermes ? asPrefs(body.prefs) : null;
   if (!history.length || history[history.length - 1].role !== "user") {
     return NextResponse.json({ error: "The last message must be the reader's question." }, { status: 400, ...noStore });
   }
@@ -275,7 +301,7 @@ export async function POST(req: Request) {
           }
           const route = routeQuestion(question, { desk, sym, watchlist: watchlistOf(slim), followUp });
           const tools = route.tier === "full" ? await gatherTools(route.desk) : [];
-          const parts = hermesSlimParts(slim, sym, { summary, tools: tools.map((t) => t.name) });
+          const parts = hermesSlimParts(slim, sym, { summary, tools: tools.map((t) => t.name), prefs });
           const base = hermesOptions();
           const opts: ChatOptions =
             route.tier === "quick"
@@ -297,7 +323,7 @@ export async function POST(req: Request) {
             noCollector();
             return;
           }
-          await run(hermesSystem(ctx, sym, summary), hermesOptions());
+          await run(hermesSystem(ctx, sym, summary, prefs), hermesOptions());
           return;
         }
         const ctx = await gather(tab, sym, desk);

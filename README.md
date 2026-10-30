@@ -521,9 +521,18 @@ checked against what it was shown or fetched.
 - **Tools for the rest**, one set per desk, written for a model to read: one line per
   headline, release or bar, so a row costs a third of what the panel's JSON would.
   Each call shows under the answer while it runs.
+- **A question across names starts with the table.** Which name is closest to a break,
+  which options read is cleanest, the strongest or the weakest: `scanner` first, then
+  `scanner_row` for the names it singles out. Nothing is called missing before the
+  tool or panel that holds it has been asked, and a digest too big for one answer
+  names the panels for what it left out.
+- **Your settings travel with each question** — the options budget, same-day
+  contracts and the alert choices from Settings, so an answer about contracts or
+  alerts reads them as you set them.
 
 | Tool | Desk | What it returns |
 |---|---|---|
+| `scanner` | stocks | the whole Scanner table, one line a name: score, setup and entry distance, the breaks and progress toward the rest, the day's move, relative volume and strength, the 200 EMA side, the options read and earnings; sorted by score, nearest a break, nearest an entry, strength, volume or move |
 | `scanner_row` | stocks | one name's whole row: last, the levels, what has broken, the setup and entry, the score and its parts, the options read (implied against realised, the expected move, the suggested contract), earnings, headlines and filings |
 | `bars` | stocks | a name's recent ten-minute or daily bars, with the EMA wave, VWAP and the levels |
 | `levels` | futures | a book's live ladder: prior settle and RTH, the overnight, today's opens, both VWAPs, the opening range, the expected move, the walls and the flip, each with its distance from last |
@@ -531,6 +540,7 @@ checked against what it was shown or fetched.
 | `event_risk` | futures | the high-impact geopolitics, policy and energy stories since the last cash close, with the channels each reaches |
 | `wire` · `calendar` · `earnings` · `sessions` | both | the wire searched, one day's releases, the latest prints and what reports next, the session clock |
 | `digest` · `note` | both | a whole desk's digest, and the latest brief or game plan with its age |
+| `panel` | both | every other panel on every tab, by name: the driver board, session ranges, value, gamma, volatility, the expiries, the COT, the tape count, breadth, fuel, index options, today's prints, rates and the Fed path, the Fed diary, cross-asset, sector rotation, index movers, sector peers, the catalysts, the scanner's pool, signal log and record, past notes and source health |
 
 ### How it answers
 ![A Hermes AI answer, in four parts](docs/media/hermes-ai-read.png)

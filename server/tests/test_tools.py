@@ -101,7 +101,8 @@ def test_the_spec_names_every_tool_run_knows() -> None:
 
 def test_scanner_row_is_the_whole_row_cut_short_or_names_the_watchlist() -> None:
     row = _run("scanner_row", {"sym": "amzn"})
-    assert row["sym"] == "AMZN" and len(row["news"]) == ask.ROW_NEWS and "record" not in row
+    assert row["sym"] == "AMZN" and len(row["news"]) == ask.ROW_NEWS
+    assert row["record"] == {"big": True}      # the detail pane's record, since 2026-10-31
     miss = _run("scanner_row", {"sym": "ZZZZ"})
     assert "not on the scanner" in miss["error"] and miss["watchlist"] == ["AMZN", "SPY"]
 
@@ -230,3 +231,115 @@ def test_a_note_can_be_cut_to_one_book() -> None:
     whole = tools.run("note", {"kind": "brief"}, snap=_snap(), scan=None, bars=_bars_doc,
                       brief=lambda i: rec, plan=lambda i: None, now=NOW)
     assert len(whole["note"]["reads"]) == 3
+
+
+# ------------------------------------------------- the whole terminal (2026-10-31)
+
+def _row(sym: str, score: int, side: str, *, broken: dict[str, bool] | None = None,
+         progress: dict[str, float] | None = None, dist: float = 1.0, rs: float = 0.0,
+         opt: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"sym": sym, "ok": True, "last": 100.0, "chg_pct": 0.0, "rvol": 1.0,
+            "rs": {"SPY": rs}, "score": {"total": score, "side": side},
+            "setup": {"state": "retest", "note": f"{sym} note",
+                      "entry": {"kind": "PMH", "price": 101.0, "dist_atr": dist}},
+            "broken": broken or {}, "progress": progress or {},
+            "levels": {"pdh": 103.0, "pdl": 98.0, "pmh": 101.0, "pml": 99.5},
+            "options": opt or {"ok": False, "error": "no chain"}}
+
+
+def _table() -> dict[str, Any]:
+    cheap = {"ok": True, "iv_rv": 0.85, "premium": "cheap",
+             "liquidity": {"grade": "good", "spread_pct": 1.2},
+             "em": [{"key": "front", "pct": 2.5}]}
+    return {**_scan(), "rows": [
+        _row("AAA", 80, "long", broken={"pmh": True}, dist=1.5, rs=1.2),
+        _row("BBB", 60, "short", progress={"pml": 0.97, "pdl": 0.4}, dist=-0.2, rs=-1.5,
+             opt=cheap),
+        _row("CCC", 70, "long", progress={"pdh": 0.5}, dist=0.4, rs=0.3),
+        {"sym": "DDD", "ok": False, "error": "no bars"},
+    ]}
+
+
+def test_the_scanner_is_one_line_a_name_ranked_as_asked() -> None:
+    syms = lambda out: [r.split(" · ")[0] for r in out["rows"]]  # noqa: E731
+    out = _run("scanner", {}, scan=_table())
+    assert syms(out) == ["AAA", "CCC", "BBB"]                  # score, best first
+    assert out["no_data"] == ["DDD · no data: no bars"]
+    bbb = out["rows"][2]
+    # The far side of a level pair is under half by construction, so it is left out.
+    assert "toward PML 99.5 (97.0%) ·" in bbb and "nothing broken" in bbb
+    assert ("options IV/RV 0.85 cheap, liquidity good (1.2% spread), "
+            "front expected move 2.5%") in bbb
+    assert "broke PMH" in out["rows"][0] and "options: no chain" in out["rows"][0]
+    assert syms(_run("scanner", {"sort": "break"}, scan=_table())) == ["BBB", "CCC", "AAA"]
+    assert syms(_run("scanner", {"sort": "entry"}, scan=_table())) == ["BBB", "CCC", "AAA"]
+    assert syms(_run("scanner", {"sort": "rs"}, scan=_table())) == ["AAA", "CCC", "BBB"]
+    shorts = _run("scanner", {"side": "short"}, scan=_table())
+    assert shorts["names"] == 1 and syms(shorts) == ["BBB"]
+    assert _run("scanner", {"limit": 1}, scan=_table())["shown"] == 1
+    assert "error" in tools.run("scanner", {}, snap=_snap(), scan=None, bars=_bars_doc,
+                                brief=lambda i: None, plan=lambda i: None, now=NOW)
+
+
+def test_a_long_list_shrinks_before_its_neighbours_go() -> None:
+    # The stocks digest's names were one list too big to share the answer, and
+    # the whole section went — the question that needed them got none.
+    out = tools._cap({"head": "keep", "names": ["n" * 300] * 60, "tail": "t" * 2000})
+    assert out["head"] == "keep" and out["tail"] == "t" * 2000 and "dropped" not in out
+    assert 1 < len(out["names"]) < 60
+    assert len(json.dumps(out)) <= tools.MAX_CHARS
+    named = tools._name_dropped({"dropped": ["rates", "fed_ahead", "mystery"]})
+    assert named["ask_panel_for"] == ["fed_diary", "rates"]
+
+
+MORE: dict[str, Any] = {
+    "watchlist": lambda: {"symbols": ["SPY"], "pool": {"on": True}},
+    "events": lambda: [
+        {"id": 1, "day": "2026-10-29", "at_et": "10:20", "sym": "AMZN", "kind": "L",
+         "side": "short", "level": "PDL", "price": 241.0, "stop": 242.0, "score": 77,
+         "outcome": {"r": 1.2, "mfe_r": 2.0, "mae_r": 0.3, "hit_1r": True,
+                     "stopped": False, "final": True}},
+        {"id": 2, "day": "2026-10-29", "at_et": "10:30", "sym": "SPY", "kind": "BO",
+         "side": "long", "level": "PMH", "price": 765.0, "retracted": True},
+    ],
+    "stats": lambda: {"days": 20, "groups": []},
+    "history": lambda: {"briefs": [{"id": "b"}] * 15, "plans": []},
+}
+
+
+def _panel(args: dict[str, Any], more: dict[str, Any] | None = MORE) -> Any:
+    return tools.run("panel", args, snap=_snap(), scan=_scan(), bars=_bars_doc,
+                     brief=lambda i: None, plan=lambda i: None, now=NOW, more=more)
+
+
+def test_every_panel_answers_by_name() -> None:
+    assert len(_panel({})["panels"]) == len(tools.PANELS)      # no name: the list
+    for name in tools.PANELS:
+        out = _panel({"name": name, "book": "NQ"})
+        assert out.get("panel") == name and "failed" not in str(out.get("error")), (name, out)
+        assert len(json.dumps(out, default=str)) <= tools.MAX_CHARS + 200, name
+    log = _panel({"name": "signal_log", "sym": "amzn"})
+    assert log["rows"] == ["2026-10-29 10:20 AMZN (L) short PDL at 241 · stop 242 · score 77"
+                           " · 1.2R now, best 2R, worst 0.3R · reached +1R"]
+    assert _panel({"name": "signal_log"})["rows"][-1].endswith("· withdrawn")
+    assert len(_panel({"name": "past_notes"})["briefs"]) == tools.MAX_PAST_NOTES
+    assert "error" in _panel({"name": "pool"}, more=None)      # the collector's own state
+    assert "error" in _panel({"name": "nope"})
+    assert tools.DESKS["panel"] == "both" and tools.DESKS["scanner"] == "stocks"
+
+
+def test_the_glance_shows_the_entry_the_options_and_any_source_down() -> None:
+    scan = _scan()
+    scan["rows"][0]["setup"]["entry"] = {"kind": "PDL", "price": 241.24, "dist_atr": -6.15}
+    scan["rows"][0]["options"] = {"ok": True, "iv_rv": 1.23, "premium": "rich",
+                                  "liquidity": {"grade": "ok"}}
+    snap = {**_snap(), "status": {
+        "quotes": {"name": "Yahoo quotes", "ok": True, "source": "live"},
+        "wire": {"name": "Wire", "ok": False, "error": "timeout"},
+        "cot": {"name": "COT", "ok": True, "source": "cache", "stale_age_min": 90}}}
+    slim = ask.slim_context(snap, scan)
+    top = slim["scanner"]["top"][0]
+    assert top["entry"] == "PDL 241.24 (-6.15 ATR)"
+    assert top["options"] == "IV/RV 1.23 rich, liquidity ok"
+    assert slim["sources_down"] == ["Wire: down — timeout",
+                                    "COT: serving a cache copy, 90 min old"]

@@ -108,8 +108,8 @@ const PRODUCT = `THE TABS — one bar for both desks (the futures books, and the
 - Structure (tab "structure") — where price is and how it is positioned. The driver board: per futures book, which way the engine's count leans, how many reads agree, and how to treat it. The book: NQ/QQQ, ES/SPY, GC/GLD, YM, RTY with day-range bars and sparklines. Session ranges: the four boxes a trader draws — Asia 20:00–00:00 ET, London 02:00–05:00, the pre-market 04:00–09:30 and New York 09:30–16:00 — and what each traded per instrument; a high or low in amber has been taken out. The data also carries the overnight as one range, 18:00 to the cash open. Volume profile: POC, VAH and VAL for the previous RTH, the completed overnight and the developing session, approximate (from 5-minute bars). Gamma levels: call walls, put walls and the gamma flip from the optional GEXYGEN service, with the regime (positive gamma dampens moves, negative amplifies); dealer gamma in ETF prices, and the index ETFs' options. Vol term structure: VIX9D, VIX, VIX3M, VIX6M and SKEW, with VIX/VIX3M against 1.00 — contango is calm, backwardation stressed. The tape count: how many market reads lean long or short (it caps the Game plan's conviction), breadth, and fuel — how much of the day's expected move is already spent. Levels: a live ladder per futures book — prior settle, prior RTH high, low and POC, the overnight high and low, today's Globex and RTH opens, VWAP since 18:00 and since 09:30, the opening range, the expected-move band and the gamma walls — each with its distance from last; and the index ETFs' own levels (SPY, QQQ, IWM): PDH, PDL, PMH, PML and VWAP, with which have been taken out. The ladder also brackets confluence bands — three or more rows inside a quarter of an ATR, named under the ladder as one level — carries the ten-minute 200 EMA as a row, and shows the daily 200 EMA beneath it as the regime line. Session ranges carries a fuel line (today's range so far against the 14-day ATR and the expected move, and whether it was spent overnight or in New York) and Volume profile a line on yesterday's shape (trend day or range day, where it closed in its range, the gap at the 18:00 reopen). The driver board votes the ten-minute 200 EMA as "10m trend" and the daily 200 EMA as "Daily 200", and the Scanner's 200 column shows each name's side of its own. The page shows one desk at a time behind a Futures / Stocks & options switch, the same switch Analysis wears. Sessions: the same four boxes with countdowns, each on the reader's own clock too, the phase headline, the next box boundary, NYSE holidays and half days.
 - Scanner (tab "scanner") — the break-and-retest scanner on 10-minute bars across the watchlist. Score: a heuristic rank built from structure (levels broken), RS, entry location, volume, the market and the sector, less fuel already used; before 09:30 the volume part is "In play" instead — the gap in daily ATRs, pre-market volume as a share of an average day, and a catalyst (earnings across the open, or headlines since the close). Setup and entry: the level to retest, or VWAP / the 8 EMA wave when price is extended, with the distance in 10-minute ATRs. RS vs SPY: today's move in the name's daily ATRs minus SPY's in its own. % change (chg_pct) is the regular session against the previous close — before 09:30 it is still YESTERDAY's move; pre/post (ext_pct) is the move outside the session against the previous close (pre-market) or today's close (after hours). Neither is a distance from a level: where price sits against PMH / PML / PDH / PDL is read from the levels and the last price. Before the open nothing has broken yet — PMH / PML are still forming, every setup is a plan, and the ranks rest on relative strength and how in play a name is, not on a confirmed break; say so when asked which setup is best. RVOL: volume to now against the same time on prior sessions. PDH / PDL / PMH / PML bars: how far price has travelled toward each level, filled once broken. Trend: ▲ above PDH and PMH, ▼ below PDL and PML, ⚠ inside. Options: IV30 against RV20 read as cheap, fair or rich. The Options view adds IV rank, the expected move from the front and weekly straddles, 25-delta skew, liquidity, flow (put/call volume), the suggested 0.60-delta contract and its debit spread, and the premium at risk per contract to the stock stop. In the regular session prices are seconds old, signals land just after each 10-minute bar closes, and a contract marked "est" is its fifteen-minute-delayed quote moved through delta and gamma to the live stock price. The detail pane shows the selected name's chart, its setup, why it ranks where it does, its signals and its options. The Signal log keeps every signal and its outcome in R.
 - Analysis (tab "report" on its futures half, "plan" on its stocks & options half) — the written read, behind one switch. Futures: the AI pre-session brief for Asia, London or New York and NQ, ES or GC: the thesis, a call per book with its conviction and the price that makes it wrong, the snapshot, a level ladder per book, the dealer-gamma read, catalysts, the read per book, rotation and the headlines that move price; the engine computes every table and the model writes around them. Stocks & options: the AI pre-open game plan for the top scanner names: the regime, and per name what to watch, the trigger and the invalidation, with conviction capped by the tape count.
-- Hermes AI (tab "hermes") — you, on a page of your own: a chat with the whole terminal within reach.
-- Settings — the interface (Quiet or Classic), alerts, the options budget and the watchlist.
+- Hermes AI (tab "hermes") — you, on a page of your own: a chat with the whole terminal within reach — every panel above is one tool call away.
+- Settings — the interface (Quiet or Classic), alerts, the options budget and the watchlist. The reader's own alert and options settings come with the live data when the request carries them; the watchlist and the pool behind it are the Scanner's.
 
 THE STRATEGY'S MARKS
 (L) is the retest signal — price came back to a broken level and held it. (E) is the entry candle on the wave. ◆ is a breakout. PMH / PML are the pre-market high and low, final at 09:30 ET. PDH / PDL are the previous regular session's high and low. The 8 EMA wave is the band between the 8, 9 and 10 EMAs. VWAP is anchored at 09:30 ET.`;
@@ -139,8 +139,75 @@ export interface SlimContext {
   selected: Record<string, unknown> | null;
 }
 
-const TOOL_RULES = (tools: string[]) => `YOUR TOOLS
-You can ask the collector for more: ${tools.join(", ")}. THE DESK NOW below is a glance, not the data. Before answering about a name, a level, a headline, a print or a session, call the tool that holds it — scanner_row for a stock or ETF, levels for a futures book, wire for why something moved, heavyweights and event_risk for what is moving the index, earnings and calendar for what printed and what is scheduled, note for the latest brief or plan, bars for the chart. One or two calls are usually enough; call digest only when a question spans a whole desk. Quote figures from what the tools return, never from memory. A follow-up question leans on earlier turns — re-read what it needs through the tools, because an earlier answer's figures are not data. If a tool returns an error, say what is missing rather than guessing.`;
+/**
+ * The tool rules, for the tool set this question was handed.
+ *
+ * A QUESTION ACROSS NAMES STARTS WITH THE TABLE (owner, 2026-10-31: "fix
+ * hermes not calling the scanner tool"). Asked which names were closest to a
+ * break and which had the cleanest options read, the model read the stocks
+ * digest — whose names the cap had dropped — and told the reader the options
+ * read was out of reach, without calling scanner_row once. The table is now a
+ * tool of its own and the rule names the questions it is for; and no answer
+ * may say the terminal lacks something before the tool or panel that holds it
+ * has been asked ("make sure hermes ai has the context of the ENTIRE app").
+ */
+export const TOOL_RULES = (tools: string[]): string => {
+  const has = (n: string) => tools.includes(n);
+  const where = [
+    has("scanner") && "scanner for the Scanner table",
+    has("scanner_row") && "scanner_row for one stock or ETF in full",
+    has("bars") && "bars for its chart",
+    has("levels") && "levels for a futures book's ladder",
+    has("heavyweights") && "heavyweights and event_risk for what is moving the index",
+    has("wire") && "wire for why something moved",
+    has("earnings") && "earnings and calendar for what printed and what is scheduled",
+    has("sessions") && "sessions for the clock",
+    has("note") && "note for the latest brief or plan",
+    has("panel") &&
+      "panel for every other panel on every tab — the driver board, session ranges, value, gamma, volatility, the expiries, the COT, rates and the Fed path, the Fed diary, cross-asset, sector rotation, index movers, the catalysts, the tape count, breadth, fuel, index options, today's prints, the pool, the signal log and record, past notes and source health",
+  ].filter(Boolean);
+  return [
+    `YOUR TOOLS\nYou can ask the collector for more: ${tools.join(", ")}. THE DESK NOW below is a glance, not the data; the whole terminal — every tab, every panel, every scanner name, both latest notes — is behind these tools.`,
+    `- Before answering about a name, a level, a headline, a print, a panel or a session, call the tool that holds it: ${where.join("; ")}.`,
+    has("scanner")
+      ? "- A question across scanner names — which is closest to a break, which setup or options read is best or cleanest, the strongest or the weakest, a ranking, a comparison — starts with scanner, which carries every name's setup, entry distance, breaks, options read and earnings in one line each. Then read the one to three names you single out with scanner_row, in the same round. A table line carries no contract: for a name's suggested contract, its premium and its R, read that name's scanner_row before saying anything about them. Never answer a question about the names from the glance's top list alone."
+      : "",
+    `- Never tell the reader the terminal does not show something until you have called the tool${has("panel") ? " or the panel" : ""} that holds it. If an answer lists dropped sections${has("panel") ? " or ask_panel_for, fetch those through panel" : ", ask for them another way"} rather than going without.`,
+    `- Call several tools in one round when a question needs several. digest is a whole desk at once and large; prefer ${[has("scanner") && "scanner", has("panel") && "panel", "the narrower tools"].filter(Boolean).join(", ")}.`,
+    "- Quote figures from what the tools return, never from memory. A follow-up leans on earlier turns — re-read what it needs through the tools, because an earlier answer's figures are not data. If a tool returns an error, say what is missing rather than guessing.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+/** The reader's own settings (Settings tab, kept in their browser), as the request carries them. */
+export interface ReaderPrefs {
+  budget: number | null;
+  zeroDte: boolean;
+  alerts: { on: boolean; desktop: boolean; sound: boolean; kinds: string[]; minScore: number } | null;
+}
+
+const ALERT_KIND: Record<string, string> = {
+  L: "the (L) retest",
+  E: "the (E) entry",
+  BO: "the ◆ breakout",
+  NEAR: "90% of the way to a level",
+};
+
+/** The settings as the prompt reads them: what the Scanner's contracts and alerts are set to. */
+export function prefsBlock(p: ReaderPrefs | null | undefined): string {
+  if (!p) return "";
+  const budget = p.budget != null ? `$${p.budget} of premium at risk on one trade` : "not set, so the Scanner shows no contract count";
+  const dte = p.zeroDte ? "offered on SPY, QQQ and IWM when one is listed" : "off, so every name gets the weekly";
+  const a = p.alerts;
+  const kinds = a && a.kinds.length ? a.kinds.map((k) => ALERT_KIND[k] ?? k).join(", ") : "no signal kinds";
+  const alerts = !a
+    ? "not known"
+    : a.on
+      ? `on, for ${kinds}, ${a.minScore > 0 ? `names scoring ${a.minScore} or more` : "every score"}; sound ${a.sound ? "on" : "off"}, desktop notifications ${a.desktop ? "on" : "off"}`
+      : "off";
+  return `\nTHE READER'S SETTINGS (the Settings tab, kept in this browser)\n- Options budget: ${budget}.\n- Same-day (0DTE) contracts: ${dte}.\n- Alerts: ${alerts}.\n`;
+}
 
 /** The whole system message, for the panel beside a tab. */
 export function askSystem(ctx: AskContext, sym: string | null): string {
@@ -170,12 +237,13 @@ export function askSystem(ctx: AskContext, sym: string | null): string {
  * which; a block that is missing says so rather than disappearing, so the
  * model does not invent the desk it cannot see.
  */
-export function hermesSystem(ctx: AskContext, sym: string | null, summary = ""): string {
+export function hermesSystem(ctx: AskContext, sym: string | null, summary = "", prefs: ReaderPrefs | null = null): string {
   const from = ctx.desk === "stocks" ? "the stocks & options desk" : ctx.desk === "futures" ? "the futures desk" : "the terminal";
   const picked = sym && ctx.selected ? ` ${sym} is selected in the Scanner — "this", "it" or "the setup" may mean ${sym}.` : "";
   return [
     HERMES_RULES,
     `\nON THE READER'S SCREEN\nThey are on the Hermes AI tab, having come from ${from}.${picked}\n`,
+    prefsBlock(prefs),
     summary ? `\nEARLIER IN THIS CHAT (a summary of turns no longer shown)\n${summary}\n` : "",
     `THE PRODUCT — what every tab and panel shows\n${PRODUCT}\n`,
     gapsBlock(ctx),
@@ -207,7 +275,11 @@ It reads as a quick check, so answer it from THE DESK NOW below in a line or two
  * turns and the desk at a glance (live). A few thousand tokens where the
  * whole-terminal message was forty-seven (2026-10-30).
  */
-export function hermesSlimParts(ctx: SlimContext, sym: string | null, extras: { summary: string; tools: string[] }): { fixed: string; live: string } {
+export function hermesSlimParts(
+  ctx: SlimContext,
+  sym: string | null,
+  extras: { summary: string; tools: string[]; prefs?: ReaderPrefs | null },
+): { fixed: string; live: string } {
   const from = ctx.desk === "stocks" ? "the stocks & options desk" : ctx.desk === "futures" ? "the futures desk" : "the terminal";
   const picked = sym && ctx.selected ? ` ${sym} is selected in the Scanner — "this", "it" or "the setup" may mean ${sym}.` : "";
   const gaps = Array.isArray(ctx.slim.gaps) && ctx.slim.gaps.length ? `\nDATA GAPS RIGHT NOW\n${(ctx.slim.gaps as string[]).map((g) => `- ${g}`).join("\n")}\n` : "";
@@ -218,16 +290,17 @@ export function hermesSlimParts(ctx: SlimContext, sym: string | null, extras: { 
   ].join("");
   const live = [
     `\nON THE READER'S SCREEN\nThey are on the Hermes AI tab, having come from ${from}.${picked}\n`,
+    prefsBlock(extras.prefs),
     extras.summary ? `\nEARLIER IN THIS CHAT (a summary of turns no longer shown)\n${extras.summary}\n` : "",
     gaps,
-    block("THE DESK NOW — the glance: the clock, the strip, the driver board, event risk, the heavyweights, earnings, the top headlines, the scanner's top names and the latest notes", ctx.slim),
+    block("THE DESK NOW — the glance: the clock, the strip, the driver board, event risk, the heavyweights, earnings, the top headlines, the scanner's top names with their entry and options read, the latest notes, and any data source that is down", ctx.slim),
     ctx.selected ? block(`THE SELECTED SCANNER ROW — ${sym ?? "the selected name"}: everything its row and detail pane show`, ctx.selected) : "",
   ].join("");
   return { fixed, live };
 }
 
 /** The two parts as one message. */
-export function hermesSlimSystem(ctx: SlimContext, sym: string | null, extras: { summary: string; tools: string[] }): string {
+export function hermesSlimSystem(ctx: SlimContext, sym: string | null, extras: { summary: string; tools: string[]; prefs?: ReaderPrefs | null }): string {
   const p = hermesSlimParts(ctx, sym, extras);
   return p.fixed + p.live;
 }

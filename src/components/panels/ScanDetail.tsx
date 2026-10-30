@@ -240,6 +240,21 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
           <span className="text-ink-2"> · {r.frame_read.text}</span>
         </p>
       )}
+      {/* THE TEN-MINUTE 200 EMA (structure.py, 2026-10-30): the side filter on
+          the strategy's own timeframe. */}
+      {r.levels.ema200 != null && (
+        <p className="mt-1 text-[12px] text-ink-3">
+          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">10m</span>
+          <span className={cn((r.trend200 ?? 0) === 1 ? "text-call-fig" : (r.trend200 ?? 0) === -1 ? "text-put-fig" : "text-ink-2")}>
+            {(r.trend200 ?? 0) === 1 ? "above" : (r.trend200 ?? 0) === -1 ? "below" : "on"} the 200 EMA
+          </span>
+          <span className="text-ink-2">
+            {" "}
+            · {r.levels.ema200.toFixed(2)}
+            {r.ema200_slope ? `, ${r.ema200_slope}` : ""} — longs above it, shorts below; a retest into it tends to fail
+          </span>
+        </p>
+      )}
 
       <div className="mt-3.5">
         <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">Signals today · confirmed 10-minute bars</p>
@@ -350,6 +365,7 @@ function Ladder({ r }: { r: ScanRow }) {
   add("pdl", "PDL", L.pdl, r.broken.pdl ? "broken-lo" : "put", "previous regular-session low");
   add("vwap", "VWAP", L.vwap, "neutral", "volume-weighted average price for the session");
   add("ema8", "8 EMA", L.ema8, "neutral", "the 8 EMA on ten-minute bars");
+  add("ema200", "200 EMA", L.ema200 ?? null, "neutral", "the 200 EMA on ten-minute bars — the side filter");
   add("pdc", "Prev close", L.pdc, "neutral");
   add("dhi", "Day high", L.day_hi, "neutral", "today's regular-session high so far");
   add("dlo", "Day low", L.day_lo, "neutral", "today's regular-session low so far");

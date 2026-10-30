@@ -38,7 +38,40 @@ export function localClock(clock: Clock | null | undefined, now: number | null):
       ...m,
       in_min: Math.max(0, m.in_min - elapsedMin),
     })),
+    boxes: (clock.boxes ?? []).map((b) => ({
+      ...b,
+      next_min: Math.max(0, b.next_min - elapsedMin),
+    })),
   };
+}
+
+/**
+ * The reader's zone, and its short name — null when the reader IS on New York
+ * time (a local column would repeat the ET one) and before mount. en-AU names
+ * Australian zones the way they are said there ("AEDT").
+ */
+export function readerZone(now: number | null): { tz: string; zone: string } | null {
+  if (now === null) return null;
+  let tz: string;
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+  if (!tz || tz === "America/New_York") return null;
+  const locale = tz.startsWith("Australia/") ? "en-AU" : undefined;
+  const zone =
+    new Intl.DateTimeFormat(locale, { timeZone: tz, timeZoneName: "short" })
+      .formatToParts(new Date(now))
+      .find((p) => p.type === "timeZoneName")?.value ?? tz;
+  return { tz, zone };
+}
+
+/** "11:00–15:00" — a box's window on the reader's clock. */
+export function localWindow(opensUtc: string, closesUtc: string, tz: string): string {
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: tz });
+  return `${fmt(opensUtc)}–${fmt(closesUtc)}`;
 }
 
 /**
@@ -51,20 +84,8 @@ export function localClock(clock: Clock | null | undefined, now: number | null):
  * zone gets its locale's short name ("BST", "GMT+1").
  */
 export function readerClock(now: number | null): { time: string; zone: string } | null {
-  if (now === null) return null;
-  let tz: string;
-  try {
-    tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  } catch {
-    return null;
-  }
-  if (!tz || tz === "America/New_York") return null;
-  const d = new Date(now);
-  const locale = tz.startsWith("Australia/") ? "en-AU" : undefined;
-  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: tz });
-  const zone =
-    new Intl.DateTimeFormat(locale, { timeZone: tz, timeZoneName: "short" })
-      .formatToParts(d)
-      .find((p) => p.type === "timeZoneName")?.value ?? tz;
-  return { time, zone };
+  const z = readerZone(now);
+  if (!z || now === null) return null;
+  const time = new Date(now).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: z.tz });
+  return { time, zone: z.zone };
 }

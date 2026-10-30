@@ -16,6 +16,7 @@
  */
 
 import type { Breadth, Conviction, FedPath, Fuel, GammaEtf, Print } from "@/types/market";
+import type { NoteJob } from "@/types/terminal";
 
 export type PlanSession = "pre" | "rth" | "post" | "closed";
 
@@ -247,6 +248,8 @@ export interface PlanFeed {
   history: PlanStub[];
   /** Set by the route handler when the collector could not be reached. */
   offline?: { reason: string; api: string };
+  /** The plan being written right now, if any, or the job a poll settled. */
+  job?: NoteJob | null;
 }
 
 /** How many of the scanner's top names a plan covers. */

@@ -191,6 +191,8 @@ export function ScanChart({
           {g.ema10 && <path d={g.ema10} fill="none" stroke={g.waveHue} strokeWidth={1} opacity={0.45} />}
           {/* VWAP */}
           {g.vwap && <path d={g.vwap} fill="none" stroke="var(--ink-2)" strokeWidth={1} strokeDasharray="4 3" opacity={0.85} />}
+          {/* the 200 EMA — the side filter (structure.py, 2026-10-30); drawn where it is on the scale, labelled at the edge where it is not */}
+          {g.ema200 && <path d={g.ema200} fill="none" stroke="var(--ink-3)" strokeWidth={1.25} opacity={0.9} />}
           {/* the straddle's expected move */}
           {g.em.map((e) => (
             <line key={e.key} x1={g.x0} x2={w - PAD.right} y1={e.y} y2={e.y} stroke="var(--ink-3)" strokeWidth={1} strokeDasharray="2 3" opacity={0.9} />
@@ -288,6 +290,7 @@ interface Geo {
   ema10: string | null;
   waveHue: string;
   vwap: string | null;
+  ema200: string | null;
   levels: Array<{ key: string; y: number; hue: string; dashed: boolean; faint?: boolean }>;
   hist: Array<{
     key: string;
@@ -347,6 +350,7 @@ function geometry(
   const ema8 = sl(d.ema8);
   const ema10 = sl(d.ema10);
   const vwap = sl(d.vwap);
+  const ema200 = sl(d.ema200 ?? []);
 
   const step = plotW / Math.max(n, 1);
   const x0 = PAD.left + step / 2;
@@ -510,6 +514,12 @@ function geometry(
   const lastV = bars[n - 1].c;
   const vLast = vwap[n - 1];
   if (vLast != null) labels.push({ key: "VWAP", y: clampY(vLast), text: `VWAP ${num(vLast)}`, hue: "var(--ink-2)" });
+  // The 200 EMA never sets the scale — a name that gapped 25% would have its
+  // candles crushed into a sliver for a line a long way off. It is drawn where
+  // it falls inside the scale and labelled at the edge where it does not.
+  const e200Last = ema200[n - 1];
+  const ema200In = ema200.map((v) => (v != null && v >= lo && v <= hi ? v : null));
+  if (e200Last != null) labels.push({ key: "200", y: clampY(e200Last), text: `200 ${num(e200Last)}`, hue: "var(--ink-3)" });
   labels.push({ key: "last", y: clampY(lastV), text: num(lastV), hue: "var(--ink)", spot: true });
 
   // Push labels apart, keeping the order price gives them.
@@ -581,6 +591,7 @@ function geometry(
     ema10: line(ema10),
     waveHue,
     vwap: line(vwap),
+    ema200: line(ema200In),
     levels,
     hist,
     em,

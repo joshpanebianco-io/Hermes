@@ -45,9 +45,11 @@ export function DriverStrip({ drivers }: { drivers: Drivers | undefined }) {
               <DriverPopover
                 key={k}
                 book={b}
-                className="flex min-w-0 flex-col items-start rounded-none px-4 py-2 text-left qt:px-6 qt:py-2.5"
+                // Half a page wide since Structure split in two (2026-10-30): tighter
+                // padding, and the head wraps as a row rather than inside a figure.
+                className="flex min-w-0 flex-col items-start rounded-none px-3 py-2 text-left qt:px-4 qt:py-2.5"
               >
-                <span className="flex w-full items-baseline gap-x-2">
+                <span className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 whitespace-nowrap">
                   <span className="qt-cap text-[10px] text-ink-3">{k}</span>
                   <span className={cn("text-[14px] leading-none font-semibold", voteTone(b.bias))}>
                     {biasWord(b.bias)}

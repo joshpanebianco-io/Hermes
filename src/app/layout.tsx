@@ -34,7 +34,7 @@ const plexMono = IBM_Plex_Mono({
 });
 
 /*
- * THE TAB ICON IS THE DESKTOP ICON (owner, 2026-09-22): public/hermesx.ico,
+ * THE TAB ICON IS THE DESKTOP ICON (owner, 2026-09-22): public/hermes.ico,
  * the gradient helm on its chassis-black tile, so the tab and the shortcut
  * that opened it are one picture. It was an inline SVG before — first
  * theme-hued, then a plain black glyph (2026-09-01) — and the file wins over
@@ -45,11 +45,11 @@ const plexMono = IBM_Plex_Mono({
  * shows the old picture is the browser's favicon cache, not the file.
  */
 export const metadata: Metadata = {
-  title: "HERMESX — News Terminal",
+  title: "Hermes — News Terminal",
   description:
     "A single-desk market terminal: the wire, the board, the curve, sector rotation, " +
     "the economic calendar and borrowed gamma levels, on one session clock.",
-  icons: { icon: "/hermesx.ico" },
+  icons: { icon: "/hermes.ico" },
 };
 
 export const viewport: Viewport = {

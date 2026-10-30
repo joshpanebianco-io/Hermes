@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
  * A window event rather than a context: the panel is mounted once beside the
  * page, and the things that open it sit in different branches of the tree.
  */
-export const OPEN_ASK_EVENT = "hermesx:ask";
+export const OPEN_ASK_EVENT = "hermes:ask";
 
 export function openAsk(): void {
   window.dispatchEvent(new Event(OPEN_ASK_EVENT));

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReportAsset, ReportFeed, ReportSession } from "@/types/terminal";
+import { NO_SERVER, followJob } from "./jobs";
 import { oneOf, usePersisted } from "./usePersisted";
 
 /**
@@ -29,6 +30,13 @@ import { oneOf, usePersisted } from "./usePersisted";
  * set" and Past calls emptied to "Nothing yet" — for a generation that had
  * merely timed out. `land` keeps the report and the history the page already
  * holds and attaches the reason, which the panel prints.
+ *
+ * THE GENERATION IS A JOB, NOT A REQUEST (2026-10-27). The POST answers at
+ * once with the job the collector started, and `follow` asks after it every
+ * few seconds until it is done (src/lib/jobs.ts says why). The feed carries
+ * the running job, so a page that loads or refreshes mid-generation resumes
+ * following it, clock and all, rather than showing the old note as though
+ * nothing had been asked for.
  */
 
 /** Fold an answer into what the page holds; an offline answer only adds its reason. */
@@ -82,6 +90,8 @@ export function useReport(initial: ReportFeed | null): ReportController {
   );
   const seq = useRef(0);
   const openSeq = useRef(0);
+  /** The job being followed, so a feed that carries it is not followed twice. */
+  const following = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -97,38 +107,77 @@ export function useReport(initial: ReportFeed | null): ReportController {
     if (!initial) void refresh();
   }, [initial, refresh]);
 
+  /**
+   * Follow a job to its end and land what it wrote. `mine` is the generation
+   * number taken when the job was asked for; a newer press, or a reload that
+   * found a different job, makes this one stop quietly.
+   */
+  const follow = useCallback((id: string, mine: number) => {
+    following.current = id;
+    void (async () => {
+      const alive = () => mine === seq.current;
+      const next = await followJob<ReportFeed>(`/api/report/job/${encodeURIComponent(id)}`, alive);
+      if (!alive()) return;
+      following.current = null;
+      if (next) {
+        // Done, lost, or the proxy offline for too long: `land` keeps the
+        // page's report under an offline answer and takes the note otherwise.
+        setFeed((prev) => ({ ...land(prev, next), job: null }));
+        if (!next.offline) {
+          // The new report is what is on screen now: drop a past call that
+          // was opened while it was being written, and any open still in
+          // flight, or the highlight and the page would disagree.
+          setViewing(null);
+          openSeq.current += 1;
+        }
+      } else {
+        setFeed((prev) => prev && { ...prev, job: null, offline: { reason: NO_SERVER, api: "" } });
+      }
+      setBusy(false);
+      setStartedAt(null);
+    })();
+  }, []);
+
   const generate = useCallback(() => {
     setBusy(true);
     setStartedAt(Date.now());
     setViewing(null);
     const mine = ++seq.current;
     void (async () => {
-      try {
-        const r = await fetch(`/api/report?session=${pick}&asset=${book}`, {
-          method: "POST",
-          cache: "no-store",
-        });
-        const next = (await r.json()) as ReportFeed;
-        if (mine === seq.current) {
-          setFeed((prev) => land(prev, next));
-          if (!next.offline) {
-            // The new report is what is on screen now: drop a past call that
-            // was opened while it was being written, and any open still in
-            // flight, or the highlight and the page would disagree.
-            setViewing(null);
-            openSeq.current += 1;
-          }
-        }
-      } catch {
-        /* same */
-      } finally {
-        if (mine === seq.current) {
-          setBusy(false);
-          setStartedAt(null);
-        }
+      const next = await fetch(`/api/report?session=${pick}&asset=${book}`, {
+        method: "POST",
+        cache: "no-store",
+      })
+        .then((r) => r.json() as Promise<ReportFeed>)
+        .catch((): null => null);
+      if (mine !== seq.current) return;
+      if (next?.job) {
+        // Started — or joined, if one was already being written. The feed it
+        // rode in on is the old note plus the job; the note comes by following.
+        follow(next.job.id, mine);
+        setFeed((prev) => land(prev, next));
+        return;
       }
+      setFeed((prev) => (next ? land(prev, next) : prev && { ...prev, offline: { reason: NO_SERVER, api: "" } }));
+      setBusy(false);
+      setStartedAt(null);
     })();
-  }, [pick, book]);
+  }, [pick, book, follow]);
+
+  /*
+   * A page that loaded, refreshed or was retried while a report was being
+   * written: the feed carries the job, so pick it up — busy, with the clock
+   * from when it was actually asked for — instead of showing the old note as
+   * though nothing had been asked for.
+   */
+  const job = feed?.job;
+  useEffect(() => {
+    if (!job || job.state !== "running" || following.current === job.id) return;
+    setBusy(true);
+    setStartedAt(Date.parse(job.started_utc ?? "") || Date.now());
+    setViewing(null);
+    follow(job.id, ++seq.current);
+  }, [job, follow]);
 
   const open = useCallback((id: string) => {
     setViewing(id);

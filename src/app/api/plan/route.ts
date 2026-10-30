@@ -7,16 +7,12 @@ import { failureReason } from "@/lib/offline";
  *
  * The futures Report's arrangement exactly (see /api/report): the collector's
  * address stays server-side, a dead collector comes back as a 200 with an
- * `offline` block, and a generation is given minutes, because a free model
- * reading the scanner's top names and their option chains is not quick.
+ * `offline` block, and the POST starts a job rather than waiting on the
+ * model — the page polls /api/plan/job/[id] for the plan.
  */
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-// The report's measured ceiling: a saturated free pool walks the fallback
-// chain, and cutting a generation off at two minutes threw away answers that
-// were about to land.
-export const maxDuration = 300;
 
 const API = process.env.NT_API ?? "http://127.0.0.1:8100";
 
@@ -56,7 +52,7 @@ export async function GET() {
 export async function POST(req: Request) {
   const top = new URL(req.url).searchParams.get("top") ?? "";
   try {
-    return NextResponse.json(await call("POST", 290_000, TOPS.has(top) ? `?top=${top}` : ""));
+    return NextResponse.json(await call("POST", 15_000, TOPS.has(top) ? `?top=${top}` : ""));
   } catch (e) {
     return NextResponse.json(offline(failureReason(e)));
   }

@@ -15,7 +15,13 @@ import type { MarketCtx } from "@/types/market";
 
 const POLL_SEC = 20;
 
-export function useMarket(): { ctx: MarketCtx | null; failed: string | null } {
+/** What the hook hands out: the context, or why there is none yet. */
+export interface MarketFeed {
+  ctx: MarketCtx | null;
+  failed: string | null;
+}
+
+export function useMarket(): MarketFeed {
   const [ctx, setCtx] = useState<MarketCtx | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const seq = useRef(0);

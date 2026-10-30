@@ -1,5 +1,5 @@
 /**
- * The HERMESX mark: the owner's own winged-helm line art, traced to vector.
+ * The HERMES mark: the owner's own winged-helm line art, traced to vector.
  *
  * PROVENANCE. The owner supplied the art as a PNG (white line work on a baked
  * checkerboard) and asked for it verbatim. It was thresholded on luminance,

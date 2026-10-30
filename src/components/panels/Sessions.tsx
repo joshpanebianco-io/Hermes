@@ -3,7 +3,7 @@
 import type { Clock } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { inMin } from "@/lib/format";
-import { localClock } from "@/lib/clock";
+import { localClock, localWindow, readerZone } from "@/lib/clock";
 import { useNow } from "@/lib/useNow";
 import { cn } from "@/lib/cn";
 
@@ -20,12 +20,23 @@ import { cn } from "@/lib/cn";
  * to 11:30 ET, both of the two deepest pools at once, and that is where the
  * day's range is usually set. It is not derivable at a glance from two rows of
  * open/closed, so it is stated.
+ *
+ * THE ROWS ARE THE FOUR BOXES (owner, 2026-10-30: "make the sessions section
+ * accordingly" — the session ranges' Asia, London, pre-market and New York).
+ * They were seven cities with local times; the boxes are what the desk
+ * actually trades by, and the ranges panel beside this one draws the same
+ * four, so the two read as one thing. Each row carries its ET window, the
+ * same window on the reader's own clock (the owner trades New York from
+ * Australia, and "20:00 ET" is a sum they should not have to do), and how
+ * long until it opens or closes. The cities stay in the data for the header's
+ * New York countdown and for Hermes.
  */
 export function Sessions({ clock: rawClock }: { clock: Clock }) {
   // Its own second hand: the countdowns move every second, the shell does not.
   const now = useNow(1000);
   const clock = localClock(rawClock, now) ?? rawClock;
   const next = clock.markers?.[0];
+  const zone = readerZone(now);
 
   return (
     <Module title="Sessions" sub={clock.et_date} bodyClassName="px-0 py-0">
@@ -47,34 +58,32 @@ export function Sessions({ clock: rawClock }: { clock: Clock }) {
         <div className="text-[10px] text-ink-3">{clock.phase.note}</div>
       </div>
 
-      {/* ---- the cities -------------------------------------------------- */}
-      <ul className="py-0.5">
-        {clock.sessions.map((s) => (
-          <li key={s.key} className="hit flex items-center gap-2 px-3 py-[3px]">
+      {/* ---- the boxes --------------------------------------------------- */}
+      <ul className="@container py-0.5">
+        {(clock.boxes ?? []).map((b) => (
+          <li
+            key={b.key}
+            className="hit flex items-center gap-2 px-3 py-[3px]"
+            title={`${b.label} · ${b.start_et}–${b.end_et} ET${zone ? ` · ${localWindow(b.opens_utc, b.closes_utc, zone.tz)} ${zone.zone}` : ""} · ${
+              b.open ? `open, closes in ${inMin(b.next_min)}` : `opens in ${inMin(b.next_min)}`
+            }`}
+          >
             <span
-              className={cn(
-                "h-[6px] w-[6px] shrink-0 rounded-full",
-                s.open ? "bg-call live-dot" : "bg-ink-4/50",
-              )}
+              className={cn("h-[6px] w-[6px] shrink-0 rounded-full", b.open ? "bg-call live-dot" : "bg-ink-4/50")}
               aria-hidden
             />
-            <span
-              className={cn(
-                "w-[74px] shrink-0 text-[11px]",
-                s.open ? "text-ink" : "text-ink-3",
-              )}
-            >
-              {s.label}
+            <span className={cn("w-[74px] shrink-0 text-[11px]", b.open ? "text-ink" : "text-ink-3")}>{b.label}</span>
+            <span className="fig shrink-0 text-[10px] text-ink-3">
+              {b.start_et}–{b.end_et} <span className="eyebrow text-[8px]">ET</span>
             </span>
-            <span className="fig w-[42px] shrink-0 text-[10.5px] text-ink-3">{s.local_time}</span>
-            <span className="flex-1 truncate text-[9.5px] text-ink-3">{s.hours}</span>
-            <span
-              className={cn(
-                "fig shrink-0 text-right text-[10px]",
-                s.open ? "text-ink-3" : "text-ink-4",
-              )}
-            >
-              {s.weekend ? "weekend" : `${s.next === "opens" ? "in" : "for"} ${inMin(s.next_min)}`}
+            {/* The reader's own clock, when it is not New York's — hidden in a
+                column too narrow to carry it, where the hover still has it. */}
+            <span className="fig hidden min-w-0 flex-1 truncate text-[10px] text-ink-4 @min-[340px]:block">
+              {zone ? `${localWindow(b.opens_utc, b.closes_utc, zone.tz)} ${zone.zone}` : ""}
+            </span>
+            <span className="flex-1 @min-[340px]:hidden" />
+            <span className={cn("fig shrink-0 text-right text-[10px]", b.open ? "text-ink-3" : "text-ink-4")}>
+              {b.next === "opens" ? "in" : "for"} {inMin(b.next_min)}
             </span>
           </li>
         ))}

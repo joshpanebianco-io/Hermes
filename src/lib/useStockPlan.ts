@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlanFeed, PlanTop } from "@/types/plan";
+import { NO_SERVER, followJob } from "./jobs";
 import { usePersisted } from "./usePersisted";
 
 /**
@@ -10,7 +11,9 @@ import { usePersisted } from "./usePersisted";
  * panel, so leaving the tab while a plan is being written does not abandon
  * it; `seq` lets only the newest generation land and `openSeq` only the newest
  * reopen; and an offline answer is folded into what the page already holds
- * rather than wiping the plan and the history under a "no key" screen.
+ * rather than wiping the plan and the history under a "no key" screen. And,
+ * as there, the generation is a job the POST starts and `follow` polls
+ * (src/lib/jobs.ts), picked back up by a page that loads mid-generation.
  */
 
 function land(prev: PlanFeed | null, next: PlanFeed): PlanFeed {
@@ -43,6 +46,7 @@ export function useStockPlan(initial: PlanFeed | null = null): PlanController {
   const [top, setTop] = usePersisted<PlanTop>("plan.top", 6, isTop);
   const seq = useRef(0);
   const openSeq = useRef(0);
+  const following = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -58,32 +62,56 @@ export function useStockPlan(initial: PlanFeed | null = null): PlanController {
     if (!initial) void refresh();
   }, [initial, refresh]);
 
+  const follow = useCallback((id: string, mine: number) => {
+    following.current = id;
+    void (async () => {
+      const alive = () => mine === seq.current;
+      const next = await followJob<PlanFeed>(`/api/plan/job/${encodeURIComponent(id)}`, alive);
+      if (!alive()) return;
+      following.current = null;
+      if (next) {
+        setFeed((prev) => ({ ...land(prev, next), job: null }));
+        if (!next.offline) {
+          setViewing(null);
+          openSeq.current += 1;
+        }
+      } else {
+        setFeed((prev) => prev && { ...prev, job: null, offline: { reason: NO_SERVER, api: "" } });
+      }
+      setBusy(false);
+      setStartedAt(null);
+    })();
+  }, []);
+
   const generate = useCallback(() => {
     setBusy(true);
     setStartedAt(Date.now());
     setViewing(null);
     const mine = ++seq.current;
     void (async () => {
-      try {
-        const r = await fetch(`/api/plan?top=${top}`, { method: "POST", cache: "no-store" });
-        const next = (await r.json()) as PlanFeed;
-        if (mine === seq.current) {
-          setFeed((prev) => land(prev, next));
-          if (!next.offline) {
-            setViewing(null);
-            openSeq.current += 1;
-          }
-        }
-      } catch {
-        /* same */
-      } finally {
-        if (mine === seq.current) {
-          setBusy(false);
-          setStartedAt(null);
-        }
+      const next = await fetch(`/api/plan?top=${top}`, { method: "POST", cache: "no-store" })
+        .then((r) => r.json() as Promise<PlanFeed>)
+        .catch((): null => null);
+      if (mine !== seq.current) return;
+      if (next?.job) {
+        follow(next.job.id, mine);
+        setFeed((prev) => land(prev, next));
+        return;
       }
+      setFeed((prev) => (next ? land(prev, next) : prev && { ...prev, offline: { reason: NO_SERVER, api: "" } }));
+      setBusy(false);
+      setStartedAt(null);
     })();
-  }, [top]);
+  }, [top, follow]);
+
+  const job = feed?.job;
+  useEffect(() => {
+    if (!job || job.state !== "running" || following.current === job.id) return;
+    setBusy(true);
+    setStartedAt(Date.parse(job.started_utc ?? "") || Date.now());
+    setViewing(null);
+    follow(job.id, ++seq.current);
+  }, [job, follow]);
 
   const open = useCallback((id: string) => {
     setViewing(id);

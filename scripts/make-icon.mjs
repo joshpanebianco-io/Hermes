@@ -1,5 +1,5 @@
 /**
- * Render the HERMESX mark to a Windows icon: public/hermesx.ico.
+ * Render the HERMES mark to a Windows icon: public/hermes.ico.
  *
  * WHY THIS EXISTS. There is no logo file in this repo: the header's Mark draws
  * the trace in HERMES_MARK_D straight from CSS tokens. A desktop shortcut needs
@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const out = join(root, "public", "hermesx.ico");
+const out = join(root, "public", "hermes.ico");
 
 /**
  * The trace, read out of the TypeScript module rather than duplicated. It is a

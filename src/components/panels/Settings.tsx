@@ -54,7 +54,7 @@ const CHROME_SLOTS: { key: keyof ThemeChoice; label: string; hint: string }[] = 
   { key: "tabs", label: "Tab underline", hint: "The active tab marker" },
   { key: "iconA", label: "Mark ring A", hint: "The larger ring of the logo" },
   { key: "iconB", label: "Mark ring B", hint: "The smaller ring" },
-  { key: "titleA", label: "Wordmark A", hint: "Left end of the HERMESX gradient" },
+  { key: "titleA", label: "Wordmark A", hint: "Left end of the HERMES gradient" },
   { key: "titleB", label: "Wordmark B", hint: "Right end of it" },
   // These described a hairline across the top edge, which no longer exists —
   // it was deleted when the frame effects arrived, because a static light and
@@ -563,8 +563,8 @@ function OptionsPrefsModule() {
 /* ---------------------------------------------------------------- keyboard */
 
 const KEYS: { keys: string[]; what: string }[] = [
-  { keys: ["1", "2", "3", "4"], what: "The current desk's tabs, in the order the header shows them" },
-  { keys: ["D"], what: "Switch desk — Futures and Stocks & Options — back to the tab you left" },
+  { keys: ["1", "2", "3", "4", "5", "6"], what: "The tabs, in the order the header shows them" },
+  { keys: ["D"], what: "Flip the desk — Futures or Stocks & options — on Structure and Analysis" },
   { keys: ["↑", "↓"], what: "Scanner: walk the list, the selection and the detail pane moving together" },
   { keys: ["Enter"], what: "Scanner: open the focused row" },
 ];

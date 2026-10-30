@@ -4,28 +4,17 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { CalendarRow, ReportFeed, Terminal as TerminalData } from "@/types/terminal";
 import { Header } from "@/components/shell/Header";
 import { StatusRail } from "@/components/shell/StatusRail";
-import { Wire } from "@/components/panels/Wire";
-import { Board } from "@/components/panels/Board";
-import { Gamma } from "@/components/panels/Gamma";
-import { Rates } from "@/components/panels/Rates";
-import { Rotation } from "@/components/panels/Rotation";
-import { Calendar } from "@/components/panels/Calendar";
-import { Sessions } from "@/components/panels/Sessions";
-import { Report } from "@/components/panels/Report";
 import { Scanner } from "@/components/panels/Scanner";
-import { StockPlan } from "@/components/panels/StockPlan";
-import { MarketBoard } from "@/components/MarketBoard";
 import { Settings } from "@/components/panels/Settings";
-import { SessionRanges } from "@/components/panels/SessionRanges";
-import { Earnings } from "@/components/panels/Earnings";
-import { Movers } from "@/components/panels/Movers";
-import { Volatility } from "@/components/panels/Volatility";
-import { VolumeProfile } from "@/components/panels/VolumeProfile";
-import { Fed } from "@/components/panels/Fed";
+import { Analysis } from "@/components/panels/Analysis";
+import { MacroBoard } from "@/components/MacroBoard";
+import { StructureBoard } from "@/components/StructureBoard";
 import { AlertStrip } from "@/components/shell/AlertStrip";
-import { DriverStrip } from "@/components/shell/DriverStrip";
 import { ScanAlerts } from "@/components/shell/ScanAlerts";
 import { AskPanel } from "@/components/ask/AskPanel";
+import { HermesTab } from "@/components/hermes/HermesTab";
+import { useHermes } from "@/lib/hermes/useHermes";
+import { useMarket } from "@/lib/useMarket";
 import { openAsk } from "@/lib/ask/open";
 import { DEFAULT_THEME, type ThemeChoice } from "@/lib/theme";
 import { DEFAULT_UI, type UiMode } from "@/lib/ui";
@@ -36,10 +25,9 @@ import { useReport } from "@/lib/useReport";
 import { useStockPlan } from "@/lib/useStockPlan";
 import { useFrameLight, type FrameFx } from "@/lib/useFrameLight";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
-import { DESK_HOME, TAB_KEYS, deskOf, isDesk, pageTitle, tabsFor, type Desk, type Tab } from "@/lib/tabs";
+import { DESK_TABS, TABS, TAB_KEYS, askTab, isDesk, pageTitle, type Desk, type Tab } from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
 import { shareUnchanged } from "@/lib/share";
-import { ageStep } from "@/lib/format";
 
 /**
  * The terminal.
@@ -82,25 +70,8 @@ const POLL_TIMEOUT_MS = 15_000;
  * rounded to what the chip prints (`ageStep`) — so a twenty-second poll
  * re-renders the board, not the calendar that refreshes every ten minutes.
  */
-const MSessionRanges = memo(SessionRanges);
-const MVolumeProfile = memo(VolumeProfile);
-const MGamma = memo(Gamma);
-const MVolatility = memo(Volatility);
-const MRates = memo(Rates);
-const MSessions = memo(Sessions);
-const MWire = memo(Wire);
-const MBoard = memo(Board);
-const MCalendar = memo(Calendar);
-const MMovers = memo(Movers);
-const MRotation = memo(Rotation);
-const MFed = memo(Fed);
-const MEarnings = memo(Earnings);
 const MStatusRail = memo(StatusRail);
 
-// Hoisted: an array literal in JSX is a new prop every render and would defeat
-// the memo above.
-const BOOK_GROUPS: React.ComponentProps<typeof Board>["groups"] = ["core"];
-const MACRO_GROUPS: React.ComponentProps<typeof Board>["groups"] = ["vol", "energy", "rates", "fx", "metals", "global", "crypto"];
 
 export function Terminal({
   initial,
@@ -109,6 +80,7 @@ export function Terminal({
   initialTabPinned,
   initialTheme = DEFAULT_THEME,
   initialUi = DEFAULT_UI,
+  initialDesk,
 }: {
   initial: TerminalData;
   initialReport: ReportFeed | null;
@@ -117,6 +89,8 @@ export function Terminal({
   initialTabPinned?: boolean;
   initialTheme?: ThemeChoice;
   initialUi?: UiMode;
+  /** The Analysis half the URL named (`?desk=`, or an old `?tab=report` / `plan` link); unset, the remembered one. */
+  initialDesk?: Desk;
 }) {
   // Held here rather than in Settings so the tab can be left and returned to
   // without the picker forgetting what is selected. The cookie is the durable
@@ -134,6 +108,13 @@ export function Terminal({
   const report = useReport(initialReport);
   // The Game plan's state, owned here for the same reason as the report's.
   const plan = useStockPlan(null);
+  // The Hermes tab's chats and its stream, owned here so an answer being
+  // written survives a tab switch (useHermes).
+  const hermes = useHermes();
+  // The stocks desk's market context, polled here rather than by the boards
+  // that read it, so switching between Macro and Structure does not start it
+  // over — and the boards' one loader (lib/ready.ts) does not show twice.
+  const market = useMarket();
 
   /*
    * The chassis light. Held here because the frame it draws on lives here, and
@@ -173,15 +154,18 @@ export function Terminal({
   }, [storedTab]);
 
   /*
-   * THE DESK IS THE TAB'S, except on Settings, which belongs to both — there
-   * the desk you came from stays, so the header keeps its strip and its tabs.
-   * Each desk remembers its own last tab, so the switch returns you to the
-   * Scanner you left rather than to the desk's front page.
+   * THE DESK IS THE ANALYSIS TAB'S QUESTION, nothing else's (owner,
+   * 2026-10-30 — see lib/tabs.ts). It is the half of that tab you last read,
+   * remembered; a link may name it (`?desk=`), and an old link to the report
+   * or the plan names it by implication (lib/tabs.ts resolveTab) — either
+   * wins over what is remembered, written through so the next load agrees.
    */
-  const [savedDesk, setSavedDesk] = usePersisted<Desk>("desk", deskOf(initialTab) ?? "futures", isDesk);
-  const desk: Desk = deskOf(tab) ?? savedDesk;
-  const [lastFutures, setLastFutures] = usePersisted<Tab>("tab.futures", DESK_HOME.futures, oneOf("terminal", "report"));
-  const [lastStocks, setLastStocks] = usePersisted<Tab>("tab.stocks", DESK_HOME.stocks, oneOf("market", "scanner", "plan"));
+  const [desk, setDeskState] = usePersisted<Desk>("desk", initialDesk ?? "futures", isDesk);
+  useEffect(() => {
+    if (initialDesk) setDeskState(initialDesk);
+    // The URL's say, once, after storage has had its turn (usePersisted).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /*
    * The tab is written to the URL with replaceState rather than a navigation.
@@ -192,29 +176,35 @@ export function Terminal({
   const setTab = useCallback((t: Tab) => {
     setTabState(t);
     setStoredTab(t);
-    const d = deskOf(t);
-    if (d) {
-      setSavedDesk(d);
-      if (d === "futures") setLastFutures(t);
-      else setLastStocks(t);
-    }
     urlPinned.current = false;
     if (typeof window !== "undefined") {
       const u = new URL(window.location.href);
       if (t === "terminal") u.searchParams.delete("tab");
       else u.searchParams.set("tab", t);
+      u.searchParams.delete("desk");
       window.history.replaceState(null, "", u);
     }
-  }, [setStoredTab, setSavedDesk, setLastFutures, setLastStocks]);
+  }, [setStoredTab]);
 
-  const switchDesk = useCallback(
-    (d: Desk) => setTab(d === "futures" ? lastFutures : lastStocks),
-    [setTab, lastFutures, lastStocks],
-  );
+  /**
+   * The desk — the brief or the plan on Analysis, the futures or the stocks
+   * half of Structure — one remembered choice for both tabs, and named in
+   * the URL while a tab that wears the switch is open.
+   */
+  const setDesk = useCallback((d: Desk) => {
+    setDeskState(d);
+    if (typeof window !== "undefined") {
+      const u = new URL(window.location.href);
+      if (!DESK_TABS.has(tab)) u.searchParams.set("tab", "analysis");
+      u.searchParams.set("desk", d);
+      window.history.replaceState(null, "", u);
+    }
+  }, [setDeskState, tab]);
 
   /*
-   * THE KEYBOARD. 1–4 reach the current desk's tabs in bar order (Settings
-   * last), D flips the desk, A opens Hermes. Never while typing — the
+   * THE KEYBOARD. 1–6 reach the tabs in bar order, D flips the desk — in place
+   * on Structure and Analysis, and from any other tab it goes to Analysis —
+   * A opens Hermes. Never while typing — the
    * watchlist editor, the inputs and Hermes's own box own their keys — and
    * never with a modifier held, so the browser's own shortcuts are untouched.
    */
@@ -225,7 +215,8 @@ export function Terminal({
       if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
       if (e.key === "d" || e.key === "D") {
         e.preventDefault();
-        switchDesk(desk === "futures" ? "stocks" : "futures");
+        if (!DESK_TABS.has(tab)) setTab("analysis");
+        setDesk(desk === "futures" ? "stocks" : "futures");
         return;
       }
       // A — ask Hermes; again to put it away.
@@ -236,7 +227,7 @@ export function Terminal({
       }
       const n = Number(e.key);
       if (Number.isInteger(n) && n >= 1) {
-        const t = tabsFor(desk)[n - 1];
+        const t = TABS[n - 1];
         if (t) {
           e.preventDefault();
           setTab(t.key);
@@ -245,9 +236,9 @@ export function Terminal({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [desk, setTab, switchDesk]);
+  }, [desk, tab, setTab, setDesk]);
 
-  // The browser tab says where you are: "HERMESX · Stocks & Options · Scanner".
+  // The browser tab says where you are: "HERMES · Structure", "HERMES · Analysis · Futures".
   useEffect(() => {
     document.title = pageTitle(tab, desk);
   }, [tab, desk]);
@@ -298,7 +289,6 @@ export function Terminal({
 
   const st = data.status ?? {};
   const raw = data.age_min ?? {};
-  const age = (k: string) => ageStep(raw[k]) ?? undefined;
 
   return (
     <UiProvider value={ui}>
@@ -330,15 +320,14 @@ export function Terminal({
           onRefresh={load}
           tab={tab}
           onTab={setTab}
-          desk={desk}
-          onDesk={switchDesk}
         />
 
         <AlertStrip items={data.wire ?? NONE} />
         {/* Raises the scanner's alerts on every tab — see the file. */}
         <ScanAlerts />
-        {/* The assistant, mounted once; the rail's key and A open it. */}
-        <AskPanel tab={tab} />
+        {/* The assistant, mounted once; the rail's key and A open it. It is
+            told the tab as the collector names it — Analysis as its half. */}
+        <AskPanel tab={askTab(tab, desk)} />
 
         {lost && !data.offline && (
           <div className="border-b border-warn/40 bg-warn/10 px-3 py-2 text-[11px] text-warn">
@@ -357,162 +346,18 @@ export function Terminal({
           </div>
         )}
 
-        {/* The driver board (drivers.py), on the futures Terminal only: the
-            stocks desk has its tape conviction on the Market tab. */}
-        {tab === "terminal" && <DriverStrip drivers={data.drivers} />}
-
         {tab === "settings" ? (
           <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
-        ) : tab === "report" ? (
-          <Report {...report} />
+        ) : tab === "hermes" ? (
+          <HermesTab hermes={hermes} desk={desk} />
+        ) : tab === "analysis" ? (
+          <Analysis desk={desk} onDesk={setDesk} report={report} plan={plan} />
         ) : tab === "scanner" ? (
           <ScannerTab calendar={data.calendar ?? NONE} />
-        ) : tab === "plan" ? (
-          <StockPlan {...plan} />
-        ) : tab === "market" ? (
-          <MarketBoard data={data} />
+        ) : tab === "structure" ? (
+          <StructureBoard data={data} market={market} desk={desk} onDesk={setDesk} />
         ) : (
-        <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
-          {/* ---- left: the context the news is read against ------------- */}
-          <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-            {/*
-             * ORDERED BY WHAT YOU ACT ON, not by what orients you. The two
-             * panels you trade against lead: where price sits inside each
-             * session's range is the handover read this terminal exists for,
-             * and the seven gamma levels are the prices you place orders at.
-             *
-             * The vol term structure is fourth because it is the regime read
-             * that frames the three above it — contango or backwardation says
-             * whether a wall is likely to hold — and it reprices every twenty
-             * seconds. Rates follows DESPITE being an explicit requirement,
-             * because it is the only panel here whose data is daily: the curve
-             * stamps a date, not a time, and cannot move during a session.
-             *
-             * The session clock is LAST, moved down from third (owner,
-             * 2026-09-16: most important at the top, descending). The header
-             * already carries the ET time and the phase ("NY midday"); what
-             * this panel uniquely adds is the city table and the NEXT marker —
-             * reference you consult, not a figure you act on. Ordering by how
-             * often something can change you is the only ordering that
-             * survives contact with a fold, and a clock never changes you.
-             */}
-            <MSessionRanges
-              assets={data.ranges?.assets ?? EMPTY}
-              expiry={data.expiry}
-              ageMin={age("ranges")}
-              error={st.ranges?.ok === false ? st.ranges.error : null}
-            />
-            <MVolumeProfile
-              data={data.profiles}
-              ageMin={age("profiles")}
-              error={st.profiles?.ok === false ? st.profiles.error : null}
-            />
-            <MGamma
-              assets={data.gex?.assets ?? EMPTY}
-              enabled={data.gex?.enabled ?? false}
-              ageMin={age("gex")}
-              error={st.gex?.ok === false ? st.gex.error : null}
-              implied={data.volterm?.books}
-              expiry={data.expiry}
-            />
-            <MVolatility vol={data.volterm} ageMin={age("quotes")} implied putcall={data.putcall} />
-            <MRates
-              rates={data.rates}
-              pm={data.policy_meetings}
-              ageMin={age("rates")}
-              error={st.rates?.ok === false ? st.rates.error : null}
-            />
-            {data.clock && <MSessions clock={data.clock} />}
-          </div>
-
-          {/* ---- middle: the wire --------------------------------------- */}
-          <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2">
-            <MWire
-              items={data.wire ?? NONE}
-              ageMin={age("wire")}
-              error={st.wire?.ok === false ? st.wire.error : null}
-            />
-          </div>
-
-          {/* ---- right: prices and rotation ----------------------------- */}
-          <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-            <MBoard
-              title="The book"
-              quotes={data.quotes ?? NONE}
-              groups={BOOK_GROUPS}
-              ageMin={age("quotes")}
-              error={st.quotes?.ok === false ? st.quotes.error : null}
-            />
-            <MCalendar
-              rows={data.calendar ?? NONE}
-              ageMin={age("calendar")}
-              error={st.calendar?.ok === false ? st.calendar.error : null}
-            />
-            <MMovers
-              indices={data.constituents?.indices ?? EMPTY}
-              ageMin={age("constituents")}
-              error={st.constituents?.ok === false ? st.constituents.error : null}
-            />
-            {/*
-             * THE BOOK, THEN THE MACRO, THEN WHAT THE MACRO DID TO THE BOOK,
-             * then the diaries. Reordered 2026-09-16 on the owner's principle
-             * that importance descends down the column, and their view that
-             * macro is what moves these books.
-             *
-             * The CALENDAR is second because it is where macro lives on this
-             * screen: the print that just landed and its surprise are the most
-             * important fact on a data day, and on a quiet day the calendar is
-             * what says it is quiet — which is itself the frame. It used to sit
-             * fourth, behind Movers and Rotation, on the grounds that a
-             * 221-row list buried everything below it; it is now capped at
-             * 340px with its own scroll, so that objection no longer holds.
-             * Movers and Rotation follow as the CONSEQUENCES of the macro —
-             * which names and which sectors carried the move — not its causes.
-             *
-             * The MACRO BOARD moved up from last, where it sat below three
-             * diaries in a column whose own rule was "live state above what is
-             * scheduled": it is live prices. It stays below the panels above it
-             * only because the header strip already carries its headline rows
-             * (VIX, US10Y, DXY, WTI). Fed and Earnings are diaries, and go last.
-             */}
-            <MRotation
-              rows={data.sectors ?? NONE}
-              ageMin={age("sectors")}
-              error={st.sectors?.ok === false ? st.sectors.error : null}
-            />
-            <MBoard
-              title="Macro board"
-              quotes={data.quotes ?? NONE}
-              groups={MACRO_GROUPS}
-              ageMin={age("quotes")}
-            />
-            <MFed
-              rows={data.fed ?? NONE}
-              auctions={data.auctions ?? NONE}
-              today={data.expiry?.today ?? ""}
-              ageMin={
-                raw.fed == null
-                  ? age("auctions")
-                  : raw.auctions == null
-                    ? age("fed")
-                    : (ageStep(Math.max(raw.fed, raw.auctions)) ?? undefined)
-              }
-              error={
-                st.fed?.ok === false
-                  ? st.fed.error
-                  : st.auctions?.ok === false
-                    ? st.auctions.error
-                    : null
-              }
-            />
-            <MEarnings
-              rows={data.earnings ?? NONE}
-              today={data.expiry?.today ?? ""}
-              ageMin={age("earnings")}
-              error={st.earnings?.ok === false ? st.earnings.error : null}
-            />
-          </div>
-        </main>
+          <MacroBoard data={data} market={market} />
         )}
 
         <MStatusRail status={st} ages={raw} pollSec={POLL_SEC} lastPoll={lastPoll} />
@@ -528,7 +373,6 @@ export function Terminal({
  * block is the same prop every render rather than a fresh `[]` or `{}`.
  */
 const NONE: never[] = [];
-const EMPTY = {} as Record<string, never>;
 
 /**
  * The Scanner with its own thirty-second clock for the headline ages — the

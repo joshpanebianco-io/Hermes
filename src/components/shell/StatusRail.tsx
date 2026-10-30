@@ -39,7 +39,7 @@ import { cn } from "@/lib/cn";
 const ORDER = [
   "quotes", "wire", "gex", "ranges", "profiles", "sectors", "constituents", "calendar",
   "earnings", "fed", "auctions", "rates", "context", "scanner", "scan_live", "scan_news", "scan_sec",
-  "options",
+  "pool", "options",
 ];
 
 export function StatusRail({

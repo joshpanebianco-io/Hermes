@@ -1,5 +1,5 @@
 {
-  "name": "hermesx",
+  "name": "hermes",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,6 +9,7 @@
     "prod": "set NT_DIST=.next-prod&& next build && next start -p 3100 -H 127.0.0.1",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "py:lint": "node scripts/py.mjs ruff check .",
     "py:types": "node scripts/py.mjs mypy",
     "icon": "node scripts/make-icon.mjs",

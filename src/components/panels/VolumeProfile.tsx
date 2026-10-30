@@ -1,6 +1,6 @@
 "use client";
 
-import type { VPAssets } from "@/types/terminal";
+import type { VPAssets, BriefLadder } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
@@ -34,10 +34,13 @@ import { ProfilePopover } from "@/components/vol/ProfileRead";
 
 export function VolumeProfile({
   data,
+  ladders,
   ageMin,
   error,
 }: {
   data: VPAssets;
+  /** The live ladders, for yesterday's shape under this book's rows (structure.yesterday). */
+  ladders?: Record<string, BriefLadder | null>;
   ageMin?: number | null;
   error?: string | null;
 }) {
@@ -45,6 +48,7 @@ export function VolumeProfile({
   const keys = Object.keys(assets);
   const [sel, setSel] = usePersisted<string>("vp.asset", "NQ", oneOf("NQ", "ES", "GC"));
   const active = assets[sel] ?? assets[keys[0]];
+  const yesterday = ladders?.[assets[sel] ? sel : keys[0]]?.yesterday ?? null;
 
   return (
     <Module
@@ -110,6 +114,15 @@ export function VolumeProfile({
               <Row key={r.key} r={r} last={active.last ?? null} />
             ))}
           </ul>
+          {/* YESTERDAY'S SHAPE (structure.yesterday, 2026-10-30): a trend day
+              that closed on its low and a range day leave the same value area
+              and are not the same handover. */}
+          {yesterday && (
+            <p className="border-t border-ring/40 px-3 py-1.5 text-[10.5px] leading-[1.45]" title="The prior cash session: its shape against the 14-day ATR, where it closed in its range, and the gap at the 18:00 reopen">
+              <span className="qt-cap mr-1.5 text-[10px] text-ink-3">Yesterday</span>
+              <span className="fig text-ink-2">{yesterday.text}</span>
+            </p>
+          )}
           {/* THE READ, in the collector's words (profile.reads): where the
               session opened against prior value and where price trades now.
               It used to reach the brief and never the panel. The sentence is

@@ -4,7 +4,7 @@ import { PaneLoader } from "@/components/ui/HelmLoader";
 
 /**
  * A pane's first-load state. It was a shimmer of grey rows; it is now the
- * HERMESX helm with its animation (owner, 2026-10-14: "everywhere there is a
+ * HERMES helm with its animation (owner, 2026-10-14: "everywhere there is a
  * loading, it should be the hermex helmet logo"), centred in about the height
  * the rows took so the pane does not jump when the answer lands. The name and
  * props stay, so every panel that used it changed with this one file.

@@ -114,6 +114,9 @@ export function ScanTable({
               <Th k="trend" {...th} center title="▲ above PDH and PMH · ▼ below PDL and PML · ⚠ inside the levels — the Pine's trend column">
                 Trend
               </Th>
+              <Th center title="▲ above · ▼ below the 200 EMA on ten-minute bars — the side filter: longs above it, shorts below, a retest into it tends to fail">
+                200
+              </Th>
               <Th k="ivrv" {...th} right title="Implied volatility against 20-day realised: whether premium is cheap, fair or rich">
                 Options
               </Th>
@@ -290,6 +293,14 @@ function Row({
             {r.sym}
           </span>
           {r.sector && <span className="qt-cap text-[9.5px] text-ink-3">{r.sector}</span>}
+          {r.promoted && (
+            <span
+              className="qt-cap text-[9.5px] text-flip-fig"
+              title={`From the pool at ${r.promoted.mark} ET — ${r.promoted.reason}`}
+            >
+              pool
+            </span>
+          )}
         </div>
       </td>
     </>
@@ -417,6 +428,9 @@ function Row({
       </td>
       <td className={cn(TD, "text-center")}>
         <Trend t={r.trend} />
+      </td>
+      <td className={cn(TD, "text-center")}>
+        <Trend200 r={r} />
       </td>
       <td className={cn(TD, "text-right whitespace-nowrap")}>
         {o && o.ok && o.iv30 != null ? (
@@ -641,6 +655,20 @@ function Trend({ t }: { t: -1 | 0 | 1 }) {
   return (
     <span title={tip} className={cn("text-[12px]", t === 1 ? "text-call-fig" : t === -1 ? "text-put-fig" : "text-flip-fig")}>
       {t === 1 ? "▲" : t === -1 ? "▼" : "⚠"}
+    </span>
+  );
+}
+
+/** The ten-minute 200 EMA's side (structure.py, 2026-10-30): ▲ above, ▼ below, — on it or not held. */
+function Trend200({ r }: { r: ScanRow }) {
+  const t = r.trend200 ?? 0;
+  const line = r.levels.ema200;
+  if (line == null) return <Dash title="The 200 EMA needs two days of ten-minute bars" />;
+  const slope = r.ema200_slope ? `, ${r.ema200_slope}` : "";
+  const tip = t === 1 ? `Above the 200 EMA (${line.toFixed(2)}${slope}) — the long side` : t === -1 ? `Below the 200 EMA (${line.toFixed(2)}${slope}) — the short side` : `On the 200 EMA (${line.toFixed(2)}${slope})`;
+  return (
+    <span title={tip} className={cn("text-[12px]", t === 1 ? "text-call-fig" : t === -1 ? "text-put-fig" : "text-ink-3")}>
+      {t === 1 ? "▲" : t === -1 ? "▼" : "—"}
     </span>
   );
 }

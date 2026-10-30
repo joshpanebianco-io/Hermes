@@ -5,7 +5,7 @@ import { failureReason, offlineTerminal } from "@/lib/offline";
 import { cookies } from "next/headers";
 import { THEME_COOKIE, parseTheme } from "@/lib/theme";
 import { UI_COOKIE, parseUi } from "@/lib/ui";
-import { deskOf, isTab, pageTitle } from "@/lib/tabs";
+import { isDesk, pageTitle, resolveTab, type Desk } from "@/lib/tabs";
 
 /**
  * The terminal, server-rendered once and then polled by the client.
@@ -62,7 +62,7 @@ async function getReport(): Promise<ReportFeed | null> {
 
 /**
  * The browser tab's title, named on the server so it is right on the first
- * frame — "HERMESX · Stocks & Options · Scanner". The client keeps it in step
+ * frame — "HERMES · Stocks & Options · Scanner". The client keeps it in step
  * as you move (Terminal.tsx).
  */
 export async function generateMetadata({
@@ -71,8 +71,9 @@ export async function generateMetadata({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<Metadata> {
   const sp = await searchParams;
-  const tab = isTab(sp.tab) ? sp.tab : "terminal";
-  return { title: pageTitle(tab, deskOf(tab) ?? "futures") };
+  const named = resolveTab(sp.tab);
+  const desk: Desk = isDesk(sp.desk) ? sp.desk : (named?.desk ?? "futures");
+  return { title: pageTitle(named?.tab ?? "terminal", desk) };
 }
 
 /**
@@ -91,7 +92,11 @@ export default async function Page({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  const initialTab = isTab(sp.tab) ? sp.tab : "terminal";
+  // Current keys and the old ones alike (lib/tabs.ts resolveTab): a link to
+  // the report or the plan opens Analysis on that half.
+  const named = resolveTab(sp.tab);
+  const initialTab = named?.tab ?? "terminal";
+  const initialDesk: Desk | undefined = isDesk(sp.desk) ? sp.desk : named?.desk;
   /*
    * WHETHER THE URL ASKED AT ALL, which is not the same question as which tab
    * it asked for. `?tab=terminal` and a bare `/` both resolve to "terminal"
@@ -101,7 +106,7 @@ export default async function Page({
    * frame: the shortcut says "show me the terminal", and the note is a place
    * you go, not a place you arrive.
    */
-  const initialTabPinned = isTab(sp.tab);
+  const initialTabPinned = named !== null;
   const jar = await cookies();
   const theme = parseTheme(jar.get(THEME_COOKIE)?.value);
   const ui = parseUi(jar.get(UI_COOKIE)?.value);
@@ -114,6 +119,7 @@ export default async function Page({
       initialTabPinned={initialTabPinned}
       initialTheme={theme}
       initialUi={ui}
+      initialDesk={initialDesk}
     />
   );
 }

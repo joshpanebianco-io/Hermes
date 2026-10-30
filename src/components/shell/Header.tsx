@@ -5,8 +5,7 @@ import { dir, feedNote, inMin, num, quoteChg } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Tick } from "@/components/ui/Tick";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
-import { DESKS, tabsFor, type Desk, type Tab } from "@/lib/tabs";
-import { segItem } from "@/lib/seg";
+import { TABS, type Tab } from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
 import { localClock, readerClock } from "@/lib/clock";
 import { curveShape } from "@/lib/vix";
@@ -22,23 +21,23 @@ import { VixPopover, type VixFacts } from "@/components/vol/VixBands";
  * a header row is that NQ is always in the same six centimetres of glass.
  */
 /*
- * EACH DESK READS ITS OWN STRIP. Futures: the three books and the macro that
- * moves them. Stocks & Options: the index ETFs the options trade on, the vol
- * pair that prices them (VIX for the level, VVIX for how fast it can move),
- * and the 10-year that leans on long-duration names — then how long until New
- * York opens or closes, the one clock that desk trades on.
+ * ONE STRIP FOR BOTH DESKS (2026-10-30, with the one tab bar — lib/tabs.ts).
+ * Each desk used to read its own: the futures books and the macro that moves
+ * them, or the index ETFs the options trade on with the vol pair that prices
+ * them. Now it is one row in trading order — the three books, the two index
+ * ETFs, VIX for the level and VVIX for how fast it can move, the 10-year,
+ * the dollar, crude, bitcoin — and the New York open-or-close countdown
+ * beside it. It fits itself from the right (see the band below), so a
+ * narrower window loses bitcoin before it loses NQ.
  */
-const STRIP: Record<Desk, string[]> = {
-  futures: ["NQ", "ES", "GC", "VIX", "US10Y", "DXY", "WTI", "BTC"],
-  stocks: ["SPY", "QQQ", "IWM", "VIX", "VVIX", "US10Y"],
-};
+const STRIP = ["NQ", "ES", "GC", "SPY", "QQQ", "VIX", "VVIX", "US10Y", "DXY", "WTI", "BTC"];
 
 /** A strip figure's ink: dimmed when its market is shut or has not printed in half an hour. */
 function stripInk(q: Quote): string {
   return q.feed === "closed" || q.feed === "stale" ? "text-ink-3" : "text-ink";
 }
 
-/** "NYSE opens in 1h 20m" / "closes in 2h 05m" / a holiday — the stocks desk's clock. */
+/** "NYSE opens in 1h 20m" / "closes in 2h 05m" / a holiday — the New York clock, beside the strip. */
 function nyClock(clock: Clock | null): { label: string; value: string; title: string } | null {
   const ny = clock?.sessions.find((x) => x.key === "newyork");
   if (!ny) return null;
@@ -57,8 +56,6 @@ export function Header({
   onRefresh,
   tab,
   onTab,
-  desk,
-  onDesk,
 }: {
   clock: Clock | null;
   quotes: Quote[];
@@ -75,8 +72,6 @@ export function Header({
   onRefresh: () => void;
   tab: Tab;
   onTab: (t: Tab) => void;
-  desk: Desk;
-  onDesk: (d: Desk) => void;
 }) {
   // The header owns its own second hand — the rest of the shell does not tick.
   const now = useNow(1000);
@@ -86,11 +81,9 @@ export function Header({
   const local = readerClock(now);
   // The strip's instruments, in trading order rather than payload order. A key
   // the feed does not carry yet is simply not drawn.
-  const strip = STRIP[desk]
-    .map((k) => quotes.find((q) => q.key === k))
-    .filter((q): q is Quote => Boolean(q));
-  const ny = desk === "stocks" ? nyClock(clock) : null;
-  const tabs = tabsFor(desk);
+  const strip = STRIP.map((k) => quotes.find((q) => q.key === k)).filter((q): q is Quote => Boolean(q));
+  const ny = nyClock(clock);
+  const tabs = TABS;
   /*
    * THE VIX FIGURE OPENS THE BANDS, ON BOTH DESKS (owner, 2026-10-21: "include
    * the header vix too"). The header has quotes, not the scanner's regime, so
@@ -125,7 +118,7 @@ export function Header({
         <div className="flex shrink-0 items-center gap-2 qt:gap-2.5">
           <Mark />
           <span className="wordmark fig text-[18px] font-semibold tracking-[0.14em] qt:text-[19px]">
-            HERMESX
+            HERMES
           </span>
         </div>
         {/* A hairline between the lockup and the controls, as the status group
@@ -139,27 +132,6 @@ export function Header({
          * beside the clock and the state light rather than in a bar that would
          * push the board down by its own height.
          */}
-        {/*
-         * THE DESK SWITCH LEADS THE TABS — the two desks are two products'
-         * worth of tabs, and which one you are on is the first thing the
-         * chassis should say. It goes to that desk's last tab. `D` flips it.
-         */}
-        <span className="seg shrink-0" role="tablist" aria-label="Desk" title="Switch desk — or press D">
-          {DESKS.map((d) => (
-            <button
-              key={d.key}
-              type="button"
-              role="tab"
-              aria-selected={desk === d.key}
-              onClick={() => onDesk(d.key)}
-              {...segItem(desk === d.key, { className: "text-[10px] tracking-[0.08em] uppercase qt:text-[12.5px]" })}
-            >
-              <span className="max-[1599px]:hidden">{d.label}</span>
-              <span className="min-[1600px]:hidden">{d.short}</span>
-            </button>
-          ))}
-        </span>
-
         <nav className="flex shrink-0 items-center gap-0.5 qt:gap-1" aria-label="Tabs">
           {tabs.map((t, i) => (
             <button
@@ -205,12 +177,6 @@ export function Header({
          */}
         {(strip.length > 0 || ny) && (
           <div className="hidden h-[36px] min-w-0 flex-1 flex-wrap content-start items-center justify-end gap-x-4 gap-y-4 overflow-hidden qt:flex">
-            {ny && (
-              <div className="flex h-[36px] shrink-0 flex-col justify-center gap-1 border-r border-ring pr-4" title={ny.title}>
-                <span className="qt-cap text-[10.5px] text-ink-3">{ny.label}</span>
-                <span className="fig text-[14.5px] leading-none text-ink">{ny.value}</span>
-              </div>
-            )}
             {strip.map((q) => {
               const chg = quoteChg(q);
               const note = feedNote(q);
@@ -245,6 +211,15 @@ export function Header({
                 </div>
               );
             })}
+            {/* The New York countdown LAST (2026-10-30): the band fits itself from
+                the right, so on a narrow window it is the clock that drops, never
+                NQ — the header already carries the ET time and the phase. */}
+            {ny && (
+              <div className="flex h-[36px] shrink-0 flex-col justify-center gap-1 border-l border-ring pl-4" title={ny.title}>
+                <span className="qt-cap text-[10.5px] text-ink-3">{ny.label}</span>
+                <span className="fig text-[14.5px] leading-none text-ink">{ny.value}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -303,12 +278,6 @@ export function Header({
 
       {strip.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ring/60 bg-surface/50 px-3 py-1.5 qt:hidden">
-          {ny && (
-            <div className="flex items-baseline gap-1.5" title={ny.title}>
-              <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{ny.label}</span>
-              <span className="fig text-[11.5px] text-ink">{ny.value}</span>
-            </div>
-          )}
           {strip.map((q) => {
             const chg = quoteChg(q);
             const figure = (
@@ -328,6 +297,12 @@ export function Header({
               </div>
             );
           })}
+          {ny && (
+            <div className="flex items-baseline gap-1.5" title={ny.title}>
+              <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{ny.label}</span>
+              <span className="fig text-[11.5px] text-ink">{ny.value}</span>
+            </div>
+          )}
         </div>
       )}
     </header>

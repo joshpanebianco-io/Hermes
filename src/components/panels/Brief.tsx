@@ -109,6 +109,9 @@ const KIND_HUE: Record<BriefLadderRow["kind"], string> = {
   em: "var(--em)",
   ref: "var(--ring-2)",
   last: "var(--spot)",
+  vwap: "var(--ink)",
+  open: "var(--ring-2)",
+  ema: "var(--ink-2)",
 };
 
 /** Quiet's rails in the figure tier — GEXYGEN's ladder; spot is ink, not a slab. */
@@ -120,6 +123,9 @@ const KIND_HUE_QT: Record<BriefLadderRow["kind"], string> = {
   em: "var(--em)",
   ref: "var(--ink-4)",
   last: "var(--ink)",
+  vwap: "var(--ink)",
+  open: "var(--ink-4)",
+  ema: "var(--ink-2)",
 };
 
 const LEGEND: [BriefLadderRow["kind"], string][] = [
@@ -407,6 +413,12 @@ function Calls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
                 </div>
               </>
             )}
+            {c.catalyst && (
+              <>
+                <Label>Catalyst</Label>
+                <div className="text-[13px] leading-snug text-ink-2">{c.catalyst}</div>
+              </>
+            )}
           </div>
         );
       })}
@@ -473,6 +485,12 @@ function QuietCalls({ calls, live }: { calls: BriefCall[]; live?: boolean }) {
                 <div>
                   <p className="qt-cap text-[10.5px] text-ink-3">Wrong if</p>
                   <p className="mt-1 font-semibold text-ink">{c.wrong_if}</p>
+                </div>
+              )}
+              {c.catalyst && (
+                <div>
+                  <p className="qt-cap text-[10.5px] text-ink-3">Catalyst</p>
+                  <p className="mt-1 text-ink-2">{c.catalyst}</p>
                 </div>
               )}
             </div>

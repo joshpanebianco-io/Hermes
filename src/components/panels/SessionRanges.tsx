@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExpiryState, SessionRange } from "@/types/terminal";
+import type { ExpiryState, SessionRange, BriefLadder } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
@@ -46,7 +46,7 @@ const ASSETS = ["NQ", "ES", "GC"];
 
 const HEAD = "fig shrink-0 text-right text-[8.5px] tracking-wide text-ink-3";
 
-// Wide enough for "Europe midday" on one line when the panel has the room; the
+// Wide enough for "Pre-market" on one line when the panel has the room; the
 // wrapping 52px it always was when it does not, so the track keeps its width.
 // One line always: a label that wrapped ("London / open") doubled its row's
 // height and broke the shared axis's rhythm in a narrow column. Narrow, it
@@ -73,11 +73,14 @@ function scaleOf(sessions: SessionRange[], last: number | null) {
 
 export function SessionRanges({
   assets,
+  ladders,
   expiry,
   ageMin,
   error,
 }: {
   assets: Record<string, { last: number | null; sessions: SessionRange[] }>;
+  /** The live ladders, for the fuel line under this book's rows (structure.fuel). */
+  ladders?: Record<string, BriefLadder | null>;
   expiry?: ExpiryState;
   ageMin?: number | null;
   error?: string | null;
@@ -85,7 +88,12 @@ export function SessionRanges({
   const keys = ASSETS.filter((k) => assets[k]);
   const [sel, setSel] = usePersisted<string>("ranges.asset", "NQ", oneOf("NQ", "ES", "GC"));
   const active = assets[sel] ?? assets[keys[0]];
-  const x = active ? scaleOf(active.sessions, active.last) : null;
+  const fuel = ladders?.[assets[sel] ? sel : keys[0]]?.fuel ?? null;
+  // The four boxes (owner, 2026-10-30). The overnight row is the brief's
+  // ladder's and spans the night's boxes, so it is not drawn and does not
+  // widen the shared axis.
+  const shown = active ? active.sessions.filter((s) => s.key !== "overnight") : [];
+  const x = active ? scaleOf(shown, active.last) : null;
   const nowX = x && active && active.last !== null ? x(active.last) : null;
 
   return (
@@ -147,10 +155,22 @@ export function SessionRanges({
             </span>
           </div>
           <ul className="pb-1">
-            {active.sessions.map((s) => (
+            {shown.map((s) => (
               <Row key={s.key} s={s} last={active.last} x={x} nowX={nowX} />
             ))}
           </ul>
+          {/* FUEL (structure.fuel, 2026-10-30): how much of a normal day this
+              book has already traded, and where — the stocks desk had it, the
+              futures desk did not. A 09:40 retest depends on the answer. */}
+          {fuel && (
+            <div className="border-t border-ring/40 px-3 py-1.5" title="Today's range so far (every box since 18:00) against the 14-day ATR and the expected move">
+              <p className="text-[10.5px] leading-[1.45]">
+                <span className="qt-cap mr-1.5 text-[10px] text-ink-3">Fuel</span>
+                <span className="fig text-ink-2">{fuel.line}</span>
+              </p>
+              <p className="text-[10.5px] leading-[1.45] text-ink-3">{fuel.read}</p>
+            </div>
+          )}
           {expiry && <ExpiryLine e={expiry} />}
         </div>
       )}

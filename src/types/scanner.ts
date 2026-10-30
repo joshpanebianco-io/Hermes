@@ -146,6 +146,8 @@ export interface ScanRow {
   ok: boolean;
   error: string | null;
   age_min: number | null;
+  /** Set when the pool put this name on the list today (sources/pool.py). */
+  promoted?: Promoted | null;
 
   last: number | null;
   prev_close: number | null;
@@ -172,11 +174,16 @@ export interface ScanRow {
     day_hi: number | null;
     day_lo: number | null;
     open: number | null;
+    /** The 200 EMA on ten-minute bars — the side filter (structure.py). Absent from an older collector. */
+    ema200?: number | null;
   };
   progress: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null };
   broken: { pdh: boolean; pdl: boolean; pmh: boolean; pml: boolean };
   lvl_state: -2 | -1 | 0 | 1 | 2;
   trend: -1 | 0 | 1;
+  /** 1 above the ten-minute 200 EMA, -1 below, 0 on it or unknown. */
+  trend200?: -1 | 0 | 1;
+  ema200_slope?: "rising" | "falling" | "flat" | null;
   range_used: number | null;
 
   setup: {
@@ -461,7 +468,12 @@ export interface ScannerPayload {
   trading_day: string;
   pm_locked: boolean;
   bench: "SPY";
+  /** Every name the rows are built for: the pinned list, then today's promotions. */
   watchlist: string[];
+  /** The owner's list alone. */
+  pinned?: string[];
+  /** The pool's view — today's promotions, the names in play, the marks. */
+  pool?: PoolView | null;
   regime: Regime;
   rows: ScanRow[];
   /** Set by the Next proxy when the collector could not be reached. */
@@ -477,6 +489,63 @@ export interface Watchlist {
   error?: string;
   /** The options expiry rule, for Settings' copy. */
   options_rule?: ExpiryRule;
+  /** The pool's view (sources/pool.py). */
+  pool?: PoolView;
+}
+
+/** A name the pool promoted into the list today, and why. */
+export interface Promoted {
+  symbol: string;
+  score: number;
+  reason: string;
+  /** ET, HH:MM — when the promotion happened. */
+  at: string;
+  /** The mark it happened at: 08:00, 09:00, 09:25 or 10:00. */
+  mark: string;
+  name?: string | null;
+  sector?: string | null;
+}
+
+/** One name of the pool as ranked. */
+export interface PoolName {
+  symbol: string;
+  name: string | null;
+  sector: string | null;
+  close: number | null;
+  cap: number | null;
+  score: number;
+  reason: string;
+  gap_atr: number | null;
+  vol_pct: number | null;
+  reports: string | null;
+  promoted: boolean;
+}
+
+/**
+ * The pool (sources/pool.py): hundreds of large caps read in one request,
+ * ranked by the scanner's own in-play arithmetic, the top promoted into the
+ * list at the marks. `basis` says which figures the rank reads: the
+ * pre-market, the day so far, or the last session's when no session is on.
+ */
+export interface PoolView {
+  ok: boolean;
+  on: boolean;
+  read_utc: string | null;
+  age_min: number | null;
+  source: string;
+  error: string | null;
+  screened: number;
+  qualified: number;
+  basis: "pre" | "day" | "last";
+  gates: { cap_usd: number; dollar_vol_usd: number; atr_pct: number; price_usd: number; min_score: number };
+  top: PoolName[];
+  promoted: Promoted[];
+  day: string | null;
+  marks_done: string[];
+  next_mark: string | null;
+  /** How many names the pool may add: 40 less the pinned list. */
+  slots: number;
+  post_open_slots: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -577,6 +646,8 @@ export interface ScanBars {
   ema8: Array<number | null>;
   ema9: Array<number | null>;
   ema10: Array<number | null>;
+  /** The 200 EMA on the chart's own bars (structure.py, 2026-10-30); null until 200 bars are held. Absent from an older collector. */
+  ema200?: Array<number | null>;
   vwap: Array<number | null>;
   levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pm_done: boolean };
   /**

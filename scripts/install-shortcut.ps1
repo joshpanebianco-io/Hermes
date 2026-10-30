@@ -1,4 +1,4 @@
-# Put a HERMESX shortcut on the desktop.
+# Put a HERMES shortcut on the desktop.
 #
 #   .\scripts\install-shortcut.ps1              # or: npm run shortcut
 #   .\scripts\install-shortcut.ps1 -Collector   # or: npm run shortcut:collector
@@ -20,14 +20,14 @@
 # source table and the JSON on 8100, no Next.js, no browser.
 #
 # Re-running replaces the shortcut in place, which is also how to repair it if
-# the repo moves. The icon is public\hermesx.ico, made by scripts\make-icon.mjs.
+# the repo moves. The icon is public\hermes.ico, made by scripts\make-icon.mjs.
 param(
     [switch]$Collector,
     [string]$Name
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$icon = Join-Path $root "public\hermesx.ico"
+$icon = Join-Path $root "public\hermes.ico"
 if (-not (Test-Path $icon)) { throw "Missing $icon - run: npm run icon" }
 
 if ($Collector) {
@@ -35,8 +35,8 @@ if ($Collector) {
     # -NoExit so a service that dies at startup leaves its traceback on screen
     # instead of a window that flashes and vanishes. This window IS the feed.
     $flags = @("-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$target`"")
-    $defaultName = "HERMESX Collector"
-    $description = "HERMESX collector - the live source feed on http://127.0.0.1:8100. No web app, no browser."
+    $defaultName = "HERMES Collector"
+    $description = "HERMES collector - the live source feed on http://127.0.0.1:8100. No web app, no browser."
 } else {
     $target = Join-Path $root "dev.ps1"
     # No -NoExit here: dev.ps1 only dispatches, and the windows it opens carry
@@ -45,8 +45,8 @@ if ($Collector) {
     # closes. dev.ps1 pauses itself on an error path so a failure still stays
     # readable.
     $flags = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$target`"", "-Tabs")
-    $defaultName = "HERMESX"
-    $description = "HERMESX - starts the collector, the web app and GEXYGEN's gamma collector if present as tabs in one window, then opens http://localhost:3100."
+    $defaultName = "HERMES"
+    $description = "HERMES - starts the collector, the web app and GEXYGEN's gamma collector if present as tabs in one window, then opens http://localhost:3100."
 }
 if (-not $Name) { $Name = $defaultName }
 if (-not (Test-Path $target)) { throw "Missing $target" }

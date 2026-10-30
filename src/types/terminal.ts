@@ -29,7 +29,7 @@ export type Impact = "high" | "medium" | "low";
 export type Region = "us" | "uk" | "eu" | "apac" | "global" | "other";
 
 /** The five trading windows the terminal segments on, in ET. */
-export type SessionKey = "asia" | "london" | "euro_mid" | "preny" | "ny" | "closed";
+export type SessionKey = "asia" | "london" | "premkt" | "ny" | "closed";
 
 export interface Quote {
   key: string;
@@ -200,6 +200,21 @@ export interface SessionRow {
   holiday?: string | null;
 }
 
+/** One of the four session boxes on the clock (sessions.box_state): open or not, and how long until that changes. */
+export interface BoxRow {
+  key: "asia" | "london" | "premkt" | "ny";
+  label: string;
+  open: boolean;
+  /** The occurrence being counted down to — today's London box reads 03:00 in a clock-mismatch week. */
+  start_et: string;
+  end_et: string;
+  next: "opens" | "closes";
+  next_min: number;
+  /** The same occurrence as instants, for printing the box in the reader's own zone. */
+  opens_utc: string;
+  closes_utc: string;
+}
+
 export interface Clock {
   et: string;
   et_time: string;
@@ -211,6 +226,8 @@ export interface Clock {
   overlap: boolean;
   phase: { key: string; label: string; note: string };
   markers: { label: string; note: string; et: string; in_min: number }[];
+  /** The four boxes the Sessions panel draws (2026-10-30). */
+  boxes: BoxRow[];
 }
 
 export interface SourceStatus {
@@ -225,7 +242,8 @@ export interface SourceStatus {
 }
 
 export interface SessionRange {
-  key: "asia" | "london" | "euro_mid" | "preny" | "ny" | "post";
+  /** The four boxes the panel draws, and the overnight the brief's ladder reads (sessions.BOXES). */
+  key: "asia" | "london" | "premkt" | "ny" | "overnight";
   label: string;
   ok: boolean;
   high: number | null;
@@ -600,7 +618,22 @@ export interface Terminal {
   calendar: CalendarRow[];
   rates: Rates;
   gex: { assets: Record<string, GexAsset>; enabled: boolean; book: string };
-  ranges: { assets: Record<string, { last: number | null; sessions: SessionRange[] }> };
+  ranges: {
+    assets: Record<
+      string,
+      {
+        last: number | null;
+        sessions: SessionRange[];
+        /** VWAP from the Globex reopen and from the cash open (ranges.py). */
+        vwap?: { globex: number | null; rth: number | null };
+        opening_range?: { high: number; low: number; complete: boolean } | null;
+        /** The ten-minute 200 EMA from the same bars (structure.ema200_10m). */
+        ema200_10m?: Ema200 | null;
+      }
+    >;
+  };
+  /** The live levels ladder per book, computed per request (report.live_ladders). */
+  ladders?: Record<string, BriefLadder | null>;
   constituents: { indices: Record<string, IndexMovers> };
   fed: FedEvent[];
   auctions: AuctionEvent[];
@@ -676,6 +709,10 @@ export interface BriefCall {
    * stored before 2026-09-16 predate the field.
    */
   why?: string[];
+  /** The heavyweight print or the event moving this book, with its figure; "" when none (2026-10-30). */
+  catalyst?: string;
+  /** The `heavyweights` / `event_risk` ids the sentence cites. */
+  catalyst_ids?: string[];
 }
 
 export interface BriefRead {
@@ -723,10 +760,68 @@ export interface BriefSnapshotRow {
 export interface BriefLadderRow {
   price: number;
   label: string;
-  kind: "flip" | "call" | "put" | "range" | "em" | "ref" | "last";
+  /** `vwap`, `open` and `ema` appear only on the live ladder (Structure), never in a note. */
+  kind: "flip" | "call" | "put" | "range" | "em" | "ref" | "last" | "vwap" | "open" | "ema";
   /** Price minus last. Null on the Last row itself. */
   dist: number | null;
   inside_em: boolean;
+  /** The confluence band this row belongs to (structure.confluence), highest band first. */
+  band?: number | null;
+}
+
+/** Rows within a quarter of an ATR of each other: the level is the band (structure.confluence). */
+export interface ConfluenceBand {
+  hi: number;
+  lo: number;
+  n: number;
+  labels: string[];
+  dist: number | null;
+  text: string;
+}
+
+/** Today's range so far against a normal day, and where it was spent (structure.fuel). */
+export interface Fuel {
+  range: number;
+  high: number;
+  low: number;
+  atr: number | null;
+  atr_pct: number | null;
+  em: number | null;
+  em_pct: number | null;
+  overnight: number | null;
+  ny: number | null;
+  line: string;
+  read: string;
+}
+
+/** The prior cash session's shape and the gap at the reopen (structure.yesterday). */
+export interface Yesterday {
+  shape: string | null;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  range: number;
+  range_atr: number | null;
+  close_pos: number | null;
+  gap: number | null;
+  gap_atr: number | null;
+  text: string;
+}
+
+/** The daily 200 EMA as the regime line (structure.regime). */
+export interface Regime {
+  ema200: number;
+  pct: number;
+  above: boolean;
+  text: string;
+}
+
+/** The ten-minute 200 EMA and its slope (structure.ema_read). */
+export interface Ema200 {
+  value: number;
+  slope: "rising" | "falling" | "flat";
+  bars: number;
 }
 
 export interface BriefLadder {
@@ -740,6 +835,12 @@ export interface BriefLadder {
   em_basis: string | null;
   rows: BriefLadderRow[];
   note: string | null;
+  /** The bands, on every ladder; the cards below ride only with the live one (Structure). */
+  confluence?: ConfluenceBand[];
+  fuel?: Fuel | null;
+  yesterday?: Yesterday | null;
+  regime?: Regime | null;
+  ema200_10m?: Ema200 | null;
 }
 
 export interface BriefGamma {
@@ -880,10 +981,27 @@ export interface ReportStub {
   headline: string | null;
 }
 
+/**
+ * A generation in progress, or one a poll just settled. The collector writes
+ * a note on a thread of its own and the page asks after it by id (server
+ * jobs.py; src/lib/jobs.ts): `running` means keep asking; `done` means the
+ * feed it rode in on carries the note as `latest`; `lost` means the collector
+ * restarted underneath it, and `latest` is the failed envelope that says so.
+ */
+export interface NoteJob {
+  id: string;
+  state: "running" | "done" | "lost";
+  /** When it was started, ISO — the clock a reloaded page resumes from. */
+  started_utc?: string;
+  model?: string;
+}
+
 export interface ReportFeed {
   config: { enabled: boolean; model: string };
   latest: Report | null;
   history: ReportStub[];
   /** Set by the route handler when the collector could not be reached. */
   offline?: { reason: string; api: string };
+  /** The report being written right now, if any, or the job a poll settled. */
+  job?: NoteJob | null;
 }

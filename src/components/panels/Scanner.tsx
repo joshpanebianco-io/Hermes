@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Conviction, Regime, ScannerPayload, Side, Watchlist } from "@/types/scanner";
+import type { Conviction, Regime, ScannerPayload, Side } from "@/types/scanner";
 import { Tick } from "@/components/ui/Tick";
 import { HelmLoader } from "@/components/ui/HelmLoader";
 import { ScanDetail } from "@/components/panels/ScanDetail";
 import { ScanLog } from "@/components/panels/ScanLog";
 import { ScanTable, sortValue, type ColSet, type SortKey } from "@/components/panels/ScanTable";
+import { WatchlistEditor } from "@/components/panels/ScanWatchlist";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
 import { age, dir, inMin, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
@@ -400,6 +401,7 @@ function Masthead({
 }) {
   const ok = data?.rows.filter((r) => r.ok).length ?? 0;
   const total = data?.watchlist.length ?? 0;
+  const fromPool = data?.pool?.promoted.length ?? 0;
   return (
     <div className="flex min-h-[50px] shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-ring px-6 py-2">
       <h2 className="text-[13.5px] font-semibold whitespace-nowrap text-ink">Scanner</h2>
@@ -429,7 +431,7 @@ function Masthead({
                 data.status?.ok ? "bg-call" : "bg-err",
               )}
             />
-            {ok}/{total} names · {age(data.age_min)}
+            {ok}/{total} names{fromPool > 0 ? ` · ${fromPool} from the pool` : ""} · {age(data.age_min)}
           </span>
         )}
         <button type="button" onClick={onWatchlist} {...segItem(editing, { className: "border border-ring-2" })}>
@@ -650,115 +652,3 @@ function etDay(ts: number, now: number): string {
 
 const trendGlyph = (t: -1 | 0 | 1) => (t === 1 ? "▲" : t === -1 ? "▼" : "–");
 const trendHue = (t: -1 | 0 | 1) => (t === 1 ? "text-call-fig" : t === -1 ? "text-put-fig" : "text-flip-fig");
-
-/* -------------------------------------------------------------------------- */
-/* Watchlist                                                                   */
-/* -------------------------------------------------------------------------- */
-
-function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
-  const [text, setText] = useState("");
-  const [dflt, setDflt] = useState<string[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    void fetch("/api/scanner/watchlist", { cache: "no-store" })
-      .then((r) => r.json() as Promise<Watchlist>)
-      .then((w) => {
-        if (!live) return;
-        setText(w.symbols.join(" "));
-        setDflt(w.default);
-        if (w.error) setErr(w.error);
-      })
-      .catch((e: unknown) => live && setErr(e instanceof Error ? e.message : "could not read the list"));
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const symbols = text
-    .toUpperCase()
-    .split(/[\s,;]+/)
-    .map((s) => s.replace(/^\$/, "").trim())
-    .filter(Boolean);
-
-  const save = async (list: string[]) => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await fetch("/api/scanner/watchlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: list }),
-      });
-      const w = (await r.json()) as Watchlist;
-      if (!r.ok || w.error) {
-        setErr(w.error ?? `HTTP ${r.status}`);
-        return;
-      }
-      if (w.rejected && w.rejected.length > 0) {
-        // Saved, but not all of it — keep the editor open so the dropped
-        // names are seen rather than silently missing from the list.
-        setText(w.symbols.join(" "));
-        setErr(`Saved without ${w.rejected.join(", ")} — not a valid ticker.`);
-        return;
-      }
-      onSaved();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "save failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="flex shrink-0 flex-col gap-2 border-b border-ring bg-surface-2/40 px-6 py-3">
-      <div className="flex items-baseline gap-3">
-        <label htmlFor="scan-watchlist" className="qt-cap text-[10.5px] text-ink-3">
-          Watchlist
-        </label>
-        <p className="text-[11.5px] text-ink-3">
-          Tickers separated by spaces or commas, up to 40. SPY and QQQ are always fetched as the benchmarks; list
-          them to see them as rows. New names appear within a minute or two.
-        </p>
-      </div>
-      <textarea
-        id="scan-watchlist"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={2}
-        spellCheck={false}
-        className="fig w-full resize-y rounded-[4px] border border-ring-2 bg-bg px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-ink-3"
-      />
-      <div className="flex items-center gap-2">
-        <span className="fig text-[11px] text-ink-3">{symbols.length} names</span>
-        {err && <span className="text-[11.5px] text-err">{err}</span>}
-        <div className="ml-auto flex items-center gap-2">
-          {dflt.length > 0 && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setText(dflt.join(" "))}
-              {...segItem(false, { className: "border border-ring-2" })}
-              title={dflt.join(" ")}
-            >
-              Reset to the Pine list
-            </button>
-          )}
-          <button type="button" onClick={onCancel} {...segItem(false, { className: "border border-ring-2" })}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy || symbols.length === 0}
-            onClick={() => void save(symbols)}
-            {...segItem(true, { className: "border border-ring-2 disabled:cursor-not-allowed disabled:opacity-40" })}
-          >
-            {busy ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}

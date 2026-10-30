@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Tab } from "@/lib/tabs";
 import { OPEN_ASK_EVENT, useAskFocus } from "@/lib/ask/open";
 import { GREETING, suggestionsFor } from "@/lib/ask/suggest";
+import { readNdjson, shortModel } from "@/lib/ask/stream";
 import { HelmInline } from "@/components/ui/HelmLoader";
 import { cn } from "@/lib/cn";
 import { Markdownish } from "./Markdownish";
@@ -13,7 +13,7 @@ import { Markdownish } from "./Markdownish";
  * 2026-10-14: "a chatbot that uses our llm model that we can ask it to explain
  * anything … with some pre selection we can click on depending on what
  * section we're in, like gexygen has"). GEXYGEN's assistant, ported: the same
- * mechanism, HERMESX's own words and data.
+ * mechanism, HERMES's own words and data.
  *
  * MOUNTED ONCE, OPENED BY EVENT — the rail's Ask key, the A key, and
  * `askHermes()` from anywhere. Closing HIDES it rather than unmounting it, so
@@ -34,6 +34,10 @@ import { Markdownish } from "./Markdownish";
  * THE UNVERIFIED LINE is the notes' rule kept: every numeral in an answer is
  * checked against the data the model was shown, and any it cannot find is
  * named under the answer — shown and marked, never passed off.
+ *
+ * ON THE HERMES TAB IT STANDS ASIDE (2026-10-30): the page is already Hermes,
+ * with the whole terminal behind it, so the Ask key and A focus that page's
+ * box (HermesTab) and this panel stays shut.
  */
 
 interface Msg {
@@ -41,6 +45,8 @@ interface Msg {
   role: "user" | "assistant";
   text: string;
   pending?: boolean;
+  /** Reasoning before speaking — so the wait has a word on it. */
+  thinking?: boolean;
   error?: string | null;
   unverified?: string[];
   /** Which model actually answered — the chain falls through on the free tier. */
@@ -48,15 +54,7 @@ interface Msg {
   ms?: number;
 }
 
-type Line =
-  | { t: "delta"; text: string }
-  | { t: "done"; model: string; finish: string | null; ms?: number; unverified?: string[] }
-  | { t: "error"; message: string };
-
 const HELLO: Msg = { id: 0, role: "assistant", text: GREETING };
-
-/** "glm-5.2 (free)" from "z-ai/glm-5.2:free". */
-const shortModel = (m: string) => m.split("/").pop()?.replace(/:free$/, " (free)") ?? m;
 
 /** A speech bubble — drawn, because one 16px glyph is not worth a dependency. */
 export function AskGlyph({ className }: { className?: string }) {
@@ -77,7 +75,8 @@ export function AskGlyph({ className }: { className?: string }) {
   );
 }
 
-export function AskPanel({ tab }: { tab: Tab }) {
+/** `tab` is the key the collector knows (lib/tabs.ts askTab): Analysis arrives as its half. */
+export function AskPanel({ tab }: { tab: string }) {
   const focus = useAskFocus();
   const sym = tab === "scanner" ? focus : null;
 
@@ -94,11 +93,16 @@ export function AskPanel({ tab }: { tab: Tab }) {
   // The thread as of the last render, for a send that must not close over a stale list.
   const threadRef = useRef(messages);
   threadRef.current = messages;
+  // The tab as of the last render, for the listener below, which is bound once.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
   // Open on the shared event; toggle when it fires while open. An event that
   // carries a question (askHermes) opens and puts the question in the box.
+  // On the Hermes tab the event is that page's to answer.
   useEffect(() => {
     const onOpen = (e: Event) => {
+      if (tabRef.current === "hermes") return;
       const q = (e as CustomEvent<{ question?: string }>).detail?.question;
       if (q) {
         setOpen(true);
@@ -170,32 +174,12 @@ export function AskPanel({ tab }: { tab: Tab }) {
           cache: "no-store",
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        const apply = (line: string) => {
-          let ev: Line;
-          try {
-            ev = JSON.parse(line) as Line;
-          } catch {
-            return;
-          }
-          if (ev.t === "delta") patch(reply.id, (m) => ({ ...m, text: m.text + ev.text }));
-          else if (ev.t === "done") patch(reply.id, (m) => ({ ...m, pending: false, model: ev.model, ms: ev.ms, unverified: ev.unverified ?? [] }));
-          else patch(reply.id, (m) => ({ ...m, pending: false, error: ev.message }));
-        };
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, nl).trim();
-            buf = buf.slice(nl + 1);
-            if (line) apply(line);
-          }
-        }
-        if (buf.trim()) apply(buf.trim());
+        await readNdjson(res.body, (ev) => {
+          if (ev.t === "delta") patch(reply.id, (m) => ({ ...m, thinking: false, text: m.text + ev.text }));
+          else if (ev.t === "thinking") patch(reply.id, (m) => ({ ...m, thinking: true }));
+          else if (ev.t === "done") patch(reply.id, (m) => ({ ...m, pending: false, thinking: false, model: ev.model, ms: ev.ms, unverified: ev.unverified ?? [] }));
+          else if (ev.t === "error") patch(reply.id, (m) => ({ ...m, pending: false, thinking: false, error: ev.message }));
+        });
       } catch (e) {
         if (!ctrl.signal.aborted) {
           patch(reply.id, (m) => ({ ...m, pending: false, error: e instanceof Error ? e.message : String(e) }));
@@ -311,7 +295,7 @@ export function AskPanel({ tab }: { tab: Tab }) {
               )}
             >
               {m.role === "user" ? m.text : <Markdownish text={m.text} />}
-              {m.pending && !m.text && <HelmInline className="text-[12px] text-ink-3" label="Reading the desk" />}
+              {m.pending && !m.text && <HelmInline className="text-[12px] text-ink-3" label={m.thinking ? "Thinking" : "Reading the desk"} />}
             </div>
             {m.role === "assistant" && m.model && (
               <span className="fig text-[9.5px] text-ink-4" title="The model that wrote this answer, and how long it took">

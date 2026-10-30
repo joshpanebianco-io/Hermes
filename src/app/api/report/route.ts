@@ -6,21 +6,19 @@ import { failureReason } from "@/lib/offline";
  * The report proxy — GET reads the last one, POST writes a new one.
  *
  * SAME REASONING AS /api/terminal: the collector's address is server-side
- * configuration and the browser has no business knowing it. What is different
- * here is the timeout. Generating a report means a round trip to a model that
- * is thinking, and on a free tier that can take most of a minute — so this one
- * waits far longer than the terminal poll, and the panel shows a working state
- * rather than a spinner with no explanation.
+ * configuration and the browser has no business knowing it.
+ *
+ * THE POST NO LONGER WAITS FOR THE MODEL (2026-10-27). It used to, under a
+ * five-minute ceiling measured on a saturated free pool — and then a brief
+ * took 332 seconds, the ceiling cut it off, and the page reported a failure
+ * for a note the collector stored a minute later. Now the collector answers
+ * the POST at once with the job it started, and the page polls
+ * /api/report/job/[id] until the note is written; no request here is ever as
+ * long as a generation.
  */
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-// FIVE MINUTES, MEASURED RATHER THAN GUESSED. A first real run took 188
-// seconds: the free pool for the preferred model was saturated, so the chain
-// walked to the next one, and a free reasoning endpoint handed the full digest
-// is simply slow. 120s cut off a report that was about to arrive, which is the
-// worst of both — the tokens were spent and the answer was thrown away.
-export const maxDuration = 300;
 
 const API = process.env.NT_API ?? "http://127.0.0.1:8100";
 
@@ -76,7 +74,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    return NextResponse.json(await call("POST", 290_000, pickQuery(req)));
+    return NextResponse.json(await call("POST", 15_000, pickQuery(req)));
   } catch (e) {
     return NextResponse.json(offline(failureReason(e)));
   }

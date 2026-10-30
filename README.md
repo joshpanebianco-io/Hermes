@@ -10,7 +10,9 @@
   S&amp;P 500 and Gold futures across the Asia, London and New York sessions — a
   live news wire, the driver board, dealer options positioning and gamma levels, the
   economic calendar, earnings, and a Fed &amp; Treasury diary — with
-  <strong>AI-powered session reads</strong> built from facts the engine computed.</p>
+  <strong>AI-powered session reads</strong> built from facts the engine computed.
+  Across both, <strong>Hermes AI</strong> reads the whole terminal through tools and
+  answers in a chat of its own, every figure it quotes checked against the data.</p>
 
   <p>
     <img alt="Next.js 15" src="https://img.shields.io/badge/Next.js-15-black" />
@@ -18,12 +20,12 @@
     <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6" />
     <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-collector-009688" />
     <img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776ab" />
-    <img alt="Tests" src="https://img.shields.io/badge/tests-778%20passing-2ea44f" />
+    <img alt="Tests" src="https://img.shields.io/badge/tests-873%20passing-2ea44f" />
     <img alt="Personal use" src="https://img.shields.io/badge/data-personal%20use%20only-orange" />
   </p>
 </div>
 
-![Hermes terminal](docs/media/hero.png)
+![Hermes — the Structure tab, futures desk](docs/media/hero.png)
 
 ---
 
@@ -43,10 +45,10 @@ game plan, behind one switch on that tab), **Hermes AI** and **Settings**.
 Every part of it is built the same way, and this section walks them in order: the
 engine computes a figure, the figure opens a read of what it means for this trade,
 and only at the end does a model write anything — the Analysis tab's game plan, and
-Hermes when asked.
+Hermes when asked (its own section, after the futures desk).
 
 ### Structure — is the tape with me?
-![Macro](docs/media/market.png)
+![Structure, stocks & options](docs/media/structure-stocks.png)
 
 - **Tape conviction** — eleven independent reads of the tape (SPY and QQQ against
   their own levels, which way VIX is moving and its curve, sectors moving, equal
@@ -61,8 +63,8 @@ Hermes when asked.
 - **Prints & the Fed** — the session's US releases against consensus, and the FOMC
   path meeting by meeting. **Cross-asset** — the 2Y, the 10Y, 2s10s, credit, the
   dollar, long bonds, oil, gold and bitcoin: what stocks lean on today.
-- **The wire and the calendar**, shared with the futures desk; the calendar's `MINE`
-  filter here means *US releases that move stocks*.
+- **The wire and the calendar** are the Macro tab's, shared with the futures desk;
+  the calendar's `MINE` filter narrows to the US releases that move the books.
 
 ### The Scanner — break and retest, ranked
 ![Scanner](docs/media/scanner.png)
@@ -77,7 +79,9 @@ far from the level for it to come back.
   RS vs SPY, PDH / PDL / PMH / PML Break (the script's ten-segment bars, a filled
   square once broken, dots while the pre-market range forms, amber at 90% where its
   "about to break" alert fires) and Trend (▲ ▼ ⚠) — under the script's own names,
-  with the engine's score, setup and entry in front of them. An **Options** column
+  with the engine's score, setup and entry in front of them, and a **200** column
+  for which side of the ten-minute 200 EMA the name trades on: longs above it,
+  shorts below, and a retest into it tends to fail. An **Options** column
   set swaps them for the options read below; the ticker column stays pinned while
   the rest scroll sideways on a narrow screen.
 - **The Pine, ported faithfully** — PDH / PDL from the previous regular session,
@@ -138,8 +142,8 @@ far from the level for it to come back.
   offerings, 10-Q / 10-K) straight from EDGAR.
 - **A chart for the selected name** — ten-minute candles with PDH / PDL (solid) and
   PMH / PML (dashed) as the Pine draws them, the 8 EMA wave tinted by the level
-  state, VWAP, the signals where they fired, and extended hours shaded — plus a
-  one-click **open in TradingView**.
+  state, VWAP, the ten-minute 200 EMA, the signals where they fired, and extended
+  hours shaded — plus a one-click **open in TradingView**.
 
   ![Scanner detail](docs/media/scanner-detail.png)
 - **Alerts on every tab** — the Pine's alerts, raised by the terminal: a toast, a
@@ -229,7 +233,10 @@ count, the weather and today's prints — and the page shows the stages as they 
 *reading the scanner's top names · placing price against PDH and PMH · reading the
 option chains · weighing the prints and the tape · writing the plans*. The same
 model chain as the futures brief (OpenRouter, free models first, falling through on
-failure) then writes only the words.
+failure) then writes only the words. Since 2026-10-27 the generation is a **job** on
+the collector that the page polls, so a free model that takes five minutes never
+times the page out; a reload mid-way finds the job still running, and a second
+press joins it rather than paying for a second model call.
 
 - **The lead** — one line on the tape and what it allows: the count, the cap on
   conviction, and the setups worth taking. Under it the regime in a paragraph, then
@@ -251,68 +258,17 @@ failure) then writes only the words.
   from; select several and delete those, or every one. A plan written for a session
   that has passed says so in red at the top — its levels and prices are not today's.
 
-### Hermes — ask about any part of it
-![Hermes](docs/media/hermes.png)
-
-The terminal's assistant, in a panel beside the page rather than over it: the **Ask
-Hermes** key on the status rail, or `A`. It answers from the desk's live digest —
-the same facts the plan is written from, plus the tab on screen and the Scanner's
-selected name — and streams the answer as it is written.
-
-- **Openers follow the tab.** On Macro: *what is the tape count saying, and why? is
-  breadth confirming the move? how should VIX shape my stops today?* On the Scanner
-  with a name selected: *explain its setup · what would trigger and invalidate it ·
-  which contract fits it and why · why does it rank where it does.* On Analysis:
-  *summarise the game plan · which name has the best context · what would change the
-  plan at the open · explain the conviction cap.*
-- **Every figure in an answer is checked** against the data the model was shown; any
-  it cannot find is named under the answer, shown and marked rather than passed off.
-- The thread survives closing the panel, and which model answered, and how long it
-  took, is printed under each reply.
-
 ### What the engine computes and what a model writes
 
 | Part | The engine computes | A model writes |
 |---|---|---|
-| **Macro** | the eleven tape reads, their grade and the conviction cap; breadth, fuel, the prints against consensus | nothing |
+| **Structure** | the eleven tape reads, their grade and the conviction cap; breadth, fuel, the levels ladder and its confluence bands, the prints against consensus | nothing |
 | **Scanner** | levels, breaks, the setup state and entry, the score and its parts, the daily frame, the catalyst's direction, the signal log | nothing |
 | **Options** | implied against realised, the straddles, liquidity, skew, flow, the earnings number, the contract and its R | nothing |
 | **Every click-through** | the read of each figure for this name's trade, from stated rules | nothing |
 | **Analysis** | the facts: every card and every number beside the prose | the plan — lead, regime, per-name plans, what to leave alone, the clock, the risks |
 | **Hermes** | the live digest the answer must quote | the answer, every figure in it checked |
-
-### Hermes AI — the whole terminal in one chat
-
-The side panel (`A`) answers beside the tab you have open. The **Hermes AI** tab, after
-Analysis, is the same assistant on a page of its own, laid out like
-the chats you know — past chats down the left, the thread in the middle, the box at
-the bottom. It opens on the desk at a glance — the clock, the strip, each book's
-driver board, event risk, the index heavyweights, earnings, the top headlines, the
-scanner's leaders and the latest notes, a few thousand tokens in all — and reaches
-for the rest with **tools**: a scanner name's whole row, a book's live levels, the
-wire, the calendar, the heavyweights, the sessions, a chart's last bars, a whole
-desk's digest, the latest brief or plan. Each call shows under the answer while it
-runs ("Reading AMZN's scanner row"). A question about a trade is answered in four
-parts: what the data says, what the strategy needs to see, where it is wrong, what
-would change the read. Answers may run longer here and carry headings, bullets and
-tables; every figure is still checked against the data the model was shown or
-fetched, and any it cannot find is named under the answer. Past the last
-twenty-four turns a chat's older turns are folded into a short summary the next
-question carries, so an earlier thread still means something. Chats are kept in
-this browser only. `NT_HERMES_MODEL` runs this tab alone on a model you name; by
-default it uses the same free chain as the notes and the panel. The footer under
-each answer shows the model, the time, the tokens it took and how many came from
-the provider's cache.
-
-A router in front of the model decides how much a question gets. A handful of checks
-— the phase, whether a box is open, a strip quote — are answered from the glance
-without a model at all. A quick check gets the glance, no tools and no thinking. A
-name, a level, a why or a comparison gets the full kit, with the tool set of the
-desk the question names (the futures set or the stocks set, not both). Tool answers
-are written for a model to read, one line per headline, release or bar, so a row
-costs a third of what the panel's JSON would. The fixed start of the prompt is
-marked for the provider's cache, which an Anthropic model needs telling about.
-`npm test` runs the router's tests; `scripts/hermes-bakeoff.mjs` compares models.
+| **Hermes AI** | the glance it opens on, and every tool's answer — a scanner row, a ladder, the wire, the calendar, bars, a desk's digest, the latest note | the answer, every figure in it checked against what it was shown or fetched |
 
 ---
 
@@ -340,15 +296,22 @@ Japan Times, the ECB, the Bank of England, the RBA and more), merged into one ta
   double-encoded publishers, and section-page detection for query feeds.
 
 ### The driver board
-Across the top of the futures Macro tab, one cell per book: which way the engine's count
+Across the top of the Structure tab's futures half, one cell per book: which way the engine's count
 leans, how many reads agree, the grade, and one line on how to treat it. Each cell
 opens the full board — every driver a vote with its threshold and its reason, in
 three layers: **macro** sets the direction (the 10Y's day change, the dollar,
-credit, the VIX and its curve, today's inflation prints), **positioning** says how
+credit, the VIX and its curve, today's inflation prints, and the index heavyweights'
+own prints — the net index points of the names that just reported, past a quarter
+of a point, is a direction), **positioning** says how
 far a move runs (dealer gamma and spot against the flip), **structure** says
 whether the tape accepts it (prior value, the last session's range, the daily
 frame, the daily 200 EMA, the ten-minute 200 EMA, breadth and the index leaders). A macro lean the structure rejects is named
-as a **conflict**, which lowers conviction rather than picking a side. Under the
+as a **conflict**, which lowers conviction rather than picking a side. **Event risk**
+— the high-impact geopolitics, policy and energy stories since the last cash close,
+grouped by story and tagged with the channels each reaches (oil, rates, semis) — is a
+damper, never a direction: a strike on Saudi oil is not a short NQ, it is a reason to
+be one notch less sure of anything, and it lowers the ceiling by one the way a
+conflict does. Under the
 votes, the context rows that never vote: the CFTC's **Commitments of Traders**
 (leveraged funds for the index futures, managed money for gold, with the net's
 percentile of the year), Cboe's daily **put/call** ratios, and OpEx week. The
@@ -359,7 +322,8 @@ confident than it.
 ### Session ranges, volume profile & dealer gamma
 ![Levels](docs/media/levels.png)
 
-The left column's core: three panels, one price ladder each, `NQ / ES / GC` pickers on all.
+The Structure tab's core on the futures desk: three panels, one price ladder each,
+`NQ / ES / GC` pickers on all.
 
 - **Session ranges** — the four boxes a trader draws, in ET: Asia 20:00–00:00, London
   02:00–05:00 (on London's clock, 07:00–10:00), the pre-market 04:00–09:30 and New York
@@ -396,8 +360,9 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
 - **Sessions** — the same four boxes as the session ranges, each with its ET window,
   the window on your own clock, and a countdown to its open or close; a phase headline
   (*"London into the pre-market — both boxes open"*) **read off the same boxes**, so it
-  can never contradict the rows beneath it, and the week is bounded by Globex (Sunday
-  18:00 ET is Monday morning, not the weekend). The NEXT marker counts down to the box
+  can never contradict the rows beneath it; the hour from 02:00 ET until London's box
+  opens reads **Frankfurt**, Europe's first hour, and the week is bounded by Globex
+  (Sunday 18:00 ET is Monday morning, not the weekend). The NEXT marker counts down to the box
   boundaries — and shows an FOMC entry **only when the Fed's own calendar says there is
   one**. NYSE **holidays and half days** come from one
   table checked against the exchange's own calendar (Thanksgiving reads as a holiday,
@@ -432,7 +397,7 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
   week, never a timing tool for the open, and it says so.
 
 ### The book, index movers & sector rotation
-![Macro](docs/media/macro.png)
+![The Macro tab](docs/media/macro.png)
 
 - **The book** — NQ/QQQ, ES/SPY, GC/GLD, YM, RTY with day-range position bars and
   sparklines.
@@ -470,14 +435,16 @@ The left column's core: three panels, one price ladder each, `NQ / ES / GC` pick
 The Analysis tab generates a **pre-session brief** on demand: pick the session (Asia /
 London / New York / auto-by-clock) and the book (NQ / ES / GC / all three). The
 collector computes every table on the page from the live snapshot, then an LLM (via
-OpenRouter, with a model-and-mode fallback chain) writes the read around them. Top to
-bottom:
+OpenRouter, with a model-and-mode fallback chain) writes the read around them — as a
+job the page polls, like the game plan, so no request is ever as long as the
+generation. Top to bottom:
 
 - **Partial data** — which sources were down when it was written, so a missing level
   is a stated gap rather than a silent one.
 - **Thesis and calls** — the one idea of the day, then a card per book: the call at
-  the open with its conviction, the rest-of-day lean, and the price that makes it
-  wrong.
+  the open with its conviction, the rest-of-day lean, the price that makes it
+  wrong, and the **catalyst** it rests on — a heavyweight's print or an event since
+  the close, cited by id from the facts below.
 - **Snapshot** — the books, the dollar, the 10Y (and the real yield for gold), vol,
   oil and the yen, with week and month context; the model flags the rows to watch.
 - **Levels** — a ladder per book in price order: gamma flip and walls, the
@@ -486,6 +453,13 @@ bottom:
   measured from last.
 - **Dealer gamma** — regime, the flip's distance in percent and in expected moves,
   the walls.
+- **Heavyweights & event risk** — one row per big index weight, and any name whose
+  move alone is worth a tenth of an index point: weight, move, index points, the
+  print if it just reported and the one headline that explains it; under them the
+  high-impact geopolitics, policy and energy stories since the last cash close. The
+  driver board votes the prints and damps conviction under the events (above), so a
+  megacap's miss lowers the board's ceiling before the model has to notice the join
+  itself.
 - **Catalysts** — data, the Fed (with what each FOMC has priced), long-end auctions
   and bellwether earnings, from twelve hours back to three days out; the model notes
   the ones that matter.
@@ -528,6 +502,111 @@ against exactly the data it saw.
 
 ---
 
+## Hermes AI
+
+![Hermes AI](docs/media/hermes-ai.png)
+
+The assistant with the whole terminal in front of it, on a tab of its own after
+Analysis, laid out like the chats you know: past chats down the left, the thread in
+the middle, the box at the bottom. It is not a chatbot with a market feed pasted in.
+It opens on the desk at a glance and fetches the rest through **tools** the collector
+serves — the same figures the panels print — and every number in its answer is
+checked against what it was shown or fetched.
+
+### What it reads
+
+- **The glance it opens on** — the clock, the strip, each book's driver board, event
+  risk, the index heavyweights, earnings, the top headlines, the scanner's leaders and
+  the latest notes, a few thousand tokens in all.
+- **Tools for the rest**, one set per desk, written for a model to read: one line per
+  headline, release or bar, so a row costs a third of what the panel's JSON would.
+  Each call shows under the answer while it runs.
+
+| Tool | Desk | What it returns |
+|---|---|---|
+| `scanner_row` | stocks | one name's whole row: last, the levels, what has broken, the setup and entry, the score and its parts, the options read (implied against realised, the expected move, the suggested contract), earnings, headlines and filings |
+| `bars` | stocks | a name's recent ten-minute or daily bars, with the EMA wave, VWAP and the levels |
+| `levels` | futures | a book's live ladder: prior settle and RTH, the overnight, today's opens, both VWAPs, the opening range, the expected move, the walls and the flip, each with its distance from last |
+| `heavyweights` | futures | what is moving the index name by name, in index points, with the print if it just reported and the headline that explains it |
+| `event_risk` | futures | the high-impact geopolitics, policy and energy stories since the last cash close, with the channels each reaches |
+| `wire` · `calendar` · `earnings` · `sessions` | both | the wire searched, one day's releases, the latest prints and what reports next, the session clock |
+| `digest` · `note` | both | a whole desk's digest, and the latest brief or game plan with its age |
+
+### How it answers
+![A Hermes AI answer, in four parts](docs/media/hermes-ai-read.png)
+
+- **A question about a trade comes back in four parts** — what the data says, what the
+  strategy needs to see, where it is wrong, what would change the read. Answers may
+  run longer here than in the side panel and carry headings, bullets and tables.
+- **Every figure is checked.** A number the model was not shown and did not fetch is
+  named under the answer; a figure carried from an earlier answer is flagged apart
+  from an invented one, and an index name is not a figure.
+- **Old notes are dated.** The latest brief or plan carries its age; past a few hours
+  the answer says how old it is before quoting it, and where the live ladder has
+  moved since, it quotes the live figure.
+- **The footer** under each answer shows the model, the time, the tokens it took, how
+  many came from the provider's cache, and the cost.
+- **Long chats stay coherent** — past twenty-four turns the older ones fold into a
+  short summary the next question carries. Chats are kept in this browser only.
+
+![Hermes AI on the NQ ladder](docs/media/hermes-ai-levels.png)
+
+### The router
+
+A router in front of the model decides how much a question gets:
+
+- **No model at all** — a handful of checks (the phase, whether a box is open, a strip
+  quote) are answered straight from the glance.
+- **Quick** — the glance, no tools and no thinking.
+- **Full** — a name, a level, a why or a comparison gets the tools of the desk the
+  question names, the futures set or the stocks set, not both. Every follow-up is
+  full.
+
+The fixed start of the prompt is marked for the provider's cache, which an Anthropic
+model needs telling about. `npm test` runs the router's tests.
+
+### The model
+
+`NT_HERMES_MODEL` runs this tab alone on a model you name, paid from your OpenRouter
+credit; unset, it uses the same free chain as the notes and the panel. The model must
+support tool calling. `scripts/hermes-bakeoff.mjs` puts the tab's own prompt and tools
+to several models and writes a report with each answer's time, tokens, cost and
+unverified figures. The first run, eight questions across both desks, is in
+[`docs/hermes-bakeoff-2026-10-30.md`](docs/hermes-bakeoff-2026-10-30.md):
+
+| Model | Answered | Avg time | Tool calls an answer | Unverified figures | Cost, all eight |
+|---|---|---|---|---|---|
+| nvidia/nemotron-3.5-super-vl:free | 8/8 | 49.5 s | 2.1 | 1 | $0.00 |
+| anthropic/claude-haiku-5.5 | 8/8 | 14.8 s | 2.3 | 3 | $0.03 |
+| google/gemini-3.8-flash | 8/8 | 12.0 s | 2.1 | 1 | $0.12 |
+| deepseek/deepseek-v4.1-flash | 8/8 | 10.7 s | 3.3 | 1 | $0.02 |
+| deepseek/deepseek-v4-pro | 8/8 | 34.8 s | 3.4 | 8 | $0.17 |
+
+### Beside any tab — the side panel
+![The Hermes side panel](docs/media/hermes.png)
+
+The terminal's assistant, in a panel beside the page rather than over it: the **Ask
+Hermes** key on the status rail, or `A`. It answers from the desk's live digest —
+the same facts the plan is written from, plus the tab on screen and the Scanner's
+selected name — and streams the answer as it is written.
+
+- **Openers follow the tab, and the desk.** On Macro: *what matters most going into
+  the next session? what are rates and the Fed path telling me? which headlines could
+  move NQ, ES or GC?* On Structure, stocks side: *what is the tape count saying, and
+  why? is breadth confirming the move? how should VIX shape my stops today?* — and on
+  the futures side the ladder, the gamma regime and the term structure. On the Scanner
+  with a name selected: *explain its setup · what would trigger and invalidate it ·
+  which contract fits it and why · why does it rank where it does.* On Analysis:
+  *summarise the game plan · which name has the best context · what would change the
+  plan at the open · explain the conviction cap* — or, on the futures side, the brief
+  in three lines and what would make today's calls wrong.
+- **Every figure in an answer is checked** against the data the model was shown; any
+  it cannot find is named under the answer, shown and marked rather than passed off.
+- The thread survives closing the panel, and which model answered, and how long it
+  took, is printed under each reply.
+
+---
+
 ## Why this exists
 
 I trade US stocks and ETFs through options in the New York session, on one
@@ -558,7 +637,7 @@ job description.
 One tab bar for both desks — **Macro** · **Structure** · **Scanner** · **Analysis** ·
 **Hermes AI** · **Settings**. Structure and Analysis carry the one desk switch — the
 futures or the stocks & options read — and remember it as one choice; `1`–`6` move
-between tabs, `D` flips the desk and `A` opens Hermes. Both desks are walked above. On the Macro tab,
+between tabs, `D` flips the desk and `A` opens Hermes. Both desks and Hermes AI are walked above. On the Macro tab,
 three columns on one session clock:
 
 | Column | Question it answers |
@@ -578,6 +657,8 @@ bands** bracketed where three or more rows sit inside a quarter of an ATR and th
 dealer gamma for the futures and in ETF prices, and the index ETFs' options; *is the
 tape with me?* — the vol curve, the tape count, breadth, fuel and the session clock,
 under the driver board.
+
+<p align="center"><img src="docs/media/ladder.png" alt="The NQ levels ladder with its confluence bands" width="560" /></p>
 
 Above them: the desk's instrument strip (with the time in New York *and* in your own zone),
 and a crawl of only the **high-impact** headlines. Below: a status rail listing
@@ -625,7 +706,7 @@ the whole board is keyboard-free by design — it is meant to be *read*.
 | Cboe (delayed option chains) | Each watchlist name's chain → IV, the straddle's expected move, skew, liquidity, the suggested contracts; a daily IV log for IV rank | 5 min SPY/QQQ/IWM, 10 min singles, in session; hourly otherwise |
 | SEC EDGAR | Each watchlist name's filings from the last three days | 30 min a name |
 | A companion options-analytics service | The seven dealer-gamma levels per book, over HTTP | 30 s |
-| OpenRouter | The futures session note and the stocks game plan (configurable model, fallback chain) | on demand |
+| OpenRouter | The futures session note, the stocks game plan and Hermes's answers (configurable models, fallback chain) | on demand |
 
 Everything flows through one **warm-snapshot collector**: a single background thread
 polls each source on its own cadence into memory; the API serves reads from that
@@ -682,13 +763,17 @@ npm run shortcut               # optional: the same thing, on the desktop
 - `npm run shortcut` puts a **HERMES** launcher on the desktop, winged helm and all,
   pointed at `dev.ps1`; `npm run shortcut:collector` adds a feed-only one beside it.
   The icon is `public/hermes.ico`, rendered from the same traced path as the header
-  by `npm run icon` — re-run that only if the mark or its hues change.
+  by `npm run icon` — re-run that only if the mark or its hues change. A shortcut made
+  before the rename (2026-10-30) points at `hermesx.ico`, which no longer exists, so it
+  shows a blank tile: run `npm run shortcut` again and delete the **HERMESX** one;
+  `ie4uinit.exe -show` refreshes Explorer's icon cache if the old picture lingers.
 
 Checks: `npm run check` runs TypeScript, ESLint, Ruff, mypy (strict) and the pytest
-suite — 316 tests, most of them regression tests bought with a real observed bug:
+suite — 860 tests, most of them regression tests bought with a real observed bug:
 the classifier rules, the FOMC un-mixing, the profile session windows, the
 scanner's Pine port and its clock boundaries, the JSON
-extractor's four observed wrappings.
+extractor's four observed wrappings. `npm test` runs the 13 TypeScript tests on
+Hermes's router and prompt.
 
 ---
 

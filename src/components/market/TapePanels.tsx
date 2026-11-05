@@ -4,6 +4,7 @@ import type { Breadth as BreadthData, BreadthIndex, Conviction, Fuel as FuelRow 
 import { Module } from "@/components/ui/Module";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
+import { familiesLine, liveLine } from "@/lib/bias";
 import { pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import {
@@ -11,6 +12,7 @@ import {
   Gap,
   SplitBar,
   biasWord,
+  readFigure,
   gradeText,
   sideText,
   stateText,
@@ -33,15 +35,13 @@ export function ConvictionPanel({ c }: { c: Conviction | null }) {
   return (
     <Module
       title="Tape conviction"
-      sub="signals that agree"
+      sub="the tape's reads, weighed"
       bodyClassName="px-0 py-0"
       right={
         c && c.total > 0 ? (
           <span className="flex items-baseline gap-2">
             <span className={cn("text-[11px] font-semibold", sideText(c.bias))}>{biasWord(c.bias)}</span>
-            <span className="fig text-[10.5px] text-ink-2">
-              {c.agree}/{c.total}
-            </span>
+            <span className={cn("fig text-[11px] font-semibold", sideText(c.bias))}>{readFigure(c)}</span>
             <span className={cn("qt-cap text-[9.5px]", gradeText(c))}>{c.grade}</span>
           </span>
         ) : undefined
@@ -60,23 +60,25 @@ export function ConvictionPanel({ c }: { c: Conviction | null }) {
                 className="hit grid grid-cols-[14px_minmax(0,1fr)_auto] items-baseline gap-2 px-3 py-[3px]"
                 title={v.note}
               >
-                <span className={cn("text-center text-[10px]", sideText(v.vote))} aria-label={v.vote}>
-                  {voteGlyph(v.vote)}
+                <span className={cn("text-center text-[10px]", v.live === false ? "text-ink-4" : sideText(v.vote))} aria-label={v.live === false ? "cannot vote" : v.vote}>
+                  {v.live === false ? "·" : voteGlyph(v.vote)}
                 </span>
-                <span className={cn("truncate text-[10.5px]", v.vote === "neutral" ? "text-ink-3" : "text-ink-2")}>
+                <span className={cn("truncate text-[10.5px]", v.live === false ? "text-ink-4" : v.vote === "neutral" ? "text-ink-3" : "text-ink-2")}>
                   {v.label}
                 </span>
-                <Tick value={v.value} className="fig text-right text-[10.5px] text-ink" />
+                <Tick value={v.value} className={cn("fig text-right text-[10.5px]", v.live === false ? "text-ink-3" : "text-ink")} />
               </li>
             ))}
           </ul>
           <div className="border-t border-ring/40 px-3 py-2">
             <ConvictionBar c={c} />
+            <p className="mt-1.5 text-[11px] text-ink-2">{liveLine(c)}</p>
+            <p className="mt-0.5 text-[11px] text-ink-3">{familiesLine(c)}</p>
             <p className="mt-1.5 text-[10px] leading-relaxed text-ink-3">
-              {c.agree} agree · {c.against} against · {c.neutral} neutral. A plan on this tape is capped at{" "}
-              <span className="fig text-ink-2">{c.max_conviction}/5</span>
-              {c.bias ? "; one against the tape at 3." : "."} Strong is six or more agreeing with at most one
-              against.
+              {c.agree} agree · {c.against} against · {c.neutral} flat · {c.cannot_vote ?? 0} cannot vote yet. A plan on
+              this tape is capped at <span className="fig text-ink-2">{c.max_conviction}/5</span>
+              {c.bias ? "; one against the tape at 3." : "."} Strong is 50 or more with at least 60% of the weight
+              live; moderate 30; weak 10.
             </p>
           </div>
         </>

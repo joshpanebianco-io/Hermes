@@ -55,10 +55,13 @@ function tint(p: number | null): string {
 
 export function Movers({
   indices,
+  cashOpen = true,
   ageMin,
   error,
 }: {
   indices: Record<string, IndexMovers>;
+  /** The constituents read the regular session; outside it, their moves are the last one's. */
+  cashOpen?: boolean;
   ageMin?: number | null;
   error?: string | null;
 }) {
@@ -121,7 +124,7 @@ export function Movers({
           ) : (
             <List m={active} />
           )}
-          <Net m={active} />
+          <Net m={active} cashOpen={cashOpen} />
         </>
       )}
     </Module>
@@ -239,7 +242,7 @@ function List({ m }: { m: IndexMovers }) {
  * really for: how much of today is these names, and how much is everything
  * else.
  */
-function Net({ m }: { m: IndexMovers }) {
+function Net({ m, cashOpen }: { m: IndexMovers; cashOpen: boolean }) {
   const up = m.net_contribution >= 0;
   return (
     <div className="border-t border-ring/40 px-3 py-1.5 text-[10px] leading-relaxed text-ink-3">
@@ -247,7 +250,7 @@ function Net({ m }: { m: IndexMovers }) {
       <span className="fig text-ink-3">{m.covered_weight}%</span>
       <span> of {m.index} and contributed </span>
       <Tick value={pct(m.net_contribution, 2)} className={cn("fig", up ? "up" : "down")} />
-      <span> to it today.</span>
+      <span> to it {cashOpen ? "today" : "in the last session"}.</span>
       {m.as_of && <span className="text-ink-3"> Weights as of {m.as_of}.</span>}
     </div>
   );

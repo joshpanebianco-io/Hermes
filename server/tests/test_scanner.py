@@ -1,5 +1,5 @@
 """
-The scanner — a port of LE_Model.pine, so every test here is a place the port
+The scanner — a port of the Pine script, so every test here is a place the port
 could quietly disagree with the script the owner trades off.
 
 The clock tests pin the boundary instants (03:59/04:00, 09:29/09:30, 15:59/16:00,
@@ -363,9 +363,30 @@ def test_score_parts_sum_to_the_total() -> None:
     reg = {"bias": "long", "confirm": "confirm"}
     sc = scanscore.score_row(_row(), reg, 0.5, None, None)
     by = {p["key"]: p["pts"] for p in sc["parts"]}
-    assert by == {"structure": 30, "rs": 15.0, "location": 20, "volume": 7, "market": 15,
+    assert by == {"structure": 30, "rs": 15, "location": 14, "volume": 12, "market": 15,
                   "frame": 0, "catalyst": 0}
-    assert sc["total"] == 87 and sc["side"] == "long"
+    assert sc["total"] == 86 and sc["side"] == "long"
+
+
+@pytest.mark.parametrize(
+    ("rvol", "want"),
+    [(None, 0), (0.99, 0), (1.0, 3), (1.24, 3), (1.25, 6), (1.49, 6), (1.5, 12), (1.99, 12),
+     (2.0, 15), (6.0, 15)],
+)
+def test_relative_volume_pays_by_its_steps(rvol: float | None, want: int) -> None:
+    sc = scanscore.score_row(_row(rvol=rvol), {"bias": "long", "confirm": "confirm"}, None, None,
+                             None)
+    part = next(p for p in sc["parts"] if p["key"] == "volume")
+    assert (part["pts"], part["max"]) == (want, 15)
+
+
+def test_relative_strength_fills_at_one_daily_atr_in_the_trade_s_direction() -> None:
+    def rs_pts(rs: float) -> int:
+        sc = scanscore.score_row(_row(rs={"SPY": rs, "QQQ": None}),
+                                 {"bias": "long", "confirm": "confirm"}, None, None, None)
+        return next(p for p in sc["parts"] if p["key"] == "rs")["pts"]
+
+    assert (rs_pts(1.0), rs_pts(2.5), rs_pts(0.5), rs_pts(0.0), rs_pts(-0.4)) == (25, 25, 12, 0, 0)
 
 
 def test_score_clamps_at_zero_and_lists_penalties() -> None:
@@ -631,7 +652,7 @@ def test_before_the_bell_in_play_stands_in_for_rvol() -> None:
         sc = scanscore.score_row(_row(), {"bias": None, "confirm": None}, None, None,
                                  None, session=session)
         vol = next(p for p in sc["parts"] if p["key"] == "volume")
-        assert (vol["pts"], vol["note"]) == (7, "RVOL 1.60")
+        assert (vol["pts"], vol["note"]) == (12, "RVOL 1.60")
 
 
 # --- the live layer and the close read ---------------------------------------------------

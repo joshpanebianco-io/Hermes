@@ -851,8 +851,8 @@ function Catalysts({ f, b }: { f: BriefFacts; b: BriefBody }) {
                       </div>
                     )}
                     {/* The release's other series, one line each (releases.py). */}
-                    {c.also?.map((a) => (
-                      <div key={a.title} className="text-[11.5px] leading-snug text-ink-3">
+                    {c.also?.map((a, i) => (
+                      <div key={`${a.title}-${i}`} className="text-[11.5px] leading-snug text-ink-3">
                         <span className="text-ink-2">{subLabel(a.title, c.title)}</span>{" "}
                         {[a.actual && `actual ${a.actual}`, a.consensus && `consensus ${a.consensus}`, a.previous && `prior ${a.previous}`]
                           .filter(Boolean)

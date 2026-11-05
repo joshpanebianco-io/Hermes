@@ -1,4 +1,4 @@
-"""The chart's earlier-day levels (scan.history_levels) — LE_Model.pine's
+"""The chart's earlier-day levels (scan.history_levels) — the Pine script's
 "keep previous days' levels", so the pre-market highs and lows a session
 traded against are on the chart overnight too."""
 

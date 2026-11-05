@@ -13,7 +13,6 @@ import { Brief } from "@/components/panels/Brief";
 import { Module } from "@/components/ui/Module";
 import { PastList } from "@/components/panels/PastList";
 import { biasHue, biasLabel } from "@/lib/bias";
-import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { HelmMark, HelmSweep, useHelmId } from "@/components/ui/HelmLoader";
 import { useQuiet } from "@/components/state/UiMode";

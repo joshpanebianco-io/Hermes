@@ -2,7 +2,7 @@
 The scanner's event log — the feed alerts are raised from, and the record the
 score will one day be judged against.
 
-WHY THE ENGINE KEEPS IT, NOT THE PAGE. LE_Model.pine alerts on its signals; the
+WHY THE ENGINE KEEPS IT, NOT THE PAGE. The Pine script alerts on its signals; the
 terminal now does too (owner instruction, 2026-10-13: alerts, and "signal
 logging so the score can be calibrated"). An alert raised by diffing two polls
 in the browser would fire twice in two tabs, never fire with the page closed,
@@ -50,11 +50,13 @@ record that flatters the strategy is worse than none. Outcomes are read off the
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import statistics
 import threading
 from collections.abc import Iterable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from .config import CACHE_DIR
@@ -62,6 +64,13 @@ from .holidays import close_minute
 from .scan import BAR_SEC, CLOSE_LAG_SEC, ET, SRC_SEC, Bar, fmt_px
 
 EVENTS_FILE = os.path.join(CACHE_DIR, "scanner_events.jsonl")
+#: The list as it stood before the bell, one line a day, beside the events: the
+#: pre-open rank is what the game plan picks from, and nothing else records it.
+PREOPEN_NAME = "scanner_preopen.jsonl"
+#: The last look before the open: from this minute, once a day.
+PREOPEN_AT = time(9, 25)
+#: A held trade's R is capped here, so one tiny stop cannot carry an average.
+HELD_CAP = 5.0
 KEEP_DAYS = 30
 LIVE_LAG_SEC = 2 * BAR_SEC  # found within two bars of the bar closing
 #: A day whose last bars never arrived settles anyway this long after its
@@ -93,6 +102,21 @@ def dedupe_key(ev: dict[str, Any]) -> str:
     return f"{ev['day']}|{ev['sym']}|{ev['kind']}|{ev['side']}|{ev['level']}|{ev['t']}"
 
 
+def held_r(outcome: dict[str, Any] | None) -> float | None:
+    """What holding to the close made: -1 R if the stop went first, else the close,
+    capped at HELD_CAP. Pure.
+
+    THE STOP IS PART OF THE TRADE (2026-11-05). `ret_close_r` reads the close whatever
+    happened on the way, so a signal stopped out and recovered counted as a win, and
+    one stop a tenth of a percent wide could carry a group: the record showed score
+    under 40 averaging +4.9 R, which made the worst-ranked names look the best."""
+    o = outcome or {}
+    if o.get("stopped"):
+        return -1.0
+    c = o.get("ret_close_r")
+    return max(-1.0, min(HELD_CAP, float(c))) if isinstance(c, int | float) else None
+
+
 def blank_outcome() -> dict[str, Any]:
     return {"r": None, "mfe_r": None, "mae_r": None, "hit_1r": None, "hit_2r": None,
             "stopped": None, "ret_30m_r": None, "ret_60m_r": None, "ret_close_r": None,
@@ -101,9 +125,10 @@ def blank_outcome() -> dict[str, Any]:
 
 def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price: float,
            stop: float | None, score: int | None, note: str, day: str,
-           now_ts: float, parts: dict[str, Any] | None = None) -> dict[str, Any]:
+           now_ts: float, parts: dict[str, Any] | None = None,
+           ctx: dict[str, Any] | None = None) -> dict[str, Any]:
     live = now_ts - (bar_t + BAR_SEC) <= LIVE_LAG_SEC
-    return {
+    ev: dict[str, Any] = {
         "id": 0,
         "ts": _iso(now_ts),
         "bar_ts": _iso(bar_t),
@@ -125,6 +150,12 @@ def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price:
         "live": live,
         "outcome": blank_outcome() if kind in TRADES else None,
     }
+    # What the next audit needs and the parts cannot say (2026-11-05): where the name
+    # stood on the table, its stop's room and the raw figures behind the points, with
+    # the 1-hour RS beside the day's, which includes the gap.
+    if live and ctx:
+        ev["ctx"] = ctx
+    return ev
 
 
 def score_parts(score: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -138,7 +169,8 @@ def score_parts(score: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None, day: str,
-                  now_ts: float, parts: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+                  now_ts: float, parts: dict[str, Any] | None = None,
+                  ctx: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The (L) / (E) / breakout events one name's replayed signals imply. Pure."""
     out: list[dict[str, Any]] = []
     for sg in signals:
@@ -149,7 +181,7 @@ def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None
         text = str(sg.get("note") or "")
         note = f"{_LABEL[kind]} {side} — {text[:1].lower()}{text[1:]}"
         out.append(_event(sym, kind, side, sg.get("level"), int(sg["t"]), sg["price"],
-                          sg.get("stop"), score, note, day, now_ts, parts))
+                          sg.get("stop"), score, note, day, now_ts, parts, ctx))
     return out
 
 
@@ -158,13 +190,16 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
     """Every event the payload's rows imply right now — new or not. Pure."""
     now_ts = now.timestamp()
     out: list[dict[str, Any]] = []
-    for r in rows:
-        if not r.get("ok"):
-            continue
+    good = [r for r in rows if r.get("ok")]
+    for rank, r in enumerate(good, start=1):
         sym = str(r.get("sym"))
         score = (r.get("score") or {}).get("total")
         parts = score_parts(r.get("score"))
-        out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts)
+        ctx = {"rank": rank, "of": len(good), "rs": (r.get("rs") or {}).get("SPY"),
+               "rs_1h": (r.get("rs_1h") or {}).get("SPY"),
+               "rvol": r.get("rvol"), "atr_b": r.get("atr_b"),
+               "state": (r.get("setup") or {}).get("state")}
+        out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts, ctx)
         if session != "rth" or r.get("last") is None:
             continue
         prog = r.get("progress") or {}
@@ -316,6 +351,19 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
     return out
 
 
+def preopen_line(rows: Iterable[dict[str, Any]], day: str, now: datetime) -> dict[str, Any]:
+    """The list as it stands before the bell, best first, for one line of the log. Pure."""
+    good = [r for r in rows if r.get("ok")]
+    return {
+        "day": day, "at_et": now.astimezone(ET).strftime("%H:%M"),
+        "rows": [{"sym": r.get("sym"), "rank": i, "score": (r.get("score") or {}).get("total"),
+                  "side": (r.get("score") or {}).get("side"),
+                  "state": (r.get("setup") or {}).get("state"),
+                  "parts": score_parts(r.get("score"))}
+                 for i, r in enumerate(good, start=1)],
+    }
+
+
 def stats(events: Iterable[dict[str, Any]], days: int, today: date) -> dict[str, Any]:
     """Settled (L)/(E) outcomes over the last `days`, grouped. Pure."""
     start = today - timedelta(days=days)
@@ -331,6 +379,10 @@ def stats(events: Iterable[dict[str, Any]], days: int, today: date) -> dict[str,
         v = [x for x in xs if x is not None]
         return round(sum(v) / len(v), 3) if v else None
 
+    def med(xs: list[float | None]) -> float | None:
+        v = [x for x in xs if x is not None]
+        return round(statistics.median(v), 3) if v else None
+
     def group(key: str, evs: list[dict[str, Any]]) -> dict[str, Any]:
         n = len(evs)
         outs = [e["outcome"] for e in evs]
@@ -338,9 +390,11 @@ def stats(events: Iterable[dict[str, Any]], days: int, today: date) -> dict[str,
             "key": key,
             "n": n,
             "win_1r": round(sum(1 for o in outs if o.get("hit_1r")) / n, 3) if n else None,
-            "avg_close_r": avg([o.get("ret_close_r") for o in outs]),
-            "avg_mfe_r": avg([o.get("mfe_r") for o in outs]),
-            "avg_mae_r": avg([o.get("mae_r") for o in outs]),
+            "held_r": avg([held_r(o) for o in outs]),
+            # Medians: one stop a hair wide reads as +440 R of best, and carried the
+            # average to +10 R on a group whose typical signal saw +4.5 R (2026-11-05).
+            "med_mfe_r": med([o.get("mfe_r") for o in outs]),
+            "med_mae_r": med([o.get("mae_r") for o in outs]),
         }
 
     def scored(lo: float, hi: float) -> list[dict[str, Any]]:
@@ -387,12 +441,11 @@ def record_table(events: Iterable[dict[str, Any]], days: int,
         groups.setdefault(f"{band}|{e['kind']}|{e['side']}", []).append(e)
     out: dict[str, dict[str, Any]] = {}
     for key, evs in groups.items():
-        closes = [x["outcome"].get("ret_close_r") for x in evs]
-        closes = [c for c in closes if c is not None]
+        held = [h for x in evs if (h := held_r(x["outcome"])) is not None]
         out[key] = {
             "n": len(evs),
             "win_1r": round(sum(1 for x in evs if x["outcome"].get("hit_1r")) / len(evs), 3),
-            "avg_close_r": round(sum(closes) / len(closes), 2) if closes else None,
+            "held_r": round(sum(held) / len(held), 2) if held else None,
             "sessions": len({x["day"] for x in evs}),
         }
     return out
@@ -407,7 +460,30 @@ class EventLog:
         self.events: list[dict[str, Any]] = []
         self._keys: set[str] = set()
         self._next = 1
+        self._preopen_path = os.path.join(os.path.dirname(path), PREOPEN_NAME)
+        self._preopen_days = self._read_preopen_days()
         self._load()
+
+    def _read_preopen_days(self) -> set[str]:
+        """The days already on file, so a restart at 09:27 does not write the day twice."""
+        days: set[str] = set()
+        with contextlib.suppress(OSError, ValueError), open(
+                self._preopen_path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    days.add(str(json.loads(line).get("day")))
+        return days
+
+    def _note_preopen(self, payload: dict[str, Any], rows: list[dict[str, Any]], day: str,
+                      now: datetime) -> None:
+        """One line a day: the rank at the last look before the open. Best effort: a
+        full disk must not cost the signals."""
+        et = now.astimezone(ET)
+        if payload.get("session") != "pre" or et.time() < PREOPEN_AT or day in self._preopen_days:
+            return
+        self._preopen_days.add(day)
+        with contextlib.suppress(OSError), open(self._preopen_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(preopen_line(rows, day, now), separators=(",", ":")) + "\n")
 
     def _load(self) -> None:
         try:
@@ -462,6 +538,7 @@ class EventLog:
         new: list[dict[str, Any]] = []
         changed = False
         with self._lock:
+            self._note_preopen(payload, rows, day, now)
             for c in candidates(rows, str(payload.get("session")), day, now):
                 k = dedupe_key(c)
                 if k in self._keys:

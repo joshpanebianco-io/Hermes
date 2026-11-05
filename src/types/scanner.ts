@@ -3,7 +3,7 @@ import type { Frame, SourceStatus } from "@/types/terminal";
 /**
  * The scanner's payload — GET /api/scanner on the collector.
  *
- * LE_Model.pine's scanner, served by the engine instead of drawn by
+ * The Pine script's scanner, served by the engine instead of drawn by
  * TradingView: the four levels (PDH / PDL / PMH / PML) and how close each name
  * is to breaking them, relative strength against SPY and QQQ scaled by each
  * name's own ATR, the 8 EMA wave, VWAP, and the (L) / (E) signals replayed on
@@ -70,13 +70,36 @@ export interface ConvictionVote {
   value: string;
   vote: Side | "neutral";
   note: string;
+  /** False when it cannot vote at this hour: shut or missing, which is not the same as flat. */
+  live?: boolean;
+}
+
+/** One family of reads, weighed for the session (server bias.py). Absent on a plan stored before them. */
+export interface ScoreFamily {
+  key: string;
+  label: string;
+  /** The strip's short name: "Structure", "Risk". */
+  short: string;
+  /** Its share of the session's score. */
+  weight: number;
+  /** -100 to +100; null when none of its reads can vote at this hour. */
+  score: number | null;
+  live: number;
+  total: number;
 }
 
 export interface Conviction {
   bias: Side | null;
+  /** -100 to +100 across the reads that can vote. A plan stored before 2026-11-05 has none. */
+  score?: number;
+  coverage?: number;
+  weight_label?: string;
+  families?: ScoreFamily[];
   agree: number;
   against: number;
   neutral: number;
+  live?: number;
+  cannot_vote?: number;
   total: number;
   grade: "strong" | "moderate" | "weak" | "none";
   max_conviction: 1 | 2 | 3 | 4 | 5;
@@ -240,7 +263,7 @@ export interface ScanRow {
     band: "<40" | "40-59" | "60+";
     n: number;
     win_1r: number | null;
-    avg_close_r: number | null;
+    held_r: number | null;
     sessions: number | null;
     small: boolean;
   } | null;
@@ -611,9 +634,9 @@ export interface ScanStatGroup {
   key: string;
   n: number;
   win_1r: number | null;
-  avg_close_r: number | null;
-  avg_mfe_r: number | null;
-  avg_mae_r: number | null;
+  held_r: number | null;
+  med_mfe_r: number | null;
+  med_mae_r: number | null;
 }
 
 export interface ScanStats {

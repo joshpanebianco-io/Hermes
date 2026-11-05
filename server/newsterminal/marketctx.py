@@ -7,13 +7,14 @@ options". Everything here is COMPUTED, from inputs the collector already holds;
 the page prints it and the Game plan is shown it, and none of it is the
 model's.
 
-THE TAPE COUNT. Eleven independent reads of the tape, each a vote — long,
-short or neutral — with its threshold stated as a constant below, so a vote
-the reader disagrees with can be traced to the number that cast it. The
-grade is arithmetic on the count, and its `max_conviction` is the ceiling the
-Game plan's convictions are capped at. A read whose input is missing is a
-NEUTRAL vote that says why, never a guess: a count that quietly drops a vote
-reads stronger than it is.
+THE TAPE COUNT. Eleven reads of the tape, each a vote — long, short or
+neutral — with its threshold stated as a constant below, so a vote the reader
+disagrees with can be traced to the number that cast it. They are weighed into
+one score by family and session (bias.py), the grade is arithmetic on the score,
+and its `max_conviction` is the ceiling the Game plan's convictions are capped
+at. A read whose input is missing or whose market is shut carries `live: false`
+and says why, never a guess: it leaves the score, and the page prints how much of
+the weight that leaves.
 
 THE CASH MARKET DOES NOT VOTE BEFORE IT OPENS. Before 09:30 the sector SPDRs,
 RSP and the index constituents still carry yesterday's change (the board
@@ -47,6 +48,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import bias as bias_mod
 from . import releases
 from .holidays import next_trading_day
 from .policy import HOLD_BAND_BP
@@ -72,12 +74,6 @@ INDEX_FLAT = 0.15  # % — SPY moved less than this: no direction for volume to 
 PART_LONG = 60.0  # % of the index leaders up, at or above → long
 PART_SHORT = 40.0  # at or below → short
 PART_MIN = 20  # fewer leaders reporting than this: no vote
-
-# ---- the grade --------------------------------------------------------------------
-STRONG_AGREE = 6
-STRONG_AGAINST = 1
-MODERATE_AGREE = 4
-MAX_CONVICTION = {"strong": 5, "moderate": 4, "weak": 3, "none": 2}
 
 # ---- fuel: how much of the implied move the index has used ------------------------
 # The thresholds (volterm.FUEL_ROOM / FUEL_STRETCHED) and the word are volterm's,
@@ -128,8 +124,10 @@ def _signed(x: float, dp: int, unit: str = "") -> str:
     return f"{'−' if x < 0 else '+'}{abs(x):.{dp}f}{unit}"
 
 
-def _vote(key: str, label: str, value: str, vote: str, note: str) -> dict[str, Any]:
-    return {"key": key, "label": label, "value": value, "vote": vote, "note": note}
+def _vote(key: str, label: str, value: str, vote: str, note: str,
+          live: bool = True) -> dict[str, Any]:
+    """One read. `live` false means it cannot vote at this hour: not flat, absent."""
+    return {"key": key, "label": label, "value": value, "vote": vote, "note": note, "live": live}
 
 
 def _side(x: float, long_at: float, short_at: float) -> str:
@@ -216,12 +214,13 @@ def _levels_vote(key: str, sym: str, row: dict[str, Any] | None,
                  session: str) -> dict[str, Any]:
     label = f"{sym} vs its levels"
     if row is None:
-        return _vote(key, label, "—", "neutral", f"no {sym} bars yet")
+        return _vote(key, label, "—", "neutral", f"no {sym} bars yet", live=False)
     if _before_open(session):
         gap = _num(row.get("ext_pct"))
         if gap is None:
             return _vote(key, label, "—", "neutral",
-                         "no extended-hours print yet — before the open it votes on the gap")
+                         "no extended-hours print yet — before the open it votes on the gap",
+                         live=False)
         v = _side(gap, GAP_FLAT, -GAP_FLAT)
         why = {"long": "gapping up", "short": "gapping down",
                "neutral": f"a gap inside ±{GAP_FLAT}% is no lean"}[v]
@@ -249,7 +248,7 @@ def _vix_dir(quotes: list[dict[str, Any]], session: str, now: datetime,
     key, label = "vix_dir", "VIX direction"
     q, pct, why = _quote(quotes, "VIX", "pct", session, now, td)
     if pct is None or q is None:
-        return _vote(key, label, "—", "neutral", why or "no VIX")
+        return _vote(key, label, "—", "neutral", why or "no VIX", live=False)
     v = _side(-pct, VIX_FLAT, -VIX_FLAT)
     last = _num(q.get("last"))
     value = (f"{last:.2f} " if last is not None else "") + _signed(pct, 1, "%")
@@ -265,11 +264,12 @@ def _vix_curve(quotes: list[dict[str, Any]], session: str, now: datetime,
     vt = volterm_state(quotes)
     ratio = _num(vt.get("ratio"))
     if ratio is None:
-        return _vote(key, label, "—", "neutral", "VIX or VIX3M missing from the board")
+        return _vote(key, label, "—", "neutral", "VIX or VIX3M missing from the board", live=False)
     q = _q(quotes, "VIX")
     if q is not None and not _fresh(q, session, now, td):
         return _vote(key, label, f"{ratio:.2f}", "neutral",
-                     f"VIX has not traded {_on(td, now)} yet — the curve votes once it does")
+                     f"VIX has not traded {_on(td, now)} yet — the curve votes once it does",
+                     live=False)
     v = "long" if ratio < CURVE_CALM else "short" if ratio >= CURVE_STRESS else "neutral"
     note = {"long": f"VIX ÷ VIX3M under {CURVE_CALM:.2f}: steep contango, a calm tape",
             "short": f"VIX ÷ VIX3M at {CURVE_STRESS:.2f} or more: near-dated protection bid",
@@ -285,9 +285,9 @@ def _sectors_vote(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
     value = f"{up} up · {down} down" if n else "—"
     if _before_open(session):
         return _vote(key, label, value, "neutral",
-                     "the last session's count — the sector SPDRs vote from the open")
+                     "the last session's count — the sector SPDRs vote from the open", live=False)
     if n < SECTOR_MIN:
-        return _vote(key, label, value, "neutral", f"only {n} sectors reporting")
+        return _vote(key, label, value, "neutral", f"only {n} sectors reporting", live=False)
     need = math.ceil(SECTOR_SHARE * n)
     if up >= need:
         return _vote(key, label, value, "long", f"{up} of {n} sectors up — a broad bid")
@@ -300,12 +300,12 @@ def _equal_weight(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
     key, label = "equal_weight", "Equal weight vs SPY"
     rsp, spy = _sector_pct(sectors, "RSP"), _sector_pct(sectors, "SPY")
     if rsp is None or spy is None:
-        return _vote(key, label, "—", "neutral", "RSP or SPY missing from the sectors")
+        return _vote(key, label, "—", "neutral", "RSP or SPY missing from the sectors", live=False)
     spread = rsp - spy
     value = f"RSP {_signed(rsp, 2, '%')} vs SPY {_signed(spy, 2, '%')}"
     if _before_open(session):
         return _vote(key, label, value, "neutral",
-                     "the last session's figures — votes from the open")
+                     "the last session's figures — votes from the open", live=False)
     v = _side(spread, RSP_EDGE, -RSP_EDGE)
     note = {"long": "the average stock is beating the index — broad participation",
             "short": "the index is leaning on its megacaps — the average stock lags",
@@ -319,7 +319,7 @@ def _pct_vote(quotes: list[dict[str, Any]], session: str, now: datetime, *, key:
     """A vote on one quote's day change: `rising` is the side a rise votes for."""
     q, pct, why = _quote(quotes, sym, "pct", session, now, td)
     if pct is None or q is None:
-        return _vote(key, label, "—", "neutral", why or f"no {sym}")
+        return _vote(key, label, "—", "neutral", why or f"no {sym}", live=False)
     last = _num(q.get("last"))
     value = f"{sym} " + (f"{last:.2f} " if last is not None else "") + _signed(pct, 2, "%")
     if abs(pct) < flat:
@@ -334,7 +334,7 @@ def _yields(quotes: list[dict[str, Any]], session: str, now: datetime,
     key, label = "yields", "10Y yield"
     q, chg, why = _quote(quotes, "US10Y", "chg", session, now, td)
     if chg is None or q is None:
-        return _vote(key, label, "—", "neutral", why or "no 10Y")
+        return _vote(key, label, "—", "neutral", why or "no 10Y", live=False)
     bp = chg * 100.0
     last = _num(q.get("last"))
     value = (f"{last:.2f}% " if last is not None else "") + _signed(bp, 1, "bp")
@@ -348,10 +348,10 @@ def _yields(quotes: list[dict[str, Any]], session: str, now: datetime,
 def _index_volume(rows: dict[str, dict[str, Any]], session: str) -> dict[str, Any]:
     key, label = "index_volume", "Index volume"
     if _before_open(session):
-        return _vote(key, label, "—", "neutral", "starts at the open")
+        return _vote(key, label, "—", "neutral", "starts at the open", live=False)
     rv = [x for s in ("SPY", "QQQ") if (x := _num((rows.get(s) or {}).get("rvol"))) is not None]
     if not rv:
-        return _vote(key, label, "—", "neutral", "no RVOL on SPY or QQQ yet")
+        return _vote(key, label, "—", "neutral", "no RVOL on SPY or QQQ yet", live=False)
     r = sum(rv) / len(rv)
     value = f"RVOL {r:.2f}×"
     move = _num((rows.get("SPY") or {}).get("chg_pct"))
@@ -376,10 +376,10 @@ def _participation(constituents: dict[str, Any] | None, session: str) -> dict[st
     value = f"{up} up · {down} down" if lead else "—"
     if _before_open(session):
         return _vote(key, label, value, "neutral",
-                     "the last session's changes — the leaders vote from the open")
+                     "the last session's changes — the leaders vote from the open", live=False)
     if up + down < PART_MIN:
         return _vote(key, label, value, "neutral",
-                     f"only {up + down} of the index leaders reporting")
+                     f"only {up + down} of the index leaders reporting", live=False)
     pct = up / (up + down) * 100.0
     v = _side(pct, PART_LONG, PART_SHORT)
     note = {"long": f"{pct:.0f}% of the NDX/SPX leaders up — the weight is behind the move",
@@ -417,35 +417,17 @@ def votes(scan: dict[str, Any], quotes: list[dict[str, Any]], sectors: list[dict
     ]
 
 
-def conviction(vs: list[dict[str, Any]]) -> dict[str, Any]:
-    """The count and its grade. Pure.
-
-    strong: agree ≥ 6 and against ≤ 1 · moderate: agree ≥ 4 and agree > against + 1 ·
-    weak: any other count with a side · none: a tie, or no votes at all.
-    """
-    long_n = sum(v.get("vote") == "long" for v in vs)
-    short_n = sum(v.get("vote") == "short" for v in vs)
-    bias = "long" if long_n > short_n else "short" if short_n > long_n else None
-    agree = max(long_n, short_n)
-    against = min(long_n, short_n)
-    if bias is None:
-        grade = "none"
-    elif agree >= STRONG_AGREE and against <= STRONG_AGAINST:
-        grade = "strong"
-    elif agree >= MODERATE_AGREE and agree > against + 1:
-        grade = "moderate"
-    else:
-        grade = "weak"
-    return {"bias": bias, "agree": agree, "against": against,
-            "neutral": len(vs) - long_n - short_n, "total": len(vs), "grade": grade,
-            "max_conviction": MAX_CONVICTION[grade], "votes": vs}
+def conviction(vs: list[dict[str, Any]], session: str = "rth") -> dict[str, Any]:
+    """The tape's score and its grade, weighed for the scanner's session (bias.py). Pure."""
+    return bias_mod.tape_read(vs, session)
 
 
 def conviction_for(scan: dict[str, Any], quotes: list[dict[str, Any]],
                    sectors: list[dict[str, Any]], constituents: dict[str, Any] | None,
                    now: datetime | None = None) -> dict[str, Any]:
-    """The Scanner's `regime.conviction` — the same count the Market tab prints. Pure."""
-    return conviction(votes(scan, quotes, sectors, constituents, now))
+    """The Scanner's `regime.conviction` — the same read the Market tab prints. Pure."""
+    return conviction(votes(scan, quotes, sectors, constituents, now),
+                      str(scan.get("session") or "closed"))
 
 
 # -------------------------------------------------------------------- breadth

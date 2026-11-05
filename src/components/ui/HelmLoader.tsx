@@ -28,9 +28,10 @@ export function HelmMark({ size, gradId }: { size: number; gradId: string }) {
   // Hairline line art: fatter strokes at small sizes, or the trace vanishes.
   const stroke = size < 32 ? 12 : size < 60 ? 8 : 6;
   return (
-    <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden style={{ overflow: "visible" }}>
+    <svg className="hermes-arrive" width={size} height={size} viewBox="0 0 512 512" aria-hidden style={{ overflow: "visible" }}>
       <defs>
-        <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="0">
+        {/* spreadMethod="repeat" is what makes the slide a loop: see the header's mark. */}
+        <linearGradient id={gradId} gradientUnits="userSpaceOnUse" spreadMethod="repeat" x1="0" y1="0" x2="1024" y2="0">
           <stop offset="0" stopColor="var(--icon-a)" />
           <stop offset="0.25" stopColor="var(--title-sheen)" />
           <stop offset="0.5" stopColor="var(--icon-b)" />
@@ -58,7 +59,7 @@ export function HelmMark({ size, gradId }: { size: number; gradId: string }) {
 export function HelmSweep({ width, gradId, className }: { width: number; gradId: string; className?: string }) {
   const run = Math.round(width / 3);
   return (
-    <svg className={className} width={width} height={2} viewBox={`0 0 ${width} 2`} preserveAspectRatio="none" aria-hidden>
+    <svg className={cn("hermes-arrive", className)} width={width} height={2} viewBox={`0 0 ${width} 2`} preserveAspectRatio="none" aria-hidden>
       <rect width={width} height="2" fill="var(--ring)" />
       <rect width={run} height="2" fill={`url(#${gradId})`}>
         <animate attributeName="x" from={-run} to={width} dur="1.8s" repeatCount="indefinite" />
@@ -103,7 +104,7 @@ export function HelmLoader({
     >
       <HelmMark size={size} gradId={id} />
       <HelmSweep width={Math.max(64, Math.round(size * 2.4))} gradId={id} />
-      {caption && <span className="text-[11px] text-ink-3">{label}…</span>}
+      {caption && <span className="hermes-arrive text-[11px] text-ink-3">{label}…</span>}
     </div>
   );
 }
@@ -114,7 +115,7 @@ export function HelmInline({ label, size = 14, className }: { label: string; siz
   return (
     <span className={cn("helm-loader inline-flex items-center gap-1.5", className)} role="status" aria-label={label}>
       <HelmMark size={size} gradId={id} />
-      <span>{label}…</span>
+      <span className="hermes-arrive">{label}…</span>
     </span>
   );
 }

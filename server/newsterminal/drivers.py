@@ -8,9 +8,9 @@ plan's convictions are capped at. The futures desk had nothing of the kind:
 its macro breakdown lived only in the Analysis brief, on demand, minutes to
 run on a free model, two runs free to disagree. Between briefs the Terminal
 showed the 10Y up six basis points and said nothing about what that did to
-NQ or to gold. This is the same count re-cast for NQ, ES and GC — every
-driver a vote with its threshold and its reason, graded by the stocks desk's
-own arithmetic (marketctx.conviction), with one line on how to treat it.
+NQ or to gold. This is the same read re-cast for NQ, ES and GC — every
+driver a vote with its threshold and its reason, weighed by bias.py with the
+stocks desk's tape, with one line on how to treat it.
 
 THREE LAYERS, READ TOGETHER. Macro sets the direction (yields, the dollar,
 credit, the VIX and its curve, today's inflation prints); positioning says
@@ -25,9 +25,10 @@ OpEx week are what a move will find, not which way it goes; they sit under
 the votes with their reads and never enter the count.
 
 THE INPUTS KEEP THEIR OWN CLOCKS. A cash-market read (credit, breadth, the
-leaders, the VIX's day change) is a neutral vote that says "closed" outside
-US hours — the futures desk runs through Asia and London, and a count that
-quietly dropped a vote would read stronger than it is.
+leaders, the VIX's day change) says "closed" outside US hours and carries
+`live: false`: the futures desk runs through Asia and London, and a read that
+cannot vote is not the same as a flat one. The score leaves it out and prints
+how much of the session's weight that leaves (bias.py), so a thin read says so.
 
 PURE. `build` takes the snapshot's blocks and does no I/O; computed on read
 like volterm and expiry.
@@ -38,10 +39,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from . import bias as bias_mod
 from . import events as events_mod
 from . import frame as frame_mod
-from . import marketctx, releases, structure, volterm
+from . import marketctx, releases, report, structure, volterm
 from .profile import value_position
+from .sources import cot as cot_mod
 
 BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
 #: Which cash index each equity book's leaders are read from.
@@ -76,9 +79,11 @@ def _q(quotes: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     return next((q for q in quotes if q.get("key") == key), None)
 
 
-def _vote(key: str, label: str, layer: str, value: str, vote: str, note: str) -> dict[str, Any]:
+def _vote(key: str, label: str, layer: str, value: str, vote: str, note: str,
+          live: bool = True) -> dict[str, Any]:
+    """One read. `live` false means it cannot vote at this hour: not flat, absent."""
     return {"key": key, "label": label, "layer": layer, "value": value, "vote": vote,
-            "note": note}
+            "note": note, "live": live}
 
 
 def _side(x: float, long_at: float, short_at: float) -> str:
@@ -96,6 +101,11 @@ def _trading(q: dict[str, Any] | None) -> bool:
     return q is not None and str(q.get("feed") or "") in _LIVE
 
 
+def _stopped(q: dict[str, Any]) -> bool:
+    """A row that says it has stopped printing. One that says nothing is trusted."""
+    return q.get("feed") in ("closed", "stale")
+
+
 # ---- macro -------------------------------------------------------------------
 
 
@@ -103,13 +113,14 @@ def _yields(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     q = _q(quotes, "US10Y")
     chg = _num(q.get("chg")) if q else None
     if q is None or chg is None:
-        return _vote("yields", "10Y yield", "macro", "—", "neutral", "no 10Y on the board")
+        return _vote("yields", "10Y yield", "macro", "—", "neutral", "no 10Y on the board",
+                     live=False)
     bp = chg * 100.0
     last = _num(q.get("last"))
     value = f"{last:.2f}% {_signed(bp, 1, 'bp')}" if last is not None else _signed(bp, 1, "bp")
     if not _trading(q):
         return _vote("yields", "10Y yield", "macro", value, "neutral",
-                     "the cash 10Y last printed at its close — no live read")
+                     "the cash 10Y last printed at its close — no live read", live=False)
     if abs(bp) < YIELD_BP:
         return _vote("yields", "10Y yield", "macro", value, "neutral",
                      f"inside ±{YIELD_BP:.0f}bp on the day — no read")
@@ -127,8 +138,12 @@ def _dollar(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     q = _q(quotes, "DXY")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
-        return _vote("dollar", "Dollar", "macro", "—", "neutral", "no DXY on the board")
+        return _vote("dollar", "Dollar", "macro", "—", "neutral", "no DXY on the board",
+                     live=False)
     value = _signed(pct, 2, "%")
+    if _stopped(q):
+        return _vote("dollar", "Dollar", "macro", value, "neutral",
+                     "the dollar index has stopped printing — no live read", live=False)
     if abs(pct) < DXY_FLAT:
         return _vote("dollar", "Dollar", "macro", value, "neutral",
                      f"inside ±{DXY_FLAT}% — no read")
@@ -146,11 +161,12 @@ def _credit(quotes: list[dict[str, Any]]) -> dict[str, Any]:
     q = _q(quotes, "HYG")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
-        return _vote("credit", "Credit (HYG)", "macro", "—", "neutral", "no HYG on the board")
+        return _vote("credit", "Credit (HYG)", "macro", "—", "neutral", "no HYG on the board",
+                     live=False)
     value = _signed(pct, 2, "%")
     if not _trading(q):
         return _vote("credit", "Credit (HYG)", "macro", value, "neutral",
-                     "the cash market is closed — credit votes from 09:30 ET")
+                     "the cash market is closed — credit votes from 09:30 ET", live=False)
     if abs(pct) < HYG_FLAT:
         return _vote("credit", "Credit (HYG)", "macro", value, "neutral",
                      f"inside ±{HYG_FLAT}% — no read")
@@ -163,19 +179,21 @@ def _vix_dir(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     q = _q(quotes, "VIX")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
-        return _vote("vix_dir", "VIX today", "macro", "—", "neutral", "no VIX on the board")
+        return _vote("vix_dir", "VIX today", "macro", "—", "neutral", "no VIX on the board",
+                     live=False)
     last = _num(q.get("last"))
     value = f"{last:.1f} {_signed(pct, 1, '%')}" if last is not None else _signed(pct, 1, "%")
     if not _trading(q):
         return _vote("vix_dir", "VIX today", "macro", value, "neutral",
-                     "the VIX last printed at its close (it trades 03:00–16:15 ET)")
+                     "the VIX last printed at its close (it trades 03:00–16:15 ET)", live=False)
     if abs(pct) < VIX_FLAT:
         return _vote("vix_dir", "VIX today", "macro", value, "neutral",
                      f"inside ±{VIX_FLAT}% — no read")
     up = pct > 0
     if book == "GC":
         return _vote("vix_dir", "VIX today", "macro", value, "neutral",
-                     "equity fear is not a gold vote on its own — the dollar and yields decide")
+                     "equity fear is not a gold vote on its own — the dollar and yields decide",
+                     live=False)
     return _vote("vix_dir", "VIX today", "macro", value, "short" if up else "long",
                  "protection being bought — risk-off" if up else "protection being sold — risk-on")
 
@@ -185,11 +203,11 @@ def _vix_curve(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     ratio, shape = _num(vt.get("ratio")), vt.get("shape")
     if ratio is None:
         return _vote("vix_curve", "VIX curve", "macro", "—", "neutral",
-                     "VIX or VIX3M missing from the board")
+                     "VIX or VIX3M missing from the board", live=False)
     value = f"{ratio:.2f} · {shape or 'unknown'}"
     if book == "GC":
         return _vote("vix_curve", "VIX curve", "macro", value, "neutral",
-                     "the equity curve is context for gold, not a vote")
+                     "the equity curve is context for gold, not a vote", live=False)
     if ratio >= CURVE_STRESS:
         return _vote("vix_curve", "VIX curve", "macro", value, "short",
                      "flat to inverted: near-term protection bid now — stress")
@@ -204,8 +222,12 @@ def _silver(quotes: list[dict[str, Any]]) -> dict[str, Any]:
     q = _q(quotes, "SILVER")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
-        return _vote("silver", "Silver", "macro", "—", "neutral", "no silver on the board")
+        return _vote("silver", "Silver", "macro", "—", "neutral", "no silver on the board",
+                     live=False)
     value = _signed(pct, 2, "%")
+    if _stopped(q):
+        return _vote("silver", "Silver", "macro", value, "neutral",
+                     "silver has stopped printing — no live read", live=False)
     cu = _q(quotes, "COPPER")
     cpct = _num(cu.get("pct")) if cu else None
     tail = ""
@@ -229,14 +251,14 @@ def _prints(calendar: list[dict[str, Any]], now: datetime, book: str) -> dict[st
         nxt = due[0] if due else None
         return _vote("prints", "US prints", "macro", "—", "neutral",
                      f"nothing printed yet — next {nxt['title']} at {nxt['et']} ET" if nxt
-                     else "no US print scored 3 or more today")
+                     else "no US print scored 3 or more today", live=False)
     infl = [p for p in rows if "inflation" in (p.get("themes") or [])]
     named = " · ".join(f"{p['title']} {p['read']}" for p in rows[-3:])
     if not infl:
         last = rows[-1]
         imp = releases.implication(last.get("read"), last.get("themes")) or {}
         return _vote("prints", "US prints", "macro", named, "neutral",
-                     imp.get(book) or "no inflation print today — read, not counted")
+                     imp.get(book) or "no inflation print today — read, not counted", live=False)
     reads = {p["read"] for p in infl}
     if reads == {"hot"}:
         v = "short"
@@ -260,7 +282,7 @@ def _gamma(gex: dict[str, Any] | None, book: str, last: float | None,
     a = ((gex or {}).get("assets") or {}).get(book) if isinstance(gex, dict) else None
     if not isinstance(a, dict) or not a.get("ok"):
         return _vote("gamma", "Dealer gamma", "positioning", "—", "neutral",
-                     "GEXYGEN is not answering — no gamma read")
+                     "GEXYGEN is not answering — no gamma read", live=False)
     regime = a.get("regime") if a.get("regime") in ("POS", "NEG") else None
     flip = next((_num(lv.get("price")) for lv in a.get("levels") or []
                  if lv.get("key") == "flip"), None)
@@ -268,7 +290,7 @@ def _gamma(gex: dict[str, Any] | None, book: str, last: float | None,
     word = {"POS": "positive γ", "NEG": "negative γ", None: "no regime"}[regime]
     if flip is None or spot is None:
         return _vote("gamma", "Dealer gamma", "positioning", word, "neutral",
-                     "no gamma flip to read spot against")
+                     "no gamma flip to read spot against", live=False)
     above = spot >= flip
     dist = spot - flip
     in_sig = f" ({abs(dist) / sigma:.1f}σ)" if sigma else ""
@@ -289,7 +311,7 @@ def _value(profiles: dict[str, Any] | None, book: str, last: float | None) -> di
     prev = rows.get("prev_rth")
     if not prev or last is None:
         return _vote("value", "Prior value", "structure", "—", "neutral",
-                     "no prior RTH profile yet")
+                     "no prior RTH profile yet", live=False)
     pos = value_position(last, prev.get("vah"), prev.get("val"))
     vah, val, poc = prev.get("vah"), prev.get("val"), prev.get("poc")
     area = f"VAL {val:,.0f} · POC {poc:,.0f} · VAH {vah:,.0f}" if vah and val and poc else "no area"
@@ -309,12 +331,13 @@ def _session(ranges: dict[str, Any] | None, book: str, last: float | None) -> di
             if isinstance(r, dict) and r.get("ok") and r.get("status") == "complete"]
     if not rows or last is None:
         return _vote("session", "Last session", "structure", "—", "neutral",
-                     "no completed session to read against")
+                     "no completed session to read against", live=False)
     r = max(rows, key=lambda x: _num(x.get("start_ts")) or 0.0)
     hi, lo = _num(r.get("high")), _num(r.get("low"))
     label = str(r.get("label") or "the last session")
     if hi is None or lo is None:
-        return _vote("session", "Last session", "structure", "—", "neutral", "no range")
+        return _vote("session", "Last session", "structure", "—", "neutral", "no range",
+                     live=False)
     value = f"{label} {lo:,.0f}–{hi:,.0f}"
     if last > hi:
         return _vote("session", "Last session", "structure", value, "long",
@@ -334,7 +357,7 @@ def _trend10m(ranges: dict[str, Any] | None, book: str, last: float | None) -> d
     line = _num(e.get("value")) if isinstance(e, dict) else None
     if line is None or last is None:
         return _vote("trend10m", "10m trend", "structure", "—", "neutral",
-                     "no ten-minute history yet — the 200 EMA needs two days of bars")
+                     "no ten-minute history yet — the 200 EMA needs two days of bars", live=False)
     slope = str(e.get("slope") or "flat") if isinstance(e, dict) else "flat"
     px = f"{line:,.0f}" if line >= 1000 else f"{line:,.2f}"
     side = structure.side_of(last, line)
@@ -359,7 +382,7 @@ def _regime200(frames: dict[str, Any] | None, book: str, last: float | None) -> 
     line = _num(fr.get("ema200")) if isinstance(fr, dict) and fr.get("ok") else None
     if line is None or last is None:
         return _vote("daily200", "Daily 200", "structure", "—", "neutral",
-                     "no daily history yet — the 200-day EMA needs a year of sessions")
+                     "no daily history yet — the 200-day EMA needs a year of sessions", live=False)
     pct = (last - line) / line * 100.0
     px = f"{line:,.0f}" if line >= 1000 else f"{line:,.2f}"
     side = structure.side_of(last, line, structure.DAILY_ON_PCT)
@@ -380,7 +403,7 @@ def _frame(frames: dict[str, Any] | None, book: str, last: float | None) -> dict
     rd = frame_mod.read(fr if isinstance(fr, dict) and fr.get("ok") else None, last)
     if rd is None:
         return _vote("frame", "Daily frame", "structure", "—", "neutral",
-                     "no daily history yet")
+                     "no daily history yet", live=False)
     text = rd.get("text") or "—"
     # The averages clause alone is the figure; the whole read is the note.
     value = text.split(" · ")[0]
@@ -402,10 +425,10 @@ def _leaders(constituents: dict[str, Any] | None, book: str, cash_open: bool) ->
     value = f"{up} up · {down} down" if pcts else "—"
     if not cash_open:
         return _vote("leaders", label, "structure", value, "neutral",
-                     "the last session's changes — the leaders vote from 09:30 ET")
+                     "the last session's changes — the leaders vote from 09:30 ET", live=False)
     if up + down < PART_MIN:
         return _vote("leaders", label, "structure", value, "neutral",
-                     f"only {up + down} of the leaders reporting")
+                     f"only {up + down} of the leaders reporting", live=False)
     pct = up / (up + down) * 100.0
     v = _side(pct, PART_LONG, PART_SHORT)
     note = {"long": f"{pct:.0f}% of the leaders up — the weight is behind the move",
@@ -418,23 +441,31 @@ def _leaders(constituents: dict[str, Any] | None, book: str, cash_open: bool) ->
 
 
 def _heavyweight_prints(heavy: list[dict[str, Any]], book: str) -> dict[str, Any]:
-    """The index points supplied by the names that just reported — a macro vote
-    past ±PRINTS_VOTE_POINTS, since a megacap's print is the largest scheduled
-    macro an index future has (2026-10-30)."""
+    """What the names that just reported have added to the index since, in
+    percentage points — a macro vote past ±PRINTS_VOTE_PP, since a megacap's print
+    is the largest scheduled macro an index future has (2026-10-30). A name that
+    has reported and not yet traded in the cash session is named and does not
+    vote: the only move on its row is the session before the report (2026-11-05)."""
     label = f"{INDEX_OF.get(book, 'Index')} prints"
     net, who = events_mod.net_print_points(heavy)
+    waiting = events_mod.awaiting_open(heavy)
+    named = f"{', '.join(waiting[:4])} reported — the cash move comes at the open"
     if not who:
+        if waiting:
+            return _vote("hw_prints", label, "macro", ", ".join(waiting[:4]), "neutral", named,
+                         live=False)
         return _vote("hw_prints", label, "macro", "—", "neutral",
-                     "no heavyweight has reported in the last day and a half")
-    value = f"{net:+.2f} pts · {', '.join(who[:4])}"
-    if abs(net) < events_mod.PRINTS_VOTE_POINTS:
+                     "no heavyweight has reported in the last day and a half", live=False)
+    value = f"{net:+.2f}pp · {', '.join(who[:4])}"
+    tail = f"; {named}" if waiting else ""
+    if abs(net) < events_mod.PRINTS_VOTE_PP:
         return _vote("hw_prints", label, "macro", value, "neutral",
-                     f"inside ±{events_mod.PRINTS_VOTE_POINTS:.2f} index points — "
-                     "the prints net out")
+                     f"inside ±{events_mod.PRINTS_VOTE_PP:.2f} percentage points of the index "
+                     f"— the prints net out{tail}")
     v = "long" if net > 0 else "short"
     return _vote("hw_prints", label, "macro", value, v,
                  f"the names that just reported are {'carrying' if v == 'long' else 'dragging'} "
-                 f"the index by {abs(net):.2f} points")
+                 f"the index by {abs(net):.2f} percentage points{tail}")
 
 
 def _event_risk(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -466,7 +497,7 @@ def _context(book: str, cot: dict[str, Any] | None, putcall: dict[str, Any] | No
         net = c.get("net") or 0
         out.append({"key": "cot", "label": f"COT · {c.get('spec')}",
                     "value": f"net {'long' if net >= 0 else 'short'} {abs(net):,.0f} · "
-                             f"{c.get('pctile')}th pct",
+                             f"{cot_mod.ordinal(c.get('pctile'))} pct",
                     "note": f"{c.get('read')} As of {c.get('as_of')}."})
     else:
         out.append({"key": "cot", "label": "COT", "value": "—",
@@ -495,50 +526,13 @@ def _context(book: str, cot: dict[str, Any] | None, putcall: dict[str, Any] | No
     return out
 
 
-# ---- the count and the sentence ------------------------------------------------
-
-
-def _lean(votes: list[dict[str, Any]], layer: str) -> str | None:
-    mine = [v for v in votes if v["layer"] == layer]
-    long_n = sum(v["vote"] == "long" for v in mine)
-    short_n = sum(v["vote"] == "short" for v in mine)
-    return "long" if long_n > short_n else "short" if short_n > long_n else None
-
-
-def treatment(book: str, count: dict[str, Any], macro: str | None, structure: str | None,
-              regime: str | None, ny_open: bool) -> str:
-    """One line on how to treat the count — the words the strip prints. Pure."""
-    bias, grade = count["bias"], count["grade"]
-    side = {"long": "long", "short": "short", None: None}[bias]
-    agreeing = [v for v in count["votes"] if v["vote"] == bias] if bias else []
-    reasons = "; ".join(f"{v['label']} {v['value']}" for v in agreeing[:3])
-    gamma = ("positive gamma: fade into the walls, ranges hold" if regime == "POS"
-             else "negative gamma: breaks run, trade the break not the fade" if regime == "NEG"
-             else "no gamma read")
-    where = "" if ny_open else " (gamma is a reference outside New York)"
-    conflict = macro and structure and macro != structure
-    # The conflict is named before the count: a tie between the layers IS the
-    # conflict, and "no lean" would hide what caused it.
-    if conflict:
-        return (f"Macro leans {macro} on {book} but structure accepts {structure}: a conflict. "
-                f"Lower conviction, trade the levels not the lean — {gamma}{where}.")
-    if bias is None or grade == "none":
-        return (f"No lean on {book}: {count['neutral']} of {count['total']} reads are neutral"
-                f". Trade the levels — {gamma}{where}.")
-    if grade == "weak":
-        return (f"Lean {side} {book}, weak ({count['agree']} of {count['total']}): {reasons}. "
-                f"Small size until more reads agree — {gamma}{where}.")
-    return (f"Lean {side} {book}, {grade} ({count['agree']} of {count['total']}, "
-            f"{count['against']} against): {reasons}. {gamma[0].upper() + gamma[1:]}{where}.")
-
-
 def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[str, Any]],
                gex: dict[str, Any] | None, profiles: dict[str, Any] | None,
                ranges: dict[str, Any] | None, frames: dict[str, Any] | None,
                sectors: list[dict[str, Any]], constituents: dict[str, Any] | None,
                cot: dict[str, Any] | None, putcall: dict[str, Any] | None,
                expiry: dict[str, Any] | None, fed: dict[str, Any] | None,
-               sigma: float | None, scan_session: str, now: datetime,
+               sigma: float | None, scan_session: str, now: datetime, weigh: str,
                heavy: list[dict[str, Any]] | None = None,
                events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     q = _q(quotes, book)
@@ -564,30 +558,23 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
         votes.append(_heavyweight_prints(heavy or [], book))
     risk = _event_risk(events or [])
     votes.append(risk)
-    count = marketctx.conviction(votes)
-    # THE DAMPER (events.py): an event on the tape is not a side, it is a
-    # reason to be a notch less sure of any side — the same treatment a
-    # macro-against-structure conflict gets, applied to the ceiling.
-    if risk.get("damper"):
-        count["max_conviction"] = max(1, int(count["max_conviction"]) - 1)
-    macro, structure = _lean(votes, "macro"), _lean(votes, "structure")
     a = ((gex or {}).get("assets") or {}).get(book) if isinstance(gex, dict) else None
     regime = a.get("regime") if isinstance(a, dict) and a.get("ok") and a.get("regime") in (
         "POS", "NEG") else None
-    ny_open = cash_open
     return {
         "key": book, "last": last,
-        **{k: v for k, v in count.items() if k != "votes"},
-        "votes": votes,
-        "macro_lean": macro, "structure_lean": structure,
-        "conflict": bool(macro and structure and macro != structure),
-        "regime": regime,
-        "event_risk": bool(risk.get("damper")),
-        "treatment": treatment(book, count, macro, structure, regime, ny_open)
-        + (f" Event risk since the close ({len(events or [])}): conviction capped a notch lower."
-           if risk.get("damper") else ""),
+        **bias_mod.board_read(book, votes, weigh, regime=regime, ny_open=cash_open,
+                              events=len(events or [])),
         "context": _context(book, cot, putcall, expiry, fed),
     }
+
+
+def weights_for(now: datetime) -> str:
+    """Which session's weights the board reads at this instant: the session a note
+    pressed now would be written for (report.resolve_session), New York's split at
+    its bell. Pure."""
+    session = report.resolve_session({"et": now.astimezone(report.ET).isoformat()}, "auto")
+    return bias_mod.session_key(session, bool(report.session_progress(session, now)["underway"]))
 
 
 def build(snap: dict[str, Any], scan_session: str = "closed",
@@ -601,6 +588,7 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
     fed = marketctx.fed(snap.get("policy_meetings") if isinstance(snap.get("policy_meetings"),
                                                                   dict) else None)
     events = events_mod.event_risk(snap, now)
+    weigh = weights_for(now)
     boards = {
         book: book_board(
             book, quotes=quotes,
@@ -615,7 +603,7 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
             cot=snap.get("cot") if isinstance(snap.get("cot"), dict) else None,
             putcall=snap.get("putcall") if isinstance(snap.get("putcall"), dict) else None,
             expiry=snap.get("expiry") if isinstance(snap.get("expiry"), dict) else None,
-            fed=fed, sigma=books_sigma.get(book), scan_session=scan_session, now=now,
+            fed=fed, sigma=books_sigma.get(book), scan_session=scan_session, now=now, weigh=weigh,
             heavy=events_mod.heavyweights(snap, book, now) if book != "GC" else None,
             events=events,
         )
@@ -625,5 +613,6 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
         "built_utc": now.astimezone(UTC).isoformat(),
         "session": scan_session,
         "ny_open": scan_session == "rth",
+        "weights": weigh,
         "books": boards,
     }

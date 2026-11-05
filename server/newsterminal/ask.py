@@ -264,16 +264,57 @@ def _q(snap: dict[str, Any], key: str) -> dict[str, Any] | None:
 
 
 def _print_line(p: dict[str, Any] | None) -> str | None:
-    if not p or not p.get("eps_actual"):
+    if not p:
         return None
+    if not p.get("eps_actual"):
+        return "reported, no figures on the feed yet"
     return f"{p['eps_actual']} vs {p['eps_forecast']}"
 
 
 def _earn_line(r: dict[str, Any]) -> str:
-    line = f"{r.get('symbol')} {r.get('date')} {r.get('when') or ''}".strip()
+    when = r.get("when") if r.get("when") in ("pre", "after") else ""
+    line = f"{r.get('symbol')} {r.get('date')} {when}".strip()
     if r.get("eps_actual"):
-        line += f" {r.get('eps_actual')} vs {r.get('eps_forecast')}"
+        line += f" {r.get('eps_actual')} vs {r.get('eps_forecast') or 'no estimate'}"
     return line
+
+
+def earnings_glance(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    """The Earnings panel at a glance: today's reports by NAME, all of them, and
+    the latest prints and what is next, counted. Pure.
+
+    THE DAY'S WHOLE LIST (owner, 2026-11-05). The glance held the six biggest of
+    each list, unmarked, and Hermes read six of twenty-three as the day's reports.
+    A symbol costs two tokens; the question "who reports today?" is worth them.
+    A list cut short here says how many there are, so it reads as part of a table
+    and the earnings tool as the way to the rest."""
+    from . import report
+
+    good = [r for r in rows if isinstance(r, dict) and r.get("date")]
+    today = now.astimezone(report.ET).date().isoformat()
+    todays = [r for r in good if r.get("date") == today]
+
+    def names(when: str | None) -> str:
+        return ", ".join(str(r.get("symbol")) for r in todays
+                         if (r.get("when") if r.get("when") in ("pre", "after") else None) == when)
+
+    d = report.digest_earnings(good, now)
+    later = sorted({str(r.get("date")) for r in good if str(r.get("date")) > today})
+    nxt = [r for r in good if later and r.get("date") == later[0]]
+    return {
+        "today": {
+            "date": today, "reports": len(todays),
+            "printed": sum(1 for r in todays if r.get("eps_actual")),
+            "before_open": names("pre"), "after_close": names("after"),
+            "time_not_given": names(None),
+        },
+        "latest_prints": [_earn_line(r) for r in d["reported"][:SLIM_HEAVY]],
+        "reported_no_figures_yet": [_earn_line(r) for r in d["awaiting_figures"]],
+        "next_day": {"date": later[0], "reports": len(nxt),
+                     "names": ", ".join(str(r.get("symbol")) for r in nxt)} if later else None,
+        "the_rest": f"{len(good)} reports across the days the panel shows; each with its "
+                    "estimate, result and size through the earnings tool",
+    }
 
 
 def _material(snap: dict[str, Any]) -> list[dict[str, Any]]:
@@ -340,8 +381,8 @@ def slim_context(
             for k in _STRIP if (q := _q(snap, k))
         ],
         "driver_board": {
-            k: {f: b.get(f) for f in ("bias", "grade", "agree", "total", "conflict",
-                                      "event_risk", "max_conviction", "treatment")}
+            k: {f: b.get(f) for f in ("bias", "score", "coverage", "grade", "live", "total",
+                                      "conflict", "event_risk", "max_conviction", "treatment")}
             for k, b in boards.items() if isinstance(b, dict)
         },
         "event_risk": [
@@ -351,16 +392,13 @@ def slim_context(
         ],
         "heavyweights_nq": [
             {"symbol": r["symbol"], "move_pct": r.get("move_pct"),
-             "index_points": r.get("index_points"), "reported": _print_line(r.get("reported"))}
+             "index_pp": r.get("index_pp"), "reported": _print_line(r.get("reported"))}
             for r in events.heavyweights(snap, "NQ", now)[:SLIM_HEAVY]
         ],
-        "earnings": {
-            k: [_earn_line(r) for r in v[:SLIM_HEAVY]]
-            for k, v in report.digest_earnings(snap.get("earnings") or [], now).items()
-        },
+        "earnings": earnings_glance(snap.get("earnings") or [], now),
         "headlines": [
             {"impact": h.get("impact"), "desk": h.get("category"), "title": h.get("title")}
-            for h in _material(snap)[:SLIM_HEADLINES]
+            for h, _ in events.distinct_stories(_material(snap))[:SLIM_HEADLINES]
         ],
         "scanner": None,
         "notes": {"brief": None, "plan": None},
@@ -377,7 +415,8 @@ def slim_context(
             "session": scan.get("session"),
             "regime": {"vix": vix.get("last"), "band": reg.get("band"),
                        "shape": vix.get("shape"), "spy_em_pct": reg.get("spy_em_pct")},
-            "tape": {f: conv.get(f) for f in ("bias", "grade", "agree", "total", "max_conviction")},
+            "tape": {f: conv.get(f) for f in ("bias", "score", "coverage", "grade", "live",
+                                              "total", "max_conviction")},
             "top": [_slim_name(r) for r in rows[:SLIM_NAMES]],
             "watchlist": [r.get("sym") for r in rows],
         }

@@ -108,12 +108,15 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
     );
   }
 
+  // New York's box: the cash figures on this page are the last session's outside it.
+  const cashOpen = data.clock?.boxes?.some((b) => b.key === "ny" && b.open) ?? true;
+
   return (
     <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
       {/* ---- left: what the market is doing ------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <MRotation rows={data.sectors ?? NONE} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
-        <MMovers indices={data.constituents?.indices ?? EMPTY} ageMin={age("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
+        <MRotation rows={data.sectors ?? NONE} cashOpen={cashOpen} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
+        <MMovers indices={data.constituents?.indices ?? EMPTY} cashOpen={cashOpen} ageMin={age("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
         <MRates rates={data.rates} pm={data.policy_meetings} ageMin={age("rates")} error={st.rates?.ok === false ? st.rates.error : null} />
         <MBoard title="Macro board" quotes={data.quotes ?? NONE} groups={MACRO_GROUPS} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
       </div>

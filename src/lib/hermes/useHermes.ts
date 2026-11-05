@@ -48,7 +48,7 @@ export interface HermesMsg {
   /** Tokens in (and how many of them from cache), tokens out and OpenRouter's cost for the turn, summed over its tool rounds. */
   usage?: { prompt: number; cached: number; completion: number; cost: number };
   /** How the router treated the question: a quick check or the full kit, and whose tools. */
-  route?: { tier: "quick" | "full"; desk: "futures" | "stocks" | "both" };
+  route?: { tier: "quick" | "full" };
 }
 
 export interface HermesChat {

@@ -36,10 +36,11 @@ export function pct(v: number | null | undefined, dp = 2): string {
 export function signed(v: number | null | undefined, dp?: number): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   const d = dp ?? autoDp(v);
-  return `${v >= 0 ? "+" : ""}${v.toLocaleString("en-US", {
-    minimumFractionDigits: d,
-    maximumFractionDigits: d,
-  })}`;
+  const text = v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  // A small negative that rounds away prints "-0", and with a sign in front of
+  // it "+-0" on a level sitting on the price. It is flat, so it reads flat.
+  if (/^-?0(\.0+)?$/.test(text)) return text.replace("-", "");
+  return `${v >= 0 ? "+" : ""}${text}`;
 }
 
 export function bp(v: number | null | undefined, dp = 0): string {

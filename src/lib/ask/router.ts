@@ -1,19 +1,21 @@
 /**
- * The router in front of Hermes: how much a question needs before any model
- * is called (owner, 2026-10-30: "is there ways to handle it so the model uses
- * less when it doesn't need to?").
+ * The router in front of Hermes: how much thinking a question needs before any
+ * model is called (owner, 2026-10-30: "is there ways to handle it so the model
+ * uses less when it doesn't need to?").
  *
- * EVERY QUESTION USED TO GET THE SAME TREATMENT — the glance, all eleven tool
- * schemas, three thousand thinking tokens — so "is London open?" cost nearly
- * what "compare the top three names" did. Three decisions are made here,
- * deterministically, from the question's own words:
+ * THE ROUTER SPENDS THINKING, NEVER REACH (owner, 2026-11-05: "Hermes AI should
+ * have the context of every thing shown and displayed in the app"). It used to
+ * decide from the question's words whether the tools came along at all, and which
+ * desk's. "Who reports today?" matched no word in the list, so it went out with no
+ * tools and a prompt that said to tell the reader to ask again; Hermes said it did
+ * not have the day's earnings, and answered once challenged, because a follow-up
+ * always got the tools. Any word list misses something, so a miss now costs only a
+ * little depth. Two decisions are made here, deterministically:
  *
- *   tier   "quick" — a check the glance already answers: no tools, no
- *          thinking, a short answer. "full" — a name, a level, a why, a
- *          comparison: the tools and the thinking budget.
- *   desk   which tool set rides along: the futures set, the stocks set, or
- *          both. A ticker from the watchlist or a futures book in the
- *          question decides; failing that, the desk the reader came from.
+ *   tier   "quick" — no thinking and a shorter answer, for a check. "full" — a
+ *          name, a level, a why, a comparison: the thinking budget. Both have
+ *          every tool, and a question the glance cannot answer takes one more
+ *          round rather than a wrong "I don't have that".
  *   local  a handful of questions never reach a model at all, because the
  *          answer is a field in the glance: the phase, whether a box is
  *          open, a strip quote. Those patterns are anchored and narrow on
@@ -25,22 +27,15 @@
  */
 
 export type Tier = "quick" | "full";
-export type ToolDesk = "futures" | "stocks" | "both";
-export type ReaderDesk = "futures" | "stocks" | null;
 
 export interface Route {
   tier: Tier;
-  desk: ToolDesk;
   /** One phrase for the log: what decided it. */
   why: string;
 }
 
-/** The futures books and the words that mean them. */
-const FUTURES_WORDS = /\b(nq|es|gc|ym|rty|nasdaq|s&p|spx|ndx|gold|futures?|globex|settle|rth|ladder|gamma|vwap since|overnight|london|asia|frankfurt|session box|brief)\b/i;
-/** The stocks desk's own words. */
-const STOCKS_WORDS = /\b(stocks?|options?|scanner|watchlist|names?|etf|calls?|puts?|straddle|contract|iv30|rv20|game plan|plan|earnings|filings?|rvol|retest|pmh|pml|pdh|pdl|8 ema|wave)\b/i;
-/** A word that needs more than the glance. */
-const FULL_WORDS = /\b(why|what moved|lean|leaning|overall|macro|structure|net|summar(y|ise|ize)|conviction|sentiment|outlook|picture|view|take|thoughts|agree|confirm|what('s| is) (moving|driving|behind)|compare|versus|vs\.?|setup|set-up|plan|trade|levels?|retest|break|breakout|should i|worth|short|long|bias|read|brief|game plan|earnings|calendar|scheduled|headlines?|news|wire|chart|bars|gamma|vwap|ladder|which|best|cleanest|review|run-?down|explain|walk me|think|risk|catalyst|print(ed)?|report(ed)?|flow|skew|expected move|wall|flip|profile|poc|value area|rotation|breadth|fuel|rates?|yield|dollar|dxy|oil|crude|vix curve|term structure)\b/i;
+/** A word that wants thinking, not just a read of the desk. */
+const FULL_WORDS = /\b(why|what moved|lean|leaning|overall|macro|structure|net|summar(y|ise|ize)|conviction|sentiment|outlook|picture|view|take|thoughts|agree|confirm|what('s| is) (moving|driving|behind)|compare|versus|vs\.?|setup|set-up|plan|trade|levels?|retest|break|breakout|should i|worth|short|long|bias|read|brief|game plan|earnings|calendar|scheduled|headlines?|news|wire|chart|bars|gamma|vwap|ladder|which|best|cleanest|review|run-?down|explain|walk me|think|risk|catalyst|print(ed|s)?|report(ed|s|ing)?|beat|beats|miss|missed|misses|flow|skew|expected move|wall|flip|profile|poc|value area|rotation|breadth|fuel|rates?|yield|dollar|dxy|oil|crude|vix curve|term structure)\b/i;
 /** A question longer than this is a run-down whatever its words. */
 const QUICK_MAX_WORDS = 18;
 
@@ -59,40 +54,18 @@ function tickersIn(q: string, watchlist: string[]): string[] {
   return out;
 }
 
-export function routeQuestion(question: string, opts: { desk: ReaderDesk; sym: string | null; watchlist: string[]; followUp?: boolean }): Route {
+export function routeQuestion(question: string, opts: { watchlist: string[]; followUp?: boolean }): Route {
   const q = question.trim();
   const named = tickersIn(q, opts.watchlist);
-  const futures = FUTURES_WORDS.test(q);
-  const stocks = STOCKS_WORDS.test(q) || named.length > 0;
-  // The desk: what the question names, else where the reader came from, else both.
-  let desk: ToolDesk;
-  let deskWhy: string;
-  if (named.length && !futures) {
-    desk = "stocks";
-    deskWhy = `names ${named.join(", ")}`;
-  } else if (futures && !stocks) {
-    desk = "futures";
-    deskWhy = "futures words";
-  } else if (futures && stocks) {
-    desk = "both";
-    deskWhy = "both desks' words";
-  } else if (opts.desk) {
-    desk = opts.desk;
-    deskWhy = `the reader's ${opts.desk} desk`;
-  } else {
-    desk = "both";
-    deskWhy = "no desk named";
-  }
-  // The tier: a name, a full word or length means the tools; the rest is a glance.
   // A FOLLOW-UP IS NEVER A GLANCE (owner, 2026-10-30: a "so overall?" turn was
   // answered from the earlier turns' figures, every one of them stale by then).
   // In an ongoing chat a short question leans on what came before, and what
   // came before has to be re-read.
-  if (opts.followUp) return { tier: "full", desk, why: `a follow-up; ${deskWhy}` };
-  if (named.length) return { tier: "full", desk, why: `names ${named.join(", ")}; ${deskWhy}` };
-  if (FULL_WORDS.test(q)) return { tier: "full", desk, why: `asks ${FULL_WORDS.exec(q)?.[0]}; ${deskWhy}` };
-  if (words(q) > QUICK_MAX_WORDS) return { tier: "full", desk, why: `long question; ${deskWhy}` };
-  return { tier: "quick", desk, why: `a check the glance answers; ${deskWhy}` };
+  if (opts.followUp) return { tier: "full", why: "a follow-up" };
+  if (named.length) return { tier: "full", why: `names ${named.join(", ")}` };
+  if (FULL_WORDS.test(q)) return { tier: "full", why: `asks ${FULL_WORDS.exec(q)?.[0]}` };
+  if (words(q) > QUICK_MAX_WORDS) return { tier: "full", why: "long question" };
+  return { tier: "quick", why: "a check" };
 }
 
 /** What the glance holds that a local answer reads (ask.slim_context). */

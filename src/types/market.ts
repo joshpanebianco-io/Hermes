@@ -22,13 +22,36 @@ export interface Vote {
   vote: Side | "neutral";
   /** Why that reads as a long, short or neutral vote. */
   note: string;
+  /** False when it cannot vote at this hour: shut or missing, which is not the same as flat. */
+  live?: boolean;
+}
+
+/** One family of reads, weighed for the session (server bias.py). Absent on a plan stored before them. */
+export interface ScoreFamily {
+  key: string;
+  label: string;
+  /** The strip's short name: "Structure", "Risk". */
+  short: string;
+  /** Its share of the session's score. */
+  weight: number;
+  /** -100 to +100; null when none of its reads can vote at this hour. */
+  score: number | null;
+  live: number;
+  total: number;
 }
 
 export interface Conviction {
   bias: Side | null;
+  /** -100 to +100 across the reads that can vote. A plan stored before 2026-11-05 has none. */
+  score?: number;
+  coverage?: number;
+  weight_label?: string;
+  families?: ScoreFamily[];
   agree: number;
   against: number;
   neutral: number;
+  live?: number;
+  cannot_vote?: number;
   total: number;
   grade: "strong" | "moderate" | "weak" | "none";
   /** The highest conviction a plan may carry on this tape. */

@@ -63,18 +63,18 @@ export function ScanTable({
 }) {
   const th = { cur: sort, onSort };
   return (
-    <table className={cn("w-full border-separate border-spacing-0 text-left", cols === "ranked" ? "min-w-[1360px]" : "min-w-[1320px]")}>
+    <table className={cn("w-full border-separate border-spacing-0 text-left", cols === "ranked" ? "min-w-[1280px]" : "min-w-[1280px]")}>
       <thead className="sticky top-0 z-20">
         <tr>
           <Th pin={0} className="w-[34px] text-right">
             #
           </Th>
-          <Th pin={34} className="w-[132px]">
+          <Th pin={34} className="w-[122px]">
             Ticker
           </Th>
           {cols === "ranked" ? (
             <>
-              <Th k="score" {...th} className="w-[88px]">
+              <Th k="score" {...th} className="w-[72px]">
                 Score
               </Th>
               <Th title="Where the trade is right now: the level to retest, or VWAP / the 8 EMA when price has run too far from it — and today's latest signal">
@@ -124,7 +124,7 @@ export function ScanTable({
             </>
           ) : (
             <>
-              <Th k="score" {...th} className="w-[88px]">
+              <Th k="score" {...th} className="w-[72px]">
                 Score
               </Th>
               <Th right>Price</Th>
@@ -215,7 +215,7 @@ function Th({
       title={title}
       aria-sort={on ? "descending" : undefined}
       className={cn(
-        "qt-cap border-b border-ring bg-bg px-2 py-2 align-bottom text-[10.5px] font-semibold whitespace-nowrap text-ink-3",
+        "qt-cap border-b border-ring bg-bg px-1.5 py-2 align-bottom text-[10.5px] font-semibold whitespace-nowrap text-ink-3",
         right && "text-right",
         center && "text-center",
         pin != null && "sticky z-30",
@@ -239,7 +239,7 @@ function Th({
   );
 }
 
-const TD = "border-b border-ring/60 px-2 py-2";
+const TD = "border-b border-ring/60 px-1.5 py-2";
 
 /**
  * A header on two lines — the Pine's own title kept whole ("PDH Break"), at
@@ -283,7 +283,7 @@ function Row({
   const lead = (
     <>
       <td className={cn(TD, "fig sticky left-0 z-10 w-[34px] text-right text-[11px] text-ink-3", pinBg)}>{rank}</td>
-      <td className={cn(TD, "sticky z-10 w-[132px]", pinBg)} style={{ left: 34 }}>
+      <td className={cn(TD, "sticky z-10 w-[122px]", pinBg)} style={{ left: 34 }}>
         <div className="flex items-center gap-1.5 whitespace-nowrap">
           <span className={cn("w-[10px] text-[11px]", side ? sideHue(side) : "text-ink-3")}>
             {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
@@ -681,21 +681,32 @@ function Dash({ title }: { title?: string }) {
   );
 }
 
+/**
+ * The row's catalysts, on one line: the first flag and a count of the rest, which
+ * the count's hover and the detail pane list. They wrapped, so a row with three
+ * was half as tall again as its neighbours, in a column off the edge of the pane
+ * where nobody could see why.
+ */
 function Catalysts({ r }: { r: ScanRow }) {
+  const [first, ...rest] = r.flags;
+  if (!first) {
+    return r.news.length > 0 ? (
+      <span className="qt-cap text-[9.5px] whitespace-nowrap text-ink-3" title={r.news[0].title}>
+        {r.news.length} news
+      </span>
+    ) : null;
+  }
   return (
-    <div className="flex flex-wrap gap-x-2 gap-y-0.5 whitespace-nowrap">
-      {r.flags.slice(0, 3).map((f) => (
-        <span
-          key={`${f.kind}-${f.text}`}
-          className={cn("qt-cap text-[9.5px]", f.tone === "warn" ? "text-flip-fig" : f.tone === "good" ? "text-call-fig" : "text-ink-3")}
-          title={f.text}
-        >
-          {flagShort(f.kind, f.text)}
-        </span>
-      ))}
-      {r.news.length > 0 && !r.flags.some((f) => f.kind === "news") && (
-        <span className="qt-cap text-[9.5px] text-ink-3" title={r.news[0].title}>
-          {r.news.length} news
+    <div className="flex gap-x-2 whitespace-nowrap">
+      <span
+        className={cn("qt-cap text-[9.5px]", first.tone === "warn" ? "text-flip-fig" : first.tone === "good" ? "text-call-fig" : "text-ink-3")}
+        title={first.text}
+      >
+        {flagShort(first.kind, first.text)}
+      </span>
+      {rest.length > 0 && (
+        <span className="qt-cap text-[9.5px] text-ink-3" title={rest.map((f) => f.text).join("\n")}>
+          +{rest.length}
         </span>
       )}
     </div>
@@ -709,10 +720,13 @@ function flagShort(kind: ScanRow["flags"][number]["kind"], text: string): string
       // "Peer TSM reports Thu" → "Peer TSM Thu": a sector peer's report, not the name's own.
       const peer = text.match(/^Peer\s+(\S+)\s+reports?\s+(.*)$/i);
       if (peer) return `Peer ${peer[1]} ${peer[2]}`.slice(0, 18);
+      // "Reported after yesterday's close — in play (-31.8% surprise)" → "Earn -31.8%".
+      // Stripping "report" from the front of it left "Earn ed after yest".
+      if (/^reported\b/i.test(text)) return `Earn ${text.match(/([+-][\d.]+)% surprise/)?.[1] ?? "out"}${/surprise/.test(text) ? "%" : ""}`;
       return `Earn ${text.replace(/^reports?\s*/i, "").split(/[·—,]/)[0].trim()}`.slice(0, 18);
     }
     case "filing":
-      return text.split(/\s/)[0] || "Filing";
+      return text.split(/\s/)[0].replace(/:$/, "") || "Filing";
     case "event":
       return "Event";
     case "fuel":
@@ -756,15 +770,15 @@ function setupHue(r: ScanRow): string {
 function recordTip(rec: ScanRow["record"]): string {
   if (!rec) return "";
   const win = rec.win_1r != null ? `${Math.round(rec.win_1r * 100)}%` : "—";
-  const close = rec.avg_close_r != null ? `${rec.avg_close_r >= 0 ? "+" : ""}${rec.avg_close_r.toFixed(1)} R` : "—";
-  return `\nSignals like this ((${rec.kind}) ${rec.side}s scored ${rec.band}): ${win} reached +1R, ${close} at the close, ${rec.n} signals over ${rec.sessions ?? "—"} sessions${rec.small ? " — small sample" : ""}`;
+  const held = rec.held_r != null ? `${rec.held_r >= 0 ? "+" : ""}${rec.held_r.toFixed(1)} R` : "—";
+  return `\nSignals like this ((${rec.kind}) ${rec.side}s scored ${rec.band}): ${win} reached +1R, ${held} held with the stop kept, ${rec.n} signals over ${rec.sessions ?? "—"} sessions${rec.small ? " — small sample" : ""}`;
 }
 
 function ScoreBar({ v, record }: { v: number; record?: ScanRow["record"] }) {
   return (
     <div className="flex items-center gap-2" title={`${v} of 100 — a heuristic rank, not a probability${recordTip(record)}`}>
       <span className={cn("fig w-[22px] text-right text-[12.5px]", v >= 65 ? "text-ink" : v >= 40 ? "text-ink-2" : "text-ink-3")}>{v}</span>
-      <span className="relative h-[4px] w-[48px] bg-[var(--qt-track,var(--ring))]">
+      <span className="relative h-[4px] w-[36px] bg-[var(--qt-track,var(--ring))]">
         <span
           className={cn("absolute inset-y-0 left-0", v >= 65 ? "bg-ink" : v >= 40 ? "bg-ink-2" : "bg-ink-3")}
           style={{ width: `${Math.max(0, Math.min(100, v))}%` }}

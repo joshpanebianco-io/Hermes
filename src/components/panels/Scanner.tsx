@@ -9,6 +9,7 @@ import { ScanLog } from "@/components/panels/ScanLog";
 import { ScanTable, sortValue, type ColSet, type SortKey } from "@/components/panels/ScanTable";
 import { WatchlistEditor } from "@/components/panels/ScanWatchlist";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
+import { liveLine, scoreText } from "@/lib/bias";
 import { age, dir, inMin, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
@@ -21,7 +22,7 @@ import { groupReleases } from "@/lib/releases";
 import type { CalendarRow } from "@/types/terminal";
 
 /**
- * The Scanner — LE_Model.pine's scanner table, ranked, with the tape and the
+ * The Scanner — the Pine script's scanner table, ranked, with the tape and the
  * news beside it (owner instruction, 2026-10-13: "a section where it ranks
  * specific stocks that are higher probability to trade, similar to the
  * pinescript, and also attach any relevant headlines and earnings and
@@ -275,7 +276,7 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
         * 2026-10-14: "a bit more width" again, for options and why it ranks);
         * past what fits, the table scrolls sideways under its pinned ticker.
         */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 xl:divide-x xl:divide-ring min-[1280px]:max-[1599px]:grid-cols-[minmax(0,1fr)_460px] min-[1600px]:grid-cols-[minmax(0,1fr)_600px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:divide-x xl:divide-ring min-[1280px]:max-[1599px]:grid-cols-[minmax(0,1fr)_460px] min-[1600px]:grid-cols-[minmax(0,1fr)_504px]">
         {/* ---- the ranked list -------------------------------------------- */}
         <section aria-label="Ranked setups" className="flex min-h-0 min-w-0 flex-col">
           <div className="flex flex-wrap items-center gap-3 px-6 pt-4 pb-3">
@@ -303,8 +304,8 @@ export function Scanner({ now: shellNow, calendar = NO_ROWS }: { now?: number | 
                 : cols === "options"
                   ? "implied vs realised · the straddle's move · liquidity · the contract"
                   : data?.session === "pre" || data?.session === "closed"
-                    ? "the Pine's scanner, ranked by structure · strength · in play · tape"
-                    : "the Pine's scanner, ranked by structure · strength · entry · tape"}
+                    ? "the Pine's scanner, ranked by structure · strength · in play · daily frame · catalyst"
+                    : "the Pine's scanner, ranked by structure · strength · volume · market · entry · daily frame · catalyst"}
             </span>
             <div className={cn("ml-auto flex items-center gap-2", view === "log" && "hidden")}>
               <span className="seg">
@@ -406,7 +407,6 @@ function Masthead({
     <div className="flex min-h-[50px] shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-ring px-6 py-2">
       <h2 className="text-[13.5px] font-semibold whitespace-nowrap text-ink">Scanner</h2>
       <p className="flex min-w-0 flex-1 items-baseline gap-x-2.5 truncate text-[11.5px] text-ink-3">
-        <span className="qt-cap text-ink-3">LE model</span>
         <span>break and retest of PDH / PDL and PMH / PML, or VWAP / the 8 EMA when extended</span>
         {data && !data.offline && (
           <>
@@ -538,7 +538,7 @@ function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRo
                 regime.bias === "long" ? "text-call-fig" : regime.bias === "short" ? "text-put-fig" : "text-ink-3",
               )}
             >
-              {regime.bias === "long" ? "▲ Long" : regime.bias === "short" ? "▼ Short" : "Neutral"}
+              {regime.bias === "long" ? "▲ Long" : regime.bias === "short" ? "▼ Short" : "No lean"}
             </span>
             <p className="mt-1.5 text-[11px] text-ink-3">
               {regime.confirm ? CONFIRM_LABEL[regime.confirm] : "no read from VIX yet"}
@@ -602,7 +602,7 @@ function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRo
 function ConvictionCell({ c }: { c: Conviction }) {
   const hue = c.bias === "long" ? "text-call-fig" : c.bias === "short" ? "text-put-fig" : "text-ink-3";
   const tip = c.votes
-    .map((v) => `${v.vote === "long" ? "▲" : v.vote === "short" ? "▼" : "–"} ${v.label}: ${v.value} — ${v.note}`)
+    .map((v) => `${v.live === false ? "·" : v.vote === "long" ? "▲" : v.vote === "short" ? "▼" : "–"} ${v.label}: ${v.value} — ${v.note}`)
     .join("\n");
   const seg = (n: number, cls: string) =>
     n > 0 ? <span className={cn("h-full", cls)} style={{ width: `${(n / Math.max(1, c.total)) * 100}%` }} /> : null;
@@ -612,10 +612,10 @@ function ConvictionCell({ c }: { c: Conviction }) {
     <Cell label="Tape conviction" title={tip}>
       <div className="flex items-baseline gap-2">
         <span className={cn("text-[17px] leading-none font-semibold", hue)}>
-          {c.bias === "long" ? "▲ Long" : c.bias === "short" ? "▼ Short" : "Neutral"}
+          {c.bias === "long" ? "▲ Long" : c.bias === "short" ? "▼ Short" : "No lean"}
         </span>
-        <span className="fig text-[12px] text-ink-2">
-          {c.agree} of {c.total}
+        <span className={cn("fig text-[17px] leading-none font-semibold", hue)}>
+          {c.score != null ? scoreText(c.score) : `${c.agree} of ${c.total}`}
         </span>
         <span className={cn("qt-cap text-[10px]", c.grade === "strong" ? hue : c.grade === "weak" || c.grade === "none" ? "text-ink-3" : "text-ink-2")}>
           {c.grade}
@@ -628,7 +628,7 @@ function ConvictionCell({ c }: { c: Conviction }) {
         </span>
       )}
       <p className="mt-1.5 text-[11px] text-ink-3">
-        {c.agree} agree · {c.against} against · {c.neutral} neutral · plans capped at {c.max_conviction}
+        {liveLine(c)} · plans capped at {c.max_conviction}
       </p>
     </Cell>
   );

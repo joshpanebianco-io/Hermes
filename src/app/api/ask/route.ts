@@ -58,13 +58,19 @@ import { localAnswer, routeQuestion, type GlanceLike, type Route } from "@/lib/a
  * that will not take tools falls back to the whole-terminal context, streamed,
  * as the tab worked before.
  *
- * AND A ROUTER DECIDES HOW MUCH OF THAT A QUESTION GETS (lib/ask/router.ts,
+ * AND A ROUTER DECIDES HOW MUCH THINKING A QUESTION GETS (lib/ask/router.ts,
  * owner 2026-10-30: "so the model uses less when it doesn't need to"). A
  * handful of checks are answered from the glance without a model. A quick
- * check gets the glance, no tools and no thinking. A run-down gets the
- * desk's tool set — the futures set or the stocks set, not both — and the
- * thinking budget. The fixed start of the prompt is marked for the provider's
- * cache (llm.ts cachePrefix). The `done` line says which tier ran.
+ * check gets no thinking and a short answer; a run-down gets the thinking
+ * budget. Every question gets every tool (owner, 2026-11-05: "Hermes AI should
+ * have the context of every thing shown and displayed in the app"), so the
+ * fixed start of the prompt is the same bytes every time and the provider's
+ * cache holds it (llm.ts cachePrefix). The `done` line says which tier ran.
+ *
+ * THE PANEL BESIDE A TAB HAS THE TOOLS TOO. It is handed its desk's digest and
+ * was handed nothing else, so a question about another tab, or about a list the
+ * digest cuts, had no answer there at all. If no model in its chain will work
+ * through tools, it answers from the digest alone, as it always has.
  *
  * EARLIER TURNS ARE REMEMBERED AS A SUMMARY. Past HERMES_TURNS the oldest
  * turns fall off the request; the page keeps a rolling summary of them
@@ -83,8 +89,10 @@ const TABS = new Set(["terminal", "structure", "tape", "report", "market", "scan
 const noStore = { headers: { "cache-control": "no-store" } };
 /** The rolling summary the page sends back, capped. */
 const MAX_SUMMARY_CHARS = 2_500;
-/** A quick check's answer cap — a line or two, no thinking. */
-const QUICK_MAX_TOKENS = 900;
+/** A quick check's answer cap — short, no thinking, room for a table a tool brought back. */
+const QUICK_MAX_TOKENS = 1_500;
+/** How long the panel's free chain may work through tools before it answers from the digest. */
+const PANEL_TOOLS_MS = 75_000;
 /** The model name the footer shows for an answer no model wrote. */
 const LOCAL = "hermes/glance";
 
@@ -142,9 +150,9 @@ function gatherSlim(sym: string | null, desk: string | null): Promise<SlimContex
   return fromCollector<SlimContext>(`/api/ask/context?${q}`);
 }
 
-/** The desk's tool set (tools.py spec_for), or every tool. */
-async function gatherTools(desk: Route["desk"]): Promise<ToolSpec[]> {
-  const got = await fromCollector<{ tools: ToolSpec[] }>(`/api/ask/tools?desk=${desk}`, 10_000);
+/** Every tool (tools.py SPEC): what the collector will answer. */
+async function gatherTools(): Promise<ToolSpec[]> {
+  const got = await fromCollector<{ tools: ToolSpec[] }>("/api/ask/tools", 10_000);
   return got?.tools ?? [];
 }
 
@@ -190,15 +198,16 @@ export async function GET(req: Request) {
     const slim = await gatherSlim(sym, desk);
     if (!slim) return NextResponse.json({ error: "The collector did not answer." }, { status: 503, ...noStore });
     const question = (q.get("q") ?? "").trim();
-    const route = question ? routeQuestion(question, { desk, sym, watchlist: watchlistOf(slim), followUp: q.get("followup") === "1" }) : null;
-    const tools = await gatherTools(route && route.tier === "quick" ? "both" : (route?.desk ?? "both"));
-    const parts = hermesSlimParts(slim, sym, { summary: "", tools: route?.tier === "quick" ? [] : tools.map((t) => t.name) });
+    const route = question ? routeQuestion(question, { watchlist: watchlistOf(slim), followUp: q.get("followup") === "1" }) : null;
+    const tools = await gatherTools();
+    const parts = hermesSlimParts(slim, sym, { summary: "", tools: tools.map((t) => t.name) });
     return NextResponse.json(
       {
         config: chatConfig(hermesModels()),
         chars: parts.fixed.length + parts.live.length,
         fixedChars: parts.fixed.length,
-        tools: route?.tier === "quick" ? 0 : tools.length,
+        toolChars: JSON.stringify(tools).length,
+        tools: tools.length,
         route,
         local: question ? localAnswer(question, slim.slim as GlanceLike) : null,
         context: slim,
@@ -218,7 +227,7 @@ type Done = Extract<ChatEvent, { t: "done" }> & {
   unverified: string[];
   /** Figures an earlier answer in this chat carried but this turn's data does not — true then, stale now. */
   carried: string[];
-  route?: { tier: Route["tier"]; desk: Route["desk"] };
+  route?: { tier: Route["tier"] };
 };
 type Line = ChatEvent | Done;
 
@@ -265,15 +274,30 @@ export async function POST(req: Request) {
       const known = new Set(history.filter((m) => m.role === "user").flatMap((m) => numeralsIn(m.content)));
       const earlier = new Set(history.filter((m) => m.role === "assistant").flatMap((m) => numeralsIn(m.content)));
       let text = "";
-      /** Stream one system prompt with these options; "fallback" when no model in the chain took tools. */
-      const run = async (system: string, opts: ChatOptions, route?: Route): Promise<"done" | "fallback"> => {
+      /** What running the tools takes: the runner, and every result's numerals counted as known. */
+      const toolOptions = (tools: ToolSpec[]): ChatOptions =>
+        tools.length
+          ? {
+              tools,
+              runTool,
+              onToolResult: (t) => {
+                for (const k of numeralsIn(t)) known.add(k);
+              },
+            }
+          : {};
+      /**
+       * Stream one system prompt with these options; "fallback" when no model in
+       * the chain took tools — or, with `quiet`, when none answered at all, so
+       * the caller can try again without them before the reader sees an error.
+       */
+      const run = async (system: string, opts: ChatOptions, route?: Route, quiet = false): Promise<"done" | "fallback"> => {
         for (const k of numeralsIn(system)) known.add(k);
         for await (const ev of streamChat([{ role: "system", content: system }, ...history], req.signal, opts)) {
-          if (ev.t === "error" && ev.message.startsWith(TOOLS_UNSUPPORTED)) return "fallback";
+          if (ev.t === "error" && (ev.message.startsWith(TOOLS_UNSUPPORTED) || (quiet && !text))) return "fallback";
           if (ev.t === "delta") text += ev.text;
           send(
             ev.t === "done"
-              ? { ...ev, ...splitUnverified(text, known, earlier), route: route ? { tier: route.tier, desk: route.desk } : undefined }
+              ? { ...ev, ...splitUnverified(text, known, earlier), route: route ? { tier: route.tier } : undefined }
               : ev,
           );
           if (!open) break;
@@ -296,25 +320,19 @@ export async function POST(req: Request) {
           const local = localAnswer(question, slim.slim as GlanceLike);
           if (local) {
             send({ t: "delta", text: local });
-            send({ t: "done", model: LOCAL, finish: "stop", ms: Date.now() - t0, usage: { prompt: 0, cached: 0, completion: 0, cost: 0 }, unverified: [], carried: [], route: { tier: "quick", desk: "both" } });
+            send({ t: "done", model: LOCAL, finish: "stop", ms: Date.now() - t0, usage: { prompt: 0, cached: 0, completion: 0, cost: 0 }, unverified: [], carried: [], route: { tier: "quick" } });
             return;
           }
-          const route = routeQuestion(question, { desk, sym, watchlist: watchlistOf(slim), followUp });
-          const tools = route.tier === "full" ? await gatherTools(route.desk) : [];
+          const route = routeQuestion(question, { watchlist: watchlistOf(slim), followUp });
+          const tools = await gatherTools();
           const parts = hermesSlimParts(slim, sym, { summary, tools: tools.map((t) => t.name), prefs });
           const base = hermesOptions();
-          const opts: ChatOptions =
-            route.tier === "quick"
-              ? { ...base, maxTokens: QUICK_MAX_TOKENS, reasoningTokens: 0, cachePrefix: parts.fixed }
-              : {
-                  ...base,
-                  cachePrefix: parts.fixed,
-                  tools: tools.length ? tools : undefined,
-                  runTool,
-                  onToolResult: (t) => {
-                    for (const k of numeralsIn(t)) known.add(k);
-                  },
-                };
+          const opts: ChatOptions = {
+            ...base,
+            ...(route.tier === "quick" ? { maxTokens: QUICK_MAX_TOKENS, reasoningTokens: 0 } : {}),
+            cachePrefix: parts.fixed,
+            ...toolOptions(tools),
+          };
           if ((await run(parts.fixed + parts.live, opts, route)) === "done") return;
           // No model in the chain takes tools: the whole terminal, streamed, as before.
           send({ t: "thinking" });
@@ -330,6 +348,14 @@ export async function POST(req: Request) {
         if (!ctx) {
           noCollector();
           return;
+        }
+        // The panel reaches the whole terminal as well. Its chain is free models,
+        // so anything short of an answer falls back to the digest in front of it.
+        const tools = await gatherTools();
+        if (tools.length) {
+          const system = askSystem(ctx, sym, tools.map((t) => t.name));
+          if ((await run(system, { budgetMs: PANEL_TOOLS_MS, ...toolOptions(tools) }, undefined, true)) === "done") return;
+          send({ t: "thinking" });
         }
         await run(askSystem(ctx, sym), {});
       } catch (e) {

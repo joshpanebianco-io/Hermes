@@ -60,8 +60,15 @@ export function Earnings({
       if (a) a.push(r);
       else m.set(r.date, [r]);
     }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [rows]);
+    // TODAY FIRST (2026-11-05). In date order the panel opened on two days of
+    // finished prints, and in earnings season today's names sat thirty-five rows
+    // down. What is still to come reads forward from today; what has printed
+    // follows it, newest first.
+    const days = [...m.entries()];
+    const ahead = days.filter(([d]) => d >= today).sort(([a], [b]) => a.localeCompare(b));
+    const past = days.filter(([d]) => d < today).sort(([a], [b]) => b.localeCompare(a));
+    return [...ahead, ...past];
+  }, [rows, today]);
 
   const mine = watch ? rows.filter((r) => watch.has(r.symbol)).length : 0;
   return (

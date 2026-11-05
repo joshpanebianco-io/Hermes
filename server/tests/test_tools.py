@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from newsterminal import ask, tools
+from newsterminal import ask, events, tools
 
 ET = ZoneInfo("America/New_York")
 NOW = datetime(2026, 10, 29, 21, 0, tzinfo=ET)
@@ -147,10 +147,12 @@ def test_calendar_takes_a_day_word() -> None:
 
 def test_earnings_heavyweights_events_and_notes_come_from_the_same_builders() -> None:
     e = _run("earnings")
-    assert e["reported"] == ["GOOGL 2026-10-28 after $2.12 vs $2.94 (-27.89% surprise)"]
-    assert e["ahead"] == ["AAPL 2026-10-30 after"]
+    assert [d["date"] for d in e["days"]] == ["2026-10-28", "2026-10-30"]
+    assert e["days"][0]["rows"] == [
+        "GOOGL · after the close · reported $2.12 vs $2.94 (-27.89% surprise) · cap 3900bn"]
+    assert e["days"][1]["rows"] == ["AAPL · after the close · estimate $1.98 · cap 3800bn"]
     h = _run("heavyweights", {"book": "NQ"})
-    assert h["rows"][0].startswith("AAPL w7.77% 1.48% (0.1148 pts)")
+    assert h["rows"][0].startswith("AAPL w7.77% 1.48% (0.1148pp)")
     assert "reported 2026-10-28 after $2.12 vs $2.94 (-27.89%)" in h["rows"][1]
     ev = _run("event_risk")["events"]
     assert len(ev) == 1 and "oil" in ev[0]["channels"]
@@ -179,7 +181,8 @@ def test_the_slim_picture_is_small_and_says_what_it_knows() -> None:
     assert slim["phase"] == "Asia session" and slim["boxes_open"] == ["Asia"]
     assert slim["driver_board"]["NQ"]["event_risk"] is True
     assert slim["heavyweights_nq"][1]["reported"] == "$2.12 vs $2.94"
-    assert slim["earnings"]["reported"] == ["GOOGL 2026-10-28 after $2.12 vs $2.94"]
+    assert slim["earnings"]["latest_prints"] == ["GOOGL 2026-10-28 after $2.12 vs $2.94"]
+    assert slim["earnings"]["next_day"] == {"date": "2026-10-30", "reports": 1, "names": "AAPL"}
     assert slim["scanner"]["top"][0]["sym"] == "AMZN"
     assert slim["scanner"]["tape"]["bias"] == "short"
     assert slim["notes"]["brief"]["lead"] == "NQ is an Alphabet story"
@@ -188,13 +191,149 @@ def test_the_slim_picture_is_small_and_says_what_it_knows() -> None:
     assert ask.slim_context(_snap(), None)["gaps"]
 
 
-def test_each_desk_gets_its_own_tools() -> None:
-    names = lambda d: [t["name"] for t in tools.spec_for(d)]  # noqa: E731
-    assert "levels" in names("futures") and "scanner_row" not in names("futures")
-    assert "scanner_row" in names("stocks") and "levels" not in names("stocks")
-    assert "wire" in names("futures") and "wire" in names("stocks")
-    assert names("both") == names(None) == [t["name"] for t in tools.SPEC]
-    assert set(tools.DESKS) == set(names(None))
+# ------------------------------------------------- a panel's list, whole (2026-11-05)
+
+DAY = [{"symbol": f"N{i}", "name": f"Name {i}", "date": "2026-10-29",
+        "when": "pre" if i % 2 else "after", "eps_forecast": "$1.00",
+        "eps_actual": "$1.10" if i % 2 else None, "surprise_pct": 10.0 if i % 2 else None,
+        "market_cap": (100 + i) * 1e9} for i in range(23)]
+
+
+def _day_snap() -> dict[str, Any]:
+    return {**_snap(), "earnings": [*DAY, *_snap()["earnings"]]}
+
+
+def test_the_earnings_tool_is_the_whole_panel_not_eight_of_it() -> None:
+    """Twenty-three names reporting today: Hermes had the biggest eight, so "who
+    reports today?" came back short of what the Earnings panel plainly showed."""
+    run = lambda a: tools.run("earnings", a, snap=_day_snap(), scan=_scan(),  # noqa: E731
+                              bars=_bars_doc, brief=lambda i: None, plan=lambda i: None, now=NOW)
+    today = run({"day": "today"})["days"]
+    assert len(today) == 1 and today[0]["label"] == "today, Thu 29 Oct"
+    assert today[0]["reports"] == 23 and len(today[0]["rows"]) == 23 and today[0]["printed"] == 11
+    every = run({})
+    assert sum(d["reports"] for d in every["days"]) == 25
+    assert len(json.dumps(every)) <= tools.SCANNER_CHARS
+    # At 21:00 ET an after-close name with no figures has reported; it is not "due".
+    assert "reported by the calendar, no figures on the feed yet" in today[0]["rows"][0]
+    one = run({"sym": "googl"})["days"]
+    assert len(one) == 1 and one[0]["rows"][0].startswith("GOOGL")
+    assert "scanner_row" in run({"sym": "ZZZZ"})["note"]
+
+
+def test_a_feed_not_yet_loaded_is_not_an_empty_one() -> None:
+    """Right after a restart the table is empty, and "nothing reports today" is false."""
+    run = lambda snap: tools.run("earnings", {"day": "today"}, snap=snap, scan=None,  # noqa: E731
+                                 bars=_bars_doc, brief=lambda i: None, plan=lambda i: None, now=NOW)
+    assert "has not loaded yet" in run({**_snap(), "earnings": []})["error"]
+    # Loaded, and the feed really has nothing: that is an answer.
+    loaded = run({**_snap(), "earnings": [], "status": {"earnings": {"ok": True}}})
+    assert "error" not in loaded and loaded["days"] == [] and "No report" in loaded["note"]
+
+
+def test_the_earnings_tool_marks_the_watchlist() -> None:
+    scan = {**_scan(), "rows": [{"sym": "GOOGL", "ok": True}]}
+    out = tools.run("earnings", {"sym": "GOOGL"}, snap=_snap(), scan=scan, bars=_bars_doc,
+                    brief=lambda i: None, plan=lambda i: None, now=NOW)
+    assert out["days"][0]["rows"][0].endswith("on the watchlist")
+
+
+def test_the_glance_carries_every_name_reporting_today() -> None:
+    today = ask.slim_context(_day_snap(), _scan())["earnings"]["today"]
+    assert today["reports"] == 23 and today["printed"] == 11
+    got = (today["before_open"] + ", " + today["after_close"]).split(", ")
+    assert sorted(got) == sorted(r["symbol"] for r in DAY)
+
+
+def test_every_tool_is_offered_on_every_question() -> None:
+    """The split by desk and the tierless "quick" answer both left a question
+    with no way to reach the panel that held its answer."""
+    assert not hasattr(tools, "spec_for") and not hasattr(tools, "DESKS")
+    assert {"scanner", "scanner_row", "levels", "earnings", "panel"} <= {
+        t["name"] for t in tools.SPEC}
+
+
+def test_the_wire_filters_by_impact_and_gives_what_is_asked() -> None:
+    assert _run("wire", {"impact": "medium", "hours": 168})["matches"] == 0
+    assert _run("wire", {"impact": "high"})["matches"] == 2
+    many = [_item(f"story {i}", "corp", "high", "P", 60 + i) for i in range(60)]
+    out = tools.run("wire", {"limit": 30}, snap={**_snap(), "wire": many}, scan=None,
+                    bars=_bars_doc, brief=lambda i: None, plan=lambda i: None, now=NOW)
+    assert len(out["items"]) == 30
+
+
+def test_the_calendar_gives_the_low_impact_rows_when_asked() -> None:
+    crowd = [{"date": "2026-10-30", "et": f"{h:02d}:00", "event": f"e{h}", "country": "X",
+              "score": 1 if h % 3 else 2, "session": "ny"} for h in range(40)]
+    run = lambda a: tools.run("calendar", a, snap={**_snap(), "calendar": crowd},  # noqa: E731
+                              scan=None, bars=_bars_doc, brief=lambda i: None,
+                              plan=lambda i: None, now=NOW)
+    assert run({"day": "tomorrow", "min_impact": 0})["releases"] == 40
+    assert run({"day": "tomorrow", "min_impact": 2})["releases"] == 14
+
+
+def test_a_whole_game_plan_comes_back_and_one_name_can_be_asked_for() -> None:
+    """Eight plans ran past the usual cap, and the whole plan came back as `dropped`."""
+    plans = [{"sym": f"N{i}", "side": "short", "conviction": 3, "plan": "p" * 300,
+              "why": ["w" * 300] * 5} for i in range(8)]
+    rec = {"ok": True, "et_label": "x", "created_utc": "2026-10-29T13:32:25+00:00",
+           "plan": {"headline": "h", "market": "m", "plans": plans, "risks": ["r"]}}
+    run = lambda a: tools.run("note", {"kind": "plan", **a}, snap=_snap(), scan=None,  # noqa: E731
+                              bars=_bars_doc, brief=lambda i: None, plan=lambda i: rec, now=NOW)
+    whole = run({})
+    assert "dropped" not in whole and len(whole["note"]["plans"]) == 8
+    one = run({"sym": "n3"})["note"]["plans"]
+    assert [p["sym"] for p in one] == ["N3"]
+
+
+def test_a_name_that_just_reported_is_on_the_heavyweights_whatever_its_weight() -> None:
+    snap = _snap()
+    snap["constituents"]["indices"]["NQ"]["members"] = [
+        *[{"symbol": f"BIG{i}", "weight": 5.0, "pct": 0.1, "contribution": 0.005}
+          for i in range(10)],
+        {"symbol": "QCOM", "weight": 0.9, "pct": 0.5, "contribution": 0.0045},
+        {"symbol": "ORLY", "weight": 0.3, "pct": 0.2, "contribution": 0.0006}]
+    snap["earnings"] = [{"symbol": "QCOM", "date": "2026-10-29", "when": "after",
+                         "eps_actual": None, "eps_forecast": "$1.46"}]
+    rows = events.heavyweights(snap, "NQ", NOW)
+    assert "QCOM" in {r["symbol"] for r in rows} and "ORLY" not in {r["symbol"] for r in rows}
+    assert events.awaiting_open(rows) == ["QCOM"]
+
+
+def test_a_note_reads_as_the_page_prints_it() -> None:
+    rec = {**BRIEF, "report": {
+        "thesis": "t", "rotation_read": "defensives lead", "ratio_reads": [{"id": "XLK/SPY"}],
+        "catalysts_intro": "CPI day", "calls": [], "reads": [],
+        "headlines": [{"id": "h1", "books": ["NQ"], "note": "moves chips"}]},
+        "facts": {"headlines": [{"id": "h1", "title": "TSMC warns"}]}}
+    out = tools.run("note", {"kind": "brief"}, snap=_snap(), scan=None, bars=_bars_doc,
+                    brief=lambda i: rec, plan=lambda i: None, now=NOW)["note"]
+    assert out["rotation_read"] == "defensives lead" and out["catalysts_intro"] == "CPI day"
+    assert out["headlines"] == ["TSMC warns — moves chips"]
+
+
+def test_the_fed_diary_names_the_speakers_on_the_calendar_too() -> None:
+    snap = _snap()
+    snap["calendar"] = [
+        {"date": "2026-10-29", "et": "21:10", "event": "FOMC Member Barkin Speaks"},
+        {"date": "2026-10-30", "et": "12:00", "event": "Fed Chair Powell Speaks"},
+        {"date": "2026-10-30", "et": "08:30", "event": "Chicago PMI"},
+        {"date": "2026-12-01", "et": "08:30", "event": "FOMC Member Daly Speaks"},
+    ]
+    out = tools.run("panel", {"name": "fed_diary"}, snap=snap, scan=_scan(), bars=_bars_doc,
+                    brief=lambda i: None, plan=lambda i: None, now=NOW, more=MORE)
+    assert out["speakers_this_week"] == ["2026-10-29 21:10 ET FOMC Member Barkin Speaks",
+                                         "2026-10-30 12:00 ET Fed Chair Powell Speaks"]
+
+
+def test_the_macro_board_and_the_whole_index_map_are_panels() -> None:
+    board = _panel({"name": "macro_board"})["groups"]
+    assert any(line.startswith("NQ ") for lines in board.values() for line in lines)
+    movers = _panel({"name": "index_movers"})
+    assert movers["NQ"]["names"][0].startswith("GOOGL w2.95% -12.64% (-0.3729pp)")
+    assert "regular session" in movers["moves_are"]
+    regime = _panel({"name": "regime"})
+    assert regime["band"] == "normal" and "conviction" not in regime
 
 
 def test_a_scanner_row_is_cut_to_what_a_question_turns_on() -> None:
@@ -325,7 +464,6 @@ def test_every_panel_answers_by_name() -> None:
     assert len(_panel({"name": "past_notes"})["briefs"]) == tools.MAX_PAST_NOTES
     assert "error" in _panel({"name": "pool"}, more=None)      # the collector's own state
     assert "error" in _panel({"name": "nope"})
-    assert tools.DESKS["panel"] == "both" and tools.DESKS["scanner"] == "stocks"
 
 
 def test_the_glance_shows_the_entry_the_options_and_any_source_down() -> None:

@@ -61,3 +61,31 @@ export function convictionWord(c: number): string {
   if (c === 3) return "moderate";
   return "low";
 }
+
+/** What the score's three lines read, on the board's book and the tape's count alike. */
+export interface ScoreRead {
+  score?: number;
+  coverage?: number;
+  live?: number;
+  total: number;
+  weight_label?: string;
+  families?: { key: string; short: string; weight: number; score: number | null }[];
+}
+
+/** +48, -31, 0: the score as the page prints it. */
+export function scoreText(score: number): string {
+  return score > 0 ? `+${score}` : String(score);
+}
+
+/** "8 of 15 reads live · 85% of London's weight": how much of the read there is right now. */
+export function liveLine(r: ScoreRead): string {
+  return `${r.live ?? 0} of ${r.total} reads live · ${r.coverage ?? 0}% of ${r.weight_label ?? "the weight"}`;
+}
+
+/** "Structure +67 · Rates & dollar 0 · Daily trend +50": what carries it, heaviest first. */
+export function familiesLine(r: ScoreRead): string {
+  return (r.families ?? [])
+    .filter((f) => f.score != null && f.weight > 0)
+    .map((f) => `${f.short} ${scoreText(f.score as number)}`)
+    .join(" · ");
+}

@@ -7,7 +7,22 @@ both of its levels, strong against SPY, sitting at its entry, on volume, with th
 tape and the sector behind it — and none of them has been fitted to outcomes.
 The number orders a watchlist; it does not say how often the trade works. That
 is why every row carries its parts: the reader can see that a 71 is "structure
-30, RS 22, location 14, volume 0, market 5" and disagree with any of them.
+30, RS 18, location 14, volume 0, market 9" and disagree with any of them.
+
+AUDITED AGAINST ITS OWN RECORD (owner, 2026-11-05: "an audit of the ranking logic
+... ensure it is as good as it should be"). On 325 live signals over ten sessions,
+the top third of each day's signals by score reached +1R 52.9% of the time and the
+bottom third 52.9%: the rank did not separate them. What changed: the top location
+score (a retest) did worst of the live states, the tape penalty hit signals that did
+no worse than the rest, the daily frame and the catalyst were underweight, and RVOL
+paid for the wrong band. Read it with every day counting the same, since two busy
+sessions are 126 of those signals. Every signal made +1R 45.6%, +2R 32.5%, +0.23 R
+held. The old weights' top five a day made 40.0%, 32.0%, +0.45 R, and these make 46
+to 48%, 38 to 40%, +0.55 R (a range, because the log cannot split RVOL's 1.25x band).
+The top third stays near the average at +1R, so what the rank adds is how far a trade
+runs, which is what a momentum strategy is after. All of it was read on the data the
+choices came from, over ten sessions: a better prior, not a measurement.
+tools/fit_score.py prints the same tests as the record grows.
 
 VIX IS THE WEATHER, NOT A SIGNAL. It never picks a stock. It sets the band the
 session is likely to run in (how far a level trade can go, how wide the noise
@@ -46,13 +61,30 @@ ET = ZoneInfo("America/New_York")
 # ---- the weights (a heuristic rank — see the module docstring) --------------
 W_STRUCTURE = {2: 30, 1: 18}
 W_APPROACH = 10
+# THE STRATEGY DECIDES THIS ONE (owner, 2026-11-05: "the strategy revolves around
+# trending stocks and momentum"), and the Pine ranks by RS. The record cannot settle
+# it: inside a day strong RS reached +2R more often on 3 days of 8, at 79% against 44%
+# on Nov 2 and 29% against 58% on Oct 30, and 20 and 25 rank about even. RS is measured
+# from yesterday's close, so it includes the gap; the log keeps the 1-hour RS beside it
+# (scanlog `ctx`) to test RS now against RS since the close.
 W_RS = 25
 RS_FULL = 1.0  # RS of +1 daily ATR over SPY earns the whole RS part
+# A LIVE ENTRY IS A LIVE ENTRY (2026-11-05). A retest earned 20, the most, and did
+# the worst of the live states on both halves of the record: +1R 30% and 45%, where
+# a pullback made 54% and 57%, and near-VWAP or the 8 EMA 46% and 87%. The strategy's
+# entry is still the retest, and 47 signals are thin, so it is not marked below the
+# others; it has only stopped outranking them. Wrong side of VWAP stays at zero: 22%
+# and 44% on the same split, which settles that open call.
 W_LOCATION = {
-    "retest": 20, "pullback": 14, "extended_near": 12, "extended_far": 4,
+    "retest": 14, "pullback": 14, "extended_near": 14, "extended_far": 4,
     "approaching": 6, "forming": 8, "failed": 0, "chop": 0,
 }
-W_VOLUME = ((2.0, 10), (1.5, 7), (1.0, 4))
+# RVOL PAYS FROM 1.5x (2026-11-05). Inside a day, signals at 1.5x or more reached +2R
+# more often on 5 days of 6, while 1.0x to 1.5x did worse than under 1.0x, ahead on 2
+# days of 9. Thin: 49 signals at 1.5x or more, 33 of them from two sessions. The 1.25x
+# step is the owner's, and untested: the log held only the points, so it cannot split
+# that band. `ctx` keeps the raw RVOL from here on.
+W_VOLUME = ((2.0, 15), (1.5, 12), (1.25, 6), (1.0, 3))
 
 # ---- in play: the volume part's stand-in before the bell ----------------------
 # BEFORE 09:30 RVOL DOES NOT EXIST (Yahoo's pre-market bars carry no volume), so
@@ -64,8 +96,8 @@ W_VOLUME = ((2.0, 10), (1.5, 7), (1.0, 4))
 # gapped in its own daily ATRs, how much of an average day has traded before
 # the bell (Nasdaq's read, sources/premarket.py), and whether there is a fresh
 # reason. 22 points, because the pre-open location part tops out at 8
-# ("forming"), so structure 30 + RS 25 + location 8 + in play 22 + market 15 is
-# the same 100 the session's parts add to.
+# ("forming"). That was before the catalyst became a part of its own (below), and
+# the parts now add past 100 and are capped, before the bell and after it.
 #
 # Worked examples, the live payload at 06:02 ET on 2026-10-14 (the part is
 # rounded once, as a whole):
@@ -86,7 +118,10 @@ GAP_FULL = 0.75  # daily ATRs for the whole gap part
 W_PMVOL = 8
 PMVOL_MIN = 0.25  # % of ADV — nothing below it (Nasdaq's quiet names sit at 0.1–0.3)
 PMVOL_FULL = 4.0  # % of ADV for the whole part; log-scaled between the two
-W_CATALYST = 6
+# DOUBLED (2026-11-05): a catalyst with the side reached +1R 63% of the time against
+# 51% with none, and the penalty for one against it stays as it was, at -6, because
+# those signals did not do worse on the hit rate.
+W_CATALYST = 12
 CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08:00)
 # THE CATALYST IS ITS OWN PART NOW, ALL SESSION (owner, 2026-10-23: "i want
 # the rankings to be as high probability as possible"). It used to be a count
@@ -98,23 +133,31 @@ CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08
 # signal so tools/fit_score.py can keep it or throw it out.
 P_CATALYST = -6
 W_INPLAY = W_GAP + W_PMVOL
-# THE CLOCK AND THE TAPE, FROM THE RECORD (453 settled signals to 2026-10-21):
-# (L)/(E) signals in the first thirty minutes reached +1R 36% of the time and
-# in the last hour 37%, against 50–60% in between; longs on a short tape 41%
-# against shorts 58%. Both are penalties: they never push a name up.
+# THE CLOCK, FROM THE RECORD (1,258 settled signals to 2026-11-04): (L)/(E) signals
+# in the first thirty minutes reached +1R 39% of the time and in the last hour 36%,
+# against 52% from 10:00 to 14:00, and on both halves of the record. A penalty: it
+# never pushes a name up. 14:00 to 15:00 made 50% on one half and 35% on the other,
+# so it stays out of the window for now.
 P_CLOCK = -10
 CLOCK_OPEN_MIN = 30
 CLOCK_CLOSE_MIN = 60
-RECORD_OPEN_WIN = 36
-RECORD_CLOSE_WIN = 37
-P_TAPE = -10
+RECORD_OPEN_WIN = 39
+RECORD_CLOSE_WIN = 36
+#: The penalty is about a signal that is live, so it lapses this long after the bar.
+CLOCK_FRESH_MIN = 30
+# THE TAPE PENALTY IS GONE (2026-11-05). It took 10 points off a setup against a
+# moderate or strong tape on a reading of the first 453 signals. Since it was added,
+# the 88 signals it fired on reached +1R 57% of the time against 52% for the rest,
+# and did at least as well on both halves. A setup with the tape still earns its
+# Market points, and the Market line now says when one runs against it.
 TAPE_GRADES = ("moderate", "strong")
 #: The record line needs this many settled signals before it says a rate.
 RECORD_MIN = 10
 RECORD_SOLID = 30
 #: The daily frame (frame.py): the whole part with the daily trend, half of
 #: it between the averages, nothing against it — and a flag when against.
-W_FRAME = 6
+#: DOUBLED (2026-11-05): 56% against the 46% of a setup against the daily trend.
+W_FRAME = 12
 W_BIAS = 8
 W_CONFIRM = 4
 W_SECTOR = 3
@@ -125,6 +168,11 @@ P_EVENT = -10
 EVENT_MIN = 30
 P_EARN_AMC = -5
 P_FAILED = -15
+# THE STRATEGY TRADES THE OPTION (2026-11-05). A name whose at-the-money spread is
+# graded poor can be the best chart on the list and still give the edge away getting
+# in and out, so it should not sit at the top of a list read for trades. Reasoned,
+# not measured: the record is in stock R, and it is logged from here to be tested.
+P_LIQUIDITY = -5
 
 # ---- the regime's thresholds --------------------------------------------------
 # MIRRORED IN src/lib/vix.ts — the VIX card's click-through draws the same four
@@ -700,16 +748,27 @@ def latest_trade_signal(signals: list[dict[str, Any]] | None) -> dict[str, Any] 
     return None
 
 
-def clock_penalty(signals: list[dict[str, Any]] | None) -> tuple[int, str] | None:
+def clock_penalty(signals: list[dict[str, Any]] | None,
+                  now: datetime | None = None) -> tuple[int, str] | None:
     """P_CLOCK when the newest (L)/(E) fired in the first CLOCK_OPEN_MIN minutes
     or the last CLOCK_CLOSE_MIN of the regular session, with the record's rate
-    in the note; None otherwise. Pure."""
+    in the note; None otherwise. Pure.
+
+    ONLY WHILE THAT SIGNAL IS LIVE (2026-11-05). A 09:40 signal took ten points off
+    its name for the rest of the day, so at 13:00 a clean retest was ranked down for
+    something three hours old. With `now`, the penalty lapses CLOCK_FRESH_MIN after
+    the bar."""
     sg = latest_trade_signal(signals)
     if sg is None:
         return None
     m = _signal_minute(sg.get("at_et"))
     if m is None:
         return None
+    if now is not None:
+        et = now.astimezone(ET)
+        # Past the window, or a minute still to come today, which is yesterday's bar.
+        if not 0 <= et.hour * 60 + et.minute - m <= CLOCK_FRESH_MIN:
+            return None
     label = f"({sg['kind']}) at {sg.get('at_et')}"
     if 9 * 60 + 30 <= m < 9 * 60 + 30 + CLOCK_OPEN_MIN:
         return P_CLOCK, (f"{label}, first {CLOCK_OPEN_MIN} minutes: {RECORD_OPEN_WIN}% of "
@@ -719,15 +778,39 @@ def clock_penalty(signals: list[dict[str, Any]] | None) -> tuple[int, str] | Non
     return None
 
 
-def tape_penalty(side: str | None, conviction: dict[str, Any] | None) -> tuple[int, str] | None:
-    """P_TAPE for a setup against the tape count's moderate or strong lean. Pure."""
+def tape_against(side: str | None, conviction: dict[str, Any] | None) -> str | None:
+    """The words for a setup against the tape's moderate or strong lean: a note on
+    the Market line, not a penalty (see TAPE_GRADES). Pure."""
     if side not in ("long", "short") or not isinstance(conviction, dict):
         return None
     bias, grade = conviction.get("bias"), conviction.get("grade")
     if bias in ("long", "short") and bias != side and grade in TAPE_GRADES:
-        return P_TAPE, (f"{side} against a {grade} {bias} tape, {conviction.get('agree')} of "
-                        f"{conviction.get('total')} agree")
+        return f"against a {grade} {bias} tape"
     return None
+
+
+def liquidity_penalty(score: dict[str, Any], options: dict[str, Any] | None) -> dict[str, Any]:
+    """The score with P_LIQUIDITY in it when the name's options are graded poor. It
+    comes after the score because the contract helper reads the score's side. Pure."""
+    liq = (options or {}).get("liquidity") or {}
+    if not score.get("side") or not (options or {}).get("ok") or liq.get("grade") != "poor":
+        return score
+    spread = liq.get("spread_pct")
+    note = (f"{spread:.1f}% at-the-money spread" if isinstance(spread, (int, float))
+            else "wide spread")
+    parts = [*score.get("parts", []), _part("liquidity", "Options liquidity", P_LIQUIDITY, 0, note)]
+    return {**score, "parts": parts, "total": max(0, min(100, sum(p["pts"] for p in parts)))}
+
+
+def rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    """The table's order: the score, then on a tie the name nearest its entry, then the
+    stronger against SPY, then the ticker, so a tie does not flicker. Pure."""
+    entry = (row.get("setup") or {}).get("entry") or {}
+    dist = entry.get("dist_atr")
+    rs = (row.get("rs") or {}).get("SPY")
+    return (not row.get("ok"), -(row.get("score") or {}).get("total", 0),
+            abs(dist) if isinstance(dist, (int, float)) else 99.0,
+            -abs(rs) if isinstance(rs, (int, float)) else 0.0, str(row.get("sym")))
 
 
 def score_band(total: int | float | None) -> str | None:
@@ -748,7 +831,8 @@ def record_for(row_kind: str | None, side: str | None, total: int | float | None
     if not r or (r.get("n") or 0) < RECORD_MIN:
         return None
     return {"kind": row_kind, "side": side, "band": band, "n": r["n"], "win_1r": r.get("win_1r"),
-            "avg_close_r": r.get("avg_close_r"), "sessions": r.get("sessions"),
+            "held_r": r.get("held_r"),
+            "sessions": r.get("sessions"),
             "small": r["n"] < RECORD_SOLID}
 
 
@@ -768,14 +852,15 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
               news: list[dict[str, Any]] | None = None,
               frame_read: dict[str, Any] | None = None,
               catalyst: dict[str, Any] | None = None,
-              conviction: dict[str, Any] | None = None) -> dict[str, Any]:
+              conviction: dict[str, Any] | None = None,
+              now: datetime | None = None) -> dict[str, Any]:
     """The contract's score: seven parts and the penalties, every one listed. Pure.
 
     Before the bell (and overnight) the volume part is IN PLAY instead — see
     W_INPLAY. From 09:30 it is RVOL exactly as before. The daily frame
     (W_FRAME) and the catalyst (W_CATALYST, catalyst_read) are the sixth and
-    seventh; the clock and the tape (P_CLOCK, P_TAPE) are penalties from the
-    record. The total is capped at 100 as before.
+    seventh; the clock (P_CLOCK) is a penalty from the record. The total is capped
+    at 100 as before.
     """
     setup = row.get("setup") or {}
     side = setup.get("side")
@@ -822,7 +907,7 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         pts, note = 0, "wrong side of VWAP"
     if not d:
         pts, note = 0, "no side"
-    parts.append(_part("location", "Location", pts, 20, note))
+    parts.append(_part("location", "Location", pts, max(W_LOCATION.values()), note))
 
     # ---- volume (in play before the bell) -----------------------------------
     rvol = row.get("rvol")
@@ -837,7 +922,7 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
                     pts = p
                     break
         vnote = f"RVOL {rvol:.2f}" if rvol is not None else "no RVOL yet"
-        parts.append(_part("volume", "Relative volume", pts, 10, vnote))
+        parts.append(_part("volume", "Relative volume", pts, W_VOLUME[0][1], vnote))
 
     # ---- market --------------------------------------------------------------
     pts, bits = 0, []
@@ -851,6 +936,9 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     if d and sector_rs is not None and abs(sector_rs) >= SECTOR_MIN and sector_rs * d > 0:
         pts += W_SECTOR
         bits.append("sector tailwind")
+    against_tape = tape_against(side, conviction)
+    if against_tape:
+        bits.append(against_tape)
     parts.append(_part("market", "Market", pts, 15, ", ".join(bits) or "no tailwind"))
 
     # ---- the daily frame -----------------------------------------------------
@@ -873,12 +961,9 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
                        str(cat.get("note") or "")))
 
     # ---- penalties -----------------------------------------------------------
-    clk = clock_penalty(row.get("signals"))
+    clk = clock_penalty(row.get("signals"), now)
     if clk is not None:
         parts.append(_part("clock", "Clock", clk[0], 0, clk[1]))
-    tp = tape_penalty(side, conviction)
-    if tp is not None:
-        parts.append(_part("tape", "Tape", tp[0], 0, tp[1]))
     ru = row.get("range_used")
     if ru is not None and ru >= FUEL_USED:
         parts.append(_part("fuel", "Range used", P_FUEL, 0, f"{ru:.1f}× daily ATR used"))
@@ -905,7 +990,11 @@ def flags_for(row: dict[str, Any], earnings: dict[str, Any] | None,
     out: list[dict[str, Any]] = []
 
     def add(kind: str, tone: str, text: str) -> None:
-        out.append({"kind": kind, "tone": tone, "text": text})
+        # Once each: a foreign filer's two 6-Ks were the same flag twice, and the
+        # table keyed its chips on the text, which is what Next's overlay was
+        # counting on the Scanner tab (2026-11-05).
+        if not any(f["kind"] == kind and f["text"] == text for f in out):
+            out.append({"kind": kind, "tone": tone, "text": text})
 
     if catalyst and catalyst.get("against"):
         add("catalyst", "warn", f"Against: {catalyst['against']}")
@@ -940,8 +1029,9 @@ def flags_for(row: dict[str, Any], earnings: dict[str, Any] | None,
     for f in filings[:2]:
         form = f.get("form") or ""
         offering = form.startswith(("S-1", "S-3", "424B", "F-1", "F-3"))
+        desc = f.get("desc") or form
         add("filing", "warn" if offering else "info",
-            f"{'Offering filed' if offering else form}: {f.get('desc') or form}")
+            f"Offering filed: {desc}" if offering else form if desc == form else f"{form}: {desc}")
     fresh = [n for n in news if n.get("age_min") is not None and n["age_min"] <= 24 * 60]
     rating = next((n for n in fresh if n.get("kind") == "rating"), None)
     if rating is not None:
@@ -1016,7 +1106,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
     reg = regime(quotes, {k: rows_in.get(k) for k in ("SPY", "QQQ", "IWM")}, calendar,
                  session, now, context=context)
     # THE TAPE COUNT BEFORE THE SCORE (marketctx.conviction_for), on the
-    # technical rows as they stand: the tape penalty reads it, and the Market
+    # technical rows as they stand: the Market line reads it, and the Market
     # tab prints the same count. Its failure is a missing count, never a
     # missing payload.
     try:
@@ -1077,16 +1167,13 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
             row["score"] = score_row(row, reg, srs, earn, event, session,
                                      premkt=row["premkt"], news=nws,
                                      frame_read=row["frame_read"], catalyst=cat,
-                                     conviction=reg.get("conviction"))
+                                     conviction=reg.get("conviction"), now=now)
             row["flags"] = flags_for(row, earn, event, nws, fil, session,
                                      frame_read=row["frame_read"], short=row["short"],
                                      catalyst=cat)
         else:
             row["score"] = {"total": 0, "side": None, "parts": []}
             row["flags"] = []
-        # The record line: settled signals of this kind, side and score band.
-        row["record"] = record_for(implied_kind(row), row["score"].get("side"),
-                                   row["score"].get("total"), record)
         if isinstance(row.get("setup"), dict):
             row["setup"] = {k: v for k, v in row["setup"].items() if k != "lost_vwap"}
         # After the score: the contract helper trades the row's side.
@@ -1095,6 +1182,10 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
                                      reports=report_dates((earn_hist or {}).get(sym)),
                                      daily=(daily or {}).get(sym),
                                      oi_prev=fc.get("oi_prev"), vol_hist=fc.get("vol_hist"))
+        row["score"] = liquidity_penalty(row["score"], row["options"])
+        # The record line: settled signals of this kind, side and score band.
+        row["record"] = record_for(implied_kind(row), row["score"].get("side"),
+                                   row["score"].get("total"), record)
         # The first targets by the plan's rule — the options maths computed
         # them with the front straddle; without a chain, from the row alone.
         o = row["options"]
@@ -1107,7 +1198,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
             row["flags"].append(pf)
         out_rows.append(row)
 
-    out_rows.sort(key=lambda r: (not r.get("ok"), -(r.get("score") or {}).get("total", 0)))
+    out_rows.sort(key=rank_key)
     ages = [r["age_min"] for r in out_rows if r.get("age_min") is not None]
     return {
         "ok": any(r.get("ok") for r in out_rows),

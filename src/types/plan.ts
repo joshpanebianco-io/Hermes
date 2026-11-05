@@ -152,13 +152,13 @@ export interface PlanDriver {
   driver: string;
   label: string;
   move: string;
-  effect: "tailwind" | "headwind" | "flat";
+  effect: "tailwind" | "headwind" | "flat" | "no live read";
   why: string;
 }
 
 /** The day's macro, once per plan: the moves and the market's high-impact headlines. */
 export interface PlanMacro {
-  moves: Array<{ key: string; label: string; unit: string; move: number; text: string }>;
+  moves: Array<{ key: string; label: string; unit: string; move: number; text: string; closed?: boolean }>;
   headlines: Array<{ id: string; title: string; publisher: string; desk: string; age_min: number | null }>;
 }
 

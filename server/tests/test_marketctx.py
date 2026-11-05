@@ -71,8 +71,11 @@ def test_votes_are_eleven_in_order_and_neutral_with_a_reason_when_inputs_are_mis
         "spy_levels", "qqq_levels", "vix_dir", "vix_curve", "sectors", "equal_weight",
         "credit", "yields", "dollar", "index_volume", "participation"]
     assert all(v["vote"] == "neutral" and v["note"] for v in vs)
+    # Nothing behind any of them: not eleven flat reads, eleven that cannot vote.
+    assert not any(v["live"] for v in vs)
     c = mc.conviction(vs)
-    assert (c["bias"], c["grade"], c["max_conviction"], c["neutral"]) == (None, "none", 2, 11)
+    assert (c["bias"], c["grade"], c["max_conviction"]) == (None, "none", 2)
+    assert (c["live"], c["cannot_vote"], c["total"], c["score"]) == (0, 11, 11, 0)
 
 
 def test_levels_vote_reads_the_state_and_names_the_levels_broken() -> None:
@@ -212,27 +215,31 @@ def test_participation_counts_a_name_once_and_waits_for_the_open() -> None:
 # ------------------------------------------------------------------- the grade
 
 
-def _votes(long_n: int, short_n: int, total: int = 11) -> list[dict[str, Any]]:
-    vs = ["long"] * long_n + ["short"] * short_n
-    vs += ["neutral"] * (total - len(vs))
-    return [{"key": f"k{i}", "label": "", "value": "", "vote": v, "note": ""}
-            for i, v in enumerate(vs)]
+TAPE_KEYS = ("spy_levels", "qqq_levels", "vix_dir", "vix_curve", "sectors", "equal_weight",
+             "credit", "yields", "dollar", "index_volume", "participation")
 
 
-@pytest.mark.parametrize(("long_n", "short_n", "bias", "grade", "cap"), [
-    (6, 1, "long", "strong", 5),
-    (1, 7, "short", "strong", 5),
-    (6, 2, "long", "moderate", 4),     # two against: no longer strong
-    (4, 2, "long", "moderate", 4),
-    (4, 3, "long", "weak", 3),         # 4 is not more than 3 + 1
-    (3, 0, "long", "weak", 3),         # a side, but under four
-    (2, 2, None, "none", 2),           # a tie
-    (0, 0, None, "none", 2),
+def _votes(**sides: str) -> list[dict[str, Any]]:
+    """The eleven reads, flat unless named."""
+    return [{"key": k, "label": k, "value": "", "vote": sides.get(k, "neutral"), "note": ""}
+            for k in TAPE_KEYS]
+
+
+@pytest.mark.parametrize(("sides", "score", "bias", "grade", "cap"), [
+    # In the session: levels 35, participation 30, risk 20, rates 15.
+    ({k: "long" for k in TAPE_KEYS}, 100, "long", "strong", 5),
+    ({k: "short" for k in TAPE_KEYS}, -100, "short", "strong", 5),
+    ({"spy_levels": "long", "qqq_levels": "long", "sectors": "long", "participation": "long"},
+     50, "long", "strong", 5),
+    ({"spy_levels": "long", "qqq_levels": "long"}, 35, "long", "moderate", 4),
+    ({"yields": "long", "dollar": "long"}, 15, "long", "weak", 3),
+    ({"spy_levels": "long", "qqq_levels": "short"}, 0, None, "none", 2),
+    ({}, 0, None, "none", 2),
 ])
-def test_grade_and_max_conviction(long_n: int, short_n: int, bias: str | None, grade: str,
+def test_grade_and_max_conviction(sides: dict[str, str], score: int, bias: str | None, grade: str,
                                   cap: int) -> None:
-    c = mc.conviction(_votes(long_n, short_n))
-    assert (c["bias"], c["grade"], c["max_conviction"]) == (bias, grade, cap)
+    c = mc.conviction(_votes(**sides))
+    assert (c["score"], c["bias"], c["grade"], c["max_conviction"]) == (score, bias, grade, cap)
     assert c["agree"] + c["against"] + c["neutral"] == c["total"] == 11
 
 

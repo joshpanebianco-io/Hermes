@@ -315,7 +315,7 @@ function Mark() {
     <svg
       // A step larger with the word (owner, 2026-10-13); sized by class so
       // Quiet's taller band can take it up a further notch.
-      className="h-[30px] w-[30px] shrink-0 qt:h-[34px] qt:w-[34px]"
+      className="hermes-arrive h-[30px] w-[30px] shrink-0 qt:h-[34px] qt:w-[34px]"
       viewBox="0 0 512 512"
       aria-hidden
       // The mark glows past the viewBox on the breath; without this the SVG
@@ -339,10 +339,16 @@ function Mark() {
           * space, twice the viewBox wide, slid one full period per cycle by
           * SMIL — so the loop is seamless and the browser owns the clock, no
           * JS. Same 5.6s as the word: one lockup, one period.
+          *
+          * spreadMethod="repeat" IS WHAT MAKES IT PERIODIC (owner, 2026-11-05:
+          * "a bit abrupt and not smooth"). Without it a gradient pads past its
+          * ends, so sliding it off the mark left one flat colour for the back
+          * half of the cycle, and the wrap jumped back to the full range.
           */}
         <linearGradient
           id="hermes-grad"
           gradientUnits="userSpaceOnUse"
+          spreadMethod="repeat"
           x1="0"
           y1="0"
           x2="1024"

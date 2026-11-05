@@ -104,7 +104,7 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
           target="_blank"
           rel="noreferrer noopener"
           className="hit ml-auto shrink-0 rounded-[3px] border border-ring-2 px-2 py-[3px] text-[11.5px] text-ink-3 hover:text-ink"
-          title="Open this name on TradingView, where the LE Model runs"
+          title="Open this name on TradingView"
         >
           TradingView ↗
         </a>
@@ -331,10 +331,10 @@ function Score({ r }: { r: ScanRow }) {
           </span>
           {" · "}
           <span className="fig text-ink">{r.record.win_1r != null ? `${Math.round(r.record.win_1r * 100)}%` : "—"}</span> reached +1R ·
-          average <span className={cn("fig", (r.record.avg_close_r ?? 0) >= 0 ? "text-ink" : "text-put-fig")}>
-            {r.record.avg_close_r != null ? `${r.record.avg_close_r >= 0 ? "+" : ""}${r.record.avg_close_r.toFixed(1)} R` : "—"}
+          held to the close with the stop kept, <span className={cn("fig", (r.record.held_r ?? 0) >= 0 ? "text-ink" : "text-put-fig")}>
+            {r.record.held_r != null ? `${r.record.held_r >= 0 ? "+" : ""}${r.record.held_r.toFixed(1)} R` : "—"}
           </span>{" "}
-          at the close · <span className="fig">{r.record.n}</span> signals over{" "}
+          · <span className="fig">{r.record.n}</span> signals over{" "}
           <span className="fig">{r.record.sessions ?? "—"}</span> sessions
           {r.record.small && <span className="block text-ink-3">Small sample: a hint, not a rate, until there are 30.</span>}
         </p>
@@ -514,8 +514,8 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
         )}
         {r.flags.length > 0 && (
           <ul className="flex flex-col gap-1">
-            {r.flags.map((f) => (
-              <li key={`${f.kind}-${f.text}`} className="flex items-baseline gap-2 text-[12px]">
+            {r.flags.map((f, i) => (
+              <li key={`${f.kind}-${i}`} className="flex items-baseline gap-2 text-[12px]">
                 <span
                   aria-hidden
                   className={cn(
@@ -558,8 +558,8 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
           <p className="text-[12px] text-ink-3">No headlines found for this name.</p>
         ) : (
           <ul className="flex flex-col divide-y divide-ring/60">
-            {r.news.map((n) => (
-              <li key={n.url}>
+            {r.news.map((n, i) => (
+              <li key={`${n.url}-${i}`}>
                 <a href={n.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-0.5 py-2">
                   <span className="text-[12.5px] leading-[1.4] text-ink">{n.title}</span>
                   <span className="flex items-baseline gap-2 text-[11px] text-ink-3">

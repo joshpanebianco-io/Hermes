@@ -3,7 +3,7 @@ The scanner's feeds — bars, headlines and filings for every name on the watchl
 
 FREE, AND ENOUGH FOR THE STRATEGY. Yahoo's v8 chart endpoint gives any US stock
 five days of 5-minute OHLCV bars from 04:00 to 20:00 ET with no key — exactly
-what LE_Model.pine reads through `request.security(…, session.extended)`. The
+what the Pine script reads through `request.security(…, session.extended)`. The
 same endpoint at a daily interval gives a year of sessions for the daily ATR,
 the daily frame (frame.py) and the realised earnings moves. Personal use only,
 like every other Yahoo read in this terminal.
@@ -77,11 +77,11 @@ SEC_TICKERS = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 SEC_DOC = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 
-# The LE_Model.pine scanner's ON tickers, in the script's order — then the
+# The Pine scanner's ON tickers, in the script's order — then the
 # names added for the same playbook (owner, 2026-10-14: "add more stocks …
 # that they would recommend trading with this model").
 #
-# HOW THE ADDITIONS WERE CHOSEN. EllyD (the LE model) and PB trade on camera
+# HOW THE ADDITIONS WERE CHOSEN. EllyD and PB trade on camera
 # the index ETFs and the megacaps already here, and build the rest of the day
 # from what is moving pre-market on news — they publish no fixed list. So the
 # additions are the names that suit a level-retest options trade on numbers,

@@ -615,7 +615,8 @@ class Collector:
         # Orphaned cache files go at startup: a removed watchlist name's bars,
         # a past day's calendar, the spark keys the old per-process hash left.
         gone = CACHE.prune(7 * 86400.0, keep=("scanner_watchlist.json", "scanner_pool.json",
-                                              "scanner_events.jsonl", "iv_history.jsonl",
+                                              "scanner_events.jsonl", "scanner_preopen.jsonl",
+                                              "iv_history.jsonl",
                                               "oi_log.jsonl", "cboe_pc.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
@@ -743,7 +744,7 @@ class Collector:
             earn_next=self.earnhist.view_next(),
             flow_ctx=flow_ctx,
             context=parts["context"] or [],
-            # The tape count is computed inside the build now (the tape penalty
+            # The tape count is computed inside the build now (the Market line
             # reads it), from the constituents; the record line reads the log.
             constituents=cons if isinstance(cons, dict) else None,
             record=self.events.record_table(),

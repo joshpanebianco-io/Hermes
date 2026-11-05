@@ -42,10 +42,16 @@ answers every other panel on every tab by name (PANELS is the map). A cap
 shrinks a dominating list before it drops sections, and a digest names the
 panel for each section it dropped.
 
-TOOLS BELONG TO A DESK. A question about a stock has no use for the levels
-ladder's schema and a question about NQ none for the scanner row's; the
-schemas ride along on every round, so `spec_for` hands the route only the
-desk's set (the web's router picks the desk from the question).
+EVERY TOOL RIDES WITH EVERY QUESTION (owner, 2026-11-05: "Hermes AI should have
+the context of every thing shown and displayed in the app"). The tools used to
+be split by desk and a "quick" question got none, both decided from the
+question's words. Asked "who reports today?", Hermes had six of the day's
+twenty-three names and no way to fetch the rest, said it did not have them, and
+answered once challenged, because a follow-up always got the tools. A miss in
+that word list reads to the reader as Hermes being broken, and the six tools the
+split saved are a few hundred tokens of a prefix the provider caches. A panel's
+list is also answered WHOLE now: the earnings tool had stopped at eight printed
+and eight due, and the index movers at eight names of the forty on the page.
 """
 
 from __future__ import annotations
@@ -65,10 +71,15 @@ ET = ZoneInfo("America/New_York")
 MAX_CHARS = 12_000
 #: Bars a chart tool hands back — the last few hours on 10-minute bars.
 MAX_BARS = 36
-#: Wire items a search hands back.
+#: Wire items a search hands back, and the most it may ask for.
 MAX_WIRE = 12
+MAX_WIRE_ASKED = 40
 #: Characters of a wire summary.
 WIRE_SUMMARY = 140
+#: A stored note is one document the reader may ask about whole, so it gets more
+#: room than a panel: eight names of a game plan run to fourteen thousand
+#: characters, and at the usual cap the plan was dropped entire.
+NOTE_CHARS = 20_000
 #: Scanner names a stocks digest carries, best score first.
 DIGEST_NAMES = 12
 #: The Scanner table is every watchlist name, one line each — forty lines at
@@ -82,15 +93,18 @@ MAX_PAST_NOTES = 10
 CALENDAR_ALL = 30
 #: The futures books, for a digest or a note asked without one.
 BOOKS = ("NQ", "ES", "GC")
-#: Which desk each tool serves; "both" rides with either.
-DESKS: dict[str, str] = {
-    "scanner": "stocks", "scanner_row": "stocks", "bars": "stocks",
-    "levels": "futures", "heavyweights": "futures", "event_risk": "futures",
-    "wire": "both", "earnings": "both", "calendar": "both", "sessions": "both",
-    "digest": "both", "note": "both", "panel": "both",
-}
 
 _STR: dict[str, Any] = {"type": "string"}
+
+#: The snapshot block each list-shaped tool reads, and its name in words. EMPTY IS
+#: NOT THE SAME AS NOTHING (2026-11-05): for a few seconds after a restart these
+#: blocks have not been collected, and "no reports on the table" came back from a
+#: table that had not loaded, which a model reads as "nothing reports today".
+_FEEDS: dict[str, tuple[str, str]] = {
+    "earnings": ("earnings", "earnings"), "calendar": ("calendar", "economic calendar"),
+    "wire": ("wire", "news wire"), "event_risk": ("wire", "news wire"),
+    "heavyweights": ("constituents", "index constituents"),
+}
 
 
 def _params(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -109,8 +123,15 @@ _BOOK = {"type": "string", "enum": list(BOOKS)}
 #: it, this is the whole terminal — keep it in step with the tabs (lib/tabs.ts)
 #: and the product map in the prompt (lib/ask/prompt.ts PRODUCT).
 PANELS: dict[str, str] = {
-    "driver_board": "Structure, futures · per book, every vote with its threshold and reason, "
-                    "the count, the grade, conflicts, event risk and the ceiling on conviction",
+    "macro_board": "Macro · every quote on the board by group: the global indices, rates, "
+                   "volatility, FX, energy, metals and crypto, each with its day's change and "
+                   "whether it is live",
+    "regime": "Scanner, the top strip · VIX and its band, the curve, SPY's implied day, the "
+              "tape's bias, the next high-impact event, and the desk's lines on how to trade "
+              "this band",
+    "driver_board": "Structure, futures · per book, the score weighed by family for this "
+                    "session, every vote with its threshold and reason, which reads can vote, "
+                    "the grade, conflicts, event risk and the ceiling on conviction",
     "the_book": "Structure · NQ/QQQ, ES/SPY, GC/GLD, YM and RTY: last, change and where "
                 "price sits in the day's range",
     "session_ranges": "Structure, futures · the four session boxes per book (high, low, "
@@ -124,8 +145,8 @@ PANELS: dict[str, str] = {
     "expiry": "Structure · OpEx week, month end and the next expiries",
     "cot": "Structure, futures · CFTC Commitments of Traders per book: the net, its change "
            "and its percentile of the year",
-    "tape_count": "Structure, stocks · the eleven tape reads with thresholds, the count, the "
-                  "grade and the conviction cap",
+    "tape_count": "Structure, stocks · the tape's score, the eleven reads with thresholds, "
+                  "which can vote, the grade and the conviction cap",
     "breadth": "Structure, stocks · sectors up and down, equal weight against SPY, how many "
                "NDX and SPX names are up",
     "fuel": "Structure, stocks · how much of the implied day SPY, QQQ and IWM have used, the "
@@ -135,14 +156,14 @@ PANELS: dict[str, str] = {
     "prints": "Macro · today's US releases against consensus, and their read",
     "rates": "Macro · the Treasury curve with daily changes, real yields, spreads, the "
              "effective funds rate and the FOMC path priced per meeting",
-    "fed_diary": "Macro · FOMC meetings, Fed speakers, the Beige Book and Treasury coupon "
-                 "auctions ahead",
+    "fed_diary": "Macro · FOMC meetings, every Fed speaker on the diary and the calendar, the "
+                 "Beige Book and Treasury coupon auctions ahead",
     "cross_asset": "Macro · the dollar, yields, credit, oil, gold and the other cross-asset "
                    "rows, risk appetite and multi-day moves",
     "sector_rotation": "Macro · the eleven sector ETFs: day, week and month change and excess "
                        "return against SPY, and equal weight against cap weight",
-    "index_movers": "Macro · the top NDX and SPX names by contribution, and what the shown "
-                    "names add up to",
+    "index_movers": "Macro · all forty names on the map for NDX and SPX: weight, move and "
+                    "contribution, and what they add up to (book narrows it to one index)",
     "sector_peers": "Macro, stocks · the watchlist's sector peers reporting this week",
     "catalysts": "Analysis, futures · the brief's catalyst list: data, the Fed, auctions and "
                  "bellwether earnings, twelve hours back to three days out",
@@ -217,6 +238,11 @@ SPEC: list[dict[str, Any]] = [
                         "description": "How far back; default 24"},
               "desk": {"type": "string",
                        "enum": ["markets", "corp", "macro", "policy", "geo", "energy"]},
+              "impact": {"type": "string", "enum": ["high", "medium", "low"],
+                         "description": "Only this tier. high is the strip across the top of "
+                                        "the page"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": MAX_WIRE_ASKED,
+                        "description": f"How many to hand back; default {MAX_WIRE}"},
           })),
     _tool("levels",
           "The live levels ladder for a futures book (NQ, ES or GC): prior settle, prior RTH "
@@ -235,17 +261,26 @@ SPEC: list[dict[str, Any]] = [
           "fiscal).",
           _params({})),
     _tool("earnings",
-          "Earnings: the latest prints (actual against estimate, surprise) and what reports "
-          "next.",
-          _params({})),
+          "The Earnings panel in full, by day: every report two days back to the days ahead, "
+          "large caps and the watchlist's names, each with its name, before the open or after "
+          "the close, the estimate, the result and its surprise, and its market cap. Call it for "
+          "any question about who reports, who reported, a beat or a miss.",
+          _params({"day": {**_STR, "description": "today, tomorrow, yesterday or YYYY-MM-DD; "
+                                                  "omit for every day"},
+                   "sym": {**_STR, "description": "One ticker, e.g. ARM"}})),
     _tool("calendar",
           "The economic calendar for one ET day, one release per line: time, name, country, "
-          "actual, consensus, previous, impact and the session it lands in.",
+          "actual, consensus, previous, impact and the session it lands in. A full day leaves "
+          "out its impact-1 rows unless min_impact is given.",
           _params({"day": {**_STR, "description": "today, tomorrow, yesterday or YYYY-MM-DD; "
-                                                  "default today"}})),
+                                                  "default today"},
+                   "min_impact": {"type": "integer", "minimum": 0, "maximum": 5,
+                                  "description": "Only releases at or above this impact; 0 for "
+                                                 "every row"}})),
     _tool("sessions",
-          "The session clock: the phase now, the four session boxes with countdowns, the next "
-          "marker, and what is open.",
+          "The session clock: the phase now, the four session boxes with countdowns, what is "
+          "coming on the clock, and every exchange with its hours, whether it is open and any "
+          "holiday.",
           _params({})),
     _tool("digest",
           "The digest for a desk — what the Analysis brief (futures) or the Game plan (stocks) "
@@ -260,7 +295,8 @@ SPEC: list[dict[str, Any]] = [
           _params({"kind": {"type": "string", "enum": ["brief", "plan"]},
                    "id": {**_STR, "description": "A note id like 20261029-093225; omit for "
                                                  "the latest"},
-                   "book": _BOOK}, ["kind"])),
+                   "book": _BOOK,
+                   "sym": {**_STR, "description": "On a plan, one name's plan"}}, ["kind"])),
     _tool("panel",
           "Any other panel on any tab, as the page shows it — with the tools above, the whole "
           "terminal. Call it with no name for the list. Names: "
@@ -269,13 +305,6 @@ SPEC: list[dict[str, Any]] = [
                    "book": {**_BOOK, "description": "NQ, ES or GC, for a per-book panel"},
                    "sym": {**_STR, "description": "A ticker, for signal_log"}})),
 ]
-
-
-def spec_for(desk: str | None) -> list[dict[str, Any]]:
-    """The tools for one desk ("futures" or "stocks"), or all of them."""
-    if desk not in ("futures", "stocks"):
-        return list(SPEC)
-    return [t for t in SPEC if DESKS.get(t["name"], "both") in (desk, "both")]
 
 
 def _size(v: Any) -> int:
@@ -559,7 +588,8 @@ def _scanner(scan: dict[str, Any], a: dict[str, Any]) -> dict[str, Any]:
         "as_of_utc": scan.get("built_utc"), "session": scan.get("session"),
         "trading_day": scan.get("trading_day"),
         "pre_market_levels_final": scan.get("pm_locked"),
-        "tape": {f: conv.get(f) for f in ("bias", "grade", "agree", "total", "max_conviction")},
+        "tape": {f: conv.get(f) for f in ("bias", "score", "coverage", "grade", "live", "total",
+                                          "max_conviction")},
         "vix": {"last": _d(reg.get("vix")).get("last"), "band": reg.get("band")},
         "sort": sort, "side": side, "names": len(live), "shown": min(limit, len(live)),
         "format": "sym · score side · setup state: note · entry (distance in 10-minute ATRs) · "
@@ -586,6 +616,10 @@ def _wire(snap: dict[str, Any], a: dict[str, Any], now: datetime) -> dict[str, A
     q = str(a.get("query") or "").strip()
     hours = _hours(a.get("hours"))
     desk = a.get("desk")
+    tier = a.get("impact") if a.get("impact") in ("high", "medium", "low") else None
+    limit = a.get("limit")
+    limit = limit if isinstance(limit, int) and not isinstance(limit, bool) else MAX_WIRE
+    limit = max(1, min(MAX_WIRE_ASKED, limit))
     since = now.timestamp() - hours * 3600
     words = [w for w in re.split(r"\W+", q.lower()) if len(w) >= 3]
     pool: list[tuple[float, str, str]] = []
@@ -596,6 +630,8 @@ def _wire(snap: dict[str, Any], a: dict[str, Any], now: datetime) -> dict[str, A
         if not isinstance(ts, int | float) or ts < since:
             continue
         if desk and h.get("category") != desk:
+            continue
+        if tier and h.get("impact") != tier:
             continue
         text = f"{h.get('title') or ''} {h.get('summary') or ''}".lower()
         line = (f"{_stamp(ts, now)} · {str(h.get('impact') or '').upper()} · "
@@ -616,7 +652,7 @@ def _wire(snap: dict[str, Any], a: dict[str, Any], now: datetime) -> dict[str, A
     return {"query": q or None, "hours": hours, "matches": len(hits),
             "match": match if words else None,
             "format": "time · impact · desk · title — publisher · summary",
-            "items": [line for _, _, line in hits[:MAX_WIRE]]}
+            "items": [line for _, _, line in hits[:limit]]}
 
 
 def _last(v: Any) -> Any:
@@ -638,15 +674,17 @@ def _bars(doc: dict[str, Any], sym: str, tf: str, now: datetime) -> dict[str, An
                  "signals": (doc.get("signals") or [])[-4:]})
 
 
-def _calendar(snap: dict[str, Any], day: str) -> dict[str, Any]:
+def _calendar(snap: dict[str, Any], day: str, floor: Any = None) -> dict[str, Any]:
     rows = [r for r in snap.get("calendar") or []
             if isinstance(r, dict) and str(r.get("date") or "")[:10] == day]
     rows.sort(key=lambda r: str(r.get("et") or ""))
     # A full day is seventy-odd releases, most of them impact 1 and most of
     # those nothing this desk trades; past CALENDAR_ALL the low-impact rows
-    # go, counted, and the model can ask for a date to see them.
+    # go, counted, and the model can ask for them with `min_impact`.
     omitted = 0
-    if len(rows) > CALENDAR_ALL:
+    if isinstance(floor, int) and not isinstance(floor, bool):
+        rows = [r for r in rows if (r.get("score") or 0) >= floor]
+    elif len(rows) > CALENDAR_ALL:
         kept = [r for r in rows if (r.get("score") or 0) >= 2]
         omitted = len(rows) - len(kept)
         rows = kept
@@ -668,13 +706,16 @@ def _calendar(snap: dict[str, Any], day: str) -> dict[str, Any]:
 
 def _heavy_line(r: dict[str, Any]) -> str:
     line = (f"{r.get('symbol')} w{_num(r.get('weight_pct'))}% {_num(r.get('move_pct'))}% "
-            f"({_num(r.get('index_points'))} pts)")
+            f"({_num(r.get('index_pp'))}pp)")
     p = _d(r.get("reported"))
     if p:
-        line += (f" · reported {p.get('date')} {p.get('when') or ''} {p.get('eps_actual')} vs "
-                 f"{p.get('eps_forecast')}")
+        line += f" · reported {p.get('date')} {p.get('when') or ''}"
+        line += (f" {p.get('eps_actual')} vs {p.get('eps_forecast')}" if p.get("eps_actual")
+                 else ", no figures on the feed yet")
         if p.get("surprise_pct") is not None:
             line += f" ({_num(p.get('surprise_pct'))}%)"
+        if not p.get("reaction_in"):
+            line += " · the move shown is the session before the report"
     h = _d(r.get("headline"))
     if h:
         line += (f" · \"{h.get('title')}\" — {h.get('publisher')}, {h.get('time_et')}, "
@@ -682,11 +723,74 @@ def _heavy_line(r: dict[str, Any]) -> str:
     return line
 
 
-def _earn_line(r: dict[str, Any]) -> str:
-    line = ask._earn_line(r)
-    if r.get("surprise_pct") is not None:
-        line += f" ({_num(r.get('surprise_pct'))}% surprise)"
-    return line
+_EARN_WHEN = {"pre": "before the open", "after": "after the close"}
+
+
+def _earn_line(r: dict[str, Any], now: datetime, watch: set[str]) -> str:
+    """One report as the Earnings panel shows it."""
+    sym = r.get("symbol")
+    head = f"{sym} {r.get('name') or ''}".strip()
+    parts = [head, _EARN_WHEN.get(str(r.get("when")), "time not given")]
+    if r.get("eps_actual"):
+        result = f"reported {r.get('eps_actual')} vs {r.get('eps_forecast') or 'no estimate'}"
+        if r.get("surprise_pct") is not None:
+            result += f" ({_num(r.get('surprise_pct'))}% surprise)"
+        parts.append(result)
+    else:
+        moment = events.print_moment(r)
+        passed = moment is not None and moment <= now and r.get("when") in _EARN_WHEN
+        estimate = f"estimate {r.get('eps_forecast') or 'none'}"
+        parts.append(f"{estimate} · reported by the calendar, no figures on the feed yet"
+                     if passed else estimate)
+    cap = r.get("market_cap")
+    if isinstance(cap, int | float) and cap > 0:
+        parts.append(f"cap {cap / 1e9:.0f}bn")
+    if sym in watch:
+        parts.append("on the watchlist")
+    return " · ".join(parts)
+
+
+def _earnings(snap: dict[str, Any], scan: dict[str, Any] | None, a: dict[str, Any],
+              now: datetime) -> dict[str, Any]:
+    """The Earnings panel, whole, by day, the way the page lists it. Pure."""
+    rows = [r for r in snap.get("earnings") or [] if isinstance(r, dict) and r.get("date")]
+    today = now.astimezone(ET).date()
+    sym = str(a.get("sym") or "").upper().strip()
+    if sym:
+        rows = [r for r in rows if r.get("symbol") == sym]
+    day = _day_of(a.get("day"), now) if a.get("day") else None
+    if day:
+        rows = [r for r in rows if r.get("date") == day]
+    watch = {str(r.get("sym")) for r in (scan or {}).get("rows") or [] if isinstance(r, dict)}
+
+    def label(d: str) -> str:
+        try:
+            when = datetime.strptime(d, "%Y-%m-%d").date()
+        except ValueError:
+            return d
+        off = (when - today).days
+        word = {0: "today", 1: "tomorrow", -1: "yesterday"}.get(off)
+        return f"{word}, {when:%a %d %b}" if word else f"{when:%a %d %b}"
+
+    days: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        days.setdefault(str(r["date"]), []).append(r)
+    out: dict[str, Any] = {
+        "today": today.isoformat(),
+        "format": "symbol name · when · result or estimate · market cap · on the watchlist",
+        "covers": "two days back to four ahead: names of $50bn or more, the bellwethers, and "
+                  "the watchlist's names whatever their size",
+        "days": [{"date": d, "label": label(d), "reports": len(v),
+                  "printed": sum(1 for r in v if r.get("eps_actual")),
+                  "rows": [_earn_line(r, now, watch) for r in v]}
+                 for d, v in sorted(days.items())],
+    }
+    if sym and not rows:
+        out["note"] = (f"{sym} is not in the calendar's window. scanner_row carries a watchlist "
+                       "name's next report date whenever the chain can price it.")
+    elif not rows:
+        out["note"] = "No report on the table for this day."
+    return _cap(out, SCANNER_CHARS)
 
 
 def _futures_digest(snap: dict[str, Any], book: str | None) -> dict[str, Any]:
@@ -714,8 +818,9 @@ def _futures_digest(snap: dict[str, Any], book: str | None) -> dict[str, Any]:
     # board is its headline per book; the votes are a panel call away.
     if not book and isinstance(out.get("engine_driver_board"), dict):
         out["engine_driver_board"] = {
-            b: {f: _d(v).get(f) for f in ("bias", "grade", "agree", "total", "conflict",
-                                         "event_risk", "max_conviction", "treatment")}
+            b: {f: _d(v).get(f) for f in ("bias", "score", "coverage", "grade", "live", "total",
+                                         "families", "conflict", "event_risk", "max_conviction",
+                                         "treatment")}
             for b, v in out["engine_driver_board"].items()}
     return _name_dropped(_cap(out))
 
@@ -742,26 +847,36 @@ def _stocks_digest(scan: dict[str, Any], snap: dict[str, Any]) -> dict[str, Any]
     return _name_dropped(_cap(out))
 
 
-def _note(got: dict[str, Any], kind: str, book: str | None) -> dict[str, Any]:
-    """A stored note cut to its calls and, for a brief, the one book's read."""
+def _note(got: dict[str, Any], kind: str, book: str | None,
+          facts: Any = None, sym: str = "") -> dict[str, Any]:
+    """A stored note: what the page prints in words, all of it, and for a brief
+    the one book's call and read when one is named. A headline the note picked
+    is stored as an id, so it is joined to its title here."""
     note = _d(got.get("note"))
     head = {k: got.get(k) for k in ("written_et", "age_hours", "model", "session", "book")}
     if kind == "plan":
-        names = note.get("names")
         plan_body = dict(note)
-        if isinstance(names, list):
-            plan_body["names"] = names[:DIGEST_NAMES]
-        return _cap({**head, "note": plan_body})
+        if sym and isinstance(plan_body.get("plans"), list):
+            plan_body["plans"] = [x for x in plan_body["plans"]
+                                  if isinstance(x, dict) and x.get("sym") == sym]
+        return _cap({**head, "note": plan_body}, NOTE_CHARS)
     calls = [c for c in note.get("calls") or [] if isinstance(c, dict)]
     reads = [r for r in note.get("reads") or [] if isinstance(r, dict)]
     if book:
         calls = [c for c in calls if c.get("book") == book] or calls
         reads = [r for r in reads if r.get("book") == book]
-    keep = ("thesis", "snapshot_watch", "gamma_read", "catalyst_notes", "risks", "cross_asset")
+    keep = ("thesis", "snapshot_watch", "gamma_read", "catalysts_intro", "catalyst_notes",
+            "risks", "cross_asset", "rotation_read", "ratio_reads", "rotation_notes")
     body: dict[str, Any] = {k: note.get(k) for k in keep if note.get(k) not in (None, "", [])}
     body["calls"] = calls
     body["reads"] = reads
-    return _cap({**head, "note": body})
+    by_id = {h.get("id"): h for h in _d(facts).get("headlines") or [] if isinstance(h, dict)}
+    picked = [f"{by_id[h['id']].get('title')} — {h.get('note') or ''}".rstrip(" —")
+              for h in note.get("headlines") or []
+              if isinstance(h, dict) and h.get("id") in by_id]
+    if picked:
+        body["headlines"] = picked
+    return _cap({**head, "note": body}, NOTE_CHARS)
 
 
 # --------------------------------------------------------------------------
@@ -770,8 +885,7 @@ def _note(got: dict[str, Any], kind: str, book: str | None) -> dict[str, Any]:
 #: Panels read from the brief's digest, and those from the stocks desk's context.
 _FUTURES_DIGEST_PANELS = frozenset({
     "driver_board", "the_book", "session_ranges", "volume_profile", "gamma", "volatility",
-    "expiry", "rates", "fed_diary", "cross_asset", "sector_rotation", "index_movers",
-    "catalysts"})
+    "expiry", "rates", "fed_diary", "cross_asset", "sector_rotation", "catalysts"})
 _MARKET_PANELS = frozenset({
     "gamma", "rates", "cross_asset", "tape_count", "breadth", "fuel", "index_options",
     "prints", "sector_peers"})
@@ -808,6 +922,70 @@ def _event_line(e: dict[str, Any]) -> str:
     if e.get("retracted"):
         line += " · withdrawn"
     return line
+
+
+_FED_SPEAKS = re.compile(r"\b(fomc|fed|federal reserve|powell)\b.*\b(speaks?|testif|remarks)", re.I)
+
+
+def _fed_speakers(snap: dict[str, Any], now: datetime) -> list[str]:
+    """The Fed speakers on the economic calendar in the next seven days.
+
+    TWO SOURCES HOLD THE FED'S WEEK (2026-11-05). The diary is the Fed's own, and
+    carries the major events; the regional presidents are on the economic
+    calendar. Asked "any Fed speakers today?", Hermes read the diary and said
+    none, with Barkin on the Prints panel at 09:10."""
+    today = now.astimezone(ET).date()
+    days = {(today + timedelta(days=i)).isoformat() for i in range(8)}
+    rows = [r for r in snap.get("calendar") or [] if isinstance(r, dict)
+            and str(r.get("date") or "")[:10] in days and _FED_SPEAKS.search(str(r.get("event")))]
+    rows.sort(key=lambda r: (str(r.get("date")), str(r.get("et"))))
+    return [f"{r.get('date')} {r.get('et')} ET {r.get('event')}" for r in rows]
+
+
+def _quote_line(q: dict[str, Any]) -> str:
+    """One row of the macro board."""
+    name = q.get("label") or q.get("name") or q.get("key")
+    line = f"{q.get('key')} ({name}) {_num(q.get('last'))}"
+    if isinstance(q.get("pct"), int | float):
+        line += f" · day {_num(round(q['pct'], 2))}%"
+    if isinstance(q.get("chg"), int | float):
+        line += f" · change {_num(round(q['chg'], 4))}"
+    if isinstance(q.get("range_pos"), int | float):
+        line += f" · {round(q['range_pos'] * 100)}% up the day's range"
+    feed = q.get("feed")
+    return f"{line} · {feed}" if feed and feed != "live" else line
+
+
+def _macro_board(snap: dict[str, Any]) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for q in snap.get("quotes") or []:
+        if isinstance(q, dict) and q.get("key"):
+            groups.setdefault(str(q.get("group") or "other"), []).append(_quote_line(q))
+    return groups
+
+
+def _index_movers(snap: dict[str, Any], book: str | None, now: datetime) -> dict[str, Any]:
+    """Every name on the Index movers map, biggest contribution first."""
+    out: dict[str, Any] = {"moves_are": report._cash_moves_basis(now),
+                           "format": "symbol weight% move% (its contribution in percentage "
+                                     "points of the index)"}
+    for k, v in ((snap.get("constituents") or {}).get("indices") or {}).items():
+        if (book and k != book) or not isinstance(v, dict):
+            continue
+        members = [m for m in v.get("members") or [] if isinstance(m, dict)]
+        members.sort(key=lambda m: -abs(float(m.get("contribution") or 0)))
+        out[k] = {"index": v.get("index"), "covered_weight_pct": v.get("covered_weight"),
+                  "net_contribution_pp": v.get("net_contribution"), "as_of": v.get("as_of"),
+                  "names": [f"{m.get('symbol')} w{_num(m.get('weight'))}% {_num(m.get('pct'))}% "
+                            f"({_num(m.get('contribution'))}pp)" for m in members]}
+    return out
+
+
+def _regime(scan: dict[str, Any] | None) -> dict[str, Any]:
+    """The Scanner's top strip, without the tape count's votes (tape_count has those)."""
+    reg = _d((scan or {}).get("regime"))
+    return {k: reg.get(k) for k in ("vix", "band", "sub", "spy_em_pct", "tape", "bias", "confirm",
+                                    "event", "notes")}
 
 
 def _source_line(key: str, s: dict[str, Any]) -> str:
@@ -855,7 +1033,11 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
         return fn() if fn else None
 
     body: dict[str, Any]
-    if name == "driver_board":
+    if name == "macro_board":
+        body = {"groups": _macro_board(snap)}
+    elif name == "regime":
+        body = _regime(scan)
+    elif name == "driver_board":
         body = {"board": _by_book(fd.get("engine_driver_board"), book)}
     elif name == "the_book":
         body = {"book": fd.get("the_book")}
@@ -883,7 +1065,8 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
         body = {"rates": fd.get("rates"), "fed_path": mk.get("fed"),
                 "policy_meetings": snap.get("policy_meetings")}
     elif name == "fed_diary":
-        body = {"fed_ahead": fd.get("fed_ahead"),
+        body = {"speakers_this_week": _fed_speakers(snap, now),
+                "fed_ahead": fd.get("fed_ahead"),
                 "treasury_supply_ahead": fd.get("treasury_supply_ahead"),
                 "fed_calendar": snap.get("fed"), "auctions": snap.get("auctions")}
     elif name == "cross_asset":
@@ -898,7 +1081,7 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
              "vs_spy_week": _r2(s.get("rs_week")), "vs_spy_month": _r2(s.get("rs_month"))}
             for s in snap.get("sectors") or [] if isinstance(s, dict)]}
     elif name == "index_movers":
-        body = {"movers": fd.get("index_movers")}
+        body = _index_movers(snap, book, now)
     elif name == "catalysts":
         body = {"catalysts": fd.get("catalysts")}
     elif name == "pool":
@@ -957,6 +1140,10 @@ def run(
     signal log, newest last), "stats" (the record), "history" (past notes)."""
     a = args if isinstance(args, dict) else {}
     now = now or report._now_et(snap)
+    feed = _FEEDS.get(name)
+    if feed and not snap.get(feed[0]) and not _d(_d(snap.get("status")).get(feed[0])).get("ok"):
+        return {"error": f"the {feed[1]} feed has not loaded yet, so this says nothing about what "
+                         "is on it; the collector may have just restarted, so try again shortly"}
     try:
         if name == "scanner":
             if scan is None:
@@ -994,15 +1181,18 @@ def run(
         if name == "event_risk":
             return {"since": "the last cash close", "events": events.event_risk(snap, now)}
         if name == "earnings":
-            earn = report.digest_earnings(snap.get("earnings") or [], now)
-            return {k: [_earn_line(r) for r in v] for k, v in earn.items()}
+            return _earnings(snap, scan, a, now)
         if name == "calendar":
-            return _calendar(snap, _day_of(a.get("day"), now))
+            return _calendar(snap, _day_of(a.get("day"), now), a.get("min_impact"))
         if name == "sessions":
             st = sessions.session_state(now)
+            exchanges = [{k: s.get(k) for k in ("label", "open", "local_time", "hours", "holiday",
+                                                "next", "next_min")}
+                         for s in st.get("sessions") or [] if isinstance(s, dict)]
             return {"et": st.get("et_time"), "phase": st.get("phase"), "boxes": st.get("boxes"),
-                    "next": (st.get("markers") or [None])[0],
-                    "open": [s["label"] for s in st.get("sessions") or [] if s.get("open")]}
+                    "next": (st.get("markers") or [None])[0], "markers": st.get("markers"),
+                    "open": [s["label"] for s in exchanges if s.get("open")],
+                    "exchanges": exchanges}
         if name == "digest":
             if str(a.get("desk") or "futures") == "stocks":
                 if scan is None:
@@ -1015,7 +1205,8 @@ def run(
             rec = (plan if kind == "plan" else brief)(nid)
             got = ask.latest_note(rec)
             if got:
-                return _note(got, kind, _book_arg(a))
+                return _note(got, kind, _book_arg(a), (rec or {}).get("facts"),
+                             str(a.get("sym") or "").upper().strip())
             return {"error": f"no {kind}" + (f" {nid}" if nid else " stored")}
         return {"error": f"unknown tool {name!r}", "tools": [t["name"] for t in SPEC]}
     except (ValueError, TypeError, KeyError, AttributeError, ZeroDivisionError) as e:

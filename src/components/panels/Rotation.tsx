@@ -51,10 +51,13 @@ type Span = (typeof SPANS)[number]["key"];
 
 export function Rotation({
   rows,
+  cashOpen = true,
   ageMin,
   error,
 }: {
   rows: SectorRow[];
+  /** The SPDRs read the regular session; outside it, 1D is the last session's move. */
+  cashOpen?: boolean;
   ageMin?: number | null;
   error?: string | null;
 }) {
@@ -75,7 +78,7 @@ export function Rotation({
   return (
     <Module
       title="Sector rotation"
-      sub="vs SPY"
+      sub={span === "day" && !cashOpen ? "vs SPY · the last session" : "vs SPY"}
       ageMin={ageMin}
       error={error}
       bodyClassName="px-0 py-0"

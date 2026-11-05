@@ -104,7 +104,9 @@ function Row({ q }: { q: Quote }) {
       </span>
       <Tick value={chg.text} className={cn("fig -ml-1 w-[62px] shrink-0 text-right text-[11px]", dir(chg.v))} />
       <RangeBar pos={q.range_pos} />
-      <Sparkline data={q.spark} prev={q.prev} width={56} height={16} />
+      {/* Right-aligned, with the range bar taking up the slack: the rows stopped
+          two-thirds of the way across a wide pane and left the rest blank. */}
+      <Sparkline className="ml-auto shrink-0" data={q.spark} prev={q.prev} width={72} height={16} />
     </li>
   );
 }
@@ -120,13 +122,13 @@ function Row({ q }: { q: Quote }) {
  */
 function RangeBar({ pos }: { pos: number | null }) {
   if (pos === null || !Number.isFinite(pos)) {
-    return <span className="h-[3px] w-[44px] shrink-0" aria-hidden />;
+    return <span className="h-[3px] max-w-[220px] min-w-[44px] flex-1" aria-hidden />;
   }
   const p = Math.max(0, Math.min(1, pos));
   const tone = p >= 0.75 ? "var(--call)" : p <= 0.25 ? "var(--put)" : "var(--ink-3)";
   return (
     <span
-      className="relative h-[3px] w-[44px] shrink-0 rounded-full bg-ring"
+      className="relative h-[3px] max-w-[220px] min-w-[44px] flex-1 rounded-full bg-ring"
       title={`${(p * 100).toFixed(0)}% of the day's range`}
     >
       <span

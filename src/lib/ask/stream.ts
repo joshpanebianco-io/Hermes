@@ -5,8 +5,7 @@
  * NDJSON, one object per line: `delta` as the model writes, `thinking` while
  * it reasons before it speaks (the free reasoning models stream their
  * thinking on a channel of its own, which the reader would otherwise see as
- * silence), `tool` when it asks the collector for something (the tab only),
- * then exactly one `done` — with the numerals the check could not find — or
+ * silence), `tool` when it asks the collector for something, then exactly one `done` — with the numerals the check could not find — or
  * one `error`.
  */
 export type Line =
@@ -23,7 +22,7 @@ export type Line =
       carried?: string[];
       usage?: { prompt: number; cached: number; completion: number; cost: number };
       /** How the router treated the question (the Hermes tab only). */
-      route?: { tier: "quick" | "full"; desk: "futures" | "stocks" | "both" };
+      route?: { tier: "quick" | "full" };
     }
   | { t: "error"; message: string };
 
@@ -48,6 +47,8 @@ const SORT_WORDS: Record<string, string> = {
 
 /** The panel tool's names (server tools.py PANELS) as the activity line says them. */
 const PANEL_WORDS: Record<string, string> = {
+  macro_board: "the macro board",
+  regime: "the scanner's regime strip",
   driver_board: "the driver board",
   the_book: "the book",
   session_ranges: "the session ranges",
@@ -94,7 +95,7 @@ export function describeTool(name: string, args: Record<string, unknown>): strin
     case "bars":
       return `Reading ${s("sym").toUpperCase()} ${s("tf") || "10m"} bars`;
     case "wire":
-      return s("query") ? `Searching the wire for “${s("query")}”` : "Reading the wire";
+      return s("query") ? `Searching the wire for “${s("query")}”` : s("impact") ? `Reading the wire's ${s("impact")} stories` : "Reading the wire";
     case "levels":
       return `Reading ${s("book") || "the"} levels`;
     case "heavyweights":
@@ -102,7 +103,7 @@ export function describeTool(name: string, args: Record<string, unknown>): strin
     case "event_risk":
       return "Reading the event risk";
     case "earnings":
-      return "Reading earnings";
+      return s("sym") ? `Reading ${s("sym").toUpperCase()} earnings` : s("day") ? `Reading earnings for ${s("day")}` : "Reading earnings";
     case "calendar":
       return `Reading the calendar for ${s("day") || "today"}`;
     case "sessions":

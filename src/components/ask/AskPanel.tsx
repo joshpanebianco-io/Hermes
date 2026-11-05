@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { OPEN_ASK_EVENT, useAskFocus } from "@/lib/ask/open";
 import { GREETING, suggestionsFor } from "@/lib/ask/suggest";
-import { readNdjson, shortModel } from "@/lib/ask/stream";
+import { describeTool, readNdjson, shortModel } from "@/lib/ask/stream";
 import { HelmInline } from "@/components/ui/HelmLoader";
 import { cn } from "@/lib/cn";
 import { Markdownish } from "./Markdownish";
@@ -47,6 +47,8 @@ interface Msg {
   pending?: boolean;
   /** Reasoning before speaking — so the wait has a word on it. */
   thinking?: boolean;
+  /** What it is reading right now, when it has gone to the collector for more. */
+  activity?: string | null;
   error?: string | null;
   unverified?: string[];
   /** Which model actually answered — the chain falls through on the free tier. */
@@ -175,9 +177,10 @@ export function AskPanel({ tab }: { tab: string }) {
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         await readNdjson(res.body, (ev) => {
-          if (ev.t === "delta") patch(reply.id, (m) => ({ ...m, thinking: false, text: m.text + ev.text }));
+          if (ev.t === "delta") patch(reply.id, (m) => ({ ...m, thinking: false, activity: null, text: m.text + ev.text }));
           else if (ev.t === "thinking") patch(reply.id, (m) => ({ ...m, thinking: true }));
-          else if (ev.t === "done") patch(reply.id, (m) => ({ ...m, pending: false, thinking: false, model: ev.model, ms: ev.ms, unverified: ev.unverified ?? [] }));
+          else if (ev.t === "tool") patch(reply.id, (m) => ({ ...m, activity: describeTool(ev.name, ev.args) }));
+          else if (ev.t === "done") patch(reply.id, (m) => ({ ...m, pending: false, thinking: false, activity: null, model: ev.model, ms: ev.ms, unverified: ev.unverified ?? [] }));
           else if (ev.t === "error") patch(reply.id, (m) => ({ ...m, pending: false, thinking: false, error: ev.message }));
         });
       } catch (e) {
@@ -295,7 +298,7 @@ export function AskPanel({ tab }: { tab: string }) {
               )}
             >
               {m.role === "user" ? m.text : <Markdownish text={m.text} />}
-              {m.pending && !m.text && <HelmInline className="text-[12px] text-ink-3" label={m.thinking ? "Thinking" : "Reading the desk"} />}
+              {m.pending && !m.text && <HelmInline className="text-[12px] text-ink-3" label={m.activity ? m.activity : m.thinking ? "Thinking" : "Reading the desk"} />}
             </div>
             {m.role === "assistant" && m.model && (
               <span className="fig text-[9.5px] text-ink-4" title="The model that wrote this answer, and how long it took">

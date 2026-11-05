@@ -1,5 +1,5 @@
 """
-The scanner's arithmetic — LE_Model.pine's levels, 8 EMA wave and signals, ported.
+The scanner's arithmetic — the Pine script's levels, 8 EMA wave and signals, ported.
 
 WHY A PORT AND NOT A NEW MODEL. The owner already trades off this indicator: a
 break of the pre-market or previous-day high/low, then the retest of that level
@@ -858,7 +858,7 @@ def _levels_out(tech: Tech) -> dict[str, Any]:
 
 def history_levels(bars5: list[Bar], trading_day: date, since: int) -> list[dict[str, Any]]:
     """Each EARLIER session's four levels, over that session's regular hours —
-    LE_Model.pine's "keep previous days' levels". Pure.
+    the Pine script's "keep previous days' levels". Pure.
 
     WHY (owner, 2026-10-14: "ensure that the chart in the scanner includes the
     pre market highs and lows"). The chart drew only the trading day's four,

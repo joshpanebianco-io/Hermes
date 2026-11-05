@@ -12,7 +12,7 @@ other three. So it is its own module with its own storage, and it borrows only
 the plumbing: the OpenRouter client, the model chain, the time budget, the JSON
 extraction and the numerals guard, imported from report.py rather than copied.
 
-THE STRATEGY IT WRITES FOR. LE_Model.pine's: a name breaks its pre-market or
+THE STRATEGY IT WRITES FOR. The Pine script's: a name breaks its pre-market or
 previous-day high (low) and the trade is the RETEST of that level — or of VWAP /
 the 8 EMA wave when price has run too far from the level for it to come back.
 Every name in the facts carries the Scanner's own reading of that: the setup
@@ -43,7 +43,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import frame, marketctx, optcalc
+from . import events, frame, marketctx, optcalc
 from . import report as rp
 from .config import CACHE_DIR
 from .holidays import close_time, next_trading_day
@@ -285,7 +285,13 @@ SYMBOL_DRIVERS: dict[str, list[tuple[str, int, str]]] = {
 
 
 def macro_moves(quotes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Today's macro moves from the board, keyed like MACRO_QUOTES. Pure."""
+    """The macro moves from the board, keyed like MACRO_QUOTES. Pure.
+
+    A QUOTE THAT HAS STOPPED SAYS SO (audit, 2026-11-05). The cash 10Y last printed
+    at its close, and at 06:16 ET the plan's Macro line still read its -6bp as
+    today's tailwind for every tech name, on the board that had just refused it a
+    vote for exactly that reason ("no live read"). `closed` carries through to the
+    verdict and the page."""
     by = {q.get("key"): q for q in quotes if isinstance(q, dict)}
     out: dict[str, dict[str, Any]] = {}
     for key, label, unit in MACRO_QUOTES:
@@ -298,6 +304,8 @@ def macro_moves(quotes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         move = float(raw) * 100.0 if unit == "bp" else float(raw)
         text = f"{move:+.0f}bp" if unit == "bp" else f"{move:+.2f}%"
         out[key] = {"key": key, "label": label, "unit": unit, "move": round(move, 2), "text": text}
+        if q.get("feed") in ("closed", "stale"):
+            out[key]["closed"] = True
     return out
 
 
@@ -314,6 +322,11 @@ def macro_for(sym: str, sector: str | None,
             continue
         flat = abs(m["move"]) < FLAT[m["unit"]]
         effect = "flat" if flat else ("tailwind" if m["move"] * sign > 0 else "headwind")
+        if m.get("closed"):
+            out.append({"driver": key, "label": m["label"],
+                        "move": f"{m['text']} at its last close",
+                        "effect": "no live read", "why": why})
+            continue
         out.append({"driver": key, "label": m["label"], "move": m["text"],
                     "effect": effect, "why": why})
     return out
@@ -330,20 +343,28 @@ def _age_min(utc: Any, now: datetime) -> float | None:
 
 
 def macro_headlines(wire: list[dict[str, Any]], now: datetime,
-                    hours: float = 12.0, n: int = 6) -> list[dict[str, Any]]:
-    """The market's high-impact headlines of the last `hours`, newest first. Pure."""
-    out: list[dict[str, Any]] = []
+                    hours: float = 12.0, n: int = 8) -> list[dict[str, Any]]:
+    """The market's high-impact stories since the last cash close (or the last
+    `hours`, whichever reaches further back), newest first, one row per story. Pure.
+
+    ONE ROW PER STORY, BACK TO THE CLOSE (audit, 2026-11-05). This was the newest
+    six HIGH headlines of the last twelve hours, so a morning when eight desks
+    previewed one rate decision had no room for anything else, and a plan written
+    on Monday could not see the weekend."""
+    close_age = (now.timestamp() - events.last_close(now).timestamp()) / 60.0
+    horizon = max(hours * 60, close_age)
+    fresh: list[dict[str, Any]] = []
     for w in wire:
         if not isinstance(w, dict) or w.get("impact") != "high":
             continue
         age = _age_min(w.get("utc"), now)
-        if age is None or age > hours * 60:
-            continue
+        if age is not None and age <= horizon:
+            fresh.append({**w, "age_min": age})
+    out: list[dict[str, Any]] = []
+    for w, _also in events.distinct_stories(fresh)[:n]:
         out.append({"id": f"m{len(out) + 1}", "title": str(w.get("title") or ""),
                     "publisher": str(w.get("publisher") or ""),
-                    "desk": str(w.get("category") or ""), "age_min": age})
-        if len(out) >= n:
-            break
+                    "desk": str(w.get("category") or ""), "age_min": w["age_min"]})
     return out
 
 
@@ -800,6 +821,13 @@ def _clock(td: date) -> dict[str, str]:
     }
 
 
+def _put_call(pc: Any) -> dict[str, Any] | None:
+    """The Cboe ratios as the plan reads them, or None when none has landed. Pure."""
+    if not isinstance(pc, dict) or not pc.get("ratios"):
+        return None
+    return {k: pc.get(k) for k in ("date", "ratios", "avg20", "read")}
+
+
 def build_facts(
     scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT
 ) -> dict[str, Any]:
@@ -862,6 +890,8 @@ def build_facts(
         "events": group_releases(_day_prints(ctx["prints"] or [], td, today)),
         "fed": ctx["fed"],
         "gamma": ctx["gamma"],
+        # The market-wide hedging read: the board has it, the plan did not.
+        "put_call": _put_call(snap.get("putcall")),
         "partial": _partial(snap, rows),
     }
 
@@ -871,7 +901,7 @@ def build_facts(
 # --------------------------------------------------------------------------
 
 STRATEGY = (
-    "LE model, New York only. A name breaks its pre-market high/low (PMH/PML, locked at 09:30) or"
+    "New York only. A name breaks its pre-market high/low (PMH/PML, locked at 09:30) or"
     " previous-day high/low (PDH/PDL); the trade is the RETEST of the broken level on a 10-minute"
     " chart — or of VWAP / the 8 EMA wave when price has run far from the level (entry.dist_atr "
     "is the distance in 10-minute ATRs). (L) = a retest with the 8 EMA wave at the level; (E) = "
@@ -933,14 +963,18 @@ it answers to with today's move and whether that is a headwind or a tailwind FOR
 tagged rating / earnings / filing / news, and its recent SEC filings. `macro` at the top level is \
 the day's macro moves and the market's high-impact headlines. The regime block is the weather: \
 VIX and its band, the curve shape, the tape's bias and whether VIX confirms it, SPY's implied \
-one-day move. `tape_count` is the engine's count of eleven independent reads of the tape (each \
-long, short or neutral) with its grade. `breadth` is sectors up and down, equal weight against \
-SPY and the index leaders; `fuel` is how much of its implied one-day move SPY, QQQ and IWM have \
-already used (room / normal / stretched); `prints` are the session's US releases against \
+one-day move. `tape_count` is the engine's score of the tape from -100 to +100: eleven reads, each \
+long, short, flat or unable to vote yet, weighed by family (`families`) for this hour, with its \
+grade, how many reads are `live` and how much of the weight that is (`coverage`). `breadth` is \
+sectors up and down, equal weight against SPY and the index leaders; `fuel` is how much of its \
+implied one-day move SPY, QQQ and IWM have already used (room / normal / stretched); \
+`prints` are the session's US releases against \
 consensus, read hot (stronger economy) / cold / in line — `done` means its time has passed (a \
 speech never has an actual); `fed` is what the next meetings price; `gamma` is \
 dealer gamma in QQQ and SPY prices — POS means dealers damp moves and the walls tend to hold, NEG \
-means they chase moves and breaks run (absent when the feed is down).
+means they chase moves and breaks run (absent when the feed is down); `put_call` is the \
+market-wide Cboe ratios against their 20-day average — how hedged the market is, a backdrop over \
+days and never a reason to pick a name (absent when none has landed).
 
 Rules:
 - `headline` is ONE line in your own words: the day's stance and the one or two best names. \
@@ -982,8 +1016,11 @@ short on a name whose `short_interest.squeeze_risk` is true names the squeeze ri
 - "Macro:" ties the name to today's macro: its sector against SPY (as printed — an index ETF \
 has no `sector`, so leave the sector out rather than calling it null) and the drivers \
 in its `macro` list — name the driver, its move as printed, and the verdict (headwind / \
-tailwind / flat). If a high-impact market headline in the top-level `macro.headlines` bears on \
-the name or its sector, say which. If every driver is flat, say the macro is quiet for it.
+tailwind / flat; "no live read" means the market has stopped for the night, so say it closed \
+that way and give no verdict). `macro.headlines` is one row per high-impact story since the last \
+cash close: read all of them. One that bears on the name or its sector goes on its Macro line, \
+and one that bears on the whole tape goes in `market`. If every driver is flat, say the macro is \
+quiet for it.
 - SPY has no relative strength against itself: its plan carries no "RS:" line.
 - "News:" cites the name's own most relevant item — an analyst rating, an earnings item, a \
 filing or a headline — with its publisher (or form), and what it means for the setup. Only an \
@@ -998,7 +1035,8 @@ no more than two names may share the top score. Plans that read alike are a sign
 ranked. THE TAPE COUNT CAPS IT: no plan above `tape_count.max_conviction`, and no plan against \
 `tape_count.bias` above 3. The server enforces both, so rank within that ceiling.
 - `market` is two or three sentences on the tape and the weather from the regime block — never \
-empty, even on a quiet day — and says how many of the tape's reads agree, as counted.
+empty, even on a quiet day — and gives the tape's score and how many of its reads are live, as \
+printed.
 - Write plain trader's English. NEVER print a field name or a JSON key — not rs_spy, dist_atr, \
 iv_rv, ext_pct, em_front_pct, pc_vol, pct_adv, adv20, news_loaded, max_conviction or any other. \
 Say "relative strength against SPY", "N ten-minute ATRs from the entry", "implied volatility N \
@@ -1070,16 +1108,17 @@ def build_digest(facts: dict[str, Any]) -> dict[str, Any]:
 
 
 def tape_line(c: dict[str, Any] | None) -> str:
-    """The tape count in one sentence, for the user message. Pure."""
+    """The tape's score in one sentence, for the user message. Pure."""
     if not isinstance(c, dict):
-        return "Tape count: not available."
-    total, mx = c.get("total"), c.get("max_conviction")
+        return "Tape score: not available."
+    mx = c.get("max_conviction")
+    reads = f"{c.get('live')} of {c.get('total')} reads live, {c.get('coverage')}% of the weight"
     if c.get("bias") is None:
-        return (f"Tape count: no lean across {total} reads — every plan's conviction is capped "
-                f"at {mx}.")
-    return (f"Tape count: {c.get('agree')} of {total} reads lean {c.get('bias')}, "
-            f"{c.get('against')} against ({c.get('grade')}) — conviction is capped at {mx}, "
-            f"and at {AGAINST_MAX} for a plan against the {c.get('bias')} tape.")
+        return (f"Tape score {c.get('score'):+d} ({reads}): no lean — every plan's conviction is "
+                f"capped at {mx}.")
+    return (f"Tape score {c.get('score'):+d} ({reads}): leans {c.get('bias')}, {c.get('grade')} — "
+            f"conviction is capped at {mx}, and at {AGAINST_MAX} for a plan against the "
+            f"{c.get('bias')} tape.")
 
 
 def _market_digest(facts: dict[str, Any]) -> dict[str, Any]:
@@ -1089,9 +1128,13 @@ def _market_digest(facts: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if isinstance(c, dict):
         out["tape_count"] = {
-            **{k: c.get(k) for k in ("bias", "agree", "against", "neutral", "total", "grade",
-                                     "max_conviction")},
-            "reads": [f"{v.get('label')}: {v.get('value')} ({v.get('vote')})"
+            **{k: c.get(k) for k in ("bias", "score", "coverage", "grade", "max_conviction",
+                                     "agree", "against", "neutral", "live", "cannot_vote",
+                                     "total")},
+            "families": [{k: f.get(k) for k in ("label", "weight", "score")}
+                         for f in c.get("families") or [] if isinstance(f, dict)],
+            "reads": [f"{v.get('label')}: {v.get('value')} "
+                      f"({v.get('vote') if v.get('live', True) else 'cannot vote yet'})"
                       for v in c.get("votes") or [] if isinstance(v, dict)],
         }
     if "breadth" in facts:
@@ -1113,6 +1156,8 @@ def _market_digest(facts: dict[str, Any]) -> dict[str, Any]:
         out["gamma"] = None if not isinstance(g, list) else [
             {k: x.get(k) for k in ("etf", "regime", "flip", "call_wall", "put_wall", "spot")}
             for x in g if isinstance(x, dict)]
+    if facts.get("put_call"):
+        out["put_call"] = facts["put_call"]
     return out
 
 

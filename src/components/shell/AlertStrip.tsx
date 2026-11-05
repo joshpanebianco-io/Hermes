@@ -41,7 +41,8 @@ export function AlertStrip({
   const runRef = useRef<HTMLDivElement | null>(null);
   const [duration, setDuration] = useState(60);
 
-  const alerts = useMemo(() => items.filter((i) => i.impact === "high").slice(0, 20), [items]);
+  const high = useMemo(() => items.filter((i) => i.impact === "high"), [items]);
+  const alerts = useMemo(() => high.slice(0, 20), [high]);
 
   /*
    * Measure one copy of the run and set the loop's duration from it. Re-measured
@@ -96,7 +97,7 @@ export function AlertStrip({
       <div className="flex shrink-0 items-center gap-1.5 border-r border-ring/60 px-3 qt:border-ring qt:px-6">
         <span className="h-[6px] w-[6px] rounded-full bg-err live-dot qt:rounded-[1px]" aria-hidden />
         <span className="fig text-[9px] tracking-[0.14em] text-err uppercase qt:text-[11px]">High</span>
-        <span className="fig text-[9px] text-ink-3 qt:text-[11px]">{alerts.length}</span>
+        <span className="fig text-[9px] text-ink-3 qt:text-[11px]">{high.length}</span>
       </div>
       <div className="wire-track relative min-w-0 flex-1 overflow-hidden py-2.5">
         <div

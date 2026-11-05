@@ -59,7 +59,7 @@ function PrintRow({ p, subs, builtUtc }: { p: Print; subs: Print[]; builtUtc: st
   return (
     <li className="hit px-3 py-[4px]" title={p.themes.length ? p.themes.join(" · ") : undefined}>
       <div className="flex items-baseline gap-2">
-        <span className="fig w-[58px] shrink-0 text-[10.5px] text-ink-2 qt:w-[66px] qt:text-[12px]">
+        <span className="fig w-[58px] shrink-0 text-[10.5px] whitespace-nowrap text-ink-2 qt:w-[70px] qt:text-[12px]">
           {clock.label}
         </span>
         <span className="min-w-0 truncate text-[11px] text-ink">{p.title}</span>
@@ -70,7 +70,7 @@ function PrintRow({ p, subs, builtUtc }: { p: Print; subs: Print[]; builtUtc: st
           {p.released ? (p.read ?? "out") : !p.done ? "due" : p.consensus != null || p.previous != null ? "out" : "done"}
         </span>
       </div>
-      <p className="fig mt-0.5 pl-[66px] text-[10px] text-ink-3 qt:pl-[74px]">
+      <p className="fig mt-0.5 pl-[66px] text-[10px] text-ink-3 qt:pl-[78px]">
         {(p.released || p.done) && (
           <>
             act <span className={surprised ? "text-flip-fig" : "text-ink"}>{p.actual ?? "—"}</span> ·{" "}
@@ -78,7 +78,7 @@ function PrintRow({ p, subs, builtUtc }: { p: Print; subs: Print[]; builtUtc: st
         )}
         cons <span className="text-ink-2">{p.consensus ?? "—"}</span> · prev <span className="text-ink-2">{p.previous ?? "—"}</span>
       </p>
-      <PrintSubs lead={p} subs={subs} className="mt-0.5 pl-[66px] text-[10px] text-ink-3 qt:pl-[74px]" />
+      <PrintSubs lead={p} subs={subs} className="mt-0.5 pl-[66px] text-[10px] text-ink-3 qt:pl-[78px]" />
     </li>
   );
 }

@@ -11,7 +11,7 @@ import { HelmLoader } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { Failed, GenerateButton, NoKey, Offline, Working } from "@/components/panels/Report";
 import { useQuiet } from "@/components/state/UiMode";
-import { ConvictionBar, SplitBar, biasWord, gradeText, leanText, readText, sideText, stateText, voteGlyph, votesTip } from "@/components/market/shared";
+import { ConvictionBar, SplitBar, biasWord, gradeText, readFigure, leanText, readText, sideText, stateText, voteGlyph, votesTip } from "@/components/market/shared";
 import { bp, compact, dir, num, pct } from "@/lib/format";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
@@ -577,9 +577,7 @@ function TapeCount({ c }: { c: Conviction }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="qt-cap text-[10.5px] text-ink-3">Tape</span>
         <span className={cn("text-[14px] font-semibold", sideText(c.bias))}>{biasWord(c.bias)}</span>
-        <span className="fig text-[12.5px] text-ink-2">
-          {c.agree} of {c.total} agree
-        </span>
+        <span className={cn("fig text-[13px] font-semibold", sideText(c.bias))}>{readFigure(c)}</span>
         <span className={cn("qt-cap text-[10.5px]", gradeText(c))}>{c.grade}</span>
         <ConvictionBar c={c} className="w-[160px] self-center" />
         <span className="ml-auto text-[12px] text-ink-3">
@@ -590,8 +588,8 @@ function TapeCount({ c }: { c: Conviction }) {
       <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
         {c.votes.map((v) => (
           <li key={v.key} className="flex items-baseline gap-1.5 text-[11.5px]" title={`${v.value} — ${v.note}`}>
-            <span className={cn("text-[10px]", sideText(v.vote))}>{voteGlyph(v.vote)}</span>
-            <span className={v.vote === "neutral" ? "text-ink-3" : "text-ink-2"}>{v.label}</span>
+            <span className={cn("text-[10px]", v.live === false ? "text-ink-4" : sideText(v.vote))}>{v.live === false ? "·" : voteGlyph(v.vote)}</span>
+            <span className={v.live === false ? "text-ink-4" : v.vote === "neutral" ? "text-ink-3" : "text-ink-2"}>{v.label}</span>
           </li>
         ))}
       </ul>
@@ -1028,8 +1026,8 @@ function Facts({ n }: { n: PlanName }) {
         <div className="mt-2.5">
           <p className="qt-cap mb-1 text-[10px] text-ink-3">SEC filings</p>
           <ul className="flex flex-col gap-0.5">
-            {n.filings.map((fl) => (
-              <li key={`${fl.form}-${fl.filed}`} className="text-[11.5px] text-ink-2">
+            {n.filings.map((fl, i) => (
+              <li key={`${fl.form}-${fl.filed}-${i}`} className="text-[11.5px] text-ink-2">
                 <span className="fig font-semibold text-ink">{fl.form}</span> <span className="text-ink-3">{fl.desc}</span>
               </li>
             ))}
@@ -1094,7 +1092,8 @@ function MacroToday({ m }: { m: PlanMacro }) {
           {m.moves.map((x) => (
             <div key={x.key} className="flex items-baseline gap-2">
               <span className="qt-cap text-[10.5px] text-ink-3">{x.label}</span>
-              <span className={cn("fig text-[13px]", x.move > 0 ? "up" : x.move < 0 ? "down" : "text-ink-2")}>{x.text}</span>
+              <span className={cn("fig text-[13px]", x.closed ? "text-ink-3" : x.move > 0 ? "up" : x.move < 0 ? "down" : "text-ink-2")}>{x.text}</span>
+              {x.closed && <span className="text-[10px] text-ink-3">at its close</span>}
             </div>
           ))}
         </div>

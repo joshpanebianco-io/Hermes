@@ -4,42 +4,33 @@ import { test } from "node:test";
 import { localAnswer, routeQuestion } from "./router.ts";
 
 const WATCH = ["AMZN", "SPY", "QQQ", "NVDA", "ARM", "SHOP"];
-const route = (q: string, desk: "futures" | "stocks" | null = null) => routeQuestion(q, { desk, sym: null, watchlist: WATCH });
+const route = (q: string) => routeQuestion(q, { watchlist: WATCH });
 
-test("a named watchlist ticker is a full question on the stocks desk", () => {
-  const r = route("What is AMZN's setup right now?");
-  assert.equal(r.tier, "full");
-  assert.equal(r.desk, "stocks");
-  const dollar = route("$shop worth a look?", "futures");
-  assert.equal(dollar.desk, "stocks");
+test("a named watchlist ticker is a full question", () => {
+  assert.equal(route("What is AMZN's setup right now?").tier, "full");
+  assert.equal(route("$shop worth a look?").tier, "full");
 });
 
 test("a ticker's letters in prose are not a ticker", () => {
-  // "arm" the word, not ARM the name; the reader's desk decides.
-  const r = route("will the arm of the move extend?", "futures");
-  assert.equal(r.desk, "futures");
+  assert.equal(route("how far will the arm extend").tier, "quick");
 });
 
-test("futures words pick the futures set and a why makes it full", () => {
-  const r = route("Why is NQ down overnight?", "stocks");
-  assert.equal(r.tier, "full");
-  assert.equal(r.desk, "futures");
-});
-
-test("a glance check is quick, on the reader's desk unless it names the other", () => {
-  const r = route("is the pre-market open?", "stocks");
-  assert.equal(r.tier, "quick");
-  assert.equal(r.desk, "stocks");
-  assert.equal(route("is london open?", "stocks").tier, "quick");
-  assert.equal(route("is london open?", "stocks").desk, "futures");
+test("a why makes it full, and a check stays quick", () => {
+  assert.equal(route("Why is NQ down overnight?").tier, "full");
+  assert.equal(route("is the pre-market open?").tier, "quick");
   assert.equal(route("what's vix at?").tier, "quick");
-  assert.equal(route("what's vix at?").desk, "both");
+});
+
+test("every way of asking who reports thinks it through", () => {
+  // These went out with no tools at all, and Hermes said it had no earnings.
+  for (const q of ["who reports today?", "whats reporting today", "any reports today", "anything reporting tonight?", "did anyone beat", "earnings today"]) {
+    assert.equal(route(q).tier, "full", q);
+  }
 });
 
 test("a follow-up is never quick, and a read-of-the-desk word is full on its own", () => {
-  const r = routeQuestion("and ES?", { desk: "futures", sym: null, watchlist: WATCH, followUp: true });
+  const r = routeQuestion("and ES?", { watchlist: WATCH, followUp: true });
   assert.equal(r.tier, "full");
-  assert.equal(r.desk, "futures");
   assert.equal(route("so what's the overall lean?").tier, "full");
   assert.equal(route("macro and structure, net?").tier, "full");
 });
@@ -47,10 +38,6 @@ test("a follow-up is never quick, and a read-of-the-desk word is full on its own
 test("length alone makes a question full", () => {
   const long = "so I was thinking about the way the morning went and whether any of it changes how I should sit tomorrow";
   assert.equal(route(long).tier, "full");
-});
-
-test("both desks' words ride both tool sets", () => {
-  assert.equal(route("compare NQ's levels with the scanner's top names").desk, "both");
 });
 
 const glance = {

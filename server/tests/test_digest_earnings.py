@@ -59,12 +59,21 @@ def test_the_latest_prints_lead_and_the_oldest_day_is_last() -> None:
     assert goog["surprise_pct"] == -27.89
 
 
-def test_ahead_starts_tonight_and_drops_past_no_shows() -> None:
+def test_what_has_reported_by_the_clock_is_not_ahead() -> None:
     d = report.digest_earnings(ROWS, NOW)
-    assert [r["symbol"] for r in d["ahead"]] == ["AMZN", "INTC", "AAPL", "XOM"]
+    # 21:25 ET: tonight's names have reported, and the feed has no figures yet.
+    assert [r["symbol"] for r in d["awaiting_figures"]] == ["AMZN", "INTC", "NOSHOW"]
+    assert [r["symbol"] for r in d["ahead"]] == ["AAPL", "XOM"]
     # Unprinted rows carry no actual at all, rather than a null the model might read as a miss.
-    assert all("eps_actual" not in r for r in d["ahead"])
-    assert d["ahead"][0]["when"] == "after"
+    assert all("eps_actual" not in r for r in d["ahead"] + d["awaiting_figures"])
+    # Before the close the same names are still to come.
+    afternoon = datetime(2026, 10, 29, 15, 0, tzinfo=ET)
+    d = report.digest_earnings(ROWS, afternoon)
+    assert [r["symbol"] for r in d["ahead"]][:2] == ["AMZN", "INTC"]
+    # A no-show past the print window is off both lists.
+    weekend = datetime(2026, 10, 31, 12, 0, tzinfo=ET)
+    d = report.digest_earnings(ROWS, weekend)
+    assert "NOSHOW" not in {r["symbol"] for r in d["ahead"] + d["awaiting_figures"]}
 
 
 def test_a_row_without_a_readable_date_is_skipped() -> None:
@@ -86,7 +95,8 @@ def test_the_digest_hands_the_model_both_lists_off_the_snapshots_clock() -> None
     snap = {"clock": {"et": NOW.isoformat()}, "earnings": ROWS}
     d = report.build_digest(snap, "asia", "all")
     assert d["earnings"]["reported"][0]["symbol"] == "CAT"
-    assert d["earnings"]["ahead"][0]["symbol"] == "AMZN"
+    assert d["earnings"]["awaiting_figures"][0]["symbol"] == "AMZN"
+    assert d["earnings"]["ahead"][0]["symbol"] == "AAPL"
 
 
 def test_the_moment_a_report_prints_follows_its_timing_field() -> None:

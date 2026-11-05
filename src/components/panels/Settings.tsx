@@ -17,6 +17,7 @@ import { UI_COOKIE, type UiMode } from "@/lib/ui";
 import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
 import { segItem } from "@/lib/seg";
 import { setOptionsPrefs, useOptionsPrefs } from "@/lib/optionsPrefs";
+import { oneOf, usePersisted } from "@/lib/usePersisted";
 import type { ExpiryRule, Watchlist } from "@/types/scanner";
 import { cn } from "@/lib/cn";
 
@@ -41,7 +42,24 @@ import { cn } from "@/lib/cn";
  * call wall in this browser, a blue one in GEXYGEN if it is themed to match,
  * and a teal one in NinjaTrader and on the TradingView indicator — those read
  * from their own source files and cannot be reached from here.
+ *
+ * ONE SECTION AT A TIME (owner, 2026-11-05: "each section actually be it's own
+ * seperate tab, just to make it cleaner"). It was one long scroll of eight
+ * modules, with Presets below the fold. The bar is the one Structure and Analysis
+ * wear for their desks; the open section is remembered like every other choice.
  */
+
+const SECTIONS = [
+  { key: "interface", label: "Interface" },
+  { key: "alerts", label: "Alerts" },
+  { key: "options", label: "Options" },
+  { key: "keyboard", label: "Keyboard" },
+  { key: "presets", label: "Presets" },
+  { key: "frame", label: "Frame light" },
+  { key: "hues", label: "Data hues" },
+  { key: "chrome", label: "Chrome" },
+] as const;
+type Section = (typeof SECTIONS)[number]["key"];
 
 const SIDE_SLOTS: { key: keyof ThemeChoice; label: string; hint: string }[] = [
   { key: "call", label: "Calls / up", hint: "Call walls, positive gamma, and every up move" },
@@ -104,6 +122,11 @@ export function Settings({
   onUi: (v: UiMode) => void;
 }) {
   const [open, setOpen] = useState<keyof ThemeChoice | null>(null);
+  const [section, setSection] = usePersisted<Section>(
+    "settings.section",
+    "interface",
+    oneOf(...SECTIONS.map((s) => s.key)),
+  );
   const active = matchPreset(theme);
 
   const set = useCallback(
@@ -134,8 +157,26 @@ export function Settings({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-2 qt:p-0">
-      <div className="qt-stack flex min-w-0 flex-col gap-2">
+    <main className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ring px-3 py-1.5 qt:px-6">
+        <span className="seg max-w-full flex-wrap" role="tablist" aria-label="Settings">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              role="tab"
+              aria-selected={section === s.key}
+              onClick={() => setSection(s.key)}
+              {...segItem(section === s.key, { className: "text-[10px] tracking-[0.08em] uppercase qt:text-[12px]" })}
+            >
+              {s.label}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2 qt:p-0">
+      <div className="qt-stack flex w-full max-w-[1040px] min-w-0 flex-col gap-2">
+        {section === "interface" && (
         <Module title="Interface" sub="the chassis the terminal is drawn in" bodyClassName="px-0 py-0">
           {UIS.map((o) => (
             <button
@@ -161,13 +202,15 @@ export function Settings({
             </button>
           ))}
         </Module>
+        )}
 
-        <Alerts />
+        {section === "alerts" && <Alerts />}
 
-        <OptionsPrefsModule />
+        {section === "options" && <OptionsPrefsModule />}
 
-        <Keyboard />
+        {section === "keyboard" && <Keyboard />}
 
+        {section === "presets" && (
         <Module
           title="Presets"
           sub={active ? active.name : "custom"}
@@ -209,7 +252,9 @@ export function Settings({
             })}
           </div>
         </Module>
+        )}
 
+        {section === "frame" && (
         <Module title="Frame light" sub="the chassis effect" bodyClassName="px-0 py-0">
           {FX.map((o) => (
             <button
@@ -239,7 +284,9 @@ export function Settings({
             </button>
           ))}
         </Module>
+        )}
 
+        {section === "hues" && (
         <Module title="Data hues" sub="these mean something" bodyClassName="px-0 py-0">
           <p className="border-b border-ring/40 px-3 py-2 text-[10.5px] leading-relaxed text-ink-3">
             One hue per side, and hierarchy inside a hue carried by value rather than by a second
@@ -258,7 +305,9 @@ export function Settings({
             />
           ))}
         </Module>
+        )}
 
+        {section === "chrome" && (
         <Module title="Chrome" sub="decoration — free to be anything" bodyClassName="px-0 py-0">
           {CHROME_SLOTS.map((s) => (
             <Slot
@@ -271,8 +320,10 @@ export function Settings({
             />
           ))}
         </Module>
+        )}
       </div>
-    </div>
+      </div>
+    </main>
   );
 }
 
@@ -565,6 +616,7 @@ function OptionsPrefsModule() {
 const KEYS: { keys: string[]; what: string }[] = [
   { keys: ["1", "2", "3", "4", "5", "6"], what: "The tabs, in the order the header shows them" },
   { keys: ["D"], what: "Flip the desk — Futures or Stocks & options — on Structure and Analysis" },
+  { keys: ["A"], what: "Ask Hermes beside the page; press it again to put the panel away" },
   { keys: ["↑", "↓"], what: "Scanner: walk the list, the selection and the detail pane moving together" },
   { keys: ["Enter"], what: "Scanner: open the focused row" },
 ];

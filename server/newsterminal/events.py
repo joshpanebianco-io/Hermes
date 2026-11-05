@@ -7,52 +7,67 @@ like mag7 etc? geopolitics?"). The digest already held the pieces: the index
 constituents with weights and contributions, the earnings rows with actual
 against estimate, and the wire with its desks and impact tiers. It held them
 as three blocks in three places, and nothing voted. On the night Alphabet
-printed $2.12 against $2.94 and fell twelve percent — 0.37 NQ points on its
-own — the driver board's ceiling on conviction was exactly what it would
+printed $2.12 against $2.94 and fell twelve percent — 0.37 percentage points
+of the index on its own — the driver board's ceiling on conviction was exactly what it would
 have been on a quiet Tuesday, and the model had to notice the join itself.
 
 TWO BLOCKS, BOTH PURE, BOTH FROM THE SNAPSHOT.
 
   heavyweights   one row per big index weight (and any name whose move alone
-                 is worth a tenth of a point): weight, move, index points,
-                 the print if it just reported, and the one headline that
-                 explains it. "What the index is being moved by, name by
-                 name." Each row has an id the brief's call cites.
+                 is worth a tenth of a percentage point): weight, move, its
+                 share of the index's move, the print if it just reported, and
+                 the one headline that explains it. "What the index is being
+                 moved by, name by name." Each row has an id the brief's call
+                 cites.
   event_risk     the HIGH-impact wire on the geopolitics, policy and energy
                  desks since the last cash close, grouped by story, each
                  tagged with the channels it reaches (oil, rates, semis…).
 
-THEY VOTE (drivers.py). Heavyweight prints are a macro vote: the net index
-points of the names that just reported, past a threshold, is a direction.
+THEY VOTE (drivers.py). Heavyweight prints are a macro vote: the net
+contribution of the names that just reported, past a threshold, is a direction.
 Event risk is a DAMPER, never a direction — a strike on Saudi oil is not a
 short NQ, it is a reason to be one notch less sure of anything — and it
 lowers the board's ceiling by one the way a macro-against-structure conflict
 does.
+
+A CONTRIBUTION IS PERCENTAGE POINTS OF THE INDEX, NOT INDEX POINTS (2026-11-05).
+It is weight times return: AAPL at 7.93% of the index, up 5.31%, adds 0.42% to
+it. The word "points" here reached the notes as "0.42 index points", which on an
+index at 28,000 understates it about three hundred times. The field is `index_pp`.
+
+A PRINT'S MOVE STARTS AT THE NEXT OPEN (2026-11-05). The constituents read the
+regular session, so from an after-close print until 09:30 the next morning the
+"move" beside it is the session BEFORE the report. Counting that as the print's
+effect put a vote on the board that had nothing to do with the print, and
+requiring an actual left it blind for the hours the feed lags: ARM and QCOM read
+as not having reported at all. So a name reported by the clock is named even
+before its figures land, and it votes only once the cash market has traded it.
 """
 
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from collections.abc import Iterable
+from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .holidays import close_time, is_trading_day, prev_trading_day
+from .holidays import close_time, is_trading_day, next_trading_day, prev_trading_day
 from .sources.scanner import ALIASES, mentions
 
 ET = ZoneInfo("America/New_York")
 
 #: How many of the index's largest weights the table always carries.
 TOP_WEIGHTS = 10
-#: A name whose own contribution is at or beyond this many index points joins
-#: the table whatever its weight — Fortinet at 0.55% down 20% is a story.
-BIG_MOVE_POINTS = 0.10
+#: A name whose own contribution is at or beyond this many percentage points of
+#: the index joins the table whatever its weight — Fortinet at 0.55% down 20% is a story.
+BIG_MOVE_PP = 0.10
 #: A print counts as "just reported" for this long after it lands.
 PRINT_WINDOW_H = 36
 #: The headline that explains a name's move is looked for this far back.
 HEADLINE_WINDOW_H = 24
-#: The net index points of names that just reported, at or beyond this, votes.
-PRINTS_VOTE_POINTS = 0.25
+#: The net contribution of names that just reported, at or beyond this, votes.
+PRINTS_VOTE_PP = 0.25
 #: The wire desks an event comes from.
 EVENT_DESKS = frozenset({"geo", "policy", "energy"})
 #: How many events the block carries, newest first.
@@ -62,6 +77,9 @@ MAX_EVENTS = 8
 #: the calendar use the same table — report.py's `_earnings_moment` reads it
 #: from here).
 PRINT_HOUR = {"pre": (8, 0), "after": (16, 5)}
+
+#: When the cash session opens, ET: where a print's move starts.
+CASH_OPEN = time(9, 30)
 
 #: What an event reaches — the channel a desk reads it through. Checked
 #: against the title and summary, several may match.
@@ -133,10 +151,47 @@ def _num(v: Any) -> float | None:
 
 
 def _just_reported(e: dict[str, Any], now: datetime) -> bool:
-    if not e.get("eps_actual"):
-        return False
+    """Reported inside the window: by its figures, or by the clock for a row that
+    names its time of day — the feed lags the print by hours, and "has not
+    reported" is the wrong thing to say about those hours."""
     at = print_moment(e)
-    return at is not None and now - timedelta(hours=PRINT_WINDOW_H) <= at <= now
+    if at is None or not now - timedelta(hours=PRINT_WINDOW_H) <= at <= now:
+        return False
+    return bool(e.get("eps_actual")) or e.get("when") in PRINT_HOUR
+
+
+def reaction_open(e: dict[str, Any]) -> datetime | None:
+    """The first regular open at or after a print, in ET: from here the cash
+    move says what the market made of it. None for an undated row. Pure."""
+    at = print_moment(e)
+    if at is None:
+        return None
+    day = at.date()
+    if not is_trading_day(day) or at.time() > CASH_OPEN:
+        day = next_trading_day(day)
+    return datetime.combine(day, CASH_OPEN, tzinfo=ET)
+
+
+def reaction_in(e: dict[str, Any], now: datetime) -> bool:
+    """Whether the cash market has traded since this print. Pure."""
+    opens = reaction_open(e)
+    return opens is not None and now >= opens
+
+
+def _reported(p: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """A heavyweight's print as its row carries it, with what its move can say."""
+    moved = reaction_in(p, now)
+    out: dict[str, Any] = {
+        "date": p.get("date"), "when": p.get("when"),
+        "eps_actual": p.get("eps_actual"), "eps_forecast": p.get("eps_forecast"),
+        "surprise_pct": p.get("surprise_pct"), "reaction_in": moved,
+    }
+    if not moved:
+        out["note"] = ("the move on this row is the session before the report — the cash "
+                       "market has not traded since")
+    elif not p.get("eps_actual"):
+        out["note"] = "reported by the calendar; the feed has no figures yet"
+    return out
 
 
 def _headline_for(sym: str, wire: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
@@ -172,14 +227,18 @@ def heavyweights(snap: dict[str, Any], book: str, now: datetime) -> list[dict[st
         return []
     members = [m for m in ix.get("members") or [] if isinstance(m, dict) and m.get("symbol")]
     by_weight = sorted(members, key=lambda m: -(_num(m.get("weight")) or 0.0))
-    chosen: list[dict[str, Any]] = list(by_weight[:TOP_WEIGHTS])
-    seen = {m["symbol"] for m in chosen}
-    for m in members:
-        if m["symbol"] not in seen and abs(_num(m.get("contribution")) or 0.0) >= BIG_MOVE_POINTS:
-            chosen.append(m)
-            seen.add(m["symbol"])
     prints = {e["symbol"]: e for e in snap.get("earnings") or []
               if isinstance(e, dict) and e.get("symbol") and _just_reported(e, now)}
+    chosen: list[dict[str, Any]] = list(by_weight[:TOP_WEIGHTS])
+    seen = {m["symbol"] for m in chosen}
+    # A name that just reported joins too, whatever its weight: QCOM down ten
+    # percent before the open on its report is a catalyst for NQ, and with only
+    # the top ten weights the board said no heavyweight had reported.
+    for m in members:
+        big = abs(_num(m.get("contribution")) or 0.0) >= BIG_MOVE_PP
+        if m["symbol"] not in seen and (big or m["symbol"] in prints):
+            chosen.append(m)
+            seen.add(m["symbol"])
     wire = [h for h in snap.get("wire") or [] if isinstance(h, dict)]
     out: list[dict[str, Any]] = []
     for i, m in enumerate(chosen, start=1):
@@ -190,21 +249,26 @@ def heavyweights(snap: dict[str, Any], book: str, now: datetime) -> list[dict[st
             "symbol": sym,
             "weight_pct": _num(m.get("weight")),
             "move_pct": _num(m.get("pct")),
-            "index_points": _num(m.get("contribution")),
-            "reported": ({
-                "date": p.get("date"), "when": p.get("when"),
-                "eps_actual": p.get("eps_actual"), "eps_forecast": p.get("eps_forecast"),
-                "surprise_pct": p.get("surprise_pct"),
-            } if p else None),
+            "index_pp": _num(m.get("contribution")),
+            "reported": _reported(p, now) if p else None,
             "headline": _headline_for(sym, wire, now),
         })
     return out
 
 
 def net_print_points(rows: list[dict[str, Any]]) -> tuple[float, list[str]]:
-    """The index points supplied by the names that just reported, and who they were. Pure."""
-    hit = [r for r in rows if r.get("reported") and _num(r.get("index_points")) is not None]
-    return round(sum(float(r["index_points"]) for r in hit), 3), [str(r["symbol"]) for r in hit]
+    """The contribution of the names that just reported and have traded since,
+    in percentage points of the index, and who they were. A name still waiting
+    for the open is left out: its figure is the session before its report. Pure."""
+    hit = [r for r in rows if (r.get("reported") or {}).get("reaction_in")
+           and _num(r.get("index_pp")) is not None]
+    return round(sum(float(r["index_pp"]) for r in hit), 3), [str(r["symbol"]) for r in hit]
+
+
+def awaiting_open(rows: list[dict[str, Any]]) -> list[str]:
+    """The names that have reported and not yet traded in the cash session. Pure."""
+    return [str(r["symbol"]) for r in rows
+            if r.get("reported") and not r["reported"].get("reaction_in")]
 
 
 # ------------------------------------------------------------------ event risk
@@ -220,6 +284,24 @@ def _signature(title: str) -> frozenset[str]:
     Saudi airports, oil facilities" share houthi, saudi and facilitie."""
     return frozenset(w.lower().rstrip("s") for w in _WORD.findall(title)
                      if w.lower() not in _STOP)
+
+
+def distinct_stories(items: Iterable[dict[str, Any]]) -> list[tuple[dict[str, Any], int]]:
+    """Each story once, in the order given, with how many other tellings of it
+    were folded in. The wire folds the same article from several outlets; this
+    folds three desks' headlines on one event, so that eight stories on one rate
+    decision cannot fill a list of eight. Pure."""
+    kept: list[tuple[dict[str, Any], frozenset[str]]] = []
+    told: list[int] = []
+    for h in items:
+        sig = _signature(str(h.get("title") or ""))
+        at = next((i for i, (_, s) in enumerate(kept) if len(sig & s) >= _SHARED), None)
+        if at is None:
+            kept.append((h, sig))
+            told.append(0)
+        else:
+            told[at] += 1
+    return [(h, n) for (h, _), n in zip(kept, told, strict=True)]
 
 
 def event_risk(snap: dict[str, Any], now: datetime) -> list[dict[str, Any]]:

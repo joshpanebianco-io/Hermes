@@ -414,6 +414,15 @@ def test_macro_moves_reads_rates_in_bp_and_the_rest_in_percent() -> None:
     assert "SPY" not in m  # not a macro driver
 
 
+def test_a_quote_that_has_stopped_gives_no_verdict() -> None:
+    moves = sp.macro_moves([{**_q("US10Y", chg=-0.06), "feed": "closed"}, _q("DXY", pct=-0.5)])
+    assert moves["US10Y"]["closed"] is True and "closed" not in moves["DXY"]
+    tech = {d["driver"]: d for d in sp.macro_for("AAPL", "XLK", moves)}
+    assert tech["US10Y"]["effect"] == "no live read"
+    assert tech["US10Y"]["move"] == "-6bp at its last close"
+    assert tech["DXY"]["effect"] in ("tailwind", "headwind")
+
+
 def test_macro_for_gives_each_sector_its_drivers_and_the_verdict() -> None:
     moves = sp.macro_moves([_q("US10Y", chg=0.05), _q("DXY", pct=-0.1), _q("WTI", pct=-2.0),
                             _q("BTC", pct=3.5)])
@@ -489,7 +498,8 @@ def test_unread_news_is_flagged_not_called_quiet() -> None:
 
 
 def _tape(bias: str | None, grade: str, mx: int) -> dict[str, Any]:
-    return {"bias": bias, "agree": 0, "against": 0, "neutral": 0, "total": 11, "grade": grade,
+    return {"bias": bias, "score": {"long": 35, "short": -35}.get(str(bias), 0), "coverage": 85,
+            "agree": 0, "against": 0, "neutral": 0, "live": 8, "total": 11, "grade": grade,
             "max_conviction": mx, "votes": []}
 
 
@@ -535,13 +545,14 @@ def test_prompt_has_the_flow_layer_the_cap_and_the_plain_english_rule() -> None:
     assert "flow" in sp.SKELETON and '"Tape: ..."' in sp.SKELETON
 
 
-def test_tape_line_states_the_count_and_the_caps() -> None:
-    c = {**_tape("short", "moderate", 4), "agree": 5, "against": 1}
-    assert sp.tape_line(c) == ("Tape count: 5 of 11 reads lean short, 1 against (moderate) — "
-                               "conviction is capped at 4, and at 3 for a plan against the "
-                               "short tape.")
-    assert sp.tape_line(_tape(None, "none", 2)).startswith("Tape count: no lean across 11")
-    assert sp.tape_line(None) == "Tape count: not available."
+def test_tape_line_states_the_score_and_the_caps() -> None:
+    assert sp.tape_line(_tape("short", "moderate", 4)) == (
+        "Tape score -35 (8 of 11 reads live, 85% of the weight): leans short, moderate — "
+        "conviction is capped at 4, and at 3 for a plan against the short tape.")
+    assert sp.tape_line(_tape(None, "none", 2)) == (
+        "Tape score +0 (8 of 11 reads live, 85% of the weight): no lean — every plan's conviction "
+        "is capped at 2.")
+    assert sp.tape_line(None) == "Tape score: not available."
 
 
 FLOW = {"call_vol": 5000, "put_vol": 2500, "pc_vol": 0.5, "call_oi": 40000, "put_oi": 30000,
@@ -586,7 +597,7 @@ def test_facts_and_digest_carry_the_market_blocks(monkeypatch: Any, tmp_path: An
 
     monkeypatch.setattr(rp, "_post", fake)
     out = sp.generate(_scan(), _snap(), top=4)
-    assert "Tape count: no lean across 11 reads" in calls[0]["messages"][1]["content"]
+    assert "Tape score +0 (0 of 11 reads live" in calls[0]["messages"][1]["content"]
     plan = out["plan"]["plans"][0]
     assert (plan["conviction"], plan["conviction_model"], plan["capped"]) == (
         2, 3, "no tape lean — at most 2")

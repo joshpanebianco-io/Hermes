@@ -89,17 +89,26 @@ def parse_day(doc: Any, day: str, keep: frozenset[str] = frozenset()) -> list[di
         big = sym in BELLWETHERS or (cap is not None and cap >= MIN_CAP)
         if not big and sym not in keep:
             continue
+        forecast = clean_text(str(r.get("epsForecast") or "")) or None
+        actual = clean_text(str(r.get("eps") or "")) or None
         out.append({
             "symbol": sym,
             "name": clean_text(str(r.get("name") or "")),
             "date": day,
             "when": _when(r.get("time")),
-            "eps_forecast": clean_text(str(r.get("epsForecast") or "")) or None,
-            "eps_actual": clean_text(str(r.get("eps") or "")) or None,
+            "eps_forecast": forecast,
+            "eps_actual": actual,
             # A NUMBER, NOT A STRING. Nasdaq sends "2.5" (or "N/A"); shipping the
             # raw text meant the UI could not compare it to zero to colour a
             # beat, and "N/A" survived as a truthy value.
-            "surprise_pct": _float(r.get("surprise")),
+            #
+            # AND WORKED OUT WHEN NASDAQ HAS NOT YET (2026-11-05). The page for
+            # a day just gone carries the actual before the surprise: ARM's
+            # $0.15 against $0.22 arrived with "N/A" beside it, so a clean miss
+            # read as neither beat nor miss. Nasdaq's own figure is this same
+            # sum (AMD: $1.84 against $1.68 is its 9.52).
+            "surprise_pct": _float(r.get("surprise")) if _float(r.get("surprise")) is not None
+            else surprise_of(actual, forecast),
             "market_cap": cap,
             "bellwether": sym in BELLWETHERS,
             "watch_only": not big,
@@ -118,6 +127,28 @@ def _float(v: object) -> float | None:
         return None
 
 
+def _eps(v: str | None) -> float | None:
+    """An EPS as Nasdaq prints it: "$1.84" → 1.84, "($0.17)" → -0.17, "N/A" → None."""
+    if not v:
+        return None
+    t = v.replace("$", "").replace(",", "").strip()
+    negative = t.startswith("(") and t.endswith(")")
+    got = _float(t.strip("()"))
+    if got is None:
+        return None
+    return -got if negative else got
+
+
+def surprise_of(actual: str | None, forecast: str | None) -> float | None:
+    """The surprise in percent of the estimate, on the size of the estimate so a
+    beat is positive for a loss-maker too. None without both figures, or against
+    a zero estimate, where a percentage means nothing. Pure."""
+    a, f = _eps(actual), _eps(forecast)
+    if a is None or f is None or f == 0:
+        return None
+    return round((a - f) / abs(f) * 100.0, 2)
+
+
 def collect(
     days_ahead: int = 4, days_back: int = 2, keep: frozenset[str] = frozenset()
 ) -> tuple[list[dict[str, Any]], SourceStatus]:
@@ -133,9 +164,14 @@ def collect(
         r = fetch(
             NASDAQ.format(d=d),
             key=f"earn_{d}",
-            # Past days are settled; today and ahead refresh so an actual EPS
-            # appears once it prints.
-            ttl_sec=86400.0 if off < 0 else 1800.0,
+            # YESTERDAY IS NOT SETTLED (2026-11-05). This said "past days are
+            # settled" and held any past day for 24 hours, so the copy read at
+            # 22:31 ET on the day, before its actuals existed, went on being
+            # served until 22:31 the next night. On Thursday morning ARM and
+            # QCOM still showed no result, though Nasdaq had them: the Earnings
+            # panel, the notes and Hermes all said they had not reported. Two
+            # days back and older really are settled.
+            ttl_sec=86400.0 if off < -1 else 1800.0,
             ua=BROWSER_UA,
             timeout=20,
             headers={"Accept": "application/json"},

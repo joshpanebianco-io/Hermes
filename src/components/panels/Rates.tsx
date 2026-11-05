@@ -100,7 +100,7 @@ export function Rates({
               className="flex items-baseline gap-2 py-[2px]"
               title={`${m.stance} · ${m.move_bp > 0 ? "+" : ""}${m.move_bp}bp priced for the ${m.label} decision (${m.method ?? ""}) · ${m.cum_bp > 0 ? "+" : ""}${m.cum_bp}bp cumulative from ${pm.anchor_src ?? "the anchor"}`}
             >
-              <span className="fig w-[44px] shrink-0 text-[10.5px] text-ink-3">{m.label}</span>
+              <span className="fig w-[48px] shrink-0 text-[10.5px] whitespace-nowrap text-ink-3">{m.label}</span>
               <span className="min-w-0 flex-1 border-b border-dotted border-ring/50" />
               {/* Rising yields wear the down hue everywhere in this panel:
                   for a long-duration book that is the losing direction. */}

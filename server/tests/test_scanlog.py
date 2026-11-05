@@ -8,6 +8,7 @@ had nor announce what it finds as though it just happened.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from typing import Any
 
@@ -166,9 +167,62 @@ def test_stats_group_by_kind_side_and_score() -> None:
     g = {x["key"]: x for x in s["groups"]}
     assert s["total"] == 3
     assert (g["all"]["n"], g["all"]["win_1r"]) == (3, 0.667)
-    assert (g["L long"]["n"], g["L long"]["avg_close_r"]) == (2, 0.1)
+    assert (g["L long"]["n"], g["L long"]["held_r"]) == (2, 0.1)
+    assert (g["L long"]["med_mfe_r"], g["L long"]["med_mae_r"]) == (0.9, 0.4)
     assert g["E short"]["n"] == 1 and g["E long"]["n"] == 0 and g["E long"]["win_1r"] is None
     assert (g["score ≥ 60"]["n"], g["score 40–59"]["n"], g["score < 40"]["n"]) == (1, 1, 1)
+
+
+def test_held_keeps_the_stop_and_one_tiny_stop_cannot_carry_a_group() -> None:
+    assert scanlog.held_r({"stopped": True, "ret_close_r": 4.0}) == -1.0
+    assert scanlog.held_r({"stopped": False, "ret_close_r": 40.0}) == 5.0
+    assert scanlog.held_r({"stopped": False, "ret_close_r": -3.0}) == -1.0
+    assert scanlog.held_r({"stopped": False, "ret_close_r": 1.2}) == 1.2
+    assert scanlog.held_r({"stopped": False, "ret_close_r": None}) is None
+    assert scanlog.held_r(None) is None
+
+
+def _scored(sym: str, total: int, ok: bool = True) -> dict[str, Any]:
+    return {"sym": sym, "ok": ok, "score": {"total": total, "side": "long", "parts": [
+        {"key": "structure", "pts": total, "max": 30}]}, "rs": {"SPY": 0.4}, "rs_1h": {"SPY": -0.2},
+        "rvol": 1.5, "atr_b": 0.8, "setup": {"state": "forming"}, "signals": []}
+
+
+def test_the_list_before_the_bell_is_kept_once_a_day(tmp_path: Any) -> None:
+    path = tmp_path / "events.jsonl"
+    file = tmp_path / scanlog.PREOPEN_NAME
+    at = lambda h, m: datetime(2026, 11, 5, h, m, tzinfo=ET)  # noqa: E731
+    pre = {"trading_day": "2026-11-05", "session": "pre",
+           "rows": [_scored("A", 70), _scored("X", 90, ok=False), _scored("B", 50)]}
+
+    log = EventLog(str(path))
+    log.observe(pre, {}, now=at(9, 24))
+    assert not file.exists()
+    log.observe(pre, {}, now=at(9, 25))
+    log.observe(pre, {}, now=at(9, 28))
+    EventLog(str(path)).observe(pre, {}, now=at(9, 29))
+    log.observe({**pre, "session": "rth"}, {}, now=at(9, 31))
+    log.observe({**pre, "session": "rth", "trading_day": "2026-11-06"}, {},
+                now=datetime(2026, 11, 6, 9, 31, tzinfo=ET))
+    lines = [json.loads(x) for x in file.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 1
+    assert (lines[0]["day"], lines[0]["at_et"]) == ("2026-11-05", "09:25")
+    assert [(r["sym"], r["rank"], r["score"], r["state"]) for r in lines[0]["rows"]] == [
+        ("A", 1, 70, "forming"), ("B", 2, 50, "forming")]
+    assert lines[0]["rows"][0]["parts"] == {"structure": {"pts": 70, "max": 30}}
+
+
+def test_a_live_signal_carries_where_it_stood_on_the_list() -> None:
+    now = datetime(2026, 11, 5, 10, 11, tzinfo=ET)
+    bar = int(datetime(2026, 11, 5, 10, 0, tzinfo=ET).timestamp())
+    sig = {"kind": "L", "side": "long", "t": bar, "price": 10.0, "stop": 9.5, "note": "Retest"}
+    rows = [_scored("A", 70), {**_scored("B", 60), "signals": [sig]}]
+    live = scanlog.candidates(rows, "rth", "2026-11-05", now)
+    assert [e["sym"] for e in live] == ["B"]
+    assert live[0]["ctx"] == {"rank": 2, "of": 2, "rs": 0.4, "rs_1h": -0.2, "rvol": 1.5,
+                              "atr_b": 0.8, "state": "forming"}
+    late = datetime(2026, 11, 5, 13, 0, tzinfo=ET)
+    assert "ctx" not in scanlog.candidates(rows, "rth", "2026-11-05", late)[0]
 
 
 # --- the chart -------------------------------------------------------------------------------

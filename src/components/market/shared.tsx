@@ -2,6 +2,7 @@ import type { Conviction, Fuel, OptionsFlow, Print, Side } from "@/types/market"
 import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { groupReleases, subLabel, type Release } from "@/lib/releases";
+import { scoreText } from "@/lib/bias";
 
 /**
  * The conviction board's small parts, shared by the Market tab and the Game
@@ -21,12 +22,20 @@ export const sideBg = (s: Side | "neutral" | null | undefined) =>
 
 export const voteGlyph = (v: Side | "neutral" | null | undefined) => (v === "long" ? "▲" : v === "short" ? "▼" : "–");
 
-export const biasWord = (b: Side | null | undefined) => (b === "long" ? "▲ Long" : b === "short" ? "▼ Short" : "No bias");
+export const biasWord = (b: Side | null | undefined) => (b === "long" ? "▲ Long" : b === "short" ? "▼ Short" : "No lean");
 
 /** Every vote, one per line — the hover on any conviction summary. */
 export function votesTip(c: Conviction): string {
   if (c.votes.length === 0) return "No signal has voted yet.";
-  return c.votes.map((v) => `${voteGlyph(v.vote)} ${v.label}: ${v.value} — ${v.note}`).join("\n");
+  return c.votes.map((v) => `${v.live === false ? "·" : voteGlyph(v.vote)} ${v.label}: ${v.value} — ${v.note}`).join("\n");
+}
+
+/**
+ * The read's figure beside its side: the score, or the count on a plan stored
+ * before there was one (2026-11-05) — an old note reads as it was written.
+ */
+export function readFigure(c: Conviction): string {
+  return c.score != null ? scoreText(c.score) : `${c.agree} of ${c.total} agree`;
 }
 
 /** The grade's ink: strong carries the side's hue, weak and none step back. */
@@ -73,7 +82,7 @@ export function ConvictionBar({ c, className }: { c: Conviction; className?: str
     <SplitBar
       className={className}
       total={c.total}
-      label={`${c.agree} agree, ${c.against} against, ${c.neutral} neutral`}
+      label={`${c.agree} agree, ${c.against} against, ${c.neutral} flat`}
       parts={[
         { n: c.agree, cls: agree },
         { n: c.against, cls: cn(against, "opacity-60") },
@@ -209,8 +218,8 @@ export function PrintSubs({ lead, subs, className }: { lead: Print; subs: Print[
   if (subs.length === 0) return null;
   return (
     <span className={cn("fig block", className)}>
-      {subs.map((s) => (
-        <span key={s.title} className="block" title={s.title}>
+      {subs.map((s, i) => (
+        <span key={`${s.title}-${i}`} className="block" title={s.title}>
           <span className="text-ink-2">{subLabel(s.title, lead.title)}</span>{" "}
           {(s.released || s.done) && s.actual != null && (
             <>

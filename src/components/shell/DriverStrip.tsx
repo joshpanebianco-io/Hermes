@@ -3,11 +3,12 @@
 import type { Drivers } from "@/types/terminal";
 import { DriverPopover, biasWord, gradeTone, voteTone } from "@/components/vol/DriverBoard";
 import { HelmLoader } from "@/components/ui/HelmLoader";
+import { familiesLine, liveLine, scoreText } from "@/lib/bias";
 import { cn } from "@/lib/cn";
 
 /**
  * The driver strip — the futures Terminal's top line: per book, which way the
- * engine's count leans, how many reads agree, and one line on how to treat it.
+ * engine's score leans, how much of the read is live, and what carries it.
  *
  * THE STOCKS DESK'S STRIP, FOR NQ, ES AND GC (owner, 2026-10-22). The Market
  * tab opens on its tape conviction; the futures Terminal opened on the panels
@@ -54,8 +55,8 @@ export function DriverStrip({ drivers }: { drivers: Drivers | undefined }) {
                   <span className={cn("text-[14px] leading-none font-semibold", voteTone(b.bias))}>
                     {biasWord(b.bias)}
                   </span>
-                  <span className="fig text-[11px] text-ink-2">
-                    {b.agree} of {b.total}
+                  <span className={cn("fig text-[14px] leading-none font-semibold", voteTone(b.bias))}>
+                    {scoreText(b.score)}
                   </span>
                   <span className={cn("qt-cap text-[10px]", gradeTone(b))}>{b.grade}</span>
                   {b.conflict && <span className="qt-cap text-[10px] text-flip-fig">conflict</span>}
@@ -65,7 +66,8 @@ export function DriverStrip({ drivers }: { drivers: Drivers | undefined }) {
                     </span>
                   )}
                 </span>
-                <span className="mt-1 line-clamp-2 text-[11px] leading-[1.4] text-ink-3">{b.treatment}</span>
+                <span className="mt-1 text-[11px] leading-[1.4] text-ink-2">{liveLine(b)}</span>
+                <span className="mt-0.5 line-clamp-2 text-[11px] leading-[1.4] text-ink-3">{familiesLine(b)}</span>
               </DriverPopover>
             );
           })}

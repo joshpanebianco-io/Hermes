@@ -50,12 +50,12 @@ Hermes when asked (its own section, after the futures desk).
 ### Structure — is the tape with me?
 ![Structure, stocks & options](docs/media/structure-stocks.png)
 
-- **Tape conviction** — eleven independent reads of the tape (SPY and QQQ against
-  their own levels, which way VIX is moving and its curve, sectors moving, equal
-  weight against SPY, credit, the 10Y, the dollar, index volume, index leaders), each
-  a vote with its threshold stated. The count is graded weak / moderate / strong and
-  **caps the game plan's convictions**: one read agreeing caps a plan at 3 of 5, and
-  strong is six or more agreeing with at most one against.
+- **Tape conviction** — eleven reads of the tape (SPY and QQQ against their own
+  levels, which way VIX is moving and its curve, sectors moving, equal weight against
+  SPY, credit, the 10Y, the dollar, index volume, index leaders), each a vote with its
+  threshold stated. They are weighed by family into a score from -100 to +100 (the
+  driver board's rule, below), graded weak / moderate / strong, and the grade **caps
+  the game plan's convictions**: a weak tape caps a plan at 3 of 5.
 - **Breadth** — sectors up against down, equal weight against the cap-weighted
   index, and how many of the NDX and SPX names are up with what the top three carry.
 - **Fuel** — how much of the implied day SPY and QQQ have already used, from the gap
@@ -69,7 +69,7 @@ Hermes when asked (its own section, after the futures desk).
 ### The Scanner — break and retest, ranked
 ![Scanner](docs/media/scanner.png)
 
-The **Scanner** tab is the `LE_Model.pine` scanner, computed by the engine instead
+The **Scanner** tab is a TradingView Pine scanner, computed by the engine instead
 of drawn by TradingView, for the New York strategy it was written for: a name
 breaks its **pre-market** or **previous-day** high (low), and the trade is the
 **retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
@@ -121,21 +121,24 @@ far from the level for it to come back.
 
   ![The VIX bands](docs/media/vix-bands.png)
 - **A ranked list, not a black box** — every score is a sum of named parts
-  (structure 30 · relative strength 25 · entry location 20 · relative volume 10,
+  (structure 30 · relative strength 25 · entry location 14 · relative volume 15,
   or before the bell the gap and the pre-market volume · market 15 · the daily
-  frame 6 · the catalyst 6, less penalties for a spent daily range, a print inside
-  30 minutes, an after-the-close report today, a failed break, a signal in the
-  first thirty minutes or the last hour, a setup against a moderate or strong
-  tape, or a catalyst against the side), each listed with the points it earned.
+  frame 12 · the catalyst 12, capped at 100, less penalties for a spent daily
+  range, a print inside 30 minutes, an after-the-close report today, a failed
+  break, a signal still live from the first thirty minutes or the last hour,
+  options too wide to trade, or a catalyst against the side), each listed with the
+  points it earned.
   The **catalyst** reads direction, never a count: a report's surprise sign, a
   rating or target change, guidance raised or cut, an offering filed — with the
   side it earns, against it it costs and the headline is quoted on the row. The
-  clock and tape penalties come from the signal log (36% of signals in the first
-  half hour reached +1R against 60% in the hour after; longs on a short tape 41%
-  against shorts 58%). It orders the list; it is a **heuristic rank, not a measured
-  probability**, and the page never calls it one. What it does show is **the
-  record**: under the parts, what logged signals of the same kind, side and score
-  band did, with their count, from ten of them and marked small under thirty.
+  clock penalty comes from the signal log (39% of signals in the first half hour
+  and 36% in the last hour reached +1R, against 52% from 10:00 to 14:00), and the
+  weights were last checked against it on 2026-11-05, over 325 live signals in ten
+  sessions; `server/tools/fit_score.py` prints the same tests as the record grows.
+  It orders the list; it is a **heuristic rank, not a measured probability**, and
+  the page never calls it one. What it does show is **the record**: under the
+  parts, what logged signals of the same kind, side and score band did with the
+  stop kept, with their count, from ten of them and marked small under thirty.
 - **What the chart does not show** — each name's headlines (Yahoo's per-ticker
   feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
   AMC and the surprise, and its SEC filings from the last three days (8-K items,
@@ -262,7 +265,7 @@ press joins it rather than paying for a second model call.
 
 | Part | The engine computes | A model writes |
 |---|---|---|
-| **Structure** | the eleven tape reads, their grade and the conviction cap; breadth, fuel, the levels ladder and its confluence bands, the prints against consensus | nothing |
+| **Structure** | the eleven tape reads, their score and grade and the conviction cap; breadth, fuel, the levels ladder and its confluence bands, the prints against consensus | nothing |
 | **Scanner** | levels, breaks, the setup state and entry, the score and its parts, the daily frame, the catalyst's direction, the signal log | nothing |
 | **Options** | implied against realised, the straddles, liquidity, skew, flow, the earnings number, the contract and its R | nothing |
 | **Every click-through** | the read of each figure for this name's trade, from stated rules | nothing |
@@ -296,13 +299,14 @@ Japan Times, the ECB, the Bank of England, the RBA and more), merged into one ta
   double-encoded publishers, and section-page detection for query feeds.
 
 ### The driver board
-Across the top of the Structure tab's futures half, one cell per book: which way the engine's count
-leans, how many reads agree, the grade, and one line on how to treat it. Each cell
-opens the full board — every driver a vote with its threshold and its reason, in
-three layers: **macro** sets the direction (the 10Y's day change, the dollar,
+Across the top of the Structure tab's futures half, one cell per book: the engine's
+score from -100 to +100 with its grade, how many reads can vote now and how much of the
+session's weight that is, and the families that carry it. Each cell opens the full
+board — every driver a vote with its threshold and its reason, by family, and one line
+on how to treat it. The reads fall into three layers: **macro** sets the direction (the 10Y's day change, the dollar,
 credit, the VIX and its curve, today's inflation prints, and the index heavyweights'
-own prints — the net index points of the names that just reported, past a quarter
-of a point, is a direction), **positioning** says how
+own prints — what the names that just reported have added to the index since they
+traded, past a quarter of a percentage point, is a direction), **positioning** says how
 far a move runs (dealer gamma and spot against the flip), **structure** says
 whether the tape accepts it (prior value, the last session's range, the daily
 frame, the daily 200 EMA, the ten-minute 200 EMA, breadth and the index leaders). A macro lean the structure rejects is named
@@ -315,9 +319,30 @@ conflict does. Under the
 votes, the context rows that never vote: the CFTC's **Commitments of Traders**
 (leveraged funds for the index futures, managed money for gold, with the net's
 percentile of the year), Cboe's daily **put/call** ratios, and OpEx week. The
-thresholds are the stocks desk's own where one exists, the grade is its
-arithmetic, and the Analysis brief is handed the count and may not be more
-confident than it.
+thresholds are the stocks desk's own where one exists, and the Analysis brief is
+handed the score and may not be more confident than it.
+
+**The score counts only what can vote, and weighs it by session.** A read whose
+market is shut or whose input is missing leaves the sum, where a flat read stays, and
+the cell says how much of the session's weight is live. Reads that are one idea share
+one voice: each family scores its own net, and the families add up by these weights,
+which are a judgement rather than a fit to outcomes:
+
+| Family | Asia | London | NY pre-open | NY live |
+|---|---|---|---|---|
+| Intraday structure (value, last session, 10m trend) | 40 | 35 | 15 | 25 |
+| Daily trend (daily frame, daily 200) | 20 | 15 | 10 | 5 |
+| Rates & dollar (10Y, DXY, silver on gold) | 15 | 25 | 20 | 15 |
+| Risk appetite (VIX, its curve, credit) | 5 | 5 | 15 | 15 |
+| Catalysts (inflation prints, heavyweight prints) | 15 | 15 | 25 | 10 |
+| Positioning (dealer gamma) | 5 | 5 | 15 | 20 |
+| Participation (sectors, index leaders) | 0 | 0 | 0 | 10 |
+
+The stocks desk's tape reads the same way over its own families: index levels 35, risk
+appetite 35 and rates & dollar 30 before the open; index levels 35, participation 30,
+risk appetite 20 and rates & dollar 15 in the session. Strong is 50 or more with at
+least 60% of the weight live, moderate 30, weak 10, and under that there is no lean.
+A conflict takes a notch off the grade.
 
 ### Session ranges, volume profile & dealer gamma
 ![Levels](docs/media/levels.png)
@@ -453,9 +478,10 @@ generation. Top to bottom:
   measured from last.
 - **Dealer gamma** — regime, the flip's distance in percent and in expected moves,
   the walls.
-- **Heavyweights & event risk** — one row per big index weight, and any name whose
-  move alone is worth a tenth of an index point: weight, move, index points, the
-  print if it just reported and the one headline that explains it; under them the
+- **Heavyweights & event risk** — one row per big index weight, any name whose move
+  alone is worth a tenth of a percentage point of the index, and any name that just
+  reported: weight, move, its contribution in percentage points, the print and the
+  one headline that explains it; under them the
   high-impact geopolitics, policy and energy stories since the last cash close. The
   driver board votes the prints and damps conviction under the events (above), so a
   megacap's miss lowers the board's ceiling before the model has to notice the join
@@ -516,11 +542,12 @@ checked against what it was shown or fetched.
 ### What it reads
 
 - **The glance it opens on** — the clock, the strip, each book's driver board, event
-  risk, the index heavyweights, earnings, the top headlines, the scanner's leaders and
-  the latest notes, a few thousand tokens in all.
-- **Tools for the rest**, one set per desk, written for a model to read: one line per
-  headline, release or bar, so a row costs a third of what the panel's JSON would.
-  Each call shows under the answer while it runs.
+  risk, the index heavyweights, every name reporting today, the top headlines, the
+  scanner's leaders and the latest notes, a few thousand tokens in all.
+- **Tools for the rest**, every one on every question, written for a model to read: one
+  line per headline, release or bar, so a row costs a third of what the panel's JSON
+  would. A panel's list comes back whole, not its first few rows. Each call shows under
+  the answer while it runs.
 - **A question across names starts with the table.** Which name is closest to a break,
   which options read is cleanest, the strongest or the weakest: `scanner` first, then
   `scanner_row` for the names it singles out. Nothing is called missing before the
@@ -530,17 +557,18 @@ checked against what it was shown or fetched.
   contracts and the alert choices from Settings, so an answer about contracts or
   alerts reads them as you set them.
 
-| Tool | Desk | What it returns |
-|---|---|---|
-| `scanner` | stocks | the whole Scanner table, one line a name: score, setup and entry distance, the breaks and progress toward the rest, the day's move, relative volume and strength, the 200 EMA side, the options read and earnings; sorted by score, nearest a break, nearest an entry, strength, volume or move |
-| `scanner_row` | stocks | one name's whole row: last, the levels, what has broken, the setup and entry, the score and its parts, the options read (implied against realised, the expected move, the suggested contract), earnings, headlines and filings |
-| `bars` | stocks | a name's recent ten-minute or daily bars, with the EMA wave, VWAP and the levels |
-| `levels` | futures | a book's live ladder: prior settle and RTH, the overnight, today's opens, both VWAPs, the opening range, the expected move, the walls and the flip, each with its distance from last |
-| `heavyweights` | futures | what is moving the index name by name, in index points, with the print if it just reported and the headline that explains it |
-| `event_risk` | futures | the high-impact geopolitics, policy and energy stories since the last cash close, with the channels each reaches |
-| `wire` · `calendar` · `earnings` · `sessions` | both | the wire searched, one day's releases, the latest prints and what reports next, the session clock |
-| `digest` · `note` | both | a whole desk's digest, and the latest brief or game plan with its age |
-| `panel` | both | every other panel on every tab, by name: the driver board, session ranges, value, gamma, volatility, the expiries, the COT, the tape count, breadth, fuel, index options, today's prints, rates and the Fed path, the Fed diary, cross-asset, sector rotation, index movers, sector peers, the catalysts, the scanner's pool, signal log and record, past notes and source health |
+| Tool | What it returns |
+|---|---|
+| `scanner` | the whole Scanner table, one line a name: score, setup and entry distance, the breaks and progress toward the rest, the day's move, relative volume and strength, the 200 EMA side, the options read and earnings; sorted by score, nearest a break, nearest an entry, strength, volume or move |
+| `scanner_row` | one name's whole row: last, the levels, what has broken, the setup and entry, the score and its parts, the options read (implied against realised, the expected move, the suggested contract), earnings, headlines and filings |
+| `bars` | a name's recent ten-minute or daily bars, with the EMA wave, VWAP and the levels |
+| `levels` | a book's live ladder: prior settle and RTH, the overnight, today's opens, both VWAPs, the opening range, the expected move, the walls and the flip, each with its distance from last |
+| `heavyweights` | what is moving the index name by name, with its contribution in percentage points, the print if it just reported and the headline that explains it |
+| `event_risk` | the high-impact geopolitics, policy and energy stories since the last cash close, with the channels each reaches |
+| `earnings` | the Earnings panel in full, by day or for one name: every report with its time, estimate, result, surprise and size |
+| `wire` · `calendar` · `sessions` | the wire searched or filtered by impact, one day's releases, the session clock with every exchange |
+| `digest` · `note` | a whole desk's digest, and a brief or game plan with its age, whole or for one book or name |
+| `panel` | every other panel on every tab, by name: the macro board, the scanner's regime strip, the driver board, session ranges, value, gamma, volatility, the expiries, the COT, the tape count, breadth, fuel, index options, today's prints, rates and the Fed path, the Fed diary with every speaker, cross-asset, sector rotation, all forty index movers, sector peers, the catalysts, the scanner's pool, signal log and record, past notes and source health |
 
 ### How it answers
 ![A Hermes AI answer, in four parts](docs/media/hermes-ai-read.png)
@@ -563,17 +591,18 @@ checked against what it was shown or fetched.
 
 ### The router
 
-A router in front of the model decides how much a question gets:
+A router in front of the model decides how much thinking a question gets. It never
+decides what Hermes can reach: every question has every tool.
 
 - **No model at all** — a handful of checks (the phase, whether a box is open, a strip
   quote) are answered straight from the glance.
-- **Quick** — the glance, no tools and no thinking.
-- **Full** — a name, a level, a why or a comparison gets the tools of the desk the
-  question names, the futures set or the stocks set, not both. Every follow-up is
-  full.
+- **Quick** — no thinking and a shorter answer.
+- **Full** — a name, a level, a why or a comparison gets the thinking budget. Every
+  follow-up is full.
 
-The fixed start of the prompt is marked for the provider's cache, which an Anthropic
-model needs telling about. `npm test` runs the router's tests.
+The fixed start of the prompt is the same bytes every time and is marked for the
+provider's cache, which an Anthropic model needs telling about. `npm test` runs the
+router's tests.
 
 ### The model
 
@@ -598,7 +627,8 @@ unverified figures. The first run, eight questions across both desks, is in
 The terminal's assistant, in a panel beside the page rather than over it: the **Ask
 Hermes** key on the status rail, or `A`. It answers from the desk's live digest —
 the same facts the plan is written from, plus the tab on screen and the Scanner's
-selected name — and streams the answer as it is written.
+selected name — and reaches the rest of the terminal through the same tools as the
+tab. If no model in its chain will work through tools, it answers from the digest.
 
 - **Openers follow the tab, and the desk.** On Macro: *what matters most going into
   the next session? what are rates and the Fed path telling me? which headlines could
@@ -671,10 +701,10 @@ under the driver board.
 <p align="center"><img src="docs/media/ladder.png" alt="The NQ levels ladder with its confluence bands" width="560" /></p>
 
 Above them: the desk's instrument strip (with the time in New York *and* in your own zone),
-and a crawl of only the **high-impact** headlines. Below: a status rail listing
-**every** data source — a dot for a healthy one, and anything down or serving a
-**stale** cached copy expanded with its error and age (red, or amber for stale) —
-because a terminal that hides a dead feed is lying to you.
+and a crawl of only the **high-impact** headlines. Below: a status rail on one line —
+how many of the data sources are live, which opens the whole list with each one's age,
+and anything down or serving a **stale** cached copy named with its error and age (red,
+or amber for stale) — because a terminal that hides a dead feed is lying to you.
 
 ---
 
@@ -687,7 +717,9 @@ Plex Sans / Condensed / Mono, and a header that carries the instrument strip as
 label-over-figure in one band. The data hues are the only colour on the screen.
 **Classic** — the carded, neon, mono-caps chassis this terminal shipped with — is
 one click away in Settings → Interface; everything Quiet changes is scoped under
-`.ui-qt`, so Classic is simply the absence of the class.
+`.ui-qt`, so Classic is simply the absence of the class. Settings is one tab per
+section: Interface, Alerts, Options, Keyboard, Presets, Frame light, Data hues and
+Chrome.
 
 Either way: three-hue discipline (a colour on a figure means calls, puts, or the
 flip — decoration lives on its own tokens), an animated frame light (a

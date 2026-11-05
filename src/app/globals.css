@@ -1059,6 +1059,7 @@
     .tick,
     .wire-in,
     .live-dot,
+    .hermes-arrive,
     .hermes-mark,
     .report-loader .hermes-mark,
     .helm-loader .hermes-mark {
@@ -1097,6 +1098,9 @@
    * exactly one element width, so an image containing two identical periods
    * loops seamlessly - the pattern at 100% is pixel-identical to the pattern at
    * 0%, which is what lets the timing be `linear` and `infinite` with no jump.
+   * ONLY AT 90deg (2026-11-05): it was 100deg, and a slanted gradient's period is
+   * wider than the box by a sliver of its height, so the wrap jumped about 2px
+   * every cycle, the same hitch the mark had in a smaller size.
    *
    * Each period is a palindrome (call, put, call), so the full range is on the
    * letterforms at every instant and the colour flows continuously through the
@@ -1109,7 +1113,7 @@
    */
   .wordmark {
     background-image: linear-gradient(
-      100deg,
+      90deg,
       var(--title-a) 0%,
       var(--title-a-lift) 6.25%,
       var(--title-sheen) 12.5%,
@@ -1134,6 +1138,7 @@
     background-clip: text;
     color: transparent;
     animation:
+      hermes-arrive 700ms ease-out,
       wordmark-wash 5.6s linear infinite,
       title-glitch 60s linear infinite;
   }
@@ -1165,9 +1170,14 @@
    *
    * NO JAVASCRIPT TIMER. The obvious build is a setInterval that adds a class
    * for half a second, which means a timer per mount and a cleanup to get
-   * wrong. Instead the burst occupies the first 1% of a very long infinite
+   * wrong. Instead the burst occupies the LAST 1% of a very long infinite
    * animation: at 60s that is a 600ms glitch once a minute, and the browser
    * owns the clock.
+   *
+   * THE LAST, NOT THE FIRST (owner, 2026-11-05: "flow smooth from the beginning").
+   * It sat in the first 1%, so every page load and every loader opened with a jolt
+   * 150ms in. At the end of the clock the first one comes a full cycle after the
+   * logo appears, and a loader gone in a few seconds never fires one.
    *
    * `clip-path: none` at the rest keyframes, never `inset(0)`. A zero inset is
    * a clip to exactly the border box applied after `filter`, and the word is
@@ -1179,34 +1189,29 @@
    * `background-position` and this owns transform, filter and clip-path.
    */
   @keyframes title-glitch {
-    0% {
+    0%,
+    99% {
       transform: translateX(0);
       clip-path: none;
       filter: none;
       animation-timing-function: steps(1, end);
     }
-    0.25% {
+    99.25% {
       transform: translateX(-2px);
       clip-path: inset(14% 0 52% 0);
       filter: drop-shadow(2px 0 var(--title-b)) drop-shadow(-2px 0 var(--title-a));
       animation-timing-function: steps(1, end);
     }
-    0.5% {
+    99.5% {
       transform: translateX(2.5px);
       clip-path: inset(56% 0 10% 0);
       filter: drop-shadow(-3px 0 var(--title-b)) drop-shadow(3px 0 var(--title-a));
       animation-timing-function: steps(1, end);
     }
-    0.75% {
+    99.75% {
       transform: translateX(-1px);
       clip-path: inset(36% 0 34% 0);
       filter: drop-shadow(1px 0 var(--title-a));
-      animation-timing-function: steps(1, end);
-    }
-    1% {
-      transform: translateX(0);
-      clip-path: none;
-      filter: none;
       animation-timing-function: steps(1, end);
     }
     100% {
@@ -1214,6 +1219,23 @@
       clip-path: none;
       filter: none;
     }
+  }
+
+  /*
+   * THE LOGO COMES IN SOFTLY (owner, 2026-11-05: "when it starts its a bit abrupt").
+   * Opacity only, on the svg or the word, never on the path: the path's filter,
+   * transform and clip-path already belong to its breath and its glitch. No fill
+   * mode, because with no delay it has nothing to hold before it starts and should
+   * leave nothing behind after. A fetch that answers in 100ms now shows a faint helm
+   * rather than a flash of a bright one.
+   */
+  @keyframes hermes-arrive {
+    from {
+      opacity: 0;
+    }
+  }
+  .hermes-arrive {
+    animation: hermes-arrive 700ms ease-out;
   }
 
   /*
@@ -1262,10 +1284,18 @@
    *     means the later one wins outright for its whole duration, which is
    *     the exact bug written up on `tick-glitch`.
    */
+  /*
+   * BOTH HALOS IN EVERY KEYFRAME, IN ONE COLOUR SPACE (2026-11-05). The rest pose
+   * used to name only the first, which left the browser to fill the second in with
+   * plain transparent black: it interpolated as near-black all the way up the breath
+   * and snapped to pink on the single frame at the peak, a flash every 5.6s. A zero
+   * percent color-mix is just as invisible and interpolates like the other end.
+   */
   @keyframes hermes-mark {
     0%,
     100% {
-      filter: drop-shadow(0 0 2px color-mix(in oklab, var(--icon-a) 55%, transparent));
+      filter: drop-shadow(0 0 2px color-mix(in oklab, var(--icon-a) 55%, transparent))
+        drop-shadow(0 0 4px color-mix(in oklab, var(--icon-a) 0%, transparent));
     }
     50% {
       filter: drop-shadow(0 0 5px color-mix(in oklab, var(--icon-b) 90%, transparent))
@@ -1273,27 +1303,27 @@
     }
   }
   @keyframes hermes-glitch {
-    0% {
+    0%,
+    99% {
       transform: translateX(0);
       clip-path: none;
       animation-timing-function: steps(1, end);
     }
-    0.25% {
+    99.25% {
       transform: translateX(-2px);
       clip-path: inset(12% 0 54% 0);
       animation-timing-function: steps(1, end);
     }
-    0.5% {
+    99.5% {
       transform: translateX(2.5px);
       clip-path: inset(58% 0 8% 0);
       animation-timing-function: steps(1, end);
     }
-    0.75% {
+    99.75% {
       transform: translateX(-1px);
       clip-path: inset(30% 0 38% 0);
       animation-timing-function: steps(1, end);
     }
-    1%,
     100% {
       transform: translateX(0);
       clip-path: none;
@@ -1312,30 +1342,31 @@
    * shrink the 600ms burst to 100ms and it would read as a flicker, not a
    * glitch. The stops are scaled x6 instead, which keeps the burst at 600ms
    * on the shorter timeline. The header keeps its 60s: a mark you glance at
-   * once a minute and one you stare at for three minutes are different jobs.
+   * once a minute and one you stare at for three minutes are different jobs. At
+   * the end of the clock, like `title-glitch` and for its reason.
    */
   @keyframes hermes-glitch-10s {
-    0% {
+    0%,
+    94% {
       transform: translateX(0);
       clip-path: none;
       animation-timing-function: steps(1, end);
     }
-    1.5% {
+    95.5% {
       transform: translateX(-2px);
       clip-path: inset(12% 0 54% 0);
       animation-timing-function: steps(1, end);
     }
-    3% {
+    97% {
       transform: translateX(2.5px);
       clip-path: inset(58% 0 8% 0);
       animation-timing-function: steps(1, end);
     }
-    4.5% {
+    98.5% {
       transform: translateX(-1px);
       clip-path: inset(30% 0 38% 0);
       animation-timing-function: steps(1, end);
     }
-    6%,
     100% {
       transform: translateX(0);
       clip-path: none;

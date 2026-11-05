@@ -99,12 +99,16 @@ export function Wire({
     "all",
     oneOf("all", "markets", "corp", "macro", "policy", "geo", "energy"),
   );
-  // The tiers that are lit. EMPTY IS THE WHOLE TAPE — that is what ALL is. A
-  // build that stored the old single string is rejected by `manyOf` and starts
-  // on ALL once, which is the right place to land.
+  // The tiers that are lit. EMPTY IS THE WHOLE TAPE — that is what ALL is.
+  //
+  // IT OPENS ON HIGH AND MED (2026-11-05). A morning's All is mostly analyst
+  // price targets and insider sales, and the stories that move a book were
+  // buried between them. All is one click away and remembered once pressed. A
+  // new key, so every browser starts here once rather than on the All it had
+  // never chosen.
   const [impacts, setImpacts] = usePersisted<Impact[]>(
-    "wire.impact",
-    [],
+    "wire.tiers",
+    ["high", "medium"],
     manyOf("high", "medium", "low"),
   );
   const toggleImpact = (k: Impact | "all") =>

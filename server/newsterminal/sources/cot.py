@@ -57,6 +57,14 @@ TTL_SEC = 6 * 3600.0
 STALE_MAX_SEC = 21 * 86400.0
 
 
+def ordinal(n: Any) -> str:
+    """92 -> "92nd", 11 -> "11th". Anything that is not a number comes back as text."""
+    if isinstance(n, bool) or not isinstance(n, int):
+        return str(n)
+    teen = 10 <= n % 100 <= 13
+    return f"{n}{'th' if teen else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
 def _f(v: Any) -> float | None:
     try:
         return float(v)
@@ -104,7 +112,7 @@ def summarise(rows: list[dict[str, Any]], spec: tuple[str, str, str],
     if chg is not None:
         bits.append(f"{chg:+,.0f} on the week")
     if pctile is not None:
-        bits.append(f"{pctile}th percentile of the year: {word}")
+        bits.append(f"{ordinal(pctile)} percentile of the year: {word}")
     read = ", ".join(bits) + "."
     if word == "crowded short":
         read += " A rally finds forced buyers; the dips are already sold."

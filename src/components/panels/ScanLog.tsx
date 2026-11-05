@@ -78,7 +78,9 @@ export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
   const days = useMemo(() => {
     const kept = filter === "all" ? events : events.filter((e) => e.kind === "L" || e.kind === "E");
     const by = new Map<string, ScanEvent[]>();
-    for (const e of [...kept].reverse()) {
+    // By the bar, not by when the log learned of it: a day's backfilled signals
+    // are appended after its live ones, so id order read 11:10, 14:20, 13:20.
+    for (const e of [...kept].sort((a, b) => (b.t ?? 0) - (a.t ?? 0) || b.id - a.id)) {
       const list = by.get(e.day) ?? [];
       list.push(e);
       by.set(e.day, list);
@@ -189,7 +191,7 @@ function DayRows({ day, list, onPick }: { day: string; list: ScanEvent[]; onPick
   );
 }
 
-const rTxt = (v: number | null | undefined) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}R`);
+const rTxt = (v: number | null | undefined) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}R`);
 const rHue = (v: number | null | undefined) => (v == null ? "text-ink-3" : v > 0 ? "up" : v < 0 ? "down" : "text-ink-2");
 
 function Outcome({ o }: { o: ScanOutcome | null }) {
@@ -239,7 +241,7 @@ function Stats({ stats }: { stats: ScanStats | null }) {
         <table className="mt-2 w-full max-w-[760px] border-collapse text-left text-[12px]">
           <thead>
             <tr className="border-b border-ring">
-              {["Group", "Signals", "Reached +1R", "Avg at close", "Avg best", "Avg worst"].map((h, i) => (
+              {["Group", "Signals", "Reached +1R", "Held, stop kept", "Median best", "Median worst"].map((h, i) => (
                 <th key={h} scope="col" className={cn("qt-cap px-2.5 py-1.5 text-[10.5px] font-semibold text-ink-3", i > 0 && "text-right")}>
                   {h}
                 </th>
@@ -257,15 +259,21 @@ function Stats({ stats }: { stats: ScanStats | null }) {
                 <td className={cn("fig px-2.5 py-1.5 text-right", g.n < SMALL ? "text-ink-3" : "text-ink")}>
                   {g.win_1r == null ? "—" : `${Math.round(g.win_1r * 100)}%`}
                 </td>
-                <td className={cn("fig px-2.5 py-1.5 text-right", rHue(g.avg_close_r))}>{rTxt(g.avg_close_r)}</td>
-                <td className="fig px-2.5 py-1.5 text-right up">{rTxt(g.avg_mfe_r)}</td>
+                <td className={cn("fig px-2.5 py-1.5 text-right", rHue(g.held_r))}>{rTxt(g.held_r)}</td>
+                <td className="fig px-2.5 py-1.5 text-right up">{rTxt(g.med_mfe_r)}</td>
                 <td className="fig px-2.5 py-1.5 text-right down">
-                  {g.avg_mae_r == null ? "—" : `−${g.avg_mae_r.toFixed(1)}R`}
+                  {g.med_mae_r == null ? "—" : `−${g.med_mae_r.toFixed(1)}R`}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+      {stats.total > 0 && (
+        <p className="mt-1.5 max-w-[760px] text-[11.5px] text-ink-3">
+          Held, stop kept: holding to the close, −1R if the stop went first, a gain capped at +5R. Score groups read the
+          score each signal had when it fired, and the weights changed on 5 November.
+        </p>
       )}
     </section>
   );

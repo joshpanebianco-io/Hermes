@@ -31,13 +31,13 @@ NO KEY, NO REPORT. There is deliberately no fallback that fabricates a bias
 locally — a made-up view presented in the same panel as a real one is exactly
 the failure this project's sister README calls the worst thing it could do.
 
-THE ENGINE'S COUNT NOW SITS BESIDE THE MODEL'S VIEW (owner, 2026-10-22: "do
-everything you recommend"). The driver board (drivers.py) counts each book's
-drivers with stated thresholds and grades them; the digest hands the model
-that count, and `sanitize_brief` caps a call's conviction at the board's
-ceiling, and at 3 against the board's lean — the game plan's rule since
-2026-10-14, applied here. The model still forms the view (the decision above
-stands); it can no longer be more confident than the arithmetic.
+THE ENGINE'S SCORE NOW SITS BESIDE THE MODEL'S VIEW (owner, 2026-10-22: "do
+everything you recommend"). The driver board (drivers.py) reads each book's
+drivers with stated thresholds and weighs them for the session (bias.py); the
+digest hands the model that score, and `sanitize_brief` caps a call's conviction
+at the board's ceiling, and at 3 against the board's lean — the game plan's rule
+since 2026-10-14, applied here. The model still forms the view (the decision
+above stands); it can no longer be more confident than the arithmetic.
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import bias as bias_mod
 from . import events as events_mod
 from . import releases, structure
 from .config import CACHE_DIR, UA
@@ -1211,19 +1212,52 @@ def _session_homes(session: str) -> set[str]:
     }.get(session, {"us", "global"})
 
 
+#: Headlines the digest carries, and how many of them may be medium-impact
+#: stories from outside the session's own regions.
+HEADLINES_MAX = 32
+HEADLINES_ELSEWHERE = 8
+
+
 def _headlines(snap: dict[str, Any], session: str, now: datetime) -> list[dict[str, Any]]:
-    """The material wire, weighted to the session, each with an id the brief picks by.
+    """The material wire, most important first, each with an id the brief picks by.
+
+    RANKED BY WHAT IT IS, NOT BY HOW NEW IT IS (audit, 2026-11-05). This took
+    the first twenty-four of the session's regions and eight of the rest, and
+    the wire is newest first with medium and HIGH mixed, so the cut fell by the
+    clock. Read against the live wire that morning: twenty-one HIGH stories on
+    the wire, two of them handed to the model — a note could not weigh what it
+    was never shown. Now one row per story (eight tellings of one rate decision
+    are one story, with `also` saying how many), HIGH first, then what has
+    landed since the last cash close, then the session's own regions.
 
     WEIGHTED TO THE SESSION BEING TRADED. For an Asia note, an item from
     Nikkei Asia or the RBA is worth more than a US market wrap, and the reverse
-    holds at 09:00 ET. Regional items for the session come first, the rest
-    follow, and nothing is dropped for being from the wrong desk — a strike on a
-    refinery is an Asia story too.
+    holds at 09:00 ET. Nothing HIGH is dropped for being from the wrong desk — a
+    strike on a refinery is an Asia story too; only the medium stories from
+    elsewhere are capped.
     """
     homes = _session_homes(session)
-    material = [h for h in snap.get("wire") or [] if h.get("impact") in {"high", "medium"}]
-    local = [h for h in material if h.get("region") in homes]
-    rest = [h for h in material if h.get("region") not in homes]
+    since = events_mod.last_close(now).timestamp()
+
+    def stamp(h: dict[str, Any]) -> float:
+        ts = h.get("ts")
+        return float(ts) if isinstance(ts, int | float) else 0.0
+
+    material = sorted(
+        (h for h in snap.get("wire") or [] if h.get("impact") in {"high", "medium"}),
+        key=lambda h: (h.get("impact") != "high", stamp(h) < since,
+                       h.get("region") not in homes, -stamp(h)),
+    )
+    kept: list[tuple[dict[str, Any], int]] = []
+    elsewhere = 0
+    for h, also in events_mod.distinct_stories(material):
+        if len(kept) >= HEADLINES_MAX:
+            break
+        if h.get("impact") != "high" and h.get("region") not in homes:
+            if elsewhere >= HEADLINES_ELSEWHERE:
+                continue
+            elsewhere += 1
+        kept.append((h, also))
     return [
         {
             "id": f"h{i}",
@@ -1236,8 +1270,9 @@ def _headlines(snap: dict[str, Any], session: str, now: datetime) -> list[dict[s
             "publisher": h.get("publisher"),
             "title": h.get("title"),
             "url": h.get("url"),
+            **({"also": also} if also else {}),
         }
-        for i, h in enumerate([*local[:24], *rest[:8]], start=1)
+        for i, (h, also) in enumerate(kept, start=1)
     ]
 
 
@@ -1291,9 +1326,9 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         "catalysts": _catalysts(snap, books, now),
         "rotation": _rotation(snap, books),
         "headlines": _headlines(snap, session, now),
-        # The driver board's count per book (drivers.py): what the page prints
-        # beside the call, and the ceiling the call's conviction is capped at.
-        "drivers": _drivers(snap, books),
+        # The driver board's read per book (drivers.py), weighed for the session
+        # this note is written for: the ceiling the call's conviction is capped at.
+        "drivers": _drivers(snap, books, session, now),
         # THE CATALYSTS THE BIAS WAS BLIND TO (events.py, 2026-10-30): the names
         # moving each equity index, with their prints and headlines, and the
         # high-impact events since the close. The call's `catalyst` cites them.
@@ -1302,25 +1337,43 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
     }
 
 
-def _drivers(snap: dict[str, Any], books: list[str]) -> dict[str, Any]:
-    """Each book's driver count, cut to what the brief prints and caps by."""
-    boards = ((snap.get("drivers") or {}).get("books") or {}) if isinstance(
-        snap.get("drivers"), dict) else {}
+def _drivers(snap: dict[str, Any], books: list[str], session: str = "ny",
+             now: datetime | None = None) -> dict[str, Any]:
+    """Each book's read, cut to what the brief caps by.
+
+    WEIGHED FOR THE SESSION THE NOTE IS FOR (2026-11-05). The live board weighs for
+    the clock; a London note pressed in Asia hours is read with London's weights,
+    or the ceiling on its call would be Asia's."""
+    drivers = snap.get("drivers") if isinstance(snap.get("drivers"), dict) else {}
+    boards = (drivers or {}).get("books") or {}
+    key = None
+    if now is not None:
+        key = bias_mod.session_key(session, bool(session_progress(session, now)["underway"]))
     out: dict[str, Any] = {}
     for b in books:
         bd = boards.get(b)
         if not isinstance(bd, dict) or not bd.get("votes"):
             continue
+        if key and bd.get("session_key") != key:
+            bd = {**bd, **bias_mod.board_read(
+                b, bd["votes"], key, regime=bd.get("regime"),
+                ny_open=bool((drivers or {}).get("ny_open")),
+                events=int(bd.get("event_count") or 0))}
         out[b] = {
-            "bias": bd.get("bias"), "grade": bd.get("grade"),
+            "bias": bd.get("bias"), "score": bd.get("score"), "coverage": bd.get("coverage"),
+            "grade": bd.get("grade"), "max_conviction": bd.get("max_conviction"),
             "agree": bd.get("agree"), "against": bd.get("against"),
-            "neutral": bd.get("neutral"), "total": bd.get("total"),
-            "max_conviction": bd.get("max_conviction"),
+            "neutral": bd.get("neutral"), "live": bd.get("live"),
+            "cannot_vote": bd.get("cannot_vote"), "total": bd.get("total"),
+            "weights_for": bd.get("weight_label"),
+            "families": [{k: f.get(k) for k in ("label", "weight", "score")}
+                         for f in bd.get("families") or [] if isinstance(f, dict)],
             "macro_lean": bd.get("macro_lean"), "structure_lean": bd.get("structure_lean"),
             "conflict": bool(bd.get("conflict")),
             "treatment": bd.get("treatment"),
-            "votes": [{"label": v.get("label"), "layer": v.get("layer"),
-                       "value": v.get("value"), "vote": v.get("vote"), "note": v.get("note")}
+            "votes": [{"label": v.get("label"), "family": v.get("family"),
+                       "value": v.get("value"), "vote": v.get("vote"),
+                       "can_vote_now": v.get("live", True), "note": v.get("note")}
                       for v in bd.get("votes") or [] if isinstance(v, dict)],
             "context": [{"label": c.get("label"), "value": c.get("value"), "note": c.get("note")}
                         for c in bd.get("context") or [] if isinstance(c, dict)],
@@ -1408,13 +1461,16 @@ def digest_earnings(
 
     `reported` is the latest prints, newest day first and biggest first
     within it, so "what did Alphabet do" is answered from the top. `ahead` is
-    every report still unprinted from today on, soonest first and biggest
-    first within a day: tonight's after-close names lead it, which is the gap
-    risk a note for Asia is written around, and they stay there until the
-    feed carries their actuals, which lags the print. A row from a past day
-    that never printed is a no-show on the feed, not a scheduled risk, and is
-    dropped. Both lists are capped — eight of each is the old budget of
-    fourteen, spent where the reader is looking.
+    every report still to come, soonest first and biggest first within a day.
+
+    `awaiting_figures` IS WHAT HAS REPORTED BY THE CLOCK AND HAS NO EPS ON THE
+    FEED YET (2026-11-05). The feed lags the print by hours, and these used to
+    sit in `ahead`: the 19:29 ET note on 4 November said "ARM and QCOM report
+    after the close", three hours after they had. They are the overnight's gap
+    risk, so they stay in view, under a name that says what they are. A row that
+    has passed its moment by more than the print window is a no-show on the
+    feed, not a scheduled risk, and is dropped. Each list is capped — eight of
+    each is the old budget of fourteen, spent where the reader is looking.
     """
     today = now.astimezone(ET).date().isoformat()
     kept = [e for e in rows if isinstance(e, dict) and _earnings_moment(e) is not None]
@@ -1423,14 +1479,56 @@ def digest_earnings(
         return str(e.get("date")), float(e.get("market_cap") or 0)
 
     printed = sorted((e for e in kept if e.get("eps_actual")), key=when_and_size, reverse=True)
+    unprinted = [e for e in kept if not e.get("eps_actual")]
+    waiting = sorted((e for e in unprinted if events_mod._just_reported(e, now)),
+                     key=when_and_size, reverse=True)
     due = sorted(
-        (e for e in kept if not e.get("eps_actual") and str(e.get("date")) >= today),
+        (e for e in unprinted
+         if str(e.get("date")) >= today and not events_mod._just_reported(e, now)),
         key=lambda e: (when_and_size(e)[0], -when_and_size(e)[1]),
     )
     return {
         "reported": [_earnings_row(e, printed=True) for e in printed[:EARNINGS_REPORTED]],
+        "awaiting_figures": [_earnings_row(e, printed=False) for e in waiting[:EARNINGS_AHEAD]],
         "ahead": [_earnings_row(e, printed=False) for e in due[:EARNINGS_AHEAD]],
     }
+
+
+def _positioning(snap: dict[str, Any], want_equity: bool, wanted: Any) -> dict[str, Any]:
+    """COT per book and, for the equity books, the Cboe put/call ratios. Pure.
+
+    THE BOARD HAD THEM AND THE PROMPT FORBADE THEM (audit, 2026-11-05). COT and
+    put/call joined the driver board as context rows on 2026-10-22, while the
+    prompt went on listing both under what the data does not have and telling
+    the model never to mention them. So the positioning layer of every note
+    was the gamma map alone."""
+    raw = snap.get("cot")
+    books = (raw.get("books") or {}) if isinstance(raw, dict) else {}
+    fields = ("spec", "as_of", "net", "chg", "pct_oi", "pctile", "word", "read")
+    cot = {
+        b: {k: c.get(k) for k in fields}
+        for b, c in books.items() if isinstance(c, dict) and c.get("ok") and wanted(b)
+    }
+    pc = snap.get("putcall") if isinstance(snap.get("putcall"), dict) else None
+    out: dict[str, Any] = {"cot_weekly": cot}
+    if want_equity and pc and pc.get("ratios"):
+        out["cboe_put_call"] = {k: pc.get(k) for k in ("date", "ratios", "avg20", "pctile", "read")}
+    return out
+
+
+def _cash_moves_basis(now: datetime) -> str:
+    """Which session a cash figure's change belongs to, in words. Pure.
+
+    The constituents and the sector SPDRs read the regular session, so at 03:00
+    ET "AAPL +5.31%" is yesterday's move — and a note with nothing to say so
+    wrote it as today's."""
+    et = now.astimezone(ET)
+    day = et.date()
+    if is_trading_day(day) and NY_OPEN <= et.time() < close_time(day):
+        return "today's regular session, so far"
+    last = events_mod.last_close(et)
+    return (f"the regular session of {last:%a %d %b} — the cash market has not traded since, "
+            "so these are not overnight moves")
 
 
 def build_digest(
@@ -1562,6 +1660,9 @@ def build_digest(
                     # 0 at that session's low, 1 at its high, >1 means the
                     # current price has taken the session's high out.
                     "where_price_sits": round(r["pos"], 2) if r.get("pos") is not None else None,
+                    # The same as a percentage, which is how a note says it: "93%
+                    # of its range" was flagged as a figure the data did not carry.
+                    "percent_of_range": round(r["pos"] * 100) if r.get("pos") is not None else None,
                     # WHEN, AND WHETHER IT IS FINISHED. "Most recent" is
                     # yesterday's for any window that has not come round again,
                     # so at 01:00 ET the London and New York rows are the
@@ -1594,6 +1695,12 @@ def build_digest(
         "minutes_into_session": _prog.get("minutes_in"),
         "minutes_until_session": _prog.get("minutes_until"),
         "session_phase": (clock.get("phase") or {}).get("label"),
+        # How this note's layers weigh, as the prompt states it, kept with the
+        # note so a stored brief says what it was asked to do.
+        "session_weighting": [f"{layer}: {role}"
+                              for layer, role, _ in session_layers(session, _prog)],
+        # WHOSE MOVE A CASH FIGURE IS. See `_cash_moves_basis`.
+        "cash_moves_basis": _cash_moves_basis(now),
         "sessions_open": [s["label"] for s in (clock.get("sessions") or []) if s.get("open")],
         "london_ny_overlap": clock.get("overlap"),
         "next_session_events": [
@@ -1720,16 +1827,19 @@ def build_digest(
             for r in snap.get("context") or []
         },
         "gamma_levels": gamma,
+        # What a move will find: who is crowded, and how hedged the market is.
+        # Slow, and never a direction on its own.
+        "positioning": _positioning(snap, asset != "GC", wanted),
         # What each session traded, and where price sits inside each range.
         # The most useful block on the page for a handover read: "London has
         # already taken out the Asia high" is one number here and an inference
         # from four elsewhere.
         "session_ranges": ranges,
-        # THE ENGINE'S OWN COUNT, per book: every driver a vote with its
-        # threshold and reason, the grade, the macro-against-structure
-        # conflict and the treatment line. The call's conviction may not
-        # exceed `max_conviction`, nor 3 against `bias`; the page prints the
-        # board beside the call, so narrate it, never re-derive it.
+        # THE ENGINE'S OWN SCORE, per book: every driver a vote with its
+        # threshold and reason, weighed by family for this session, the grade,
+        # the macro-against-structure conflict and the treatment line. The
+        # call's conviction may not exceed `max_conviction`, nor 3 against
+        # `bias`, so narrate it, never re-derive it.
         "engine_driver_board": {k: v for k, v in facts.get("drivers", {}).items()
                                 if wanted(k)},
         "expiry": snap.get("expiry") or {},
@@ -1749,7 +1859,7 @@ def build_digest(
                         "symbol": m["symbol"],
                         "weight_pct": m["weight"],
                         "change_pct": m["pct"],
-                        "index_points_pct": m["contribution"],
+                        "index_pp": m["contribution"],
                     }
                     for m in (v.get("members") or [])[:8]
                 ],
@@ -1775,7 +1885,7 @@ def build_digest(
         # The material wire, each with the `id` the brief picks headlines by.
         "headlines": [{k: v for k, v in h.items() if k != "url"} for h in facts["headlines"]],
         # WHAT THE INDEX IS BEING MOVED BY, NAME BY NAME: the biggest weights
-        # and the biggest movers, each with its index points, its print if it
+        # and the biggest movers, each with its contribution, its print if it
         # just reported, and the headline that explains it. Cite by id.
         "heavyweights": facts.get("heavyweights") or {},
         # The high-impact geopolitics, policy and energy wire since the last
@@ -1967,11 +2077,13 @@ positioning rather than information — after-hours US earnings, which print at
 16:00-16:30 ET before Globex has even reopened, routinely move NQ overnight more
 than anything on the regional tape.
 
-THAT THINNESS CHANGES THE READING, structurally rather than narratively. Weight
-the SESSION'S OWN EVIDENCE up and the macro story down: the developing profile
-and the range so far are built from the tape actually trading, they update with
-every bar, and in a thin book acceptance means more, not less. Say explicitly
-when a move looks like position-driven drift rather than a repricing.
+THAT THINNESS CHANGES THE READING, structurally rather than narratively. The
+SESSION'S OWN EVIDENCE decides the path here: the developing profile and the
+range so far are built from the tape actually trading, they update with every
+bar, and in a thin book acceptance means more, not less. Macro keeps the
+direction only through what is live right now, and the weighting below says what
+that is. Say explicitly when a move looks like position-driven drift rather than
+a repricing.
 
 DEALER GAMMA IS THE EXCEPTION, AND IT SPLITS IN TWO. Overnight a wall is a
 LEVEL, NOT A FORCE. The pin works through dealers hedging in a deep book, and
@@ -1991,6 +2103,97 @@ shut, not where they are now. Usually still fair — positions do not move much
 when nothing trades — but it is one more reason to read the walls as geometry
 overnight rather than as a live constraint.
 """
+
+
+# HOW THE LAYERS WEIGH, SESSION BY SESSION (owner, 2026-11-05: "every like macro,
+# positioning, structure, session etc is weighted accordingly depending on what
+# session it is"). The rules were all in this prompt already, scattered across
+# five paragraphs, and two of them disagreed about macro. Here they are one table:
+# what each layer does in this session and which of its inputs are live, in the
+# order they should move the call. Words and an order, not percentages: a note is
+# a judgement, and a number here would be precision nobody has measured. The US
+# stays the anchor for direction in every row (the owner's rule above); what
+# changes is how much of it is live and what else may be believed.
+_WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
+    "asia": [
+        ("Session tape", "leads the path",
+         "Asia's range so far, the developing profile, acceptance against the New York close. "
+         "It is the only evidence still being written."),
+        ("Structure", "frames it",
+         "prior value, the New York range, the 200 EMAs and the daily frame: what the tape is "
+         "being judged against."),
+        ("Macro", "the anchor, mostly at its close",
+         "the cash 10Y, credit and the VIX are shut, so they are closing prints that frame the "
+         "call and cannot make a new one. Live: USD/JPY, the dollar, oil, gold and last night's "
+         "US earnings."),
+        ("News", "through the channels only",
+         "HIGH stories since the close first, and only where they reach a book through the "
+         "channels above."),
+        ("Positioning", "a reference",
+         "gamma walls are geometry tonight, though spot below the flip counts for more in a "
+         "thin book. COT and put/call are slow background, never tonight's direction."),
+    ],
+    "london": [
+        ("Session tape", "leads the path",
+         "what London does with the Asia range — taken out and held, or rejected — is the read."),
+        ("Macro", "the anchor, and it is waking up",
+         "rates and the dollar as Europe trades them, European data and central banks today, "
+         "all ahead of the 08:30 ET US window, which remains the event."),
+        ("News", "since the close",
+         "HIGH stories first; a European policy decision today outranks anything overnight."),
+        ("Structure", "frames it",
+         "prior value and the 200 EMAs: the frame New York will inherit."),
+        ("Positioning", "a reference",
+         "gamma is still the US close's map, so geometry until New York; COT and put/call are "
+         "slow background."),
+    ],
+    "ny_pre": [
+        ("Macro", "sets the direction",
+         "the 08:30 window, what is priced for the Fed, and the earnings from last night and "
+         "this morning: this is what the open is positioning for."),
+        ("News", "since the close",
+         "HIGH stories first: whatever changed overnight is what the open has to price."),
+        ("Structure", "sets the path",
+         "the overnight range against prior value is the range the open breaks or defends."),
+        ("Positioning", "sets how far",
+         "the gamma map is what the open will trade against, and the regime says whether a "
+         "break runs; it counts in full from 09:30. COT and put/call say who is crowded."),
+        ("Session tape", "the handover",
+         "Asia and London are context here, not the subject."),
+    ],
+    "ny_live": [
+        ("Structure", "leads the path",
+         "acceptance against prior value, the opening range, VWAP, and the levels this session "
+         "has already taken or rejected."),
+        ("Positioning", "decisive",
+         "the hedging flow is real now: the gamma regime, the flip, the walls and any expiry."),
+        ("Macro", "direction, where it is live",
+         "prints that have landed, and how the curve and the dollar reacted. A print the tape "
+         "has faded does not anchor by reputation."),
+        ("Breadth and heavyweights", "confirm or deny",
+         "whether the move is the index's top weights or the whole market."),
+        ("News", "what just changed",
+         "HIGH stories since the close; anything mid-session outranks the morning's read."),
+    ],
+}
+
+
+def session_layers(session: str, prog: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """The layers for this note, heaviest first: (layer, its role, what is live). Pure."""
+    if session == "ny" or session not in _WEIGHTING:
+        return _WEIGHTING["ny_live" if prog.get("underway") else "ny_pre"]
+    return _WEIGHTING[session]
+
+
+def _weighting(session: str, prog: dict[str, Any]) -> str:
+    """The table as the prompt prints it."""
+    rows = "\n".join(f"  {i}. {layer} — {role}: {what}"
+                     for i, (layer, role, what) in enumerate(session_layers(session, prog), 1))
+    return f"""\
+HOW THE LAYERS WEIGH IN THIS NOTE, heaviest first. Where they disagree the higher \
+row decides the path and the conflict lowers conviction; the `why` bullets say \
+which layer carried the call.
+{rows}"""
 
 
 def _transmission(session: str, asset: str) -> str:
@@ -2081,8 +2284,9 @@ priced into it.
   dollar_and_commodities   the unit gold is priced in, plus silver and copper — \
 which say whether a metals move is monetary or industrial.
 
-Then volatility, the volume profile levels, the calendar ahead, expiry and \
-the headlines — context, cited where it changes the read. Sector rotation and \
+Then positioning (the weekly COT: who is crowded, what a break would find), \
+volatility, the volume profile levels, the calendar ahead, expiry and the \
+headlines — context, cited where it changes the read. Sector rotation and \
 index constituents are equity internals: bring them in only when equities \
 are moving hard enough to be a risk signal for gold in their own right, \
 never as structure."""
@@ -2099,7 +2303,9 @@ figures, which are weight times return — not the raw percent changes.
   sector_rotation  WHICH SECTORS are being bought, as excess return over SPY. \
 Defensives leading is a different tape from technology leading.
 
-Then rates and the policy path, volatility, the volume profile (POC is the \
+Then rates and the policy path, positioning (the weekly COT and the Cboe \
+put/call ratios: who is crowded and how hedged the market is — what a move will \
+find, never a direction on its own), volatility, the volume profile (POC is the \
 magnet, VAH/VAL bound acceptance; STATE where the session opened and where \
 price trades now against prior value — the classifier already decided, cite \
 it — and name any confluence between profile levels and gamma walls), the \
@@ -2143,12 +2349,11 @@ made ("10Y 4.99%, +6bp", not "yields are up"). If the data does not support a \
 view, the call is neutral with a low conviction — a hedged guess presented \
 confidently is worse than no brief.
 
-WHAT THIS DATA DOES NOT HAVE: COT positioning, options open interest or \
-put/call ratios, net gamma notional, ETF flows or holdings, European or \
-Japanese government bond yields, gold fixes or physical premiums. Never \
-mention them. A figure that is not in the data does not go in the brief, \
-however standard it would be in one — AND NEITHER DOES A MARKET, FLOW OR DATA \
-SERIES. Every driver you name must be a block or row in the data, or a \
+WHAT THIS DATA DOES NOT HAVE: net gamma notional, strike-level open interest, \
+ETF flows or holdings, European or Japanese government bond yields, gold fixes \
+or physical premiums. Never mention them. A figure that is not in the data \
+does not go in the brief, however standard it would be in one — AND NEITHER \
+DOES A MARKET, FLOW OR DATA SERIES. Every driver you name must be a block or row in the data, or a \
 headline you cite by id. "Gilts sold off", "Indian demand", "the fix was \
 strong" are claims about data you were not given; leave them out.
 
@@ -2170,23 +2375,52 @@ a different question, and the first four should appear somewhere in the brief:
 If a block genuinely says nothing today, leave it out rather than padding. \
 What is not acceptable is not looking.
 
+THE NEWS IS DATA, AND IT IS RANKED. `headlines` carries one row per story, HIGH \
+first, then what has landed since the last cash close, then the session's own \
+regions; `also` counts the other tellings of it. Read every HIGH row before you \
+conclude. One that reaches a book — through rates, the dollar, oil, chips, tariffs, \
+war or fiscal policy — belongs in that book's `why` or `catalyst` and, if it is \
+the day's story, in the thesis. One you set aside but could still matter goes in \
+`risks`. Coverage is not importance, and a story with no channel to the book is \
+not a driver however loud it is. `event_risk` is the same wire's geopolitics, \
+policy and energy desks, for the books' ceilings.
+
+EARNINGS HAVE A CLOCK. `earnings.awaiting_figures` have already reported by the \
+calendar and the feed has no EPS for them yet: say they have reported and the \
+figures are not in, never that they report later. `earnings.ahead` is still to \
+come. On a `heavyweights` row, `reported.reaction_in` false means the move shown \
+is the session BEFORE the report.
+
+CASH MOVES HAVE A DATE. `cash_moves_basis` says which session the constituents, \
+the heavyweights' moves and the sector rotation belong to. Before the open they \
+are the last session's: quote them as that ("AAPL rose 5.31% in Wednesday's \
+session"), never as today's. `index_pp` is that name's contribution to the index \
+in PERCENTAGE POINTS (weight times return), not index points: write "0.42 \
+percentage points of the index".
+
 Read the gamma levels the way a dealer-flow trader does: positive gamma means \
 hedging dampens moves and price tends to pin between the walls; negative gamma \
 means hedging amplifies them and ranges extend. Spot's position against the \
 gamma flip and the expected move is the single most important structural fact \
 on the page. If `expiry` says it is OpEx week, say what that does to the walls.
 
-THE ENGINE HAS ALREADY COUNTED THE DRIVERS. `engine_driver_board` is, per \
+THE ENGINE HAS ALREADY WEIGHED THE DRIVERS. `engine_driver_board` is, per \
 book, every macro, positioning and structure read as a vote with its threshold \
-and its reason, graded, with a `treatment` line and a `conflict` flag when the \
-macro layer and the structure layer disagree. Read it first and cite it: the \
-call's `conviction` may not exceed the book's `max_conviction`, and may not \
-exceed 3 when the call runs against the board's `bias` — the server enforces \
-both, so rank inside that ceiling. Where you disagree with a vote, say which \
-and why, with the figure; never re-derive the count. Two structure votes are the \
-200 EMAs — "Daily 200" (the daily chart's regime) and "10m trend" (the strategy's \
-side filter on ten-minute bars): when either runs against a call, the call's `why` \
-names it, and a call against both is capped at 2 by you even where the board allows 3.
+and its reason, grouped into `families`, each with its weight for this session \
+and its own score. `score` runs from -100 to +100 across the reads that can vote; \
+`coverage` is how much of this session's weight that is. A vote with \
+`can_vote_now` false has no market or no input behind it at this hour: it neither \
+agrees nor disagrees, so do not count it either way, and say the read is thin \
+when `coverage` is low. There is a `treatment` line, and a `conflict` flag when \
+the macro families and the structure families disagree. Read it first and cite \
+the score and the families that carry it: the call's `conviction` may not exceed \
+the book's `max_conviction`, and may not exceed 3 when the call runs against the \
+board's `bias` — the server enforces both, so rank inside that ceiling. Where you \
+disagree with a vote, say which and why, with the figure; never re-derive the \
+score. Two structure votes are the 200 EMAs — "Daily 200" (the daily chart's \
+regime) and "10m trend" (the strategy's side filter on ten-minute bars): when \
+either runs against a call, the call's `why` names it, and a call against both is \
+capped at 2 by you even where the board allows 3.
 
 THE PAGE IS ALREADY BUILT AROUND YOUR WORDS. The snapshot, the levels ladder, \
 the dealer gamma card, the catalyst list, the ratio table and the headline \
@@ -2196,6 +2430,8 @@ sits beside them, point at rows by `key` or `id` where a field asks for one, \
 and take any level you name from `brief_tables.ladders`.
 
 {_live_framing(session, prog)}
+{_weighting(session, prog)}
+
 HOW THE BIAS IS FORMED, AND IN WHAT ORDER. Macro sets the DIRECTION: the data \
 that printed, what is priced for the Fed, the policy path, the dollar and the \
 curve are why the market wants to go somewhere, and the call is anchored there \
@@ -2237,7 +2473,7 @@ catalyst's `also` lists the other series of the same release (core and \
 headline, monthly and annual): one note covers the release.
   catalyst        On each call: one sentence naming the heavyweight print or \
 the event moving THAT book, with its figure from `heavyweights` (weight, move, \
-index points, the print) or `event_risk` (the story and what it reaches), and \
+its share of the index's move, the print) or `event_risk` (the story and what it reaches), and \
 its ids in `catalyst_ids` — only there, never written into the sentence. When \
 a heavyweight has just reported or an event is on the board, the thesis names \
 it too — it is the largest scheduled macro an index future has. Empty when \

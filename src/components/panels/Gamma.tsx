@@ -233,7 +233,7 @@ function Ladder({
               />
               {r.side === "call" || r.side === "put" ? (
                 <span
-                  className="flex w-[74px] shrink-0 items-baseline gap-1"
+                  className="flex w-[84px] shrink-0 items-baseline gap-1"
                   style={{ color: hue }}
                   title={`${r.label} — ${["", "heaviest", "second", "third"][r.rank] ?? ""} on the side`}
                 >
@@ -249,7 +249,7 @@ function Ladder({
                 </span>
               ) : (
                 <span
-                  className="fig w-[74px] shrink-0 truncate text-[10.5px]"
+                  className="fig w-[84px] shrink-0 truncate text-[10.5px]"
                   style={{ color: hue }}
                 >
                   {r.label}

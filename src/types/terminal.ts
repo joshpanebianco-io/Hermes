@@ -302,6 +302,20 @@ export interface ExpiryState {
  * The driver board (server/newsterminal/drivers.py) and the inputs it added.
  * ------------------------------------------------------------------------ */
 
+/** One family of reads, weighed for the session (server bias.py). */
+export interface ScoreFamily {
+  key: string;
+  label: string;
+  /** The strip's short name: "Structure", "Risk". */
+  short: string;
+  /** Its share of the session's score. */
+  weight: number;
+  /** -100 to +100; null when none of its reads can vote at this hour. */
+  score: number | null;
+  live: number;
+  total: number;
+}
+
 export interface DriverVote {
   key: string;
   label: string;
@@ -312,6 +326,10 @@ export interface DriverVote {
   vote: "long" | "short" | "neutral";
   /** Why that reads as it does — or why it is neutral (closed, missing, inside the band). */
   note: string;
+  /** False when it cannot vote at this hour: shut or missing, which is not the same as flat. */
+  live: boolean;
+  /** Which family it scores in; event risk has none, being a damper. */
+  family: string | null;
 }
 
 /** What a move will find — positioning, the market-wide put/call, OpEx — never a vote. */
@@ -326,9 +344,20 @@ export interface DriverBook {
   key: string;
   last: number | null;
   bias: "long" | "short" | null;
+  /** -100 to +100 across the reads that can vote, weighed for the session. */
+  score: number;
+  /** The share of the session's weight that is live, percent. */
+  coverage: number;
+  /** "London's weight": what `coverage` is a share of. */
+  weight_label: string;
+  families: ScoreFamily[];
   agree: number;
   against: number;
+  /** Reads that can vote and sit inside their threshold. */
   neutral: number;
+  live: number;
+  cannot_vote: number;
+  /** Every read that scores: live and shut. Event risk is not one. */
   total: number;
   grade: "strong" | "moderate" | "weak" | "none";
   /** The ceiling the Analysis brief's call is capped at. */
@@ -339,7 +368,7 @@ export interface DriverBook {
   /** Macro and structure disagree: lower conviction, trade the levels. */
   conflict: boolean;
   regime: "POS" | "NEG" | null;
-  /** One line on how to treat the count — the strip's sentence. */
+  /** One line on how to treat the score. */
   treatment: string;
   context: DriverContext[];
 }

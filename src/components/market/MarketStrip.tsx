@@ -2,6 +2,7 @@
 
 import type { Fuel, MarketCtx, Print } from "@/types/market";
 import { Tick } from "@/components/ui/Tick";
+import { liveLine } from "@/lib/bias";
 import { inMin } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { HelmLoader } from "@/components/ui/HelmLoader";
@@ -9,6 +10,7 @@ import {
   ConvictionBar,
   SplitBar,
   biasWord,
+  readFigure,
   gradeText,
   readText,
   sideText,
@@ -72,15 +74,12 @@ export function MarketStrip({ ctx, failed }: { ctx: MarketCtx | null; failed?: s
             <>
               <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
                 <span className={cn("text-[18px] leading-none font-semibold", sideText(c.bias))}>{biasWord(c.bias)}</span>
-                <span className="fig text-[12.5px] text-ink-2">
-                  {c.agree} of {c.total} agree
-                </span>
+                <span className={cn("fig text-[18px] leading-none font-semibold", sideText(c.bias))}>{readFigure(c)}</span>
                 <span className={cn("qt-cap text-[10.5px]", gradeText(c))}>{c.grade}</span>
               </div>
               <ConvictionBar c={c} className="mt-2 max-w-[260px]" />
               <p className="mt-1.5 text-[11px] text-ink-3">
-                {c.agree} agree · {c.against} against · {c.neutral} neutral · plans capped at{" "}
-                <span className="fig text-ink-2">{c.max_conviction}</span>
+                {liveLine(c)} · plans capped at <span className="fig text-ink-2">{c.max_conviction}</span>
               </p>
             </>
           )}

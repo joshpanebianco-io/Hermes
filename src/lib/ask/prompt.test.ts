@@ -29,7 +29,10 @@ test("a question across names is sent to the scanner table, and nothing is missi
   const stocks = TOOL_RULES(["scanner", "scanner_row", "bars", "wire", "earnings", "calendar", "sessions", "digest", "note", "panel"]);
   assert.match(stocks, /starts with scanner/);
   assert.match(stocks, /A table line carries no contract/);
-  assert.match(stocks, /Never tell the reader the terminal does not show something until you have called the tool or the panel/);
+  assert.match(stocks, /Never tell the reader the terminal does not show something, or that you do not have it, or ask them to name it, until you have called the tool or the panel/);
+  // The day's earnings are read whole, with what has already reported said as such.
+  assert.match(stocks, /List every name it returns for the day asked/);
+  assert.match(stocks, /has reported; say the figures are not on the feed yet/);
   assert.match(stocks, /panel for every other panel on every tab/);
   const futures = TOOL_RULES(["levels", "heavyweights", "event_risk", "wire", "earnings", "calendar", "sessions", "digest", "note", "panel"]);
   assert.doesNotMatch(futures, /starts with scanner|prefer scanner|scanner_row/);

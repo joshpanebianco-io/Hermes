@@ -39,7 +39,9 @@ no login, one POST with the filter and the columns wanted, ~0.5 s:
     endpoint carries extended-hours closes but no volume either), and they
     are why this is one request a pass instead of the ~1,500 Yahoo chart
     reads a night the same screen would otherwise cost.
-  - ASSUMED UNTIL A WEEKDAY PRE-MARKET CONFIRMS IT: before 09:30 `close` is the
+  - CONFIRMED IN A LIVE PRE-MARKET, Thu 2026-11-05 05:42 ET (APP close 271.75
+    against a pre-market last of 314.05, +15.57%; QCOM 173.19 against 156.50):
+    before 09:30 `close` is the
     previous regular close and `premarket_close` the last pre-market trade, so
     the gap is their difference. Saturday's reply cannot show that (both are
     Friday's); tools/pool_probe.py prints both so Monday can.

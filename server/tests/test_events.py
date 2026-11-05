@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from newsterminal import drivers, events, report
 
 ET = ZoneInfo("America/New_York")
@@ -83,17 +85,66 @@ def test_heavyweights_join_weight_print_and_headline() -> None:
     assert rows[0]["id"] == "w1"
     g = by["GOOGL"]
     assert g["reported"] == {"date": "2026-10-28", "when": "after", "eps_actual": "$2.12",
-                             "eps_forecast": "$2.94", "surprise_pct": -27.89}
+                             "eps_forecast": "$2.94", "surprise_pct": -27.89,
+                             "reaction_in": True}
     # The HIGH headline wins over the newer medium one.
     assert g["headline"]["title"].startswith("Google erases")
-    assert by["NVDA"]["reported"] is None and by["AAPL"]["reported"] is None
+    assert by["NVDA"]["reported"] is None
+    # AAPL's time has passed and the feed has no figures: reported, and said so.
+    aapl = by["AAPL"]["reported"]
+    assert aapl["eps_actual"] is None and aapl["reaction_in"] is False
+    assert "session before the report" in aapl["note"]
     assert events.heavyweights(_snap(), "GC", NOW) == []
 
 
 def test_net_print_points_is_the_reported_names_only() -> None:
     rows = events.heavyweights(_snap(), "NQ", NOW)
     net, who = events.net_print_points(rows)
+    # Not AAPL: it reported tonight, and its figure is the session before that.
     assert who == ["MSFT", "GOOGL"] and net == -0.383
+    assert events.awaiting_open(rows) == ["AAPL"]
+
+
+@pytest.mark.parametrize(
+    ("date", "when", "now", "moved"),
+    [
+        # After the close: nothing until the next morning's open.
+        ("2026-11-04", "after", (2026, 11, 4, 19, 29), False),
+        ("2026-11-04", "after", (2026, 11, 5, 9, 29), False),
+        ("2026-11-04", "after", (2026, 11, 5, 9, 30), True),
+        # Before the open: that morning's open.
+        ("2026-11-05", "pre", (2026, 11, 5, 8, 30), False),
+        ("2026-11-05", "pre", (2026, 11, 5, 9, 30), True),
+        # Friday night's report waits for Monday.
+        ("2026-11-06", "after", (2026, 11, 7, 12, 0), False),
+        ("2026-11-06", "after", (2026, 11, 9, 9, 30), True),
+    ],
+)
+def test_a_prints_move_starts_at_the_next_open(
+    date: str, when: str, now: tuple[int, int, int, int, int], moved: bool
+) -> None:
+    assert events.reaction_in({"date": date, "when": when}, at(*now)) is moved
+
+
+def test_the_prints_vote_waits_for_the_open_and_names_who_is_waiting() -> None:
+    waiting = [{"symbol": "QCOM", "index_pp": 0.2, "reported": {"reaction_in": False}},
+               {"symbol": "ARM", "index_pp": 0.1, "reported": {"reaction_in": False}}]
+    v = drivers._heavyweight_prints(waiting, "NQ")
+    assert v["vote"] == "neutral" and v["value"] == "QCOM, ARM"
+    assert "reported — the cash move comes at the open" in v["note"]
+    moved = [{"symbol": "AAPL", "index_pp": 0.42, "reported": {"reaction_in": True}}, *waiting]
+    v = drivers._heavyweight_prints(moved, "NQ")
+    assert v["vote"] == "long" and v["value"] == "+0.42pp · AAPL"
+    assert "by 0.42 percentage points; QCOM, ARM reported" in v["note"]
+
+
+def test_stories_fold_into_one_and_count_their_tellings() -> None:
+    wire = [{"title": "Bank of England Eyes First Rate Hike Since 2023"},
+            {"title": "BOE Poised for First Rate Hike in Three Years"},
+            {"title": "Israel Launches Heavy Strikes On Southern Lebanon"},
+            {"title": "Bank of England poised to hike rates: first rate rise"}]
+    got = events.distinct_stories(wire)
+    assert [(h["title"][:6], n) for h, n in got] == [("Bank o", 2), ("Israel", 0)]
 
 
 def test_event_risk_is_the_high_wire_since_the_close_grouped_by_story() -> None:

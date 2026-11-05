@@ -2,6 +2,7 @@
 
 import type { SourceStatus } from "@/types/terminal";
 import { AskGlyph } from "@/components/ask/AskPanel";
+import { Popover } from "@/components/ui/Popover";
 import { openAsk } from "@/lib/ask/open";
 import { age } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -29,10 +30,13 @@ import { cn } from "@/lib/cn";
  * failed — opens up with its age and its reason, red for down, amber for
  * stale. A dead feed can no longer look like a quiet one.
  *
- * ONE LINE AT EVERY WIDTH. Eighteen names need about 1,600px; below that the
- * healthy ones fold into a single "17 live" whose hover lists them, and only
- * what is down or stale keeps its own entry — so the rail never wraps into a
- * second line, and a problem is never one of the things folded away.
+ * ONE LINE AT EVERY WIDTH. Eighteen names needed about 1,600px, so below that
+ * the healthy ones folded into a single "17 live". There are twenty-four now and
+ * the fold never fired at 1920, where the rail wrapped to two lines of green on
+ * every tab (2026-11-05). So it folds at every width: the count is a button, the
+ * whole list with each source's age opens from it, and only what is down, stale
+ * or missing feeds keeps its own entry. A problem is never folded away, and the
+ * count is still evidence: "24 of 24" cannot be mistaken for an empty rail.
  */
 
 /** Reading order; anything the collector adds later lands after these. */
@@ -59,78 +63,55 @@ export function StatusRail({
   ];
 
   const healthy = names.filter((n) => status[n].ok && status[n].source !== "stale");
+  const trouble = names.filter((n) => !healthy.includes(n));
+  // The wire is forty feeds behind one name: "38/39" is worth saying while it is short.
+  const feeds = status.wire?.ok ? /^(\d+)\/(\d+)/.exec(status.wire.notes?.[0] ?? "") : null;
+  const short = feeds && feeds[1] !== feeds[2] ? status.wire.notes?.[0] : null;
 
   return (
-    <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring bg-surface/40 px-3 py-1.5 qt:gap-x-4 qt:bg-transparent qt:px-6 qt:py-2">
-      {healthy.length > 0 && (
-        <div
-          className="flex items-center gap-1.5 min-[1600px]:hidden"
-          title={`Live: ${healthy.map((n) => n.replace(/_/g, " ")).join(", ")}`}
+    <footer className="flex items-center gap-x-3 border-t border-ring bg-surface/40 px-3 py-1.5 whitespace-nowrap qt:gap-x-4 qt:bg-transparent qt:px-6 qt:py-1.5">
+      <Popover
+        label="Data sources"
+        title="Every source the terminal reads — click for the list"
+        className="hit flex shrink-0 items-center gap-1.5 rounded-[3px] px-1 py-0.5 -ml-1"
+        panel={<SourceList names={names} status={status} ages={ages} />}
+      >
+        <span className={cn("h-[6px] w-[6px] rounded-full", trouble.length ? "bg-warn" : "bg-call")} aria-hidden />
+        <span className="fig text-[9.5px] tracking-wide text-ink-3 uppercase qt:text-[10.5px]">
+          {healthy.length} of {names.length} sources live
+        </span>
+      </Popover>
+      {short && (
+        <span
+          className="fig shrink-0 text-[9.5px] tracking-wide text-ink-3 uppercase qt:text-[10.5px]"
+          title={status.wire.error ?? undefined}
         >
-          <span className="h-[6px] w-[6px] rounded-full bg-call" aria-hidden />
-          <span className="fig text-[9.5px] tracking-wide text-ink-3 uppercase qt:text-[10.5px]">
-            {healthy.length} of {names.length} live
-          </span>
-        </div>
+          wire {short}
+        </span>
       )}
-      {names.map((n) => {
-        const s = status[n];
-        const a = ages[n];
-        const stale = s.ok && s.source === "stale";
-        const open = !s.ok || stale;
-        const label = n.replace(/_/g, " ");
-        return (
-          <div
-            key={n}
-            className={cn("flex items-center gap-1.5", !open && "max-[1599px]:hidden")}
-            title={[
-              `${label}: ${!s.ok ? "down" : stale ? "serving a stale copy" : "ok"}`,
-              s.ok ? `${s.items} items · ${s.source}` : null,
-              a !== undefined ? `refreshed ${age(a)} ago` : null,
-              s.error,
-              ...(s.notes ?? []),
-            ]
-              .filter(Boolean)
-              .join("\n")}
-          >
-            <span
-              className={cn(
-                "h-[6px] w-[6px] rounded-full",
-                !s.ok ? "bg-err" : stale ? "bg-warn" : "bg-call",
-              )}
-              aria-hidden
-            />
-            <span
-              className={cn(
-                "fig text-[9.5px] tracking-wide uppercase qt:text-[10.5px]",
-                !s.ok ? "text-err" : stale ? "text-warn" : "text-ink-3",
-              )}
-            >
-              {label}
-            </span>
-            {n === "wire" && s.ok && s.notes?.[0] && (
-              <span className="fig text-[9.5px] text-ink-3 qt:text-[10.5px]">{s.notes[0]}</span>
-            )}
-            {open && (
-              <>
-                <span className={cn("fig text-[9.5px] qt:text-[10.5px]", stale ? "text-warn" : "text-err")}>
-                  {stale ? `stale${s.age_min != null ? ` ${age(s.age_min)}` : ""}` : a !== undefined ? age(a) : "never"}
+      <div className="flex min-w-0 items-center gap-x-3 overflow-hidden">
+        {trouble.map((n) => {
+          const s = status[n];
+          const a = ages[n];
+          const stale = s.ok && s.source === "stale";
+          return (
+            <div key={n} className="flex min-w-0 items-center gap-1.5" title={s.error ?? undefined}>
+              <span className={cn("h-[6px] w-[6px] shrink-0 rounded-full", stale ? "bg-warn" : "bg-err")} aria-hidden />
+              <span className={cn("fig text-[9.5px] tracking-wide uppercase qt:text-[10.5px]", stale ? "text-warn" : "text-err")}>
+                {n.replace(/_/g, " ")}
+              </span>
+              <span className={cn("fig text-[9.5px] qt:text-[10.5px]", stale ? "text-warn" : "text-err")}>
+                {stale ? `stale${s.age_min != null ? ` ${age(s.age_min)}` : ""}` : a !== undefined ? age(a) : "never"}
+              </span>
+              {s.error && (
+                <span className={cn("fig max-w-[240px] truncate text-[9.5px] qt:text-[10.5px]", stale ? "text-warn" : "text-err")}>
+                  {s.error}
                 </span>
-                {s.error && (
-                  <span
-                    className={cn(
-                      "fig max-w-[240px] truncate text-[9.5px] qt:text-[10.5px]",
-                      stale ? "text-warn" : "text-err",
-                    )}
-                  >
-                    {s.error}
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-        );
-      })}
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       <div className="ml-auto flex items-center gap-3">
         <span className="fig text-[9px] text-ink-3 qt:text-[10px]">
@@ -153,5 +134,46 @@ export function StatusRail({
         </button>
       </div>
     </footer>
+  );
+}
+
+/** Every source, in reading order, with its state, its age and what it holds. */
+function SourceList({
+  names,
+  status,
+  ages,
+}: {
+  names: string[];
+  status: Record<string, SourceStatus>;
+  ages: Record<string, number>;
+}) {
+  return (
+    <div className="max-h-[70vh] w-[520px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-[4px] border border-ring-2 bg-surface p-3 shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+      <p className="qt-cap mb-2 text-[10px] text-ink-3">Data sources</p>
+      <ul className="flex flex-col">
+        {names.map((n) => {
+          const s = status[n];
+          const stale = s.ok && s.source === "stale";
+          const a = ages[n];
+          const note = s.error ?? s.notes?.[0] ?? null;
+          return (
+            <li key={n} className="border-b border-ring/40 py-1 last:border-b-0">
+              <div className="flex items-baseline gap-2">
+                <span
+                  className={cn("h-[6px] w-[6px] shrink-0 -translate-y-[1px] rounded-full", !s.ok ? "bg-err" : stale ? "bg-warn" : "bg-call")}
+                  aria-hidden
+                />
+                <span className="fig w-[120px] shrink-0 text-[11px] text-ink-2 uppercase">{n.replace(/_/g, " ")}</span>
+                <span className={cn("fig w-[64px] shrink-0 text-[10.5px]", !s.ok ? "text-err" : stale ? "text-warn" : "text-ink-3")}>
+                  {!s.ok ? "down" : stale ? "stale" : "ok"}
+                </span>
+                <span className="fig w-[44px] shrink-0 text-right text-[10.5px] text-ink-3">{a !== undefined ? age(a) : "never"}</span>
+                {note && <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-3">{note}</span>}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

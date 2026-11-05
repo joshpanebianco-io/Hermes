@@ -25,8 +25,4 @@ export async function scanProxy<T extends object>(path: string, empty: T): Promi
   }
 }
 
-/** A non-negative integer query value, clamped — anything else falls back. */
-export function intParam(v: string | null, fallback: number, max: number): number {
-  const n = Number(v);
-  return Number.isInteger(n) && n >= 0 ? Math.min(n, max) : fallback;
-}
+export { intParam } from "@/lib/intParam";

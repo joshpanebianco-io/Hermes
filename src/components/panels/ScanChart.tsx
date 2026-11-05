@@ -9,7 +9,7 @@ import { HelmLoader } from "@/components/ui/HelmLoader";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
- * One name's chart, drawn the way LE_Model.pine draws it: the
+ * One name's chart, drawn the way the Pine script draws it: the
  * candles, the four levels (PDH / PDL solid, PMH / PML dashed, as the script's
  * defaults set them), the 8 EMA wave, VWAP, and the signals where they fired —
  * so the setup the row describes can be SEEN before switching to TradingView
@@ -141,7 +141,7 @@ export function ScanChart({
       <div className="flex items-center gap-3 pb-1.5">
         <span className="qt-cap text-[10.5px] text-ink-3">Chart</span>
         {tf !== "10m" && tf !== "D" && (
-          <span className="min-w-0 truncate text-[11px] text-ink-3" title="LE_Model's (L) and (E) are read on ten-minute bars; on this view each sits on the bar holding the ten-minute close that confirmed it">
+          <span className="min-w-0 truncate text-[11px] text-ink-3" title="The (L) and (E) signals are read on ten-minute bars; on this view each sits on the bar holding the ten-minute close that confirmed it">
             signals read on 10m
           </span>
         )}

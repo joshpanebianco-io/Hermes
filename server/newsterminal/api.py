@@ -516,10 +516,9 @@ def ask_context(
 
 
 @app.get("/api/ask/tools")
-def ask_tools(desk: str | None = Query(None, pattern="^(futures|stocks|both)$")) -> dict[str, Any]:
-    """What Hermes may ask for (tools.py), in the shape a model is shown —
-    one desk's set when the web's router names a desk, else all of it."""
-    return {"tools": tools_mod.spec_for(desk)}
+def ask_tools() -> dict[str, Any]:
+    """What Hermes may ask for (tools.py), in the shape a model is shown."""
+    return {"tools": tools_mod.SPEC}
 
 
 class ToolIn(BaseModel):

@@ -161,6 +161,29 @@ def test_earnings_heavyweights_events_and_notes_come_from_the_same_builders() ->
     assert "error" in _run("note", {"kind": "plan"})
 
 
+def test_hermes_can_name_the_wire_feed_that_is_down() -> None:
+    feeds = [{"name": "Reuters · Markets", "ok": True, "items": 25, "source": "live",
+              "age_min": 0.0, "error": None},
+             {"name": "BBC · World", "ok": True, "items": 12, "source": "cache", "age_min": 1.0,
+              "error": None},
+             {"name": "CNBC · Markets", "ok": True, "items": 9, "source": "stale", "age_min": 22.0,
+              "error": "unreachable"},
+             {"name": "Yahoo Finance · Top", "ok": False, "items": 0, "source": "unavailable",
+              "age_min": None, "error": "HTTP 404"}]
+    out = tools.run("panel", {"name": "sources"}, snap={**_snap(), "wire_feeds": feeds}, scan=None,
+                    bars=_bars_doc, brief=lambda i: None, plan=lambda i: None, now=NOW)
+    # A fresh copy from the short cache is healthy; a stale one is not, as on the rail.
+    assert out["wire_feeds_down"] == [
+        "CNBC · Markets: serving a stale copy · 22 min old · unreachable",
+        "Yahoo Finance · Top: DOWN · HTTP 404",
+    ]
+    assert out["wire_feeds"][0] == "Reuters · Markets: ok · 0 min old"
+    assert len(out["wire_feeds"]) == 4
+    bare = tools.run("panel", {"name": "sources"}, snap=_snap(), scan=None, bars=_bars_doc,
+                     brief=lambda i: None, plan=lambda i: None, now=NOW)
+    assert bare["wire_feeds"] == [] and bare["wire_feeds_down"] == []
+
+
 def test_a_tool_answer_is_capped() -> None:
     big = [_item("x" * 200, "corp", "high", "P", 1, "y" * 300) for _ in range(200)]
     out = tools.run("wire", {}, snap={**_snap(), "wire": big}, scan=None,

@@ -714,7 +714,9 @@ or amber for stale) — because a terminal that hides a dead feed is lying to yo
 across by copying (never by linkage): one neutral grey ramp, hairlines instead of
 cards, sentence-case section titles, condensed caps labels, square markers, IBM
 Plex Sans / Condensed / Mono, and a header that carries the instrument strip as
-label-over-figure in one band. The data hues are the only colour on the screen.
+label-over-figure in one band: spacious from 2,540px wide, stacked tighter below that,
+with anything that still does not fit behind a count that opens it. The data hues are
+the only colour on the screen.
 **Classic** — the carded, neon, mono-caps chassis this terminal shipped with — is
 one click away in Settings → Interface; everything Quiet changes is scoped under
 `.ui-qt`, so Classic is simply the absence of the class. Settings is one tab per

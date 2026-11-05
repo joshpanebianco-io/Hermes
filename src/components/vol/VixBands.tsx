@@ -4,7 +4,17 @@ import { Fragment } from "react";
 import type { ImpliedBook } from "@/types/terminal";
 import { Popover } from "@/components/ui/Popover";
 import { Tick } from "@/components/ui/Tick";
-import { BANDS, bandChip, impliedDayPct, vixBand, vixRow, vixSub, type VixBand, type VixSub } from "@/lib/vix";
+import {
+  BANDS,
+  bandChip,
+  curveOverride,
+  impliedDayPct,
+  levelRow,
+  vixBand,
+  vixSub,
+  type VixBand,
+  type VixSub,
+} from "@/lib/vix";
 import { dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -20,8 +30,14 @@ import { cn } from "@/lib/cn";
  *
  * THE BAND WORD IS THE SERVER'S WHEN THE PAYLOAD CARRIES ONE, and only read
  * off the level (lib/vix, the same rule) where it does not — the header has a
- * quote, not a regime. Either way the marked row is the row the scanner is
- * in, not a second opinion.
+ * quote, not a regime.
+ *
+ * THE MARKED ROW IS THE ROW THE NUMBER FALLS IN, AND ONLY THAT ROW (owner,
+ * 2026-11-06: "only the row where the value falls in to the range listed ... should
+ * be highlighted and in white"). It used to follow the band word, so backwardation
+ * lit "Stressed 28 – 35" with VIX at 24. The curve still moves the band the scanner
+ * scores in, and the chip and the line under it say so, but a row's range is a
+ * statement about the number.
  */
 
 /** What the panel reads: the VIX print and what travels with it, any of it missing. */
@@ -82,8 +98,12 @@ function VixBands({ facts, band }: { facts: VixFacts; band: VixBand | null }) {
   const shape = facts.shape && facts.shape !== "unknown" ? facts.shape : null;
   // The sub-line the server scored with, else the same rule on the level.
   const sub = isSub(facts.sub) ? facts.sub : vixSub(facts.last, band);
-  const row = vixRow(band, sub);
-  const chip = bandChip(band, sub);
+  const row = levelRow(facts.last);
+  // The band word can say Stressed under 28 when the curve put it there, so the line
+  // under the figure says why it does not match the marked row.
+  const curve = curveOverride(facts.last, band);
+  const rowLabel = BANDS.find((b) => b.key === row)?.label;
+  const chip = bandChip(band, sub, curve);
   const head = "qt-cap border-b border-ring pb-1 text-[10px] text-ink-3";
   const cell = "border-b border-ring/50 py-1.5";
   return (
@@ -100,6 +120,21 @@ function VixBands({ facts, band }: { facts: VixFacts; band: VixBand | null }) {
           </span>
         )}
       </div>
+
+      {curve && (
+        <p className="mt-2 text-[12px] leading-[1.5] text-ink-2">
+          VIX <span className="fig text-ink">{num(facts.last, 2)}</span> is in {rowLabel}, marked below. The scanner is
+          scoring names as Stressed because{" "}
+          {facts.ratio != null ? (
+            <>
+              VIX ÷ VIX3M is <span className="fig text-ink">{facts.ratio.toFixed(2)}</span>, in backwardation
+            </>
+          ) : (
+            "the curve is in backwardation"
+          )}
+          : near-term fear has overtaken the three-month view.
+        </p>
+      )}
 
       {/* MEAN REVERSION BELOW THE MEDIAN, TREND ABOVE IT (owner, 2026-10-23:
           "below 18 vix is good for mean reversion? and above 18 is good for
@@ -136,11 +171,11 @@ function VixBands({ facts, band }: { facts: VixFacts; band: VixBand | null }) {
           const lead = cn(cell, "max-sm:border-b-0 max-sm:pb-0");
           return (
             <Fragment key={b.key}>
-              <span className={cn(lead, "fig", bandTone(b.band))} aria-label={here ? "Now" : undefined}>
+              <span className={cn(lead, "fig text-ink")} aria-label={here ? "Now" : undefined}>
                 {here ? "▸" : ""}
               </span>
-              <span className={cn(lead, "fig", here ? cn("font-semibold", bandTone(b.band)) : "text-ink-2")}>{b.label}</span>
-              <span className={cn(lead, "fig whitespace-nowrap", here ? "text-ink" : "text-ink-2")}>{b.range}</span>
+              <span className={cn(lead, "fig", here ? "font-semibold text-ink" : "text-ink-3")}>{b.label}</span>
+              <span className={cn(lead, "fig whitespace-nowrap", here ? "text-ink" : "text-ink-3")}>{b.range}</span>
               <span className={cn(lead, "fig whitespace-nowrap", here ? "text-ink" : "text-ink-3")}>{b.move}</span>
               <span className={cn(cell, "max-sm:col-start-2 max-sm:col-span-3 max-sm:border-b-0 max-sm:pt-0.5 max-sm:pb-0", here ? "text-ink" : "text-ink-3")}>
                 <span className="qt-cap mr-1 text-[9.5px] text-ink-3 sm:hidden">Tape</span>
@@ -173,8 +208,9 @@ function VixBands({ facts, band }: { facts: VixFacts; band: VixBand | null }) {
       )}
 
       <p className="mt-2.5 text-[11.5px] leading-[1.5] text-ink-3">
-        <span className="text-ink-2">The curve overrides the level.</span> VIX ÷ VIX3M above 1.00 (backwardation) reads
-        Stressed at any number, because near-term fear has overtaken the three-month view.
+        <span className="text-ink-2">The curve can override the scanner&apos;s band.</span> VIX ÷ VIX3M above 1.02
+        (backwardation) scores names as Stressed at any number, because near-term fear has overtaken the three-month
+        view.
         {facts.ratio != null ? (
           <>
             {" "}

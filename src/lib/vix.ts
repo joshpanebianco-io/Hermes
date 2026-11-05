@@ -54,10 +54,14 @@ export function vixRow(band: VixBand | null, sub: VixSub | null): VixRow | null 
   return band;
 }
 
-/** The band word on a chip, with the sub-line where there is one: "Normal · 18+". */
-export function bandChip(band: VixBand | null, sub: VixSub | null): string | null {
+/**
+ * The band word on a chip, with the sub-line where there is one: "Normal · 18+".
+ * "Stressed · curve" when the curve put it there rather than the number.
+ */
+export function bandChip(band: VixBand | null, sub: VixSub | null, curve = false): string | null {
   if (band == null) return null;
   const base = BAND_LABEL[band];
+  if (curve) return `${base} · curve`;
   if (sub === "heavy") return `${base} · ${VIX_MEDIAN}+`;
   if (sub === "panic") return `${base} · ${VIX_PANIC}+`;
   return base;
@@ -75,6 +79,21 @@ export function vixBand(last: number | null | undefined, shape?: string | null):
   if (last < VIX_GRIND) return "grind";
   if (last < VIX_NORMAL) return "normal";
   return "elevated";
+}
+
+/**
+ * Whether the band is the curve's and not the number's. Backwardation reads
+ * Stressed at any level, so a Stressed under 28 can only have come from the curve.
+ * The chip says so, and the table marks the number's own row (levelRow).
+ */
+export function curveOverride(last: number | null | undefined, band: VixBand | null): boolean {
+  return band === "stressed" && last != null && Number.isFinite(last) && last < VIX_STRESSED;
+}
+
+/** The table row the number falls in, whatever the curve says: the row the panel marks. */
+export function levelRow(last: number | null | undefined): VixRow | null {
+  const band = vixBand(last);
+  return vixRow(band, vixSub(last, band));
 }
 
 /** volterm's shape rule for a VIX ÷ VIX3M ratio. */

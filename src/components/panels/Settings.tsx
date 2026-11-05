@@ -158,8 +158,10 @@ export function Settings({
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ring px-3 py-1.5 qt:px-6">
-        <span className="seg max-w-full flex-wrap" role="tablist" aria-label="Settings">
+      {/* The tabs and what they open share one centred column (owner, 2026-11-06), or
+          on a wide screen the tabs sit far to the left of the page they control. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-ring px-3 py-1.5 qt:px-6">
+        <span className="seg max-w-full flex-wrap justify-center" role="tablist" aria-label="Settings">
           {SECTIONS.map((s) => (
             <button
               key={s.key}
@@ -175,7 +177,7 @@ export function Settings({
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2 qt:p-0">
-      <div className="qt-stack flex w-full max-w-[1040px] min-w-0 flex-col gap-2">
+      <div className="qt-stack mx-auto flex w-full max-w-[1040px] min-w-0 flex-col gap-2">
         {section === "interface" && (
         <Module title="Interface" sub="the chassis the terminal is drawn in" bodyClassName="px-0 py-0">
           {UIS.map((o) => (

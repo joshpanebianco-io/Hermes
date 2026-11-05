@@ -81,7 +81,11 @@ FEEDS: list[tuple[str, str, str, str, str]] = [
     ("macro", "https://feeds.bloomberg.com/economics/news.rss",
      "Bloomberg", "Economics", "global"),
     ("markets", "https://www.ft.com/markets?format=rss", "FT", "Markets", "global"),
-    ("markets", "https://finance.yahoo.com/news/rssindex", "Yahoo Finance", "Top", "us"),
+    # THE INDEX HEADLINES, NOT THE OLD TOP STORIES (2026-11-06): Yahoo retired
+    # finance.yahoo.com/news/rssindex and /rss/topstories, which answer 404 to anyone.
+    # This one is the S&P 500, Nasdaq and Dow's own headlines.
+    ("markets", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,%5EIXIC,%5EDJI"
+                "&region=US&lang=en-US", "Yahoo Finance", "Indices", "us"),
     ("markets", "https://www.investing.com/rss/news.rss", "Investing.com", "News", "global"),
     ("macro", "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml", "NYT", "Economy", "us"),
     ("markets", "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",

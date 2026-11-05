@@ -360,7 +360,7 @@ export function Terminal({
           <MacroBoard data={data} market={market} />
         )}
 
-        <MStatusRail status={st} ages={raw} pollSec={POLL_SEC} lastPoll={lastPoll} />
+        <MStatusRail status={st} ages={raw} feeds={data.wire_feeds} pollSec={POLL_SEC} lastPoll={lastPoll} />
       </div>
     </div>
     </OfflineProvider>

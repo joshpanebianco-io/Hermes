@@ -37,6 +37,11 @@ import { cn } from "@/lib/cn";
  * whole list with each source's age opens from it, and only what is down, stale
  * or missing feeds keeps its own entry. A problem is never folded away, and the
  * count is still evidence: "24 of 24" cannot be mistaken for an empty rail.
+ *
+ * THE WIRE'S COUNT OPENS ITS FEEDS (owner, 2026-11-06: "can we make it clickable
+ * like the sources live next to it"). "38/39" said one publisher was missing and
+ * not which, or why; its row in the list above cannot either, being one name for
+ * forty feeds.
  */
 
 /** Reading order; anything the collector adds later lands after these. */
@@ -49,11 +54,14 @@ const ORDER = [
 export function StatusRail({
   status,
   ages,
+  feeds,
   pollSec,
   lastPoll,
 }: {
   status: Record<string, SourceStatus>;
   ages: Record<string, number>;
+  /** The wire's publishers, one row each. */
+  feeds?: SourceStatus[];
   pollSec: number;
   lastPoll: Date | null;
 }) {
@@ -64,9 +72,10 @@ export function StatusRail({
 
   const healthy = names.filter((n) => status[n].ok && status[n].source !== "stale");
   const trouble = names.filter((n) => !healthy.includes(n));
-  // The wire is forty feeds behind one name: "38/39" is worth saying while it is short.
-  const feeds = status.wire?.ok ? /^(\d+)\/(\d+)/.exec(status.wire.notes?.[0] ?? "") : null;
-  const short = feeds && feeds[1] !== feeds[2] ? status.wire.notes?.[0] : null;
+  // The wire is forty feeds behind one name. Always on the rail, since it is the way
+  // into the list: a healthy "39/39" is as much evidence as "24 of 24" beside it.
+  const wireCount = /^(\d+)\/(\d+)/.exec(status.wire?.notes?.[0] ?? "");
+  const wireShort = wireCount != null && wireCount[1] !== wireCount[2];
 
   return (
     <footer className="flex items-center gap-x-3 border-t border-ring bg-surface/40 px-3 py-1.5 whitespace-nowrap qt:gap-x-4 qt:bg-transparent qt:px-6 qt:py-1.5">
@@ -81,13 +90,18 @@ export function StatusRail({
           {healthy.length} of {names.length} sources live
         </span>
       </Popover>
-      {short && (
-        <span
-          className="fig shrink-0 text-[9.5px] tracking-wide text-ink-3 uppercase qt:text-[10.5px]"
-          title={status.wire.error ?? undefined}
+      {wireCount && (
+        <Popover
+          label="Wire feeds"
+          title={[status.wire.error, "Click for every feed"].filter(Boolean).join(" — ")}
+          className="hit flex shrink-0 items-center gap-1.5 rounded-[3px] px-1 py-0.5"
+          panel={<FeedList feeds={feeds ?? []} />}
         >
-          wire {short}
-        </span>
+          <span className={cn("h-[6px] w-[6px] rounded-full", wireShort ? "bg-warn" : "bg-call")} aria-hidden />
+          <span className="fig text-[9.5px] tracking-wide text-ink-3 uppercase qt:text-[10.5px]">
+            wire {status.wire.notes?.[0]}
+          </span>
+        </Popover>
       )}
       <div className="flex min-w-0 items-center gap-x-3 overflow-hidden">
         {trouble.map((n) => {
@@ -134,6 +148,48 @@ export function StatusRail({
         </button>
       </div>
     </footer>
+  );
+}
+
+/** Every feed on the wire, what is wrong at the top, with how many stories each is carrying. */
+function FeedList({ feeds }: { feeds: SourceStatus[] }) {
+  const rank = (f: SourceStatus) => (!f.ok ? 0 : f.source === "stale" ? 1 : 2);
+  const rows = [...feeds].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const live = feeds.filter((f) => rank(f) === 2).length;
+  return (
+    <div className="max-h-[70vh] w-[560px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-[4px] border border-ring-2 bg-surface p-3 shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+      <p className="qt-cap mb-2 text-[10px] text-ink-3">
+        Wire feeds · {live} of {feeds.length} live
+      </p>
+      {rows.length === 0 ? (
+        <p className="py-1 text-[11px] text-ink-3">The feed list has not loaded yet.</p>
+      ) : (
+        <ul className="flex flex-col">
+          {rows.map((f) => {
+            const stale = f.ok && f.source === "stale";
+            return (
+              <li key={f.name} className="border-b border-ring/40 py-1 last:border-b-0">
+                <div className="flex items-baseline gap-2">
+                  <span
+                    className={cn("h-[6px] w-[6px] shrink-0 -translate-y-[1px] rounded-full", !f.ok ? "bg-err" : stale ? "bg-warn" : "bg-call")}
+                    aria-hidden
+                  />
+                  <span className="w-[230px] shrink-0 truncate text-[11px] text-ink-2">{f.name}</span>
+                  <span className={cn("fig w-[44px] shrink-0 text-[10.5px]", !f.ok ? "text-err" : stale ? "text-warn" : "text-ink-3")}>
+                    {!f.ok ? "down" : stale ? "stale" : "ok"}
+                  </span>
+                  <span className="fig w-[72px] shrink-0 text-right text-[10.5px] whitespace-nowrap text-ink-3">
+                    {f.ok ? `${f.items} ${f.items === 1 ? "story" : "stories"}` : ""}
+                  </span>
+                  {/* Wrapped, not truncated: the reason is why the list was opened. */}
+                  {f.error && <span className="min-w-0 flex-1 text-[10.5px] text-ink-3">{f.error}</span>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

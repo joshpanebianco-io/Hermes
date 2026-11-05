@@ -15,7 +15,7 @@ import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
-import { BAND_LABEL, bandChip } from "@/lib/vix";
+import { BAND_LABEL, bandChip, curveOverride } from "@/lib/vix";
 import { VixPopover } from "@/components/vol/VixBands";
 import { nextEvent } from "@/lib/events";
 import { groupReleases } from "@/lib/releases";
@@ -475,7 +475,7 @@ function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRo
           }
         >
           {/* THE FIGURE IS THE BUTTON (owner, 2026-10-21): the card opens the
-              four bands with this row marked. Spans inside, because it is a
+              four bands with the VIX's row marked. Spans inside, because it is a
               <button> now — see components/vol/VixBands. */}
           <VixPopover
             facts={{ ...v, band: regime.band, sub: regime.sub ?? null, month: v.month ?? null }}
@@ -487,7 +487,7 @@ function RegimeStrip({ regime, later, now }: { regime: Regime; later: CalendarRo
               {/* The band word with its sub-line: "Normal · 18+" over the median. */}
               {regime.band && (
                 <span className={cn("qt-cap text-[10.5px]", bandHue)}>
-                  {bandChip(regime.band, regime.sub ?? null) ?? BAND_LABEL[regime.band]}
+                  {bandChip(regime.band, regime.sub ?? null, curveOverride(regime.vix?.last, regime.band)) ?? BAND_LABEL[regime.band]}
                 </span>
               )}
             </span>

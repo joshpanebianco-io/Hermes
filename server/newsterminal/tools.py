@@ -172,11 +172,11 @@ PANELS: dict[str, str] = {
     "signal_log": "Scanner · the latest signals the engine saw, each with its outcome in R so "
                   "far (sym narrows it to one name)",
     "record": "Scanner · the signal record over twenty sessions by kind, side and score band: "
-              "count, +1R rate, average R at the close",
+              "count, +1R rate, R held to the close with the stop kept, median best and worst",
     "past_notes": "Analysis · the stored briefs and game plans, newest first, with the ids "
                   "note takes",
     "sources": "The status rail · every data source's health: down, stale or on a cached "
-               "copy, with the error and the age",
+               "copy, with the error and the age, and each wire feed the same way",
 }
 
 #: A digest section the cap dropped, and the panel (or tool) that answers it.
@@ -988,6 +988,13 @@ def _regime(scan: dict[str, Any] | None) -> dict[str, Any]:
                                     "event", "notes")}
 
 
+def _source_trouble(s: dict[str, Any]) -> bool:
+    """Down, or serving stale bytes: the rail's own test. A copy from the fetcher's
+    short cache is how a healthy source answers between polls, and counting it had
+    Hermes telling the owner that healthy feeds were "on cached copies" (2026-11-06)."""
+    return not s.get("ok") or s.get("source") == "stale"
+
+
 def _source_line(key: str, s: dict[str, Any]) -> str:
     state = "ok" if s.get("ok") else "DOWN"
     if s.get("ok") and s.get("source") not in (None, "live"):
@@ -1113,9 +1120,15 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
         body = {k: (v or [])[:MAX_PAST_NOTES] for k, v in h.items()}
     else:  # sources
         st = snap.get("status") or {}
-        lines = [_source_line(k, s) for k, s in st.items() if isinstance(s, dict)]
-        body = {"sources": len(lines), "problems": [ln for ln in lines if ": ok" not in ln],
-                "all": lines}
+        rows = [(k, s) for k, s in st.items() if isinstance(s, dict)]
+        # What the rail's wire count opens: one name there, forty publishers behind it.
+        feeds = [f for f in snap.get("wire_feeds") or [] if isinstance(f, dict)]
+        feed_line = lambda f: _source_line(str(f.get("name")), f)  # noqa: E731
+        body = {"sources": len(rows),
+                "problems": [_source_line(k, s) for k, s in rows if _source_trouble(s)],
+                "all": [_source_line(k, s) for k, s in rows],
+                "wire_feeds_down": [feed_line(f) for f in feeds if _source_trouble(f)],
+                "wire_feeds": [feed_line(f) for f in feeds]}
     return _cap({**head, **body})
 
 

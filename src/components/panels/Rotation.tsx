@@ -1,6 +1,6 @@
 "use client";
 
-import type { SectorRow } from "@/types/terminal";
+import type { BreadthAll, SectorRow } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { SectorGlyph } from "@/components/ui/SectorGlyph";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -49,21 +49,35 @@ const SPANS = [
 
 type Span = (typeof SPANS)[number]["key"];
 
+/** A sector's biggest movers at $5bn+, for its row's hover. */
+function leaderLine(l: BreadthAll["leaders"][string] | undefined): string | undefined {
+  if (!l) return undefined;
+  const say = (xs: Array<{ sym: string; chg: number }>) => xs.map((x) => `${x.sym} ${x.chg >= 0 ? "+" : ""}${x.chg.toFixed(1)}%`).join(", ");
+  return [l.up.length ? `Leading: ${say(l.up)}` : "", l.down.length ? `Lagging: ${say(l.down)}` : ""].filter(Boolean).join("\n");
+}
+
 export function Rotation({
   rows,
+  themes = [],
+  leaders,
   cashOpen = true,
   ageMin,
   error,
 }: {
   rows: SectorRow[];
+  /** The theme ETFs: where inside technology, or outside the eleven, the money is going. */
+  themes?: SectorRow[];
+  leaders?: BreadthAll["leaders"];
   /** The SPDRs read the regular session; outside it, 1D is the last session's move. */
   cashOpen?: boolean;
   ageMin?: number | null;
   error?: string | null;
 }) {
   const [span, setSpan] = usePersisted<Span>("rot.span", "day", oneOf("day", "week", "month"));
+  const [set, setSet] = usePersisted<"sectors" | "themes">("rot.set", "sectors", oneOf("sectors", "themes"));
+  const isThemes = set === "themes" && themes.length > 0;
 
-  const sectors = rows.filter((r) => r.key !== "SPY" && r.key !== "RSP");
+  const sectors = (isThemes ? themes : rows).filter((r) => r.key !== "SPY" && r.key !== "RSP");
   const spy = rows.find((r) => r.key === "SPY");
   const rsp = rows.find((r) => r.key === "RSP");
 
@@ -77,23 +91,34 @@ export function Rotation({
 
   return (
     <Module
-      title="Sector rotation"
+      title={isThemes ? "Theme rotation" : "Sector rotation"}
       sub={span === "day" && !cashOpen ? "vs SPY · the last session" : "vs SPY"}
       ageMin={ageMin}
       error={error}
       bodyClassName="px-0 py-0"
       right={
-        <div className="seg">
-          {SPANS.map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => setSpan(s.key)}
-              {...segItem(s.key === span, { className: "text-[10px] normal-case tracking-normal" })}
-            >
-              {s.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-1.5">
+          {themes.length > 0 && (
+            <div className="seg">
+              {(["sectors", "themes"] as const).map((k) => (
+                <button key={k} type="button" onClick={() => setSet(k)} {...segItem(set === k, { className: "text-[10px] normal-case tracking-normal" })}>
+                  {k === "sectors" ? "Sectors" : "Themes"}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="seg">
+            {SPANS.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => setSpan(s.key)}
+                {...segItem(s.key === span, { className: "text-[10px] normal-case tracking-normal" })}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
       }
     >
@@ -110,8 +135,8 @@ export function Rotation({
               const v = r[rsKey];
               const abs = r[`${span}_pct` as const];
               return (
-                <li key={r.key} className="hit flex items-center gap-2 px-3 py-[3px]">
-                  <SectorGlyph fund={r.key} className="block shrink-0 text-ink-3" />
+                <li key={r.key} title={isThemes ? undefined : leaderLine(leaders?.[r.key])} className="hit flex items-center gap-2 px-3 py-[3px]">
+                  {!isThemes && <SectorGlyph fund={r.key} className="block shrink-0 text-ink-3" />}
                   <span className="fig w-[38px] shrink-0 text-[10.5px] text-ink-2">{r.key}</span>
                   <span className="hidden w-[104px] shrink-0 truncate text-[10px] text-ink-3 sm:block">
                     {r.label}

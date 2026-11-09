@@ -129,6 +129,37 @@ SECTORS: list[tuple[str, str, str]] = [
     ("RSP", "RSP", "S&P 500 equal weight"),
 ]
 
+# The themes beside the sectors (owner, 2026-11-09): where inside technology, or
+# outside the eleven SPDRs altogether, the money is going. Same arithmetic as the
+# sectors, read on the same clock, shown behind a toggle on the same panel.
+THEMES: list[tuple[str, str, str]] = [
+    ("SMH", "SMH", "Semis"),
+    ("DRAM", "DRAM", "Memory"),
+    ("IGV", "IGV", "Software"),
+    ("CIBR", "CIBR", "Cybersecurity"),
+    ("SKYY", "SKYY", "Cloud"),
+    ("QTUM", "QTUM", "Quantum"),
+    ("BOTZ", "BOTZ", "Robotics & AI"),
+    ("ARKK", "ARKK", "Innovation"),
+    ("WGMI", "WGMI", "Bitcoin Miners"),
+    ("XBI", "XBI", "Biotech"),
+    ("ITA", "ITA", "Aerospace & Defense"),
+    ("NASA", "NASA", "Space"),
+    ("KRE", "KRE", "Regional Banks"),
+    ("XHB", "XHB", "Homebuilders"),
+    ("JETS", "JETS", "Airlines"),
+    ("PAVE", "PAVE", "Infrastructure"),
+    ("GRID", "GRID", "Smart Grid"),
+    ("TAN", "TAN", "Solar"),
+    ("URA", "URA", "Uranium"),
+    ("XOP", "XOP", "Oil & Gas E&P"),
+    ("GDX", "GDX", "Gold Miners"),
+    ("COPX", "COPX", "Copper Miners"),
+    ("XME", "XME", "Metals & Mining"),
+    ("KWEB", "KWEB", "China Internet"),
+    ("FXI", "FXI", "China Large Cap"),
+]
+
 # THE MULTI-DAY CONTEXT a desk brief quotes and a one-day board cannot: "WTI
 # +11% on the week", "10Y from 4.80 to 4.96 in five sessions", "miners lagging
 # GLD". Daily bars over a month, fetched on the sectors' clock and kept out of
@@ -471,6 +502,39 @@ def collect_sectors() -> tuple[list[dict[str, Any]], SourceStatus]:
                 mine, base = r.get(f"{span}_pct"), spy.get(f"{span}_pct")
                 r[f"rs_{span}"] = (mine - base) if (mine is not None and base is not None) else None
 
+    st.items = len(rows)
+    if errors:
+        st.error = errors[0]
+    st.settle(len(rows) > 2, "chunk")
+    return rows, st
+
+
+def collect_themes() -> tuple[list[dict[str, Any]], SourceStatus]:
+    """The theme ETFs, against SPY — `collect_sectors` for the longer list."""
+    st = SourceStatus("Theme ETFs")
+    names = [t[1] for t in THEMES]
+    got: dict[str, Any] = {}
+    errors: list[str] = []
+    for chunk in _chunks([*names, "SPY"], CHUNK):
+        part, err = _spark(chunk, "1mo", "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
+        got.update(part)
+        if err:
+            errors.append(err)
+    rows: list[dict[str, Any]] = []
+    for key, sym, label in [*THEMES, ("SPY", "SPY", "S&P 500")]:
+        resp = got.get(sym)
+        row = _daily_row(key, label, resp) if resp else None
+        if row is None:
+            continue
+        row["spark"] = row.pop("closes")[-30:]
+        del row["week_chg"], row["month_chg"]
+        rows.append(row)
+    spy = next((r for r in rows if r["key"] == "SPY"), None)
+    if spy:
+        for r in rows:
+            for span in ("day", "week", "month"):
+                mine, base = r.get(f"{span}_pct"), spy.get(f"{span}_pct")
+                r[f"rs_{span}"] = (mine - base) if (mine is not None and base is not None) else None
     st.items = len(rows)
     if errors:
         st.error = errors[0]

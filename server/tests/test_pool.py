@@ -352,3 +352,40 @@ def test_fetch_posts_when_given_a_body(monkeypatch: Any, tmp_path: Any) -> None:
     assert r.ok and seen == {"method": "POST", "data": b'{"a":1}', "ct": "application/json"}
     with pytest.raises(ValueError):
         http_mod.fetch("https://example.invalid/scan", data=b"x")
+
+
+# --- Track: a name put on today's list by hand ------------------------------------
+
+
+def _hand_store(tmp_path: Any) -> pool.PoolStore:
+    return pool.PoolStore(path=str(tmp_path / "pool.json"))
+
+
+def test_track_puts_a_name_on_todays_list_ahead_of_the_marks(tmp_path: Any) -> None:
+    s = _hand_store(tmp_path)
+    s.day = "2026-11-09"
+    s.promoted = [{"symbol": "AAA", "score": 9.0, "reason": "gap", "at": "08:00", "mark": "08:00"}]
+    assert s.track("ZZZ", "Zed", "XLK", "11:40", room=3) is None
+    assert s.for_scan() == (date(2026, 11, 9), ["ZZZ", "AAA"], {"ZZZ": "XLK"})
+    # Tracking it again changes nothing.
+    assert s.track("ZZZ", "Zed", "XLK", "11:41", room=3) is None
+    assert s.for_scan()[1] == ["ZZZ", "AAA"]
+
+
+def test_track_says_when_the_list_is_full(tmp_path: Any) -> None:
+    s = _hand_store(tmp_path)
+    assert "full" in str(s.track("ZZZ", None, None, "11:40", room=0))
+    assert s.for_scan()[1] == []
+
+
+def test_a_tracked_name_survives_the_marks_and_rolls_off_with_the_day(tmp_path: Any) -> None:
+    s = _hand_store(tmp_path)
+    s.day = "2026-11-09"
+    s.track("ZZZ", None, None, "08:30", room=3)
+    s.promoted = []                  # what a pre-market mark does: replaced whole
+    assert s.for_scan()[1] == ["ZZZ"]
+    assert s.view(["AAPL"])["promoted"][0]["mark"] == "hand"
+    # And it is on disk, for a restart.
+    assert pool.PoolStore(path=s._path).manual[0]["symbol"] == "ZZZ"
+    assert s._roll(date(2026, 11, 10)) is True
+    assert s.for_scan()[1] == []

@@ -7,11 +7,14 @@ import { StatusRail } from "@/components/shell/StatusRail";
 import { Scanner } from "@/components/panels/Scanner";
 import { Settings } from "@/components/panels/Settings";
 import { Analysis } from "@/components/panels/Analysis";
+import { Dashboard } from "@/components/Dashboard";
 import { MacroBoard } from "@/components/MacroBoard";
 import { StructureBoard } from "@/components/StructureBoard";
 import { AlertStrip } from "@/components/shell/AlertStrip";
 import { ScanAlerts } from "@/components/shell/ScanAlerts";
 import { AskPanel } from "@/components/ask/AskPanel";
+import { TickerDrawer } from "@/components/ticker/TickerDrawer";
+import { TickerSearch } from "@/components/ticker/TickerSearch";
 import { HermesTab } from "@/components/hermes/HermesTab";
 import { useHermes } from "@/lib/hermes/useHermes";
 import { useMarket } from "@/lib/useMarket";
@@ -202,7 +205,7 @@ export function Terminal({
   }, [setDeskState, tab]);
 
   /*
-   * THE KEYBOARD. 1–6 reach the tabs in bar order, D flips the desk — in place
+   * THE KEYBOARD. The number keys reach the tabs in bar order, D flips the desk — in place
    * on Structure and Analysis, and from any other tab it goes to Analysis —
    * A opens Hermes. Never while typing — the
    * watchlist editor, the inputs and Hermes's own box own their keys — and
@@ -328,6 +331,7 @@ export function Terminal({
         {/* The assistant, mounted once; the rail's key and A open it. It is
             told the tab as the collector names it — Analysis as its half. */}
         <AskPanel tab={askTab(tab, desk)} />
+        <TickerSearch />
 
         {lost && !data.offline && (
           <div className="border-b border-warn/40 bg-warn/10 px-3 py-2 text-[11px] text-warn">
@@ -346,19 +350,25 @@ export function Terminal({
           </div>
         )}
 
-        {tab === "settings" ? (
-          <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
-        ) : tab === "hermes" ? (
-          <HermesTab hermes={hermes} desk={desk} />
-        ) : tab === "analysis" ? (
-          <Analysis desk={desk} onDesk={setDesk} report={report} plan={plan} />
-        ) : tab === "scanner" ? (
-          <ScannerTab calendar={data.calendar ?? NONE} />
-        ) : tab === "structure" ? (
-          <StructureBoard data={data} market={market} desk={desk} onDesk={setDesk} />
-        ) : (
-          <MacroBoard data={data} market={market} />
-        )}
+        {/* The page and the slide-out over it, between the header and the status rail. */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          {tab === "dashboard" ? (
+            <Dashboard calendar={data.calendar ?? NONE} onOpen={setTab} />
+          ) : tab === "settings" ? (
+            <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
+          ) : tab === "hermes" ? (
+            <HermesTab hermes={hermes} desk={desk} />
+          ) : tab === "analysis" ? (
+            <Analysis desk={desk} onDesk={setDesk} report={report} plan={plan} />
+          ) : tab === "scanner" ? (
+            <ScannerTab calendar={data.calendar ?? NONE} />
+          ) : tab === "structure" ? (
+            <StructureBoard data={data} market={market} desk={desk} onDesk={setDesk} />
+          ) : (
+            <MacroBoard data={data} market={market} />
+          )}
+          <TickerDrawer />
+        </div>
 
         <MStatusRail status={st} ages={raw} feeds={data.wire_feeds} pollSec={POLL_SEC} lastPoll={lastPoll} />
       </div>

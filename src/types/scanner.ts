@@ -252,6 +252,12 @@ export interface ScanRow {
   short?: ShortInterest | null;
   /** The first targets by the plan's rule (targets.py), nearest first. */
   targets?: Target[];
+  /** The most important story of the last day, graded (catalysts.py). Null when there is none. */
+  catalyst?: Catalyst | null;
+  /** Which day of a multi-day move this is (momentum.py), when it is on one. */
+  stage?: number | null;
+  /** The day's closes, for the table's small chart. */
+  spark?: number[] | null;
   /**
    * The record line (scanscore.record_for): settled signals of the kind this
    * setup implies, the side and the score band, from ten of them; `small`
@@ -681,4 +687,206 @@ export interface ScanBars {
   history?: Array<{ key: "PDH" | "PDL" | "PMH" | "PML"; v: number; from: number; to: number; day: string }>;
   sessions: Array<{ kind: "pre" | "rth" | "post"; from: number; to: number }>;
   signals: Array<{ t: number; kind: "L" | "E" | "BO" | "E_SETUP"; side: Side; price: number }>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The wide scan, the stream and the slide-out (2026-11-09)                    */
+/* -------------------------------------------------------------------------- */
+
+/** A name's most important story of the last day (catalysts.py, sources/tvnews.py). */
+export interface Catalyst {
+  title: string;
+  url: string;
+  provider: string;
+  /** Earnings, Guidance, FDA, Deal, Contract, Offering, Legal, Move, Analyst, Target, Preview, List, News. */
+  tag: string;
+  /** 1 major, 2 notable, 3 minor. */
+  tier: 1 | 2 | 3;
+  age_min: number;
+  /** Tier 1 and under eighteen hours old: what puts a name ahead in the tables. */
+  major: boolean;
+}
+
+/** GET /api/scanner/tick/{sym} — what an open chart asks for every second. */
+export interface TickPayload {
+  ok: boolean;
+  sym: string;
+  connected?: boolean;
+  price?: number;
+  /** Epoch seconds of the trade. */
+  at?: number;
+  /** The session the trade fell in; never overnight. */
+  session?: "pre" | "rth" | "post" | "closed" | null;
+  clock_session?: ScanSession;
+  via?: "stream" | "spark";
+  age_sec?: number | null;
+  minute?: { t: number; o: number; h: number; l: number; c: number } | null;
+  /** The newest overnight print, when it is newer than the last session trade. */
+  overnight?: { price: number; at: number };
+  offline?: { reason: string; api: string };
+}
+
+/** GET /api/scanner/name/{sym} — one whole row, tracked or not. */
+export interface NamePayload {
+  ok: boolean;
+  sym: string;
+  row: (ScanRow & { float_shares?: number | null; market_cap?: number | null; industry?: string | null }) | null;
+  error: string | null;
+  tracked: boolean;
+  pinned: boolean;
+  session: ScanSession | null;
+  trading_day: string | null;
+  stage: number | null;
+  offline?: { reason: string; api: string };
+}
+
+export interface SearchHit {
+  sym: string;
+  name: string | null;
+  cap: number | null;
+  sector: string | null;
+}
+
+export type WideBasis = "pre" | "rth" | "post" | "last";
+
+interface WideHead {
+  ok: boolean;
+  basis: WideBasis;
+  /** The session the figures are about. */
+  day: string;
+  read_age_min: number | null;
+  delayed_min: number;
+  source: string;
+  error: string | null;
+  shown: number;
+  matched: number;
+  offline?: { reason: string; api: string };
+}
+
+export type RangeState = "above" | "below" | "inside";
+
+export interface BreakoutRow {
+  sym: string;
+  name: string | null;
+  cap: number | null;
+  sector: string | null;
+  theme: string | null;
+  industry: string | null;
+  last: number;
+  chg: number | null;
+  gap: number | null;
+  ext: number | null;
+  rvol: number | null;
+  vol: number | null;
+  /** The past week, as TradingView's screener counts it. */
+  week?: number | null;
+  /** Every theme this name is in (the Sectors view's chips). */
+  themes: string[];
+  adv_pct: number | null;
+  pmh: number | null;
+  pml: number | null;
+  pdh: number;
+  pdl: number;
+  pdc: number | null;
+  pm_state: RangeState | "forming" | null;
+  pd_state: RangeState;
+  both: "up" | "down" | null;
+  inside: boolean;
+  live: boolean;
+  catalyst: Catalyst | null;
+  tracked: boolean;
+  pinned: boolean;
+  stage: number | null;
+  spark: number[] | null;
+}
+
+export type BreakoutChip = "all" | "both" | "news" | "gaps" | "through" | "inside" | "day23" | "pinned";
+
+export interface BreakoutsPayload extends WideHead {
+  scanned: number;
+  chips: Record<BreakoutChip, number>;
+  stats: {
+    up: number;
+    down: number;
+    /** Through the previous day's high, and low, on their own. */
+    pdh: number;
+    pdl: number;
+    top_rvol: { sym: string; v: number } | null;
+    top_move: { sym: string; v: number } | null;
+    live: number;
+  };
+  themes: Array<{ key: string; label: string }>;
+  rows: BreakoutRow[];
+}
+
+export interface ExtendedRow {
+  sym: string;
+  name: string | null;
+  cap: number | null;
+  sector: string | null;
+  float: number | null;
+  last: number;
+  chg: number;
+  vol: number | null;
+  adv_pct: number | null;
+  hi?: number;
+  lo?: number;
+  state?: RangeState;
+  live?: boolean;
+  catalyst: Catalyst | null;
+  tracked?: boolean;
+  pinned?: boolean;
+  stage?: number | null;
+  spark?: number[] | null;
+}
+
+export type ExtendedChip = "all" | "up" | "down" | "news" | "through" | "day23" | "pinned";
+
+export interface ExtendedPayload extends WideHead {
+  session: "pre" | "post";
+  active: boolean;
+  volume_floor: number;
+  chips: Record<ExtendedChip, number>;
+  stats: { up: ExtendedRow | null; down: ExtendedRow | null };
+  reference: ExtendedRow[];
+  reference_is_last: boolean;
+  rows: ExtendedRow[];
+}
+
+export interface Day23Row {
+  sym: string;
+  name: string | null;
+  cap: number | null;
+  sector: string | null;
+  side: Side;
+  stage: number;
+  moved: string;
+  move: number;
+  vx: number | null;
+  chg: number | null;
+  last: number;
+  pdh: number;
+  pdl: number;
+  level: number;
+  to_level: number | null;
+  adv_pct: number | null;
+  state: string;
+  kind: "confirmed" | "inside" | "watch" | "failed";
+  through: boolean;
+  live: boolean;
+  since: number | null;
+  catalyst: Catalyst | null;
+  tracked: boolean;
+  pinned: boolean;
+  spark: number[] | null;
+}
+
+export type Day23Chip = "all" | "long" | "short" | "day1" | "day2" | "day3" | "inside" | "through";
+
+export interface Day23Payload extends WideHead {
+  min_move: number;
+  cap: number;
+  chips: Record<Day23Chip, number>;
+  rows: Day23Row[];
+  last_day: string | null;
 }

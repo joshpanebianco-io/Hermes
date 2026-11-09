@@ -1499,12 +1499,12 @@
  * instruments as a label over a price with the move beside it, the clock on one
  * line, "Live" and "Refresh" in words (owner, 2026-11-06: "in our full screen on our
  * pc, the header should be the way it was before", on a 2560 monitor). All eleven
- * need 1,294px in that form, which the band has from about 2,531px wide, and below
- * this the header goes compact rather than start losing figures. After `qt`, because
- * a later variant wins over an earlier one.
+ * need about 1,233px in that form, which the band has from about 2,546px wide with
+ * the Dashboard's tab on the bar, and below this the header goes compact rather than
+ * start losing figures. After `qt`, because a later variant wins over an earlier one.
  */
 @custom-variant roomy {
-  @media (min-width: 2540px) {
+  @media (min-width: 2550px) {
     &:where(.ui-qt, .ui-qt *) {
       @slot;
     }

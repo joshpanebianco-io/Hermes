@@ -35,7 +35,8 @@ def test_headline_direction(title: str, want: str | None) -> None:
 
 def test_catalyst_with_the_side_earns_and_against_it_costs_and_flags() -> None:
     hit = scanscore.catalyst_read("short", None, [_h("Jefferies downgrades X to Hold")], None)
-    assert hit["pts"] == 12 and hit["against"] is None
+    # A rating change is notable, not major: 8 of the 12 (catalysts.py).
+    assert hit["pts"] == 8 and hit["against"] is None
     assert hit["note"] == ('with the short · Reuters: "Jefferies downgrades X to Hold" '
                            "(2h)")
     miss = scanscore.catalyst_read("long", None, [_h("Jefferies downgrades X to Hold")], None)

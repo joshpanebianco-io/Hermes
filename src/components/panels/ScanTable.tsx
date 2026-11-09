@@ -6,9 +6,11 @@ import { Tick } from "@/components/ui/Tick";
 import { HelmInline } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { levelGlyph, setupLabel, sideHue } from "@/components/panels/ScanDetail";
+import { CatalystCell, GroupHead, RangeCell, Spark, VolCell, gapOf, pctText } from "@/components/panels/ScanWide";
 import { compact, dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
+import { togglePin } from "@/lib/ticker";
 
 /**
  * The scanner's table, in two column sets.
@@ -25,13 +27,17 @@ import { useOptionsPrefs } from "@/lib/optionsPrefs";
  * an earnings date inside the expiry, and the suggested contract with what it
  * puts at risk.
  *
+ * OVERVIEW IS THE ONE IT OPENS ON (owner, 2026-11-09: "i like how it is a bit more
+ * streamlined"): the name, the score, the setup, the story, the move, the two ranges
+ * in words, the day's line and the volume. Ranked keeps every column the Pine has.
+ *
  * THE TICKER STAYS PUT. Rank and ticker are pinned to the left edge, so on a
  * narrow screen the table scrolls sideways under them rather than losing which
  * row is which.
  */
 
-export type ColSet = "ranked" | "options";
-export type SortKey = "score" | "rs" | "rvol" | "chg" | "ext" | "vol" | "trend" | "ivrv" | "em";
+export type ColSet = "overview" | "ranked" | "options";
+export type SortKey = "score" | "rs" | "rvol" | "chg" | "gap" | "ext" | "vol" | "trend" | "ivrv" | "em";
 type Bench = "SPY" | "QQQ";
 
 /* -------------------------------------------------------------------------- */
@@ -48,6 +54,8 @@ export function ScanTable({
   onStep,
   tbody,
   budget,
+  pinned,
+  onPinned,
 }: {
   rows: ScanRow[];
   cols: ColSet;
@@ -60,19 +68,62 @@ export function ScanTable({
   onStep: (sym: string, delta: number) => void;
   tbody: RefObject<HTMLTableSectionElement | null>;
   budget: number | null;
+  /** The owner's list, for each row's star. */
+  pinned: ReadonlySet<string>;
+  onPinned: () => void;
 }) {
   const th = { cur: sort, onSort };
   return (
-    <table className={cn("w-full border-separate border-spacing-0 text-left", cols === "ranked" ? "min-w-[1280px]" : "min-w-[1280px]")}>
+    <table className="w-full min-w-[1280px] border-separate border-spacing-0 text-left">
       <thead className="sticky top-0 z-20">
+        {cols === "overview" && (
+          <GroupHead
+            groups={[
+              { label: "", span: 2 },
+              { label: "Setup", span: 2 },
+              { label: "Catalyst", span: 1 },
+              { label: "Move", span: 3 },
+              { label: "Levels", span: 2 },
+              { label: "Chart", span: 1 },
+              { label: "Volume", span: 1 },
+              { label: "Options", span: 1 },
+            ]}
+          />
+        )}
         <tr>
           <Th pin={0} className="w-[34px] text-right">
             #
           </Th>
-          <Th pin={34} className="w-[122px]">
+          <Th pin={34} className="w-[142px]">
             Ticker
           </Th>
-          {cols === "ranked" ? (
+          {cols === "overview" ? (
+            <>
+              <Th k="score" {...th} className="w-[72px]">
+                Score
+              </Th>
+              <Th title="Where the trade is right now, the entry, and today's latest signal">Setup</Th>
+              <Th title="The most important story of the last day, not the newest">Most important story</Th>
+              <Th k="rvol" {...th} right title="Regular-session volume to now against the same time of day on the prior sessions">
+                RVol
+              </Th>
+              <Th k="chg" {...th} right title="Against the previous close; pre or post under it">
+                Chg
+              </Th>
+              <Th k="gap" {...th} right title={GAP_TIP}>
+                Gap
+              </Th>
+              <Th>PM range</Th>
+              <Th>PD range</Th>
+              <Th>Today</Th>
+              <Th k="vol" {...th} right>
+                Volume
+              </Th>
+              <Th k="ivrv" {...th} right title="IV30 and whether premium is cheap, fair or rich against 20-day realised">
+                IV
+              </Th>
+            </>
+          ) : cols === "ranked" ? (
             <>
               <Th k="score" {...th} className="w-[72px]">
                 Score
@@ -89,6 +140,9 @@ export function ScanTable({
               </Th>
               <Th k="chg" {...th} right title="Regular session vs the previous close — before the open, still the previous session's move (as the Pine prints it)">
                 % Change
+              </Th>
+              <Th k="gap" {...th} right title={GAP_TIP}>
+                Gap
               </Th>
               <Th k="ext" {...th} right title="Pre-market vs the previous close, or post-market vs today's close">
                 <Two a="Pre/Post" b="%" />
@@ -175,6 +229,8 @@ export function ScanTable({
             now={now}
             on={selected === r.sym}
             budget={budget}
+            pinned={pinned.has(r.sym)}
+            onPinned={onPinned}
             onPick={() => onPick(r.sym)}
             onStep={(d) => onStep(r.sym, d)}
           />
@@ -264,6 +320,8 @@ function Row({
   now,
   on,
   budget,
+  pinned,
+  onPinned,
   onPick,
   onStep,
 }: {
@@ -274,6 +332,8 @@ function Row({
   now: number | null;
   on: boolean;
   budget: number | null;
+  pinned: boolean;
+  onPinned: () => void;
   onPick: () => void;
   onStep: (delta: number) => void;
 }) {
@@ -283,8 +343,20 @@ function Row({
   const lead = (
     <>
       <td className={cn(TD, "fig sticky left-0 z-10 w-[34px] text-right text-[11px] text-ink-3", pinBg)}>{rank}</td>
-      <td className={cn(TD, "sticky z-10 w-[122px]", pinBg)} style={{ left: 34 }}>
+      <td className={cn(TD, "sticky z-10 w-[142px]", pinBg)} style={{ left: 34 }}>
         <div className="flex items-center gap-1.5 whitespace-nowrap">
+          <button
+            type="button"
+            aria-pressed={pinned}
+            title={pinned ? "Pinned: always on the list. Click to unpin." : "Pin: keep this name on the list for good"}
+            onClick={(e) => {
+              e.stopPropagation();
+              void togglePin(r.sym).then(onPinned);
+            }}
+            className="text-[12px] leading-none text-ink-3 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            {pinned ? "★" : "☆"}
+          </button>
           <span className={cn("w-[10px] text-[11px]", side ? sideHue(side) : "text-ink-3")}>
             {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
           </span>
@@ -299,6 +371,11 @@ function Row({
               title={`From the pool at ${r.promoted.mark} ET — ${r.promoted.reason}`}
             >
               pool
+            </span>
+          )}
+          {(r.stage ?? 0) >= 2 && (
+            <span className="qt-cap text-[9.5px] text-ink-2" title={`Day ${r.stage} of a multi-day move`}>
+              day {r.stage}
             </span>
           )}
         </div>
@@ -329,7 +406,7 @@ function Row({
     return (
       <tr {...handlers}>
         {lead}
-        <td colSpan={18} className={cn(TD, "text-[11.5px] text-ink-3")}>
+        <td colSpan={19} className={cn(TD, "text-[11.5px] text-ink-3")}>
           {r.error ?? "no data yet"}
         </td>
       </tr>
@@ -337,6 +414,7 @@ function Row({
   }
 
   if (cols === "options") return <OptionsRow r={r} lead={lead} handlers={handlers} budget={budget} />;
+  if (cols === "overview") return <OverviewRow r={r} lead={lead} handlers={handlers} now={now} />;
 
   const rs = r.rs[bench];
   const entry = r.setup.entry;
@@ -401,6 +479,9 @@ function Row({
         <Tick value={pct(r.chg_pct)} className={cn("fig text-[12px]", dir(r.chg_pct))} />
       </td>
       <td className={cn(TD, "text-right")}>
+        <GapCell r={r} />
+      </td>
+      <td className={cn(TD, "text-right")}>
         {r.ext_pct != null ? <Tick value={pct(r.ext_pct)} className={cn("fig text-[12px]", dir(r.ext_pct))} /> : <Dash />}
       </td>
       <td className={cn(TD, "text-right")}>
@@ -444,6 +525,95 @@ function Row({
       </td>
       <td className={TD}>
         <Catalysts r={r} />
+      </td>
+    </tr>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The clean column set                                                       */
+/* -------------------------------------------------------------------------- */
+
+function OverviewRow({
+  r,
+  lead,
+  handlers,
+  now,
+}: {
+  r: ScanRow;
+  lead: React.ReactNode;
+  handlers: Record<string, unknown>;
+  now: number | null;
+}) {
+  const L = r.levels;
+  const last = lastSignal(r, now);
+  const entry = r.setup.entry;
+  const o = r.options;
+  const pmState = L.pmh == null || L.pml == null ? null : !L.pm_done ? "forming" : r.last == null ? "inside" : r.last > L.pmh ? "above" : r.last < L.pml ? "below" : "inside";
+  const pdState = r.last == null || L.pdh == null || L.pdl == null ? "inside" : r.last > L.pdh ? "above" : r.last < L.pdl ? "below" : "inside";
+  const vol = r.volume ?? r.premkt?.volume ?? null;
+  const adv = vol != null && r.adv20 ? (vol / r.adv20) * 100 : null;
+  return (
+    <tr {...(handlers as React.HTMLAttributes<HTMLTableRowElement>)}>
+      {lead}
+      <td className={TD}>
+        <ScoreBar v={r.score.total} record={r.record} />
+      </td>
+      <td className={cn(TD, "whitespace-nowrap")}>
+        <p className={cn("text-[12px] leading-[1.3]", setupHue(r))}>{setupLabel(r)}</p>
+        <p className="fig mt-0.5 text-[10.5px] text-ink-3">
+          {entry && (
+            <>
+              {entry.kind === "EMA8" ? "8 EMA" : entry.kind} {num(entry.price)}
+            </>
+          )}
+          {last && (
+            <span className={cn("ml-2", last.fresh && cn("font-semibold", sideHue(last.side)))} title={last.fresh ? "Fired in the last 30 minutes" : "Today's latest signal"}>
+              {last.text}
+            </span>
+          )}
+        </p>
+      </td>
+      <td className={TD}>
+        {r.catalyst ? (
+          <CatalystCell c={r.catalyst} width={380} />
+        ) : r.flags[0] ? (
+          <span className="block max-w-[380px] truncate text-[11.5px] text-ink-3" title={r.flags.map((f) => f.text).join("\n")}>
+            {r.flags[0].text}
+          </span>
+        ) : (
+          <span className="text-[12px] text-ink-3">—</span>
+        )}
+      </td>
+      <td className={cn(TD, "fig text-right text-[12px]", (r.rvol ?? 0) >= 1.5 ? "text-ink" : "text-ink-2")}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</td>
+      <td className={cn(TD, "fig text-right leading-[1.3]")}>
+        <Tick value={pct(r.chg_pct)} className={cn("block text-[12px]", dir(r.chg_pct))} />
+        {r.ext_pct != null && <span className={cn("block text-[10.5px]", dir(r.ext_pct))}>{pctText(r.ext_pct)}</span>}
+      </td>
+      <td className={cn(TD, "text-right")}>
+        <GapCell r={r} />
+      </td>
+      <td className={TD}>
+        <RangeCell state={pmState} hi={L.pmh} lo={L.pml} hiName="PMH" loName="PML" none="Forms from 04:00" />
+      </td>
+      <td className={TD}>
+        <RangeCell state={pdState} hi={L.pdh} lo={L.pdl} hiName="PDH" loName="PDL" />
+      </td>
+      <td className={TD}>
+        <Spark pts={r.spark} w={76} />
+      </td>
+      <td className={TD}>
+        <VolCell vol={vol} adv={adv} />
+      </td>
+      <td className={cn(TD, "text-right whitespace-nowrap")}>
+        {o && o.ok && o.iv30 != null ? (
+          <span className="fig text-[11.5px]" title={`IV30 ${o.iv30.toFixed(1)}% vs RV20 ${o.rv20?.toFixed(1) ?? "—"}%`}>
+            <span className="text-ink-2">{o.iv30.toFixed(0)}%</span>
+            {o.premium && <span className={cn("qt-cap ml-1.5 text-[9.5px]", premiumHue(o.premium))}>{o.premium}</span>}
+          </span>
+        ) : (
+          <Dash />
+        )}
       </td>
     </tr>
   );
@@ -673,6 +843,14 @@ function Trend200({ r }: { r: ScanRow }) {
   );
 }
 
+const GAP_TIP = "The open against the previous close. Before the open, where the extended session stands against that close.";
+
+function GapCell({ r }: { r: ScanRow }) {
+  const g = gapOf(r);
+  if (g == null) return <Dash title={GAP_TIP} />;
+  return <Tick value={pct(g)} className={cn("fig text-[12px]", dir(g))} />;
+}
+
 function Dash({ title }: { title?: string }) {
   return (
     <span className="text-ink-3" title={title}>
@@ -689,6 +867,21 @@ function Dash({ title }: { title?: string }) {
  */
 function Catalysts({ r }: { r: ScanRow }) {
   const [first, ...rest] = r.flags;
+  // The day's most important story leads when it is a major one (catalysts.py).
+  if (r.catalyst?.major) {
+    return (
+      <div className="flex gap-x-2 whitespace-nowrap">
+        <span className="qt-cap text-[9.5px] text-ink" title={`${r.catalyst.title}\n${r.catalyst.provider}`}>
+          {r.catalyst.tag}
+        </span>
+        {r.flags.length > 0 && (
+          <span className="qt-cap text-[9.5px] text-ink-3" title={r.flags.map((f) => f.text).join("\n")}>
+            +{r.flags.length}
+          </span>
+        )}
+      </div>
+    );
+  }
   if (!first) {
     return r.news.length > 0 ? (
       <span className="qt-cap text-[9.5px] whitespace-nowrap text-ink-3" title={r.news[0].title}>
@@ -862,6 +1055,8 @@ export function sortValue(r: ScanRow, k: SortKey, bench: Bench): number | null {
       return r.rvol;
     case "chg":
       return r.chg_pct;
+    case "gap":
+      return gapOf(r);
     case "ext":
       return r.ext_pct;
     case "vol":

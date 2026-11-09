@@ -6,6 +6,7 @@ import { Wire } from "@/components/panels/Wire";
 import { Board } from "@/components/panels/Board";
 import { Rates } from "@/components/panels/Rates";
 import { Rotation } from "@/components/panels/Rotation";
+import { Breadth } from "@/components/panels/Breadth";
 import { Calendar } from "@/components/panels/Calendar";
 import { Earnings } from "@/components/panels/Earnings";
 import { Movers } from "@/components/panels/Movers";
@@ -65,6 +66,7 @@ const MWire = memo(Wire);
 const MBoard = memo(Board);
 const MRates = memo(Rates);
 const MRotation = memo(Rotation);
+const MBreadth = memo(Breadth);
 const MCalendar = memo(Calendar);
 const MEarnings = memo(Earnings);
 const MMovers = memo(Movers);
@@ -115,7 +117,8 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
     <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
       {/* ---- left: what the market is doing ------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <MRotation rows={data.sectors ?? NONE} cashOpen={cashOpen} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
+        <MRotation rows={data.sectors ?? NONE} themes={data.themes ?? NONE} leaders={data.breadth_all?.leaders} cashOpen={cashOpen} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
+        <MBreadth data={data.breadth_all} ageMin={age("breadth_all")} />
         <MMovers indices={data.constituents?.indices ?? EMPTY} cashOpen={cashOpen} ageMin={age("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
         <MRates rates={data.rates} pm={data.policy_meetings} ageMin={age("rates")} error={st.rates?.ok === false ? st.rates.error : null} />
         <MBoard title="Macro board" quotes={data.quotes ?? NONE} groups={MACRO_GROUPS} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />

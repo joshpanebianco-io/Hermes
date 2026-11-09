@@ -143,7 +143,7 @@ export function Header({
                 "fig hit relative rounded px-2 py-1 text-[10px] tracking-[0.1em] uppercase",
                 // Quiet: sentence case Plex, the active tab lifted onto the
                 // selection grey — the same key GEXYGEN's rail and segments use.
-                "qt:rounded-[3px] qt:px-2 qt:font-sans qt:text-[12.5px] qt:tracking-normal qt:normal-case roomy:px-2.5",
+                "qt:rounded-[3px] qt:px-2 qt:font-sans qt:text-[12.5px] qt:tracking-normal qt:normal-case",
                 tab === t.key ? "text-ink qt:bg-surface-3 qt:font-semibold" : "text-ink-3 hover:text-ink-2",
               )}
             >

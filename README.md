@@ -36,8 +36,8 @@ session — a different instrument, a different clock and a different risk unit 
 the futures — so it has panels of its own: the Scanner, the game plan, the tape
 count. The wire, the calendar, the vol curve and rotation are shared, because macro
 moves both books. Since 2026-10-30 both desks share **one tab bar** and one header
-strip, cut by what a page is for rather than which book it is about: **Macro** (what
-is happening and what is scheduled), **Structure** (where price is and how it is
+strip, cut by what a page is for rather than which book it is about: **Dashboard** (the
+session on one page), **Macro** (what is happening and what is scheduled), **Structure** (where price is and how it is
 positioned — the book, session ranges, the volume profile, dealer gamma, the vol
 curve, the tape count), **Scanner**, **Analysis** (the futures brief or the stocks
 game plan, behind one switch on that tab), **Hermes AI** and **Settings**.
@@ -46,6 +46,24 @@ Every part of it is built the same way, and this section walks them in order: th
 engine computes a figure, the figure opens a read of what it means for this trade,
 and only at the end does a model write anything — the Analysis tab's game plan, and
 Hermes when asked (its own section, after the futures desk).
+
+### The Dashboard — the session on one page
+![The Dashboard](docs/media/dashboard.png)
+
+The first tab answers "what is my plan before the open" without adding anything to what
+the other tabs already hold, and every part opens where it came from. Three rows:
+
+- **The read and the game plan.** Two sentences written by a fixed rule from the tape
+  count, the VIX band and breadth; who reports and the next print. Beside them the tape's
+  bias, the sectors and themes ahead of SPY, the count of Day 2/3 continuations and of
+  breakouts and breakdowns through the previous day's range, and every stock at $2bn+ by
+  the size of its move.
+- **Top setups, the list, the news.** The top setups are the Scanner's own rank, because
+  nobody here picks names by hand, each with its side, where it sits against the previous
+  day and the pre-market, the setup, its most important story and today's chart. Beside
+  them the pinned names and the freshest major company stories, one line per event.
+- **Sector rotation.** The eleven sectors on one row with the stocks pushing each; a card
+  opens that sector on the heat map.
 
 ### Structure — is the tape with me?
 ![Structure, stocks & options](docs/media/structure-stocks.png)
@@ -74,6 +92,13 @@ of drawn by TradingView, for the New York strategy it was written for: a name
 breaks its **pre-market** or **previous-day** high (low), and the trade is the
 **retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
 far from the level for it to come back.
+
+The tab has six views in a strip: **Setups**, the ranked list this section describes;
+**Breakouts**, **Extended hours**, **Day 2/3** and **Sectors**, the wide scan read four ways;
+and the **Signal log**. Setups opens on **Overview**, the short list of what matters (the score,
+the setup, the most important story, the move, the two ranges in words, the day's line,
+the volume); **Levels** has every column of the Pine's scanner, and **Options** the
+options read.
 
 - **Every column the Pine's scanner has** — Price, Volume, % Change, Pre/Post %,
   RS vs SPY, PDH / PDL / PMH / PML Break (the script's ten-segment bars, a filled
@@ -128,10 +153,11 @@ far from the level for it to come back.
   break, a signal still live from the first thirty minutes or the last hour,
   options too wide to trade, or a catalyst against the side), each listed with the
   points it earned.
-  The **catalyst** reads direction, never a count: a report's surprise sign, a
-  rating or target change, guidance raised or cut, an offering filed — with the
-  side it earns, against it it costs and the headline is quoted on the row. The
-  clock penalty comes from the signal log (39% of signals in the first half hour
+  The **catalyst** reads direction, never a count, and pays by what the news is: a
+  report's surprise, guidance, an FDA readout or a deal earn the full twelve, an
+  upgrade or downgrade eight, a price-target tweak three, and a law firm's notice
+  nothing. With the side it earns, against it it costs and the headline is quoted on
+  the row. The clock penalty comes from the signal log (39% of signals in the first half hour
   and 36% in the last hour reached +1R, against 52% from 10:00 to 14:00), and the
   weights were last checked against it on 2026-11-05, over 325 live signals in ten
   sessions; `server/tools/fit_score.py` prints the same tests as the record grows.
@@ -143,10 +169,69 @@ far from the level for it to come back.
   feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
   AMC and the surprise, and its SEC filings from the last three days (8-K items,
   offerings, 10-Q / 10-K) straight from EDGAR.
-- **A chart for the selected name** — ten-minute candles with PDH / PDL (solid) and
-  PMH / PML (dashed) as the Pine draws them, the 8 EMA wave tinted by the level
-  state, VWAP, the ten-minute 200 EMA, the signals where they fired, and extended
-  hours shaded — plus a one-click **open in TradingView**.
+- **The slide-out, for any ticker** — click a row in any table, or press **Ctrl+K**
+  and type any US ticker or company, and the name opens over the page: a large
+  [Lightweight Charts](https://www.tradingview.com/lightweight-charts/) chart with
+  PDH / PDL (solid) and PMH / PML (dashed) as the Pine draws them, the 8 EMA wave
+  tinted by the level state, VWAP, the ten-minute 200 EMA, volume, the signals where
+  they fired and extended hours shaded, each switchable, on 1m, 3m, 5m, 10m and daily
+  bars, with drag to pan and scroll to zoom; and beside it the session snapshot, the
+  setup, the options, why it ranks where it does, the levels and the news. The table
+  behind it stays live, so another click swaps the name and ↑ / ↓ walk the list. Esc
+  closes it, F makes it full width, its edge drags. A one-click **open in TradingView**
+  is in its header.
+- **The last candle moves on every trade** — Yahoo's live quote stream, one connection
+  for the list, the wide scan's best few hundred candidates and any chart that is
+  open, lands on the chart within about two seconds in the pre-market, the session and
+  after hours. Volume stays with the bars and signals are still read on confirmed
+  ten-minute bars; overnight prints show as a quote and stay out of the candles and
+  levels. The stream is unofficial, so the spark layer and the bar rotation keep running
+  behind it, and the chart says on its face whether it is live or on bars alone.
+- **Breakouts: every US stock against its levels** — one request to TradingView's
+  screener reads about 3,500 stocks and DRs at $300m+ with their pre-market ranges and
+  the previous two sessions' bars. The table asks one question, which names are through
+  the pre-market range **and** the previous day's range the same way, and sorts those
+  first, then the ones with a fresh major story, then relative volume. Chips with counts
+  (Both ranges, Has news, Gaps, Through PDH / PDL, Inside day, Day 2/3, Pinned), filters
+  for cap, volume, relative volume, sector and theme, and a column picker. It is
+  **fifteen minutes delayed** except for the names the stream is watching, which are
+  marked live. **Track** puts a name on today's list, where it is read live with signals
+  and options; the star pins it for good.
+
+  ![Breakouts](docs/media/breakouts.png)
+- **The most important story, not the newest** — stories arrive tagged by ticker from
+  TradingView's news flow and are graded (earnings, guidance, FDA, deal, contract,
+  offering, against an analyst's note or a preview). The newest headline on a big mover
+  is nearly always an analyst writing about the move; the Catalyst column shows the
+  cause. On the signal log, signals with news behind them reached +2R more often and
+  held about three times as much as those without, though no more often reached +1R.
+- **Extended hours** — the pre-market and after-hours gappers of 2% or more with their
+  volume against an average day, the story, and where each sits against the day it
+  follows. With no session on it shows the last one, for planning the next.
+- **Day 2/3** — the big movers, and whether they are still moving. A Day 1 is a 20% move
+  on 1.5× volume at $2bn+ by default (the filters reach down to 10% and $300m). Day 2 is
+  the session after, whose PDH is Day 1's high; an inside day is the move resting; Day 3
+  and on are older. Grouped by side, what is holding first, and written from a ledger the
+  collector keeps itself, a session at a time. There is no second score here or on
+  Breakouts: the 0-100 rank needs bars and belongs to the tracked names.
+
+  ![Day 2/3](docs/media/day-2-3.png)
+
+- **Sectors: the heat map** — the top mover beside the eleven sector ETFs and regional
+  banks, ranked, then two dozen theme ETFs, over a day, a week or a month. The bar under a
+  card is its distance from SPY, and up and down count its stocks at $2bn+, because an ETF
+  can hide them: XLV closed -0.06% on 2026-11-06 with most of its stocks up. There is no
+  rotation score. A card opens its stocks below it, with the themes each belongs to, at any
+  hour: the list's volume filter reads the last whole session. Sectors and nine themes list
+  every stock in the group; CIBR, SKYY, QTUM, ARKK, PAVE, WGMI, NASA, GRID, BOTZ and TAN are
+  partial, because Yahoo publishes a fund's top ten and no more; DRAM, URA, COPX, KWEB and
+  FXI hold mostly foreign listings and TradingView files most American oil producers with
+  the majors, so those five and XOP list a hand-written set of US-listed names that trade
+  with the theme, and the page says so. The **Industries** chip swaps the
+  cards for about ninety groups, ranked by their median stock so that one 40% name cannot
+  carry a group the way it carries an average.
+
+  ![Sectors](docs/media/sectors.png)
 
   ![Scanner detail](docs/media/scanner-detail.png)
 - **Alerts on every tab** — the Pine's alerts, raised by the terminal: a toast, a
@@ -177,8 +262,10 @@ far from the level for it to come back.
   they leave for the opening drive, and from then the list holds until the day
   rolls. A promoted row says so, with the mark and the reason; the editor shows
   today's promotions with a pin for any you want to keep, the names in play that
-  did not make the cut, and a switch to turn promotion off.
-- **Keyboard** — the rows are in the tab order, Enter picks one, ↑ / ↓ walk the list.
+  did not make the cut, and a switch to turn promotion off. A fresh major story that
+  is not the report is worth three points in that rank.
+- **Keyboard** — the rows are in the tab order, Enter opens one, ↑ / ↓ walk the list,
+  Ctrl+K finds any ticker from any tab.
 
 Relative volume starts at the open: Yahoo's pre-market bars carry no volume, and
 the column says so rather than guessing.
@@ -433,6 +520,10 @@ The Structure tab's core on the futures desk: three panels, one price ladder eac
 - **Sector rotation** — the eleven S&P sector ETFs as **excess return vs SPY** (the
   only view that says anything on a day when everything is red), plus the breadth
   line: equal-weight against cap-weight, i.e. is this move the market or just its top.
+  A **Themes** toggle reads two dozen theme ETFs the same way, and each sector's row
+  names its leading and lagging stocks on hover.
+- **Breadth** — every US stock at $2bn+, advancers against decliners, by the size of the
+  move.
 
 ### Calendar, Fed & Treasury diary, earnings
 ![Diary](docs/media/diary.png)
@@ -568,7 +659,7 @@ checked against what it was shown or fetched.
 | `earnings` | the Earnings panel in full, by day or for one name: every report with its time, estimate, result, surprise and size |
 | `wire` · `calendar` · `sessions` | the wire searched or filtered by impact, one day's releases, the session clock with every exchange |
 | `digest` · `note` | a whole desk's digest, and a brief or game plan with its age, whole or for one book or name |
-| `panel` | every other panel on every tab, by name: the macro board, the scanner's regime strip, the driver board, session ranges, value, gamma, volatility, the expiries, the COT, the tape count, breadth, fuel, index options, today's prints, rates and the Fed path, the Fed diary with every speaker, cross-asset, sector rotation, all forty index movers, sector peers, the catalysts, the scanner's pool, signal log and record, past notes and source health |
+| `panel` | every other panel on every tab, by name: the macro board, the scanner's regime strip, the driver board, session ranges, value, gamma, volatility, the expiries, the COT, the tape count, breadth, fuel, index options, today's prints, rates and the Fed path, the Fed diary with every speaker, cross-asset, sector rotation and themes, market breadth, all forty index movers, sector peers, the catalysts, the scanner's pool, signal log and record, Breakouts, Extended hours, Day 2/3, the stock news, the Dashboard, the sector heat map and any one group's stocks, past notes and source health |
 
 ### How it answers
 ![A Hermes AI answer, in four parts](docs/media/hermes-ai-read.png)
@@ -746,6 +837,10 @@ the whole board is keyboard-free by design — it is meant to be *read*.
 | iShares holdings CSVs | NDX/SPX constituent weights → contribution math | daily |
 | Yahoo Finance (chart, per stock) | 5-minute bars 04:00–20:00 for every watchlist name → the Scanner's levels, wave, VWAP and signals; daily bars for the ATR | ~90 s a name in session (SPY/QQQ/IWM 30 s), 15 min closed; daily 6 h |
 | TradingView (public screener, one POST) | Every US common line and DR at $5bn+ with close, change, volume, 30-day average volume, 14-day ATR, pre-market change and volume, report dates → the Scanner's pool and its promotions | 5 min 04:00–10:30 ET, 30 min otherwise |
+| Yahoo Finance (live quote stream) | Every trade for the watchlist, the wide scan's best few hundred names and any open chart → the last candle and each name's last price | pushed, about 2 s behind |
+| Yahoo Finance (quote summary, fund holdings) | The top ten holdings of the theme funds no industry describes → the stocks a Sectors card lists | one fund a tick, each once a week |
+| TradingView (public screener, the wide read) | Every US stock and DR at $300m+ with the day's bar, the two previous sessions' bars, pre-market and post-market figures, float, industry and the week's and month's change → Breakouts, Extended hours, Day 2/3, Sectors and Breadth | 2 min 04:15–20:15 ET, 30 min otherwise; 15 min delayed |
+| TradingView (public news flow) | US company stories tagged by ticker → the Catalyst column, with one per-name read for the top of the wide scan | 2 min in session, 15 min otherwise; per name 15 min |
 | Yahoo Finance (per-ticker RSS) | Each watchlist name's headlines | 10 min a name |
 | Cboe (delayed option chains) | Each watchlist name's chain → IV, the straddle's expected move, skew, liquidity, the suggested contracts; a daily IV log for IV rank | 5 min SPY/QQQ/IWM, 10 min singles, in session; hourly otherwise |
 | SEC EDGAR | Each watchlist name's filings from the last three days | 30 min a name |
@@ -836,6 +931,17 @@ Hermes's router and prompt.
   TradingView, with extended hours on, would include. The four levels are unaffected.
 - **The scanner's score is a heuristic rank**, not a probability — until the signal
   log has enough settled sessions to calibrate it.
+- **The wide scan is fifteen minutes behind** on every row the live stream is not
+  watching, and its levels are TradingView's, which can differ from the desk's own by a
+  few cents and, on the pre-market low of a wick-heavy morning, by a percent or more.
+  It finds names; a name traded from is a tracked name, on the desk's levels.
+- **The heat map's lists are partial where the funds' are.** Yahoo names a fund's top ten
+  and no more, six themes are hand-written lists (the five foreign-heavy ones and Oil & Gas
+  E&P), and the stock table's
+  1W is TradingView's own week, which can sit a couple of points from a strict five-session
+  close (NVDA -10.7% against -8.8% on 2026-11-06).
+- **The live stream is unofficial** and can change without notice. Nothing depends on it.
+  `server/tools/stream_check.py` prints how it has compared with the bars, session by session.
 - **Free-tier LLMs are flaky.** The report chain retries across models and modes,
   parses JSON out of four kinds of wrapper, and fails loudly with the full attempt
   trail when the pools are saturated.

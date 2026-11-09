@@ -78,6 +78,18 @@ export interface SectorRow {
   spark: number[];
 }
 
+/** Every US stock at $2bn+ by the size of its move (sources/universe.breadth). */
+export interface BreadthAll {
+  basis: "pre" | "rth" | "post" | "last";
+  floor: number;
+  names: number;
+  advancers: number;
+  decliners: number;
+  buckets: Array<{ label: string; n: number; side: "up" | "down" }>;
+  /** Each sector's biggest movers at $5bn+. */
+  leaders: Record<string, { up: Array<{ sym: string; chg: number }>; down: Array<{ sym: string; chg: number }> }>;
+}
+
 export interface WireItem {
   title: string;
   url: string;
@@ -642,6 +654,9 @@ export interface Terminal {
   age_min: Record<string, number>;
   quotes: Quote[];
   sectors: SectorRow[];
+  /** The theme ETFs, the same shape as the sectors (sources/quotes.collect_themes). */
+  themes?: SectorRow[];
+  breadth_all?: BreadthAll | null;
   wire: WireItem[];
   wire_feeds?: SourceStatus[];
   calendar: CalendarRow[];

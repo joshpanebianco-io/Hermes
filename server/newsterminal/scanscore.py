@@ -42,11 +42,13 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import frame, marketctx, optcalc, releases, targets
+from .catalysts import NOISE, TIER_PENALTY, TIER_POINTS, grade
 from .holidays import next_trading_day
 from .scan import Clock
 from .sources.shortint import squeeze_flag
@@ -553,7 +555,8 @@ def _story(title: str) -> str:
 
 
 def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
-             aliases: list[str], now: datetime) -> list[dict[str, Any]]:
+             aliases: list[str], now: datetime, limit: int | None = NEWS_MAX,
+             ) -> list[dict[str, Any]]:
     """The ticker's own headlines plus any wire story that names it. Pure.
 
     THE WIRE MATCH IS STRICT ON PURPOSE: the cashtag, or a company name written
@@ -589,7 +592,7 @@ def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
             "age_min": round((now_ts - ts) / 60.0, 1) if ts is not None else None,
             "kind": it.get("kind") or news_kind(it.get("title") or ""),
         })
-        if len(out) >= NEWS_MAX:
+        if limit is not None and len(out) >= limit:
             break
     return out
 
@@ -641,21 +644,30 @@ def in_play(row: dict[str, Any], premkt: dict[str, Any] | None) -> tuple[float, 
 # reiterations); these patterns are narrower and name the action.
 _BULL = re.compile(
     r"upgrad|rais\w* (?:its |the |their )?(?:price )?target|"
-    r"lift\w* (?:its |the )?(?:price )?target|"
+    r"lift\w* (?:its |the )?(?:price )?target|price target (?:raised|lifted|increased|hiked)|"
+    r"raised to (?:buy|outperform|overweight|strong buy)|"
     r"initiat\w*[^.]{0,40}\b(?:buy|outperform|overweight)\b|reiterat\w*[^.]{0,20}\bbuy\b|"
     r"rais\w* (?:full[- ]year |fy ?\d* |annual |its |the )?(?:guidance|outlook|forecast)|"
     r"hik\w* (?:its |the )?(?:guidance|outlook|forecast)|\bbeats?\b|"
-    r"\btops? (?:estimates|expectations)",
+    r"\btops? (?:estimates|expectations)|"
+    r"\bfda (?:approv|clear)|approved by the fda|met (?:its |the )?primary endpoint|"
+    r"positive (?:phase|topline|trial|data)|to be acquired|acquired by|"
+    r"takeover (?:bid|offer)|buyout (?:bid|offer)|"
+    r"\b(?:wins?|awarded)\b[^.]{0,40}\bcontract\b",
     re.I)
 _BEAR = re.compile(
     r"downgrad|cut\w* (?:its |the |their )?(?:price )?target|"
     r"lower\w* (?:its |the )?(?:price )?target|"
-    r"trim\w* (?:its |the )?(?:price )?target|"
+    r"trim\w* (?:its |the )?(?:price )?target|price target (?:cut|lowered|trimmed|reduced)|"
+    r"cut to (?:neutral|hold|sell|underperform|underweight|market perform|sector perform|"
+    r"equal[- ]weight|in[- ]line|peer perform)|"
     r"initiat\w*[^.]{0,40}\b(?:sell|underperform|underweight)\b|"
     r"cut\w* (?:full[- ]year |fy ?\d* |annual |its |the )?(?:guidance|outlook|forecast)|"
     r"lower\w* (?:its |the )?(?:guidance|outlook|forecast)|slash\w* (?:guidance|outlook|forecast)|"
     r"withdraw\w* (?:its )?guidance|\bmiss(?:es|ed)?\b|\bfalls? short\b|"
-    r"\b(?:secondary|stock|share) offering|\bprobe\b|investigat|\brecall\b|lawsuit",
+    r"\b(?:secondary|stock|share) offering|\bprobe\b|investigat|\brecall\b|lawsuit|"
+    r"\bfda (?:rejects?|declines?|refuses?)|complete response letter|clinical hold|"
+    r"(?:trial|study) (?:fails|failed)|failed (?:to meet|its) primary|\bbankrupt|\bchapter 11\b",
     re.I)
 _OFFERING_FORMS = ("S-1", "S-3", "424B", "F-1", "F-3")
 
@@ -677,25 +689,29 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
     with no directional item. Pure.
 
     Items: a report since the close with its surprise sign (W_CATALYST); a
-    rating, target or guidance headline since the close (W_CATALYST); a beat or
-    miss headline (W_CATALYST); an offering filed in the last three days (3,
-    bear); a bankruptcy 8-K (W_CATALYST, bear). The strongest item each way
-    decides; against wins a tie, because the downside of ranking a name into
-    its own bad news is the larger one.
+    headline since the close with a direction, GRADED BY WHAT IT IS
+    (catalysts.py, owner 2026-11-09): a beat, guidance, an FDA readout or a deal
+    W_CATALYST, an upgrade or downgrade 8, a price-target tweak 3, a law firm's
+    notice nothing; an offering filed in the last three days (3, bear); a
+    bankruptcy 8-K (W_CATALYST, bear). The strongest item each way decides;
+    against wins a tie, because the downside of ranking a name into its own bad
+    news is the larger one. A minor note against the side costs 3 where it used
+    to cost the full penalty, since it now earns only 3 with it.
     """
-    items: list[tuple[str, int, str]] = []  # (direction, weight, text)
+    items: list[tuple[str, int, str, int]] = []  # (direction, weight, text, penalty)
     days, when = (earnings or {}).get("days"), (earnings or {}).get("when")
     sp = (earnings or {}).get("surprise_pct")
     if earnings and (days == -1 or (days == 0 and when == "pre")):
         when_txt = "after the close" if days == -1 else "this morning"
         if isinstance(sp, (int, float)) and sp != 0:
             items.append(("bull" if sp > 0 else "bear", W_CATALYST,
-                          f"reported {when_txt}, EPS {sp:+.1f}% vs estimate"))
+                          f"reported {when_txt}, EPS {sp:+.1f}% vs estimate", P_CATALYST))
     fresh = [h for h in news or []
              if isinstance(h, dict) and h.get("age_min") is not None
              and h["age_min"] <= CATALYST_FRESH_MIN]
     for h in fresh:
-        d = headline_direction(str(h.get("title") or ""))
+        g = grade(str(h.get("title") or ""))
+        d = headline_direction(str(h.get("title") or "")) if g.tier != NOISE else None
         if d is None:
             continue
         pub = str(h.get("publisher") or "").strip()
@@ -703,14 +719,15 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         age_txt = f"{round(age / 60)}h" if isinstance(age, (int, float)) and age >= 60 else (
             f"{round(age)}m" if isinstance(age, (int, float)) else "")
         text = f"{pub + ': ' if pub else ''}\"{str(h.get('title') or '').strip()[:90]}\""
-        items.append((d, W_CATALYST, f"{text} ({age_txt})" if age_txt else text))
+        items.append((d, min(TIER_POINTS[g.tier], W_CATALYST),
+                      f"{text} ({age_txt})" if age_txt else text, TIER_PENALTY[g.tier]))
     for f in filings or []:
         form = str((f or {}).get("form") or "")
         desc = str((f or {}).get("desc") or form)
         if form.startswith(_OFFERING_FORMS):
-            items.append(("bear", 3, f"offering filed: {desc[:60]}"))
+            items.append(("bear", 3, f"offering filed: {desc[:60]}", P_CATALYST))
         elif form.startswith("8-K") and "bankruptcy" in desc.lower():
-            items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}"))
+            items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}", P_CATALYST))
     if side not in ("long", "short") or not items:
         n_fresh = len(fresh)
         why = ("no side" if side not in ("long", "short") else
@@ -727,7 +744,7 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         note = f"against the {side} · {best_against[2]}"
         if best_with:
             note += f" · with it: {best_with[2]}"
-        return {"pts": P_CATALYST, "note": note, "against": best_against[2]}
+        return {"pts": best_against[3], "note": note, "against": best_against[2]}
     assert best_with is not None
     note = f"with the {side} · {best_with[2]}"
     if best_against:
@@ -1080,7 +1097,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           record: dict[str, dict[str, Any]] | None = None,
           promoted: dict[str, dict[str, Any]] | None = None,
           pool: dict[str, Any] | None = None,
-          pinned: list[str] | None = None) -> dict[str, Any]:
+          pinned: list[str] | None = None,
+          top_story: Callable[[str], dict[str, Any] | None] | None = None,
+          news_limit: int | None = NEWS_MAX) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
 
     `promoted` is {symbol: why} for the names the pool put on the list today
@@ -1139,10 +1158,15 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         # lists it (a week further out than the calendar feed reaches), so the
         # options maths can price the report whenever the chain covers it.
         earn = earnings_for(sym, earnings, td) or next_report((earn_next or {}).get(sym), td)
-        nws = news_for(sym, news.get(sym) or [], wire, aliases.get(sym) or [], now)
+        # The catalyst reads every headline it can see: the row carries the newest
+        # eight, and an analyst's note on top of them must not hide the report.
+        all_news = news_for(sym, news.get(sym) or [], wire, aliases.get(sym) or [], now,
+                            limit=None)
+        nws = all_news[:NEWS_MAX]
         fil = [f for f in (filings.get(sym) or [])][:FILINGS_MAX]
         row["earnings"] = earn
-        row["news"] = nws
+        row["news"] = all_news if news_limit is None else all_news[:news_limit]
+        row["catalyst"] = top_story(sym) if top_story else None
         # WHETHER the name's own feed has been read yet — not the same as having
         # headlines. After a restart the news job works through the list a few
         # names a minute, and "no headlines" from a name not yet read is a
@@ -1162,7 +1186,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         row["short"] = (shorts or {}).get(sym)
         row["promoted"] = (promoted or {}).get(sym)
         side0 = (row.get("setup") or {}).get("side")
-        cat = catalyst_read(side0, earn, nws, fil)
+        cat = catalyst_read(side0, earn, all_news, fil)
         if row.get("ok"):
             row["score"] = score_row(row, reg, srs, earn, event, session,
                                      premkt=row["premkt"], news=nws,

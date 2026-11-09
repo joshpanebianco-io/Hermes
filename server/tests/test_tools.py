@@ -489,6 +489,51 @@ def test_every_panel_answers_by_name() -> None:
     assert "error" in _panel({"name": "nope"})
 
 
+def test_the_heat_map_and_the_dashboard_read_as_the_pages_show_them() -> None:
+    def read(up: int) -> dict[str, Any]:
+        return {"up": up, "down": 1, "median": 1.5, "leaders": [{"sym": "AA", "chg": 9.0}]}
+
+    card = {"key": "XLK", "label": "Technology", "kind": "sector", "day_pct": 1.45, "rs_day": 1.14,
+            "week_pct": -8.2, "month_pct": None, "list": "sector", "names": 3, "day": read(2)}
+    kid = {**card, "key": "CIBR", "label": "Cyber", "kind": "theme", "list": "fund",
+           "parent": "XLK", "day_pct": 2.0}
+    heat = {"cards": [card, kid], "cards_day": "2026-11-06", "basis": "last", "industries": [
+        {"key": "Semiconductors", "sector": "XLK", "names": 54, "day": read(51),
+         "week": {"median": -2.0}, "month": {"median": 3.0}}]}
+    table = {"basis": "last", "scanned": 9, "rows": [{"sym": "NVDA", "last": 186.64}]}
+    page = {"session": "closed", "trading_day": "2026-11-09", "read": {"lines": ["x"]}, "plan": {},
+            "breadth": {"advancers": 968, "decliners": 1034, "names": 2002, "buckets": []},
+            "top": [{"sym": "SPCX", "last": 135.64, "chg_pct": 8.62, "ext_pct": 1.02,
+                     "score": {"total": 40, "side": "long"},
+                     "setup": {"state": "forming", "level": "PDH"}}],
+            "list": [{"sym": "SPY", "last": 736.53, "chg_pct": 0.31, "ext_pct": None}], "adds": [],
+            "stories": [{"syms": ["IRTC"], "tag": "Earnings", "title": "Plunges", "provider": "W",
+                         "age_min": 90.0}],
+            "rotation": [{"key": "XLK", "label": "Technology", "day_pct": 1.45, "rs_day": 1.14,
+                          "leaders": ["FROG"]}, {"key": "XLF", "label": "Fin", "day_pct": -0.59,
+                                                 "rs_day": -0.9, "leaders": []}]}
+    more = {**MORE, "heatmap": lambda: heat, "dashboard": lambda: page,
+            "group": lambda g: table if g == "XLK" else None}
+    out = _panel({"name": "sector_heatmap"}, more=more)
+    assert out["sectors"] == [
+        "XLK Technology: day +1.45% (+1.14% vs SPY), week -8.20%, month n/a · 3 stocks at $2bn+: "
+        "2 up, 1 down, median +1.50%, led by AA +9.00% · list: sector"]
+    assert out["themes"][0].endswith("list: fund · under XLK")
+    assert out["industries"] == [
+        "Semiconductors (XLK): median +1.50%, 54 names, 51 up 1 down, lead AA +9.00%; "
+        "week -2.00%, month +3.00%"]
+    listed = _panel({"name": "sector_heatmap", "group": "XLK"}, more=more)
+    assert listed["rows"][0].startswith("NVDA")
+    assert "no group" in _panel({"name": "sector_heatmap", "group": "zzz"}, more=more)["error"]
+    dash = _panel({"name": "dashboard"}, more=more)
+    assert dash["top_setups"] == ["SPCX score 40 long · forming PDH · last 135.64 · day +8.62% · "
+                                  "extended hours +1.02%"]
+    assert dash["pinned"] == ["SPY 736.53 · day +0.31% · extended hours n/a"]
+    assert dash["stories"] == ["IRTC [Earnings] Plunges (W, 1.5h ago)"]
+    assert dash["sectors"] == ["XLK Technology +1.45% (+1.14% vs SPY), leaders FROG",
+                               "XLF Fin -0.59% (-0.90% vs SPY), leaders none yet"]
+
+
 def test_the_glance_shows_the_entry_the_options_and_any_source_down() -> None:
     scan = _scan()
     scan["rows"][0]["setup"]["entry"] = {"kind": "PDL", "price": 241.24, "dist_atr": -6.15}

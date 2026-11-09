@@ -153,6 +153,9 @@ def backoff(failures: int) -> float:
     return min(BACKOFF_MAX, BACKOFF_BASE * 2 ** max(0, failures - 1))
 
 WATCHLIST_FILE = os.path.join(CACHE_DIR, "scanner_watchlist.json")
+#: Names off the list a chart was opened on: how often each may be read, how many are held.
+ADHOC_SEC = 60.0
+ADHOC_MAX = 40
 
 # Ticker → the S&P sector SPDR it trades with. A static table because the
 # iShares holdings file the constituents panel reads is not reliably served
@@ -196,7 +199,8 @@ SECTOR: dict[str, str] = {
     **dict.fromkeys(
         ["PGR", "TRV", "CB", "AIG", "ALL", "MET", "PNC", "USB", "TFC", "COF", "BK", "BNY",
          "MMC", "MRSH", "AON", "CME", "ICE", "SPGI", "MCO"], "XLF"),
-    **dict.fromkeys(["PSX", "VLO", "KMI", "WMB", "OKE", "BKR"], "XLE"),
+    # TRGP, CQP and EE move gas for a living: TradingView files them with the gas utilities.
+    **dict.fromkeys(["PSX", "VLO", "KMI", "WMB", "OKE", "BKR", "TRGP", "CQP", "EE"], "XLE"),
     **dict.fromkeys(
         ["ABT", "DHR", "ELV", "CI", "BMY", "GILD", "VRTX", "REGN", "MDT", "SYK", "BSX", "ZTS",
          "HCA", "MCK"], "XLV"),
@@ -547,6 +551,10 @@ class ScanStore:
         #: BURST_TICK_SEC later while this is non-zero.
         self.burst_left = 0
         self._warm = False
+        #: The live stream (sources/stream.py), when the collector has one.
+        self.stream: Any = None
+        #: Names off the list read on request, and when (`ensure_adhoc`).
+        self.adhoc: dict[str, float] = {}
 
     # ---- watchlist ----------------------------------------------------------
 
@@ -846,19 +854,85 @@ class ScanStore:
             st.last_ok_utc = datetime.now(UTC).isoformat()
         return st, delay
 
+    def _latest_trade(self, sym: str, session: str) -> LiveQuote | None:
+        """The newest trade anyone has told us about. The spark layer's counts only
+        in the regular session, the one it reads; the stream's in any."""
+        q = self.live.get(sym) if session == "rth" else None
+        got = self.stream.last_trade(sym) if self.stream is not None else None
+        if got is None:
+            return q
+        s = LiveQuote(float(got[0]), int(got[1]))
+        return s if q is None or s.at >= q.at else q
+
     def live_bars(self, sym: str, clock: scan.Clock) -> list[scan.Bar] | None:
-        """The name's bars, with its live trade laid over them in the regular
-        session (scan.with_live). A trade the bars were read after is already
-        in them, so it changes nothing."""
+        """The name's bars, with its live trade laid over them (scan.with_live).
+        A trade the bars were read after is already in them, so it changes
+        nothing. Any session the stream is hearing, now: the spark layer only
+        ever knew the regular one. The clock is allowed five seconds' slack
+        against the feed's, or a machine a second behind would refuse every trade."""
         bars = self.bars.get(sym)
-        q = self.live.get(sym)
-        if not bars or q is None or clock.session != "rth":
+        q = self._latest_trade(sym, clock.session)
+        if not bars or q is None or clock.session == "closed":
             return bars
         if datetime.fromtimestamp(q.at, scan.ET).date() != clock.trading_day:
             return bars
-        if q.at <= self.fetched.get(sym, 0.0) or q.at > clock.now.timestamp():
+        if q.at <= self.fetched.get(sym, 0.0) or q.at > clock.now.timestamp() + 5:
             return bars
         return scan.with_live(bars, q.price, q.at)
+
+    def ensure_adhoc(self, sym: str) -> str | None:
+        """Bars for a name off the list, on request (a chart opened from the wide
+        scan or the search). Called on the API's thread; the bars land in the same
+        books as a tracked name's, so every reader of them works unchanged. A
+        minute between reads of one name, and the rotation's 429 pause holds here
+        too. Returns why not, or None."""
+        if not _SYM.match(sym):
+            return "not a ticker"
+        t = time.time()
+        if self.pause_until > t:
+            return None if sym in self.bars else "Yahoo is rate-limiting — paused"
+        if t - self.adhoc.get(sym, 0.0) < ADHOC_SEC and sym in self.bars:
+            return None
+        self.adhoc[sym] = t
+        err = self._fetch_bars(sym)
+        if t - self.daily_at.get(sym, 0.0) >= DAILY_TTL:
+            self._fetch_daily(sym)
+        self._prune_adhoc()
+        return err if sym not in self.bars else None
+
+    def _prune_adhoc(self) -> None:
+        keep = set(self.symbols())
+        names = sorted((s for s in self.adhoc if s not in keep), key=lambda s: self.adhoc[s])
+        for s in names[:-ADHOC_MAX]:
+            for book in (self.adhoc, self.bars, self.meta, self.fetched, self.daily, self.daily_at,
+                         self.fails, self.daily_fails, self.errors):
+                book.pop(s, None)
+
+    def compute_one(self, sym: str, sector: str | None = None,
+                    now: datetime | None = None) -> dict[str, Any] | None:
+        """One name's technical row, for a name off the list — `compute`'s body for
+        a single symbol, read against SPY and QQQ as every row is."""
+        now = now or datetime.now(UTC)
+        clock = self.clock(now)
+
+        def tech(s: str) -> scan.Tech | None:
+            bars = self.live_bars(s, clock)
+            if not bars:
+                return None
+            name = (self.meta.get(s) or {}).get("shortName") or self.sec_names.get(s)
+            return scan.technicals(bars, self.daily.get(s) or [], clock, name=name,
+                                   official=scan.official_close(self.meta.get(s)),
+                                   asof=self.fetched.get(s))
+
+        t = tech(sym)
+        if t is None:
+            return None
+        row = scan.row_of(sym, t, tech("SPY"), tech("QQQ"), clock)
+        row["sector"] = SECTOR.get(sym) or self.pool_sectors.get(sym) or sector
+        row["adv20"] = adv20([d.volume for d in (self.daily.get(sym) or [])
+                              if d.day < clock.trading_day])
+        row["frame"] = frame_of(self.daily.get(sym) or [], clock.trading_day)
+        return row
 
     def clock(self, now: datetime) -> scan.Clock:
         return scan.clock_at(now.astimezone(scan.ET))

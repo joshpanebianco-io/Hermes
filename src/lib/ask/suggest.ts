@@ -37,6 +37,13 @@ export const HERMES_SUGGESTIONS = [
  */
 export function suggestionsFor(tab: string, sym: string | null): string[] {
   switch (tab) {
+    case "dashboard":
+      return [
+        "What is the plan for the next session?",
+        "Which sector or theme has the broadest move?",
+        "Which of the top setups has news behind it?",
+        "What could change the plan before the open?",
+      ];
     case "terminal":
       return [
         "What matters most going into the next session?",

@@ -99,7 +99,7 @@ import json
 import math
 import os
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -140,6 +140,11 @@ MIN_PRICE = 10.0
 RVOL_MIN = 5.0
 RVOL_FULL = 40.0
 W_REPORT = 2
+#: A fresh major story that is not the report (sources/tvnews, owner 2026-11-09:
+#: "news is the engine of moves"). Three, so a 0.4-ATR gap (3.7, one short of the
+#: bar) gets promoted with news behind it, and news alone (3.0) does not: a story
+#: the tape is ignoring is not in play.
+W_NEWS = 3
 MIN_SCORE = 4.0
 
 # ---- the marks and the clock ------------------------------------------------
@@ -297,7 +302,8 @@ def _clamp(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def in_play(row: dict[str, Any], basis: str, trading_day: date) -> dict[str, Any]:
+def in_play(row: dict[str, Any], basis: str, trading_day: date,
+            news: Callable[[str], str | None] | None = None) -> dict[str, Any]:
     """One pool name's in-play read: the score, its parts and the reason. Pure.
 
     Worked examples, Friday 23 Oct 2026's reply (tests/fixtures/tv_pool_trim.json):
@@ -334,6 +340,9 @@ def in_play(row: dict[str, Any], basis: str, trading_day: date) -> dict[str, Any
 
     reports = report_read(row, trading_day)
     rep_pts = float(W_REPORT) if reports else 0.0
+    # The report earns its own two; a story is only counted when there is no report.
+    story = news(str(row.get("symbol") or "")) if news is not None and not reports else None
+    news_pts = float(W_NEWS) if story else 0.0
 
     bits = [
         (f"{'gap' if basis == 'pre' else 'moved'} {gap_atr:.2f} ATR"
@@ -342,8 +351,10 @@ def in_play(row: dict[str, Any], basis: str, trading_day: date) -> dict[str, Any
     ]
     if reports:
         bits.append(reports)
+    if story:
+        bits.append(f"{story.lower()} news")
     return {
-        "score": round(gap_pts + vol_pts + rep_pts, 1),
+        "score": round(gap_pts + vol_pts + rep_pts + news_pts, 1),
         "reason": " · ".join(bits),
         "gap_atr": round(gap_atr, 2) if gap_atr is not None else None,
         "vol_pct": round(vol_pct, 2) if vol_pct is not None else None,
@@ -370,12 +381,13 @@ def report_read(row: dict[str, Any], trading_day: date) -> str | None:
     return None
 
 
-def rank(rows: Iterable[dict[str, Any]], clock: scan.Clock) -> list[dict[str, Any]]:
+def rank(rows: Iterable[dict[str, Any]], clock: scan.Clock,
+         news: Callable[[str], str | None] | None = None) -> list[dict[str, Any]]:
     """Every qualified name scored and sorted, best first. Pure."""
     basis = basis_for(clock)
     out = []
     for r in rows:
-        ip = in_play(r, basis, clock.trading_day)
+        ip = in_play(r, basis, clock.trading_day, news)
         out.append({"symbol": r["symbol"], "name": r.get("name"),
                     "sector": TV_SECTOR.get(r.get("tv_sector") or ""),
                     "close": r.get("close"), "cap": r.get("cap"), **ip})
@@ -489,6 +501,11 @@ class PoolStore:
         self.day: str | None = None
         self.promoted: list[dict[str, Any]] = []
         self.marks_done: list[str] = []
+        #: Names put on the list by hand from the wide scan, for today (`track`).
+        #: Apart from `promoted`, which the marks replace whole.
+        self.manual: list[dict[str, Any]] = []
+        #: The fresh-major-story read (sources/tvnews.NewsStore.major).
+        self.news: Callable[[str], str | None] | None = None
         self._load()
 
     # ---- persistence --------------------------------------------------------
@@ -506,6 +523,8 @@ class PoolStore:
         self.promoted = [p for p in (d.get("promoted") or [])
                          if isinstance(p, dict) and p.get("symbol")]
         self.marks_done = [str(m) for m in (d.get("marks_done") or [])]
+        self.manual = [p for p in (d.get("manual") or [])
+                       if isinstance(p, dict) and p.get("symbol")]
 
     def _save(self) -> None:
         tmp = self._path + ".tmp"
@@ -513,7 +532,7 @@ class PoolStore:
             os.makedirs(os.path.dirname(self._path), exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"enabled": self.enabled, "day": self.day, "promoted": self.promoted,
-                           "marks_done": self.marks_done,
+                           "marks_done": self.marks_done, "manual": self.manual,
                            "saved_utc": datetime.now(UTC).isoformat()}, f)
             os.replace(tmp, self._path)
         except OSError:
@@ -525,9 +544,27 @@ class PoolStore:
         """(the day the promotions are for, their symbols, their sectors)."""
         with self._lock:
             day = date.fromisoformat(self.day) if self.day else None
-            syms = [p["symbol"] for p in self.promoted] if self.enabled else []
-            sectors = {p["symbol"]: p["sector"] for p in self.promoted if p.get("sector")}
+            # By hand first: a name someone asked for keeps its slot over the marks'.
+            hand = [p["symbol"] for p in self.manual]
+            syms = hand + [p["symbol"] for p in self.promoted
+                           if p["symbol"] not in hand] if self.enabled else hand
+            sectors = {p["symbol"]: p["sector"] for p in (*self.manual, *self.promoted)
+                       if p.get("sector")}
         return day, syms, sectors
+
+    def track(self, sym: str, name: str | None, sector: str | None, at: str,
+              room: int) -> str | None:
+        """Put one name on today's list by hand. Returns why not, or None."""
+        with self._lock:
+            if any(p["symbol"] == sym for p in self.manual):
+                return None
+            if room <= 0:
+                return f"the list is full at {MAX_SYMBOLS} names"
+            self.manual.append({"symbol": sym, "name": name, "sector": sector, "score": 0.0,
+                                "reason": "tracked by hand from the wide scan", "at": at,
+                                "mark": "hand"})
+            self._save()
+        return None
 
     def set_enabled(self, on: bool) -> bool:
         """Switch promotion. Off clears today's list; on re-runs today's latest
@@ -550,9 +587,10 @@ class PoolStore:
         with self._lock:
             if self.day == trading_day.isoformat():
                 return False
-            had = bool(self.promoted)
+            had = bool(self.promoted or self.manual)
             self.day = trading_day.isoformat()
             self.promoted = []
+            self.manual = []
             self.marks_done = []
             self._save()
         return had
@@ -609,7 +647,7 @@ class PoolStore:
                     self.read_at = t - (r.age_min or 0.0) * 60.0
                     self.source = r.source
                     self.basis = basis_for(clock)
-                    self.ranked = rank(self.rows, clock)
+                    self.ranked = rank(self.rows, clock, self.news)
                     self.error = r.error if r.source == "stale" else None
                     fresh = r.source == "live" or (r.age_min or 0.0) <= FRESH_MIN
                     if fresh:
@@ -642,7 +680,9 @@ class PoolStore:
         pin = set(pinned)
         with self._lock:
             on = self.enabled
-            promoted = [dict(p) for p in self.promoted]
+            hand = [dict(p) for p in self.manual]
+            have = {p["symbol"] for p in hand}
+            promoted = hand + [dict(p) for p in self.promoted if p["symbol"] not in have]
             marks = list(self.marks_done)
         promoted = [p for p in promoted if p["symbol"] not in pin]
         shown = {p["symbol"] for p in promoted}

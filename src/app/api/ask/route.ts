@@ -85,7 +85,7 @@ export const maxDuration = 300;
 
 const API = process.env.NT_API ?? "http://127.0.0.1:8100";
 const HERMES = "hermes";
-const TABS = new Set(["terminal", "structure", "tape", "report", "market", "scanner", "plan", "settings", HERMES]);
+const TABS = new Set(["dashboard", "terminal", "structure", "tape", "report", "market", "scanner", "plan", "settings", HERMES]);
 const noStore = { headers: { "cache-control": "no-store" } };
 /** The rolling summary the page sends back, capped. */
 const MAX_SUMMARY_CHARS = 2_500;

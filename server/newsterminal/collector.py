@@ -57,6 +57,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import config, drivers, marketctx
+from . import dashboard as dash_mod
+from . import momentum as mom_mod
 from . import scan as scan_mod
 from .expiry import state as expiry_state
 from .http import CACHE, SourceStatus
@@ -75,6 +77,7 @@ from .sources import earnings as earn_src
 from .sources import fedcal as fed_src
 from .sources import gex as gex_src
 from .sources import history as hist_src
+from .sources import holdings as hold_src
 from .sources import options as opt_src
 from .sources import pool as pool_src
 from .sources import premarket as pre_src
@@ -84,6 +87,9 @@ from .sources import ranges as ranges_src
 from .sources import rates as rates_src
 from .sources import scanner as scan_src
 from .sources import shortint as short_src
+from .sources import stream as stream_src
+from .sources import tvnews as tvnews_src
+from .sources import universe as uni_src
 from .sources import wire as wire_src
 from .volterm import implied_day, vix_month
 from .volterm import state as volterm_state
@@ -142,6 +148,7 @@ class Collector:
             # The driver board's own inputs (2026-10-22): a year of daily bars
             # per book, the CFTC's positioning, Cboe's daily put/call.
             "history": {"books": {}}, "cot": {"books": {}}, "putcall": None,
+            "themes": [], "breadth_all": None,
         }
         self.scan = scan_src.ScanStore()
         # The bars job and the live job both rebuild the scanner block; one at a
@@ -174,6 +181,16 @@ class Collector:
         # restart repaints them beside the pinned names.
         self.pool = pool_src.PoolStore()
         self.scan.set_promoted(*self.pool.for_scan())
+        # The wide scan (sources/universe.py), the ticker-tagged news it is read
+        # with, the Day 1/2/3 ledger written from it, and the live stream that
+        # watches the best of what it finds.
+        self.stream = stream_src.PriceStream()
+        self.scan.stream = self.stream
+        self.stock_news = tvnews_src.NewsStore()
+        self.universe = uni_src.UniverseStore()
+        self.holdings = hold_src.HoldingsStore()
+        self.momentum = mom_mod.MomentumStore()
+        self.pool.news = self.stock_news.major
 
         now = time.monotonic()
         # The board, on a thread of its own (module docstring): it is the block
@@ -245,6 +262,20 @@ class Collector:
             "scan_live": (self._do_live, scan_src.LIVE_SEC, now + 2.0),
         }
         self._live_thread: threading.Thread | None = None
+        # The wide read and everything hung off it, on a thread of their own: a
+        # 2 MB reply and the per-name news reads must not hold up a chain or a bar.
+        self._wide_jobs: dict[str, Job] = {
+            "stream": (self._do_stream, 15.0, now + 1.5),
+            "universe": (self._do_universe, uni_src.TICK_SEC, now + 5.0),
+            "stock_news": (self._do_stock_news, 20.0, now + 6.5),
+            "themes": (self._do_themes, config.QUOTES_SEC * 15, now + 9.0),
+            "holdings": (self._do_holdings, hold_src.TICK_SEC, now + 2.5),
+            "sparks": (self._do_sparks, uni_src.SPARK_TICK_SEC, now + 12.0),
+            "stock_news_sym": (self._do_stock_news_sym, tvnews_src.SYM_TICK_SEC, now + 30.0),
+        }
+        self._wide_thread: threading.Thread | None = None
+        self._stream_logged = 0.0
+        self._stream_checked = 0.0
 
     # ---------------------------------------------------------------- jobs
 
@@ -267,6 +298,72 @@ class Collector:
     def _do_sectors(self) -> None:
         rows, st = quotes_src.collect_sectors()
         self._commit("sectors", rows if st.ok else None, st)
+
+    def _do_themes(self) -> None:
+        rows, st = quotes_src.collect_themes()
+        self._commit("themes", rows if st.ok else None, st)
+
+    def _do_holdings(self) -> None:
+        """One fund's list when one is due; the table of who is in what, every tick."""
+        st, read = self.holdings.tick()
+        self.universe.members = self.holdings.members()
+        if read or "holdings" not in self._status:
+            self._commit("holdings", None, st)
+
+    def _do_stream(self) -> None:
+        """Tell the stream what to listen to, keep its health on the rail, and
+        once a minute score it against the bars (stream.StreamCheck)."""
+        self.stream.set_targets("tracked", self.scan.symbols())
+        st = self.stream.status()
+        with self._lock:
+            self._status["stream"] = st
+            if st.ok:
+                self._updated["stream"] = time.time()
+        now = time.monotonic()
+        if now - self._stream_checked >= 60.0:
+            self._stream_checked = now
+            self.stream.run_check(dict(self.scan.bars), dict(self.scan.fetched))
+        if not st.ok or now - self._stream_logged >= 300.0:
+            self._stream_logged = now
+            self._log("stream", st)
+
+    def _do_universe(self) -> None:
+        st, read = self.universe.tick()
+        if not read:
+            return
+        now = datetime.now(UTC)
+        basis = uni_src.basis_at(now)
+        et = now.astimezone(ET)
+        # Once a session, from the first read whose bar is final: the delayed
+        # feed has the close by 16:15, and the auction's print a little after.
+        final = basis == "last" or (basis == "post" and
+                                    et.hour * 60 + et.minute >= scan_mod.rth_end(et.date()) + 30)
+        if final and self.universe.rows:
+            self.momentum.update(self.universe.rows, uni_src.session_day(now))
+        cands = self.universe.candidates(extra=self.momentum.names())
+        self.stream.set_targets("candidates", cands)
+        self.stock_news.want(cands[:80])
+        breadth = SourceStatus("Breadth (wide)")
+        data = self.universe.breadth(now)
+        breadth.items = (data or {}).get("names", 0)
+        breadth.ok, breadth.source = bool(data), "live" if data else "unavailable"
+        with self._lock:
+            self._state["breadth_all"] = data
+            if data:
+                self._updated["breadth_all"] = time.time()
+        self._commit("universe", None, st)
+
+    def _do_stock_news(self) -> None:
+        on = uni_src.basis_at(datetime.now(UTC)) != "last"
+        st, read = self.stock_news.tick_flow(on)
+        if read:
+            self._commit("stock_news", None, st)
+
+    def _do_stock_news_sym(self) -> None:
+        self.stock_news.tick_symbol(self.universe.exchanges())
+
+    def _do_sparks(self) -> None:
+        self.universe.tick_sparks()
 
     def _do_context(self) -> None:
         rows, st = quotes_src.collect_context()
@@ -425,7 +522,10 @@ class Collector:
         request (ScannerStore.bars_1m)."""
         sym = sym.strip().upper()
         if sym not in self.scan.symbols():
-            return {"ok": False, "sym": sym, "tf": tf, "error": "not on the watchlist"}
+            # A chart opened from the wide scan or the search: read it now.
+            err = self.scan.ensure_adhoc(sym)
+            if err:
+                return {"ok": False, "sym": sym, "tf": tf, "error": err}
         clock = self.scan.clock(datetime.now(UTC))
         # The live trade on the last candle too, so the chart's price agrees
         # with the row beside it.
@@ -447,6 +547,136 @@ class Collector:
                                     daily_asof=self.scan.daily_at.get(sym))
         out["sym"] = sym
         return out
+
+    def scanner_tick(self, sym: str) -> dict[str, Any]:
+        """What an open chart asks for every second: the last trade and this
+        minute's candle, off the stream, or the spark layer's trade when the
+        stream has none. Asking keeps the name subscribed."""
+        sym = sym.strip().upper()
+        self.stream.touch(sym)
+        q = self.stream.quote(sym)
+        now = time.time()
+        clock = self.scan.clock(datetime.now(UTC))
+        if q is None or "price" not in q:
+            spark = self.scan.live.get(sym)
+            if spark is not None and clock.session == "rth":
+                q = {**(q or {}), "price": spark.price, "at": float(spark.at), "session": "rth",
+                     "minute": None, "via": "spark"}
+        if q is None:
+            return {"ok": False, "sym": sym, "clock_session": clock.session,
+                    "connected": self.stream.connected}
+        at = q.get("at")
+        return {"ok": "price" in q, "sym": sym, "connected": self.stream.connected,
+                "clock_session": clock.session, "via": q.get("via", "stream"), **q,
+                "age_sec": round(now - float(at), 1) if at else None}
+
+    def scanner_name(self, sym: str) -> dict[str, Any]:
+        """One whole row for the slide-out: a tracked name's as the table has it,
+        any other's built here on request from a chart read and the same join."""
+        sym = sym.strip().upper()
+        watch = self.scan.watchlist()
+        tracked = sym in watch or sym in self.scan.symbols()
+        err: str | None = None
+        raw = self.universe.raw(sym)
+        if not tracked:
+            err = self.scan.ensure_adhoc(sym)
+        names = [sym] if not tracked else None
+        sector = raw["sector"] if raw else None
+        extra = None
+        if not tracked and err is None:
+            one = self.scan.compute_one(sym, sector=sector)
+            if one is None:
+                err = "no bars for this name"
+            else:
+                extra = {sym: one}
+        payload = self._payload(watch=names, extra_rows=extra, news_limit=None)
+        row = next((r for r in payload.get("rows") or [] if r.get("sym") == sym), None)
+        if row is not None and raw is not None:
+            row["float_shares"] = raw.get("float")
+            row["market_cap"] = raw.get("cap")
+            row["industry"] = raw.get("industry")
+            if not row.get("name"):
+                row["name"] = raw.get("name")
+        stages = self._ctx().stage
+        pinned = self.scan.pinned()
+        return {"ok": row is not None and bool(row.get("ok")), "sym": sym, "row": row,
+                "error": err or (None if row else "no data for this name"),
+                "tracked": tracked, "pinned": sym in pinned,
+                "session": payload.get("session"), "trading_day": payload.get("trading_day"),
+                "stage": stages.get(sym)}
+
+    def _catalyst(self, sym: str) -> dict[str, Any] | None:
+        return self.stock_news.catalyst(sym, ref=uni_src.news_anchor(datetime.now(UTC)))
+
+    def _ctx(self) -> uni_src.Ctx:
+        now = datetime.now(UTC)
+        basis = uni_src.basis_at(now)
+        return uni_src.Ctx(
+            quote=self.stream.quote, catalyst=self._catalyst,
+            pinned=frozenset(self.scan.pinned()), tracked=frozenset(self.scan.symbols()),
+            stage=self.momentum.stages(now.astimezone(ET).date(), basis != "last"))
+
+    def breakouts(self, **kw: Any) -> dict[str, Any]:
+        return self.universe.breakouts(self._ctx(), **kw)
+
+    def extended(self, **kw: Any) -> dict[str, Any]:
+        return self.universe.extended(self._ctx(), **kw)
+
+    def heatmap(self) -> dict[str, Any]:
+        """The Sectors page: the sector and theme ETFs joined to what their stocks did."""
+        with self._lock:
+            rows = [*(self._state.get("sectors") or []), *(self._state.get("themes") or [])]
+        # SPY is on both lists.
+        etfs = {str(e["key"]): e for e in rows if isinstance(e, dict) and e.get("key")}
+        return self.universe.heatmap(list(etfs.values()))
+
+    def group_rows(self, group: str) -> dict[str, Any] | None:
+        """The table of one card: a sector or theme ETF, or an industry by name."""
+        key = group.strip().upper()
+        table: dict[str, Any] = {"chip": "all", "rvol": 0.0, "listing": True}
+        if key in uni_src.SECTOR_KEYS:
+            return self.breakouts(sector=key, **table)
+        if key in {t["key"] for t in self.universe.theme_list()}:
+            return self.breakouts(theme=key, **table)
+        name = self.universe.industry_name(group)
+        return self.breakouts(industry=name, **table) if name else None
+
+    def dashboard(self) -> dict[str, Any]:
+        """The Dashboard, off what the Scanner and Macro already hold."""
+        return dash_mod.build(self.scanner_payload(), self.snapshot(), self.breakouts(),
+                              self.day23(), self.stock_news.top(),
+                              session_day=uni_src.cards_day(datetime.now(UTC)))
+
+    def day23(self, min_move: float = mom_mod.DEFAULT_MOVE, cap: float = mom_mod.DEFAULT_CAP,
+              chip: str = "all") -> dict[str, Any]:
+        now = datetime.now(UTC)
+        ctx = self._ctx()
+        basis = uni_src.basis_at(now)
+        out = self.momentum.table(
+            read=lambda s: self.universe.read_one(s, ctx, now), raw=self.universe.raw,
+            catalyst=ctx.catalyst, spark=self.universe.spark, tracked=ctx.tracked,
+            pinned=ctx.pinned, basis=basis, today=now.astimezone(ET).date(), min_move=min_move,
+            cap=cap, chip=chip,
+            forming=self.universe.forming(ctx, min_move=min_move, cap=cap, now=now))
+        self.universe.want_sparks(r["sym"] for r in out["rows"][:80])
+        return {**self.universe._head(basis, now), "min_move": min_move, "cap": cap, **out}
+
+    def track(self, sym: str) -> dict[str, Any]:
+        """Put a name from the wide scan on today's list."""
+        sym = sym.strip().upper()
+        raw = self.universe.raw(sym) or {}
+        room = scan_src.MAX_SYMBOLS - len(self.scan.watchlist())
+        at = datetime.now(UTC).astimezone(ET).strftime("%H:%M")
+        err = self.pool.track(sym, raw.get("name"), raw.get("sector"), at, room)
+        if err is None and self._apply_promotions():
+            self._wake_scan_jobs()
+        return {"ok": err is None, "sym": sym, "error": err,
+                "tracked": sym in self.scan.symbols(), "room": room}
+
+    def stream_health(self) -> dict[str, Any]:
+        st = self.stream.status().as_dict()
+        return {"status": st, "connected": self.stream.connected,
+                "subscribed": self.stream.subscribed, "check": self.stream.check.days}
 
     def _do_options(self) -> None:
         clock = self.scan.clock(datetime.now(UTC))
@@ -616,7 +846,8 @@ class Collector:
         # a past day's calendar, the spark keys the old per-process hash left.
         gone = CACHE.prune(7 * 86400.0, keep=("scanner_watchlist.json", "scanner_pool.json",
                                               "scanner_events.jsonl", "scanner_preopen.jsonl",
-                                              "iv_history.jsonl",
+                                              "iv_history.jsonl", "scanner_momentum.json",
+                                              "scanner_universe.json", "stream_check.json",
                                               "oi_log.jsonl", "cboe_pc.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
@@ -637,11 +868,16 @@ class Collector:
         self._live_thread = threading.Thread(
             target=self._run, args=(self._live_jobs,), name="scan-live", daemon=True)
         self._live_thread.start()
+        self.stream.start()
+        self._wide_thread = threading.Thread(
+            target=self._run, args=(self._wide_jobs,), name="wide", daemon=True)
+        self._wide_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self.stream.stop()
         for th in (self._thread, self._scan_thread, self._quotes_thread, self._options_thread,
-                   self._premarket_thread, self._live_thread):
+                   self._premarket_thread, self._live_thread, self._wide_thread):
             if th:
                 th.join(timeout=3)
 
@@ -702,6 +938,14 @@ class Collector:
 
     def scanner_payload(self) -> dict[str, Any]:
         """The Scanner tab's whole read — technicals joined with the macro now."""
+        return self._payload()
+
+    def _payload(self, watch: list[str] | None = None,
+                 extra_rows: dict[str, dict[str, Any]] | None = None,
+                 news_limit: int | None = 8) -> dict[str, Any]:
+        """`watch` narrows the build to those names (the slide-out's one row);
+        `extra_rows` carries a row for a name off the list; `news_limit` is how
+        many headlines each row ships, None for all of them."""
         with self._lock:
             scan = self._state.get("scanner") or {}
             parts = {k: self._state.get(k) for k in
@@ -709,7 +953,9 @@ class Collector:
                       "scan_sec", "context")}
             cons = self._state.get("constituents")
             st = self._status.get("scanner")
-        watch = self.scan.watchlist()
+        if extra_rows:
+            scan = {**scan, "rows": {**(scan.get("rows") or {}), **extra_rows}}
+        watch = self.scan.watchlist() if watch is None else watch
         pinned = self.scan.pinned()
         pool_view = self.pool.view(pinned)
         promoted = {p["symbol"]: {k: p.get(k) for k in ("score", "reason", "at", "mark")}
@@ -727,7 +973,9 @@ class Collector:
             calendar=parts["calendar"] or [],
             earnings=parts["scan_earn"] or [],
             wire=parts["wire"] or [],
-            news=parts["scan_news"] or {},
+            # Each name's own feed plus every ticker-tagged story held for it.
+            news={s: [*((parts["scan_news"] or {}).get(s) or []),
+                      *self.stock_news.headlines(s)] for s in watch},
             filings=parts["scan_sec"] or {},
             aliases={s: self.scan.aliases(s) for s in watch},
             status=st.as_dict() if st else None,
@@ -751,7 +999,15 @@ class Collector:
             promoted=promoted,
             pool=pool_view,
             pinned=pinned,
+            top_story=self._catalyst,
+            news_limit=news_limit,
         )
+        # Which day of a multi-day move each name is on, for the Day 2/3 preset.
+        stages = self._ctx().stage
+        self.universe.want_sparks(watch)
+        for r in payload.get("rows") or []:
+            r["stage"] = stages.get(r.get("sym"))
+            r["spark"] = self.universe.spark(str(r.get("sym")))
         return payload
 
     def market_payload(self) -> dict[str, Any]:

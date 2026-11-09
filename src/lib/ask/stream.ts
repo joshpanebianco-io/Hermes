@@ -47,6 +47,8 @@ const SORT_WORDS: Record<string, string> = {
 
 /** The panel tool's names (server tools.py PANELS) as the activity line says them. */
 const PANEL_WORDS: Record<string, string> = {
+  dashboard: "the dashboard",
+  sector_heatmap: "the sector heat map",
   macro_board: "the macro board",
   regime: "the scanner's regime strip",
   driver_board: "the driver board",
@@ -68,6 +70,13 @@ const PANEL_WORDS: Record<string, string> = {
   sector_rotation: "sector rotation",
   index_movers: "the index movers",
   sector_peers: "the sector peers",
+  breakouts: "the Breakouts scan",
+  pre_market_gappers: "the pre-market gappers",
+  after_hours_gappers: "the after-hours gappers",
+  day_2_3: "the Day 2/3 tracker",
+  stock_news: "the stock news",
+  market_breadth: "market breadth",
+  themes: "the theme ETFs",
   catalysts: "the catalysts",
   pool: "the scanner's pool",
   signal_log: "the signal log",

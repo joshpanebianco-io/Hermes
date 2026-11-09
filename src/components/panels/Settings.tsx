@@ -616,11 +616,14 @@ function OptionsPrefsModule() {
 /* ---------------------------------------------------------------- keyboard */
 
 const KEYS: { keys: string[]; what: string }[] = [
-  { keys: ["1", "2", "3", "4", "5", "6"], what: "The tabs, in the order the header shows them" },
+  { keys: ["1", "2", "3", "4", "5", "6", "7"], what: "The tabs, in the order the header shows them" },
   { keys: ["D"], what: "Flip the desk — Futures or Stocks & options — on Structure and Analysis" },
   { keys: ["A"], what: "Ask Hermes beside the page; press it again to put the panel away" },
-  { keys: ["↑", "↓"], what: "Scanner: walk the list, the selection and the detail pane moving together" },
+  { keys: ["Ctrl", "K"], what: "Find any ticker or company, from any tab, and open it" },
+  { keys: ["↑", "↓"], what: "Scanner: walk the list; with a name open, the slide-out moves with it" },
   { keys: ["Enter"], what: "Scanner: open the focused row" },
+  { keys: ["Esc"], what: "Close the slide-out" },
+  { keys: ["F"], what: "Make the slide-out full width, and back" },
 ];
 
 /** The shortcuts, written down — the header's hover hints are not where anyone looks for them. */

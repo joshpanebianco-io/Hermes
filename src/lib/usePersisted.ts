@@ -63,6 +63,18 @@ export function usePersisted<T>(
   return [value, set];
 }
 
+/**
+ * Write a preference for a page that is not mounted: the Dashboard's links open a
+ * Scanner view by leaving it where the Scanner will look. Fails as quietly as the hook.
+ */
+export function persist(key: string, value: unknown): void {
+  try {
+    window.localStorage.setItem(`nt.${key}`, JSON.stringify(value));
+  } catch {
+    /* it just opens on whatever was last there */
+  }
+}
+
 /** `isValid` for a fixed set of string options — the shape most filters take. */
 export function oneOf<T extends string>(...allowed: readonly T[]) {
   const set = new Set<string>(allowed);

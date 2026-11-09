@@ -1,11 +1,10 @@
 "use client";
 
-import type { ScanRow, Side } from "@/types/scanner";
-import { Tick } from "@/components/ui/Tick";
-import { TickerLogo } from "@/components/ui/TickerLogo";
-import { ScanChart } from "@/components/panels/ScanChart";
+import { useState } from "react";
+import type { Catalyst, ScanRow, Side } from "@/types/scanner";
 import { ScanOptions } from "@/components/panels/ScanOptions";
-import { ago, compact, dir, num, pct } from "@/lib/format";
+import { CARD, capShort, gapOf } from "@/components/panels/ScanWide";
+import { ago, compact, dir, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 /**
@@ -27,13 +26,13 @@ export const levelGlyph = (k: "forming") => (k === "forming" ? "···" : "");
 const LEVEL_FIELD = { PDH: "pdh", PDL: "pdl", PMH: "pmh", PML: "pml" } as const;
 
 /** The front expiry's straddle as a band for the chart — what the options market prices for the move. */
-function emBand(r: ScanRow): { lo: number; hi: number; label: string } | null {
+export function emBand(r: ScanRow): { lo: number; hi: number; label: string } | null {
   const e = r.options?.ok ? r.options.em.find((x) => x.key === "front") : undefined;
   return e ? { lo: e.lo, hi: e.hi, label: `EM ±${e.pct.toFixed(1)}%` } : null;
 }
 
 /** The setup column's words: the state, and the level or reference it is about. */
-export function setupLabel(r: ScanRow): string {
+export function setupLabel(r: Pick<ScanRow, "setup" | "broken">): string {
   const { state, level, entry, side } = r.setup;
   switch (state) {
     case "retest":
@@ -60,7 +59,18 @@ export function setupLabel(r: ScanRow): string {
   }
 }
 
-export function ScanDetail({ r, bench, now }: { r: ScanRow; bench: "SPY" | "QQQ"; now: number | null }) {
+export function ScanDetail({
+  r,
+  bench,
+  now,
+  tracked = true,
+}: {
+  r: ScanRow;
+  bench: "SPY" | "QQQ";
+  now: number | null;
+  /** A name off the list has no chain read; it says so rather than spinning. */
+  tracked?: boolean;
+}) {
   if (!r.ok) {
     return (
       <div className="px-6 py-6">
@@ -71,13 +81,17 @@ export function ScanDetail({ r, bench, now }: { r: ScanRow; bench: "SPY" | "QQQ"
   }
   const side = r.setup.side ?? r.score.side;
   return (
-    <div className="flex flex-col divide-y divide-ring">
-      <Head r={r} bench={bench} side={side} />
-      <section aria-label={`${r.sym} chart`} className="px-6 pt-3 pb-2">
-        <ScanChart sym={r.sym} state={r.lvl_state} em={emBand(r)} />
-      </section>
+    <div className="flex flex-col gap-2 p-2.5">
+      <Figures r={r} bench={bench} />
       <Setup r={r} side={side} />
-      <ScanOptions r={r} />
+      {tracked ? (
+        <ScanOptions r={r} />
+      ) : (
+        <section className={CARD}>
+          <Cap>Options</Cap>
+          <p className="text-[12px] text-ink-3">Chains are read for the names on the list. Track this name to load its options.</p>
+        </section>
+      )}
       <Score r={r} />
       <Ladder r={r} />
       <Catalysts r={r} now={now} />
@@ -87,55 +101,27 @@ export function ScanDetail({ r, bench, now }: { r: ScanRow; bench: "SPY" | "QQQ"
 
 /* -------------------------------------------------------------------------- */
 
-function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side | null }) {
+function Figures({ r, bench }: { r: ScanRow & { float_shares?: number | null; market_cap?: number | null }; bench: "SPY" | "QQQ" }) {
   const rs = r.rs[bench];
   const rs1h = r.rs_1h[bench];
   return (
-    <div className="px-6 pt-5 pb-4">
-      <div className="flex items-baseline gap-2.5">
-        <span className={cn("text-[14px]", side ? sideHue(side) : "text-ink-3")}>
-          {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
-        </span>
-        <TickerLogo sym={r.sym} size={22} className="self-center" />
-        <span className="text-[21px] leading-none font-semibold text-ink">{r.sym}</span>
-        {r.name && <span className="min-w-0 truncate text-[12.5px] text-ink-3">{r.name}</span>}
-        <a
-          href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.sym)}`}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="hit ml-auto shrink-0 rounded-[3px] border border-ring-2 px-2 py-[3px] text-[11.5px] text-ink-3 hover:text-ink"
-          title="Open this name on TradingView"
-        >
-          TradingView ↗
-        </a>
+    <div className={CARD}>
+      <p className="qt-cap mb-2.5 flex items-baseline justify-between text-[10.5px] text-ink-3">
+        <span>Session snapshot</span>
         {r.sector && (
-          <span
-            className="shrink-0 text-[11.5px] text-ink-3"
-            title="The name's sector SPDR against SPY today, in percentage points"
-          >
-            <span className="qt-cap text-[10.5px] text-ink-3">{r.sector}</span>{" "}
+          <span className="normal-case" title="The name's sector SPDR against SPY today, in percentage points">
+            {r.sector}{" "}
             <span className={cn("fig", dir(r.sector_rs))}>
               {r.sector_rs != null ? `${r.sector_rs >= 0 ? "+" : ""}${r.sector_rs.toFixed(2)}` : "—"}
             </span>{" "}
             vs SPY
           </span>
         )}
-      </div>
+      </p>
       {/* Six across only where the PANE has room for six — a window breakpoint
           lied whenever the pane was the narrow one. */}
       <div className="@container">
-      <div className="mt-3.5 grid grid-cols-3 gap-x-4 gap-y-3 @min-[600px]:grid-cols-6">
-        <Fig label="Last">
-          <Tick value={num(r.last)} className="fig text-[16px] text-ink" />
-        </Fig>
-        <Fig label="Chg">
-          <Tick value={pct(r.chg_pct)} className={cn("fig text-[14px]", dir(r.chg_pct))} />
-        </Fig>
-        <Fig label="Pre / post">
-          <span className={cn("fig text-[14px]", r.ext_pct == null ? "text-ink-3" : dir(r.ext_pct))}>
-            {r.ext_pct == null ? "—" : pct(r.ext_pct)}
-          </span>
-        </Fig>
+      <div className="grid grid-cols-3 gap-x-4 gap-y-3 @min-[600px]:grid-cols-6">
         <Fig label={`RS ${bench}`} title={`Today · last hour (six ten-minute bars), each in ATRs, minus ${bench}'s`}>
           <span className={cn("fig text-[14px]", rs == null ? "text-ink-3" : dir(rs))}>
             {rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}
@@ -172,6 +158,21 @@ function Head({ r, bench, side }: { r: ScanRow; bench: "SPY" | "QQQ"; side: Side
           </span>
           <span className="fig ml-1.5 text-[11px] text-ink-3">ATR {num(r.atr_d)}</span>
         </Fig>
+        <Fig label="Gap" title="The open against the previous close. Before the open, where the extended session stands against that close.">
+          <span className={cn("fig text-[14px]", gapOf(r) == null ? "text-ink-3" : dir(gapOf(r)))}>{gapOf(r) == null ? "—" : `${(gapOf(r) as number) >= 0 ? "+" : ""}${(gapOf(r) as number).toFixed(2)}%`}</span>
+        </Fig>
+        <Fig label="Day range" title="Today's regular-session low to high">
+          <span className="fig text-[12.5px] text-ink">{r.levels.day_lo != null && r.levels.day_hi != null ? `${num(r.levels.day_lo)} – ${num(r.levels.day_hi)}` : "—"}</span>
+        </Fig>
+        <Fig label="8 EMA · 10m">
+          <span className="fig text-[14px] text-ink">{num(r.levels.ema8)}</span>
+        </Fig>
+        <Fig label="Float">
+          <span className="fig text-[14px] text-ink">{r.float_shares != null ? compact(r.float_shares) : (r.short?.float_shares != null ? compact(r.short.float_shares) : "—")}</span>
+        </Fig>
+        <Fig label="Mkt cap">
+          <span className="fig text-[14px] text-ink">{capShort(r.market_cap)}</span>
+        </Fig>
       </div>
       </div>
     </div>
@@ -188,8 +189,8 @@ function Fig({ label, title, children }: { label: string; title?: string; childr
 }
 
 const Cap = ({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) => (
-  <div className="mb-2.5 flex items-baseline gap-2">
-    <h3 className="text-[13.5px] font-semibold text-ink">{children}</h3>
+  <div className="mb-2 flex items-baseline gap-2">
+    <h3 className="qt-cap text-[10.5px] font-semibold text-ink-3">{children}</h3>
     {right && <div className="ml-auto text-[11px] text-ink-3">{right}</div>}
   </div>
 );
@@ -200,7 +201,7 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
   const e = r.setup.entry;
   const live = r.setup.state === "retest";
   return (
-    <section className="px-6 py-4">
+    <section className={CARD}>
       <Cap>The setup</Cap>
       <p
         className={cn(
@@ -288,7 +289,7 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
 
 function Score({ r }: { r: ScanRow }) {
   return (
-    <section className="px-6 py-4">
+    <section className={CARD}>
       <Cap right={<span title="Each part is a fixed rule; together they order the list. Not a measured probability.">heuristic rank</span>}>
         Why it ranks here <span className="fig ml-1.5 text-ink-2">{r.score.total}</span>
       </Cap>
@@ -378,7 +379,7 @@ function Ladder({ r }: { r: ScanRow }) {
 
   const atr = r.atr_b;
   return (
-    <section className="px-6 py-4">
+    <section className={CARD}>
       <Cap right={atr != null ? <span className="fig">10m ATR {num(atr)}</span> : undefined}>Levels</Cap>
       {L.wave_hi != null && L.wave_lo != null && (
         <p className="mb-2 text-[11.5px] text-ink-3">
@@ -449,8 +450,10 @@ const KIND_LABEL: Record<ScanRow["news"][number]["kind"], string> = {
 function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
   const e = r.earnings;
   return (
-    <section className="px-6 py-4">
+    <section className={CARD}>
       <Cap>Catalysts</Cap>
+
+      {r.catalyst && <TopStory c={r.catalyst} />}
 
       <div className="flex flex-col gap-1.5">
         <p className="text-[12px] text-ink-2">
@@ -557,27 +560,71 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
         {r.news.length === 0 ? (
           <p className="text-[12px] text-ink-3">No headlines found for this name.</p>
         ) : (
-          <ul className="flex flex-col divide-y divide-ring/60">
-            {r.news.map((n, i) => (
-              <li key={`${n.url}-${i}`}>
-                <a href={n.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-0.5 py-2">
-                  <span className="text-[12.5px] leading-[1.4] text-ink">{n.title}</span>
-                  <span className="flex items-baseline gap-2 text-[11px] text-ink-3">
-                    {n.kind !== "news" && (
-                      <span className={cn("qt-cap text-[9.5px]", n.kind === "rating" ? "text-flip-fig" : "text-ink-3")}>
-                        {KIND_LABEL[n.kind]}
-                      </span>
-                    )}
-                    <span className="text-ink-3">{n.publisher}</span>
-                    <span className="fig">{ago(n.utc, now)}</span>
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
+          <Headlines news={r.news} now={now} />
         )}
       </div>
     </section>
+  );
+}
+
+/** The most important story of the last day, above the list it was picked from. */
+function TopStory({ c }: { c: Catalyst }) {
+  return (
+    <a href={c.url} target="_blank" rel="noreferrer noopener" className="hit mb-3 block rounded-[3px] border border-ring-2 p-2.5" title={c.provider}>
+      <span className="qt-cap text-[9.5px] text-ink-2">{c.tag}</span>
+      <span className="fig ml-2 text-[10.5px] text-ink-3">{c.age_min < 60 ? `${Math.round(c.age_min)}m` : `${Math.round(c.age_min / 60)}h`} ago</span>
+      <span className="mt-1 block text-[13px] leading-[1.4] text-ink">{c.title}</span>
+    </a>
+  );
+}
+
+const HEADLINES_SHOWN = 12;
+const ET_DATE = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
+const ET_DAY_NAME = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" });
+
+/** Headlines newest first, under their New York day, the rest behind a button. */
+function Headlines({ news, now }: { news: ScanRow["news"]; now: number | null }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? news : news.slice(0, HEADLINES_SHOWN);
+  const today = now === null ? null : ET_DATE.format(new Date(now));
+  let last: string | null = null;
+  return (
+    <>
+      <ul className="flex flex-col">
+        {shown.map((n, i) => {
+          const when = n.utc ? new Date(n.utc) : null;
+          const day = when ? ET_DATE.format(when) : null;
+          const head = day !== null && day !== last;
+          last = day ?? last;
+          return (
+            <li key={`${n.url}-${i}`}>
+              {head && when && (
+                <p className="qt-cap mt-2 border-t border-ring/60 pt-2 text-[10px] text-ink-3">
+                  {day === today ? "Today" : ET_DAY_NAME.format(when)}
+                </p>
+              )}
+              <a href={n.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-0.5 py-1.5">
+                <span className="text-[12.5px] leading-[1.4] text-ink">{n.title}</span>
+                <span className="flex items-baseline gap-2 text-[11px] text-ink-3">
+                  {n.kind !== "news" && (
+                    <span className={cn("qt-cap text-[9.5px]", n.kind === "rating" ? "text-flip-fig" : "text-ink-3")}>
+                      {KIND_LABEL[n.kind]}
+                    </span>
+                  )}
+                  <span className="text-ink-3">{n.publisher}</span>
+                  <span className="fig">{ago(n.utc, now)}</span>
+                </span>
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+      {!all && news.length > HEADLINES_SHOWN && (
+        <button type="button" onClick={() => setAll(true)} className="hit mt-1.5 w-full rounded-[3px] border border-ring-2 py-1 text-[11.5px] text-ink-3 hover:text-ink">
+          Show {news.length - HEADLINES_SHOWN} more
+        </button>
+      )}
+    </>
   );
 }
 

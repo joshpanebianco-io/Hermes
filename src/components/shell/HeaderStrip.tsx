@@ -104,7 +104,7 @@ export function HeaderStrip({
     <div ref={room} className="hidden min-w-0 flex-1 items-center gap-2.5 qt:flex">
       <div
         ref={box}
-        className="relative flex h-[36px] min-w-0 flex-1 flex-wrap content-start justify-end gap-x-[9px] gap-y-4 overflow-hidden roomy:gap-x-4"
+        className="relative flex h-[36px] min-w-0 flex-1 flex-wrap content-start justify-end gap-x-[9px] gap-y-4 overflow-hidden roomy:gap-x-[11px]"
       >
         {tiles.map((t: StripTile, i) => (
           <div

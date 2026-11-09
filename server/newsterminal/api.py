@@ -403,6 +403,96 @@ def scanner_bars(sym: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|D)$")
 
 
 
+@app.get("/api/scanner/tick/{sym}")
+def scanner_tick(sym: str) -> dict[str, Any]:
+    """The last trade and this minute's candle — an open chart polls this every second."""
+    return COLLECTOR.scanner_tick(sym[:12])
+
+
+@app.get("/api/scanner/name/{sym}")
+def scanner_name(sym: str) -> dict[str, Any]:
+    """One name's whole row, tracked or not: what the slide-out reads."""
+    return COLLECTOR.scanner_name(sym[:12])
+
+
+@app.get("/api/scanner/search")
+def scanner_search(q: str = Query("", max_length=40)) -> dict[str, Any]:
+    """Tickers and company names across the wide read, for the search box."""
+    return {"results": COLLECTOR.universe.search(q)}
+
+
+_CHIPS = r"^(all|both|news|gaps|through|inside|day23|pinned)$"
+_SECTORS = r"^(XLK|XLC|XLY|XLP|XLE|XLF|XLV|XLI|XLB|XLRE|XLU)$"
+
+
+@app.get("/api/scanner/breakouts")
+def scanner_breakouts(
+    chip: str = Query("both", pattern=_CHIPS),
+    cap: float = Query(2e9, ge=0),
+    vol: float = Query(5e5, ge=0),
+    rvol: float = Query(2.0, ge=0),
+    sector: str | None = Query(None, pattern=_SECTORS),
+    theme: str | None = Query(None, max_length=8),
+    industry: str | None = Query(None, max_length=60),
+    sort: str = Query("rank", pattern=r"^(rank|rvol|chg|gap|vol)$"),
+    listing: bool = Query(False),
+) -> dict[str, Any]:
+    """The wide scan against the levels: the table, its counts and the stats above it.
+    `listing` is a Sectors card's own list, whose volume filter reads the last session."""
+    return COLLECTOR.breakouts(chip=chip, cap=cap, vol=vol, rvol=rvol, sector=sector, theme=theme,
+                               industry=industry, sort=sort, listing=listing)
+
+
+@app.get("/api/scanner/sectors")
+def scanner_sectors() -> dict[str, Any]:
+    """The Sectors view: every sector and theme ETF with what its stocks did, and the
+    industry groups by their median stock."""
+    return COLLECTOR.heatmap()
+
+
+@app.get("/api/dashboard")
+def dashboard() -> dict[str, Any]:
+    """The Dashboard tab, whole."""
+    return COLLECTOR.dashboard()
+
+
+@app.get("/api/scanner/extended")
+def scanner_extended(
+    session: str = Query("pre", pattern=r"^(pre|post)$"),
+    cap: float = Query(2e9, ge=0),
+    vol: float | None = Query(None, ge=0),
+    chip: str = Query("all", pattern=r"^(all|up|down|news|through|day23|pinned)$"),
+) -> dict[str, Any]:
+    """One extended session's gappers: this one while it is on, else the last."""
+    return COLLECTOR.extended(session=session, cap=cap, vol=vol, chip=chip)
+
+
+@app.get("/api/scanner/day23")
+def scanner_day23(
+    move: float = Query(20.0, ge=0),
+    cap: float = Query(2e9, ge=0),
+    chip: str = Query("all", pattern=r"^(all|long|short|day1|day2|day3|inside|through)$"),
+) -> dict[str, Any]:
+    """The Day 1 / 2 / 3 ledger read against now."""
+    return COLLECTOR.day23(min_move=move, cap=cap, chip=chip)
+
+
+class TrackIn(BaseModel):
+    sym: str
+
+
+@app.post("/api/scanner/track")
+def scanner_track(body: TrackIn) -> dict[str, Any]:
+    """Put a name from the wide scan on today's list; it rolls off with the day."""
+    return COLLECTOR.track(body.sym[:12])
+
+
+@app.get("/api/scanner/stream")
+def scanner_stream() -> dict[str, Any]:
+    """The live stream's health, and its running score against the bars."""
+    return COLLECTOR.stream_health()
+
+
 @app.post("/api/scanner/watchlist")
 def scanner_watchlist_set(body: WatchlistIn) -> dict[str, Any]:
     """Replace the pinned list. Invalid entries come back in `rejected` rather
@@ -546,6 +636,15 @@ def ask_tool(body: ToolIn) -> dict[str, Any]:
         plan=lambda i: plan_mod.load(i) if i else plan_mod.latest(),
         more={
             "watchlist": COLLECTOR.watchlist_payload,
+            "breakouts": COLLECTOR.breakouts,
+            "extended_pre": lambda: COLLECTOR.extended(session="pre"),
+            "extended_post": lambda: COLLECTOR.extended(session="post"),
+            "day23": COLLECTOR.day23,
+            "stock_news": COLLECTOR.stock_news.panel,
+            "dashboard": COLLECTOR.dashboard,
+            "heatmap": COLLECTOR.heatmap,
+            "group": COLLECTOR.group_rows,
+            "stream": COLLECTOR.stream_health,
             "events": _recent_events,
             "stats": lambda: COLLECTOR.events.stats(20),
             "history": lambda: {"briefs": report_mod.history(), "plans": plan_mod.history()},

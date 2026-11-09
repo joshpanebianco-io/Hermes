@@ -38,7 +38,7 @@ from ..http import CACHE, SourceStatus
 COOKIE_URL = "https://fc.yahoo.com"
 CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb"
 SUMMARY = ("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{sym}"
-           "?modules=defaultKeyStatistics&crumb={crumb}")
+           "?modules={module}&crumb={crumb}")
 
 TICK_SEC = 20.0
 TTL_SEC = 12 * 3600.0
@@ -103,21 +103,13 @@ def squeeze_flag(short: dict[str, Any] | None, side: str | None) -> dict[str, st
             "text": f"{pct:.0f}% of the float is short{tail} — fuel for a squeeze on a break"}
 
 
-class ShortStore:
-    """The reads held between ticks; one name a tick; crumb kept in memory."""
+class YahooSession:
+    """One cookie and crumb for Yahoo's quote-summary reads (module docstring)."""
 
     def __init__(self) -> None:
-        self.data: dict[str, dict[str, Any]] = {}
-        self.at: dict[str, float] = {}
-        self.errors: dict[str, str] = {}
-        self.fails: dict[str, tuple[int, float]] = {}
-        self.pause_until = 0.0
         self._jar = http.cookiejar.CookieJar()
         self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._jar))
         self._crumb: str | None = None
-        self._warm = False
-
-    # ---- the crumb ----------------------------------------------------------
 
     def _get(self, url: str) -> tuple[int, bytes]:
         req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA, "Accept": "*/*"})
@@ -139,6 +131,34 @@ class ShortStore:
             return text
         self._crumb = None
         return None
+
+    def summary(self, sym: str, module: str) -> tuple[int, bytes]:
+        """One read of one module, the pair fetched again once if it has expired.
+        (0, b"") when no crumb could be had."""
+        crumb = self.crumb()
+        if crumb is None:
+            return 0, b""
+        ysym = urllib.parse.quote(sym.replace(".", "-"))
+        url = SUMMARY.format(sym=ysym, module=module, crumb=urllib.parse.quote(crumb))
+        code, body = self._get(url)
+        if code in (401, 403) and self.crumb(refresh=True):
+            url = SUMMARY.format(sym=ysym, module=module,
+                                 crumb=urllib.parse.quote(self._crumb or ""))
+            code, body = self._get(url)
+        return code, body
+
+
+class ShortStore(YahooSession):
+    """The reads held between ticks; one name a tick; crumb kept in memory."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: dict[str, dict[str, Any]] = {}
+        self.at: dict[str, float] = {}
+        self.errors: dict[str, str] = {}
+        self.fails: dict[str, tuple[int, float]] = {}
+        self.pause_until = 0.0
+        self._warm = False
 
     # ---- the rotation -------------------------------------------------------
 
@@ -168,16 +188,9 @@ class ShortStore:
         return [s for _, s in sorted(out)]
 
     def fetch_one(self, sym: str, t: float) -> str | None:
-        crumb = self.crumb()
-        if crumb is None:
+        if self.crumb() is None:
             return "no crumb from Yahoo"
-        ysym = sym.replace(".", "-")
-        url = SUMMARY.format(sym=urllib.parse.quote(ysym), crumb=urllib.parse.quote(crumb))
-        code, body = self._get(url)
-        if code in (401, 403) and self.crumb(refresh=True):
-            url = SUMMARY.format(sym=urllib.parse.quote(ysym),
-                                 crumb=urllib.parse.quote(self._crumb or ""))
-            code, body = self._get(url)
+        code, body = self.summary(sym, "defaultKeyStatistics")
         if code == 429:
             self.pause_until = t + PAUSE_SEC
         if code != 200 or not body:

@@ -85,6 +85,10 @@ DIGEST_NAMES = 12
 #: The Scanner table is every watchlist name, one line each — forty lines at
 #: about three hundred characters, so it gets a cap of its own.
 SCANNER_CHARS = 16_000
+#: The wide tables are a line a name for a hundred names and more. A panel's whole
+#: list is the rule (a table the model reads short is a table it misreports), so
+#: they get room, and each says how many rows the page has.
+WIDE_CHARS = 26_000
 #: Signals the signal log panel hands back, newest last.
 MAX_SIGNALS = 30
 #: Stored notes the past-notes panel lists, per kind.
@@ -123,6 +127,14 @@ _BOOK = {"type": "string", "enum": list(BOOKS)}
 #: it, this is the whole terminal — keep it in step with the tabs (lib/tabs.ts)
 #: and the product map in the prompt (lib/ask/prompt.ts PRODUCT).
 PANELS: dict[str, str] = {
+    "dashboard": "Dashboard · the session on one page: the read in words, the game plan (the "
+                 "tape's bias, the focus sectors and themes, the counts of best setups, who "
+                 "reports), breadth, the top setups by score, the pinned list, the freshest "
+                 "major stock stories, and the eleven sectors with the stocks pushing each",
+    "sector_heatmap": "Scanner, Sectors · every sector and theme ETF with its day, week and "
+                      "month, how many of its $2bn+ stocks rose and fell and who led, and the "
+                      "ninety-odd industry groups by their median stock (group, an ETF or an "
+                      "industry name, lists that group's stocks)",
     "macro_board": "Macro · every quote on the board by group: the global indices, rates, "
                    "volatility, FX, energy, metals and crypto, each with its day's change and "
                    "whether it is live",
@@ -173,6 +185,24 @@ PANELS: dict[str, str] = {
                   "far (sym narrows it to one name)",
     "record": "Scanner · the signal record over twenty sessions by kind, side and score band: "
               "count, +1R rate, R held to the close with the stop kept, median best and worst",
+    "breakouts": "Scanner, Breakouts · the wide scan, every US stock at $2bn+ against its "
+                 "levels: names through both the pre-market and previous-day ranges, relative "
+                 "volume, the gap, each name's most important story (fifteen minutes delayed "
+                 "unless the live stream has it)",
+    "pre_market_gappers": "Scanner, Extended hours · the pre-market's gappers of 2% or more: "
+                          "the move, volume against an average day, where each sits against "
+                          "the day before, and its story (this session, or the last if none is on)",
+    "after_hours_gappers": "Scanner, Extended hours · the after-hours gappers of 2% or more, the "
+                           "same way",
+    "day_2_3": "Scanner, Day 2/3 · names that made a Day 1 (a 20% move on 1.5x volume by "
+               "default), which day they are on, what they did since, and where they stand "
+               "against PDH or PDL",
+    "stock_news": "Scanner · the freshest major company stories, tagged by ticker and kind "
+                  "(earnings, guidance, FDA, deal, offering)",
+    "market_breadth": "Macro · advancers against decliners across every US stock at $2bn+ by "
+                      "the size of the move, and each sector's leading stocks",
+    "themes": "Macro · the theme ETFs (semis, software, cybersecurity, biotech, gold miners "
+              "and the rest): day, week and month change and excess return against SPY",
     "past_notes": "Analysis · the stored briefs and game plans, newest first, with the ids "
                   "note takes",
     "sources": "The status rail · every data source's health: down, stale or on a cached "
@@ -303,7 +333,9 @@ SPEC: list[dict[str, Any]] = [
           + "; ".join(f"{k} ({v})" for k, v in PANELS.items()) + ".",
           _params({"name": {"type": "string", "enum": list(PANELS)},
                    "book": {**_BOOK, "description": "NQ, ES or GC, for a per-book panel"},
-                   "sym": {**_STR, "description": "A ticker, for signal_log"}})),
+                   "sym": {**_STR, "description": "A ticker, for signal_log"},
+                   "group": {**_STR, "description": "For sector_heatmap: a sector or theme ETF, "
+                                                    "or an industry name, to list its stocks"}})),
 ]
 
 
@@ -1011,8 +1043,152 @@ def _source_line(key: str, s: dict[str, Any]) -> str:
     return line
 
 
+def _story(c: Any) -> str | None:
+    """A row's catalyst in a phrase: "[Earnings] iRhythm plunges after Q3 miss (5h)"."""
+    if not isinstance(c, dict):
+        return None
+    age = c.get("age_min")
+    when = f" ({round(age / 60)}h)" if isinstance(age, int | float) else ""
+    return f"[{c.get('tag')}] {c.get('title')}{when}"
+
+
+def _breakouts_body(g: dict[str, Any]) -> dict[str, Any]:
+    """The Breakouts table as the page shows it: the whole list, one line a name."""
+    def line(r: dict[str, Any]) -> str:
+        bits = [f"{r.get('sym')} {_num(r.get('last'))}",
+                f"chg {_num(r.get('chg'))}%", f"gap {_num(r.get('gap'))}%",
+                f"rvol {_num(r.get('rvol'))}x",
+                f"PM {r.get('pm_state')}", f"PD {r.get('pd_state')}"]
+        if r.get("both"):
+            bits.append(f"through both {r['both']}")
+        if r.get("live"):
+            bits.append("live")
+        s = _story(r.get("catalyst"))
+        if s:
+            bits.append(s)
+        return " · ".join(bits)
+    return {"basis": g.get("basis"), "day": g.get("day"), "scanned": g.get("scanned"),
+            "delayed_minutes": g.get("delayed_min"), "counts": g.get("chips"),
+            "stats": g.get("stats"), "rows_on_the_page": g.get("matched"),
+            "rows": [line(r) for r in g.get("rows") or []]}
+
+
+def _extended_body(g: dict[str, Any]) -> dict[str, Any]:
+    def line(r: dict[str, Any]) -> str:
+        bits = [f"{r.get('sym')} {_num(r.get('last'))}", f"{_num(r.get('chg'))}%",
+                f"vol {_num(r.get('vol'))}", f"{_num(r.get('adv_pct'))}% ADV",
+                f"{r.get('state')} the day"]
+        s = _story(r.get("catalyst"))
+        if s:
+            bits.append(s)
+        return " · ".join(bits)
+    return {"session": g.get("session"), "on_now": g.get("active"), "day": g.get("day"),
+            "counts": g.get("chips"), "rows_on_the_page": g.get("matched"),
+            "format": "sym last · move · volume · % of an average day · against the day's range "
+                      "· story",
+            "rows": [line(r) for r in g.get("rows") or []]}
+
+
+def _day23_body(g: dict[str, Any]) -> dict[str, Any]:
+    def line(r: dict[str, Any]) -> str:
+        bits = [f"{r.get('sym')} {r.get('side')} Day {r.get('stage')}",
+                f"moved {r.get('moved')} {_num(r.get('move'))}% on {_num(r.get('vx'))}x volume",
+                f"latest {_num(r.get('chg'))}%", str(r.get("state")),
+                f"level {_num(r.get('level'))} ({_num(r.get('to_level'))}% away)"]
+        s = _story(r.get("catalyst"))
+        if s:
+            bits.append(s)
+        return " · ".join(bits)
+    return {"rule": f"Day 1: {g.get('min_move')}%+ on 1.5x volume", "counts": g.get("chips"),
+            "last_session_on_file": g.get("last_day"), "rows_on_the_page": g.get("matched"),
+            "rows": [line(r) for r in g.get("rows") or []]}
+
+
+def _pc(v: Any) -> str:
+    return f"{v:+.2f}%" if isinstance(v, int | float) else "n/a"
+
+
+def _stocks_read(g: dict[str, Any]) -> str:
+    """How a card's stocks moved on the day, and who led."""
+    s = _d(g.get("day"))
+    led = ", ".join(f"{x.get('sym')} {_pc(x.get('chg'))}" for x in s.get("leaders") or [])
+    return (f"{g.get('names')} stocks at $2bn+: {s.get('up')} up, {s.get('down')} down, median "
+            f"{_pc(s.get('median'))}" + (f", led by {led}" if led else ""))
+
+
+def _heatmap_body(g: dict[str, Any]) -> dict[str, Any]:
+    """The Sectors view as the page shows it: every card, best first, one line each."""
+    def card(c: dict[str, Any]) -> str:
+        return (f"{c.get('key')} {c.get('label')}: day {_pc(c.get('day_pct'))} "
+                f"({_pc(c.get('rs_day'))} vs SPY), week {_pc(c.get('week_pct'))}, month "
+                f"{_pc(c.get('month_pct'))} · {_stocks_read(c)} · list: {c.get('list')}"
+                + (f" · under {c['parent']}" if c.get("parent") else ""))
+
+    def group(i: dict[str, Any]) -> str:
+        d = _d(i.get("day"))
+        lead = (d.get("leaders") or [{}])[0]
+        return (f"{i.get('key')} ({i.get('sector') or 'no sector'}): median "
+                f"{_pc(d.get('median'))}, {i.get('names')} names, {d.get('up')} up "
+                f"{d.get('down')} down, lead {lead.get('sym')} {_pc(lead.get('chg'))}; week "
+                f"{_pc(_d(i.get('week')).get('median'))}, month "
+                f"{_pc(_d(i.get('month')).get('median'))}")
+
+    def by_day(c: dict[str, Any]) -> float:
+        day = c.get("day_pct")
+        return -float(day) if isinstance(day, int | float) else 1e9
+
+    cards = sorted((c for c in g.get("cards") or [] if isinstance(c, dict)), key=by_day)
+    groups = sorted((i for i in g.get("industries") or [] if isinstance(i, dict)),
+                    key=lambda i: -(_d(i.get("day")).get("median") or -1e9))
+    return {"cards_show_the_session_of": g.get("cards_day"), "basis": g.get("basis"),
+            "delayed_minutes": g.get("delayed_min"), "spy": g.get("spy"),
+            "list_kinds": "sector and industry: every stock in the group; fund: partial, because "
+                          "Yahoo publishes only a fund's top ten; hand: a short list of US-listed "
+                          "names that trade with the theme, not the fund's holdings",
+            "sectors": [card(c) for c in cards if c.get("kind") == "sector"],
+            "themes": [card(c) for c in cards if c.get("kind") != "sector"],
+            "industries": [group(i) for i in groups]}
+
+
+def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
+    """The Dashboard as the page shows it."""
+    def setup(r: dict[str, Any]) -> str:
+        sc, st = _d(r.get("score")), _d(r.get("setup"))
+        bits = [f"{r.get('sym')} score {sc.get('total')} {sc.get('side') or 'no side'}",
+                " ".join(str(x) for x in (st.get("state"), st.get("level")) if x),
+                f"last {_num(r.get('last'))}", f"day {_pc(r.get('chg_pct'))}",
+                f"extended hours {_pc(r.get('ext_pct'))}"]
+        story = _story(r.get("catalyst"))
+        return " · ".join([*bits, story] if story else bits)
+
+    def line(r: dict[str, Any]) -> str:
+        return (f"{r.get('sym')} {_num(r.get('last'))} · day {_pc(r.get('chg_pct'))} · extended "
+                f"hours {_pc(r.get('ext_pct'))}")
+
+    def story(s: dict[str, Any]) -> str:
+        hours = round(float(s.get("age_min") or 0.0) / 60.0, 1)
+        return (f"{','.join(s.get('syms') or [])} [{s.get('tag')}] {s.get('title')} "
+                f"({s.get('provider')}, {hours}h ago)")
+
+    def rows(key: str) -> list[dict[str, Any]]:
+        return [r for r in g.get(key) or [] if isinstance(r, dict)]
+
+    breadth = _d(g.get("breadth"))
+    return {"session": g.get("session"), "levels_for": g.get("trading_day"), "read": g.get("read"),
+            "plan": g.get("plan"),
+            "breadth": {k: breadth.get(k) for k in ("advancers", "decliners", "names", "buckets")},
+            "top_setups": [setup(r) for r in rows("top")],
+            "pinned": [line(r) for r in rows("list")],
+            "added_today": [line(r) for r in rows("adds")],
+            "stories": [story(s) for s in rows("stories")],
+            "sectors": [f"{s.get('key')} {s.get('label')} {_pc(s.get('day_pct'))} "
+                        f"({_pc(s.get('rs_day'))} vs SPY), leaders "
+                        f"{', '.join(str(x) for x in s.get('leaders') or []) or 'none yet'}"
+                        for s in rows("rotation")]}
+
+
 def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, Any] | None,
-           more: Mapping[str, Callable[[], Any]], now: datetime) -> dict[str, Any]:
+           more: Mapping[str, Callable[..., Any]], now: datetime) -> dict[str, Any]:
     """One panel by name, as the page shows it (PANELS). Pure given `more`."""
     if not name:
         return {"panels": [f"{k} — {v}" for k, v in PANELS.items()],
@@ -1040,7 +1216,26 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
         return fn() if fn else None
 
     body: dict[str, Any]
-    if name == "macro_board":
+    if name == "dashboard":
+        got = need("dashboard")
+        if not isinstance(got, dict):
+            return {**head, "error": "the dashboard is not readable here"}
+        body = _dashboard_body(got)
+    elif name == "sector_heatmap":
+        group = str(a.get("group") or "").strip()
+        if group:
+            lister = more.get("group")
+            got = lister(group) if lister else None
+            if not isinstance(got, dict):
+                return {**head, "error": f"no group {group!r}: a sector or theme ETF, or an "
+                                         "industry name as the page spells it"}
+            body = {"group": group, **_breakouts_body(got)}
+        else:
+            got = need("heatmap")
+            if not isinstance(got, dict):
+                return {**head, "error": "the sector heat map is not readable here"}
+            body = _heatmap_body(got)
+    elif name == "macro_board":
         body = {"groups": _macro_board(snap)}
     elif name == "regime":
         body = _regime(scan)
@@ -1113,6 +1308,40 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
         if not isinstance(st, dict):
             return {**head, "error": "the record is not readable here"}
         body = {"record": st}
+    elif name == "breakouts":
+        got = need("breakouts")
+        if not isinstance(got, dict):
+            return {**head, "error": "the wide scan is not readable here"}
+        body = _breakouts_body(got)
+    elif name in ("pre_market_gappers", "after_hours_gappers"):
+        got = need("extended_pre" if name.startswith("pre") else "extended_post")
+        if not isinstance(got, dict):
+            return {**head, "error": "the wide scan is not readable here"}
+        body = _extended_body(got)
+    elif name == "day_2_3":
+        got = need("day23")
+        if not isinstance(got, dict):
+            return {**head, "error": "the Day 2/3 ledger is not readable here"}
+        body = _day23_body(got)
+    elif name == "stock_news":
+        got = need("stock_news")
+        if not isinstance(got, list):
+            return {**head, "error": "the stock news is not readable here"}
+        body = {"stories": got, "format": "tickers [kind] headline (source, hours ago)"}
+    elif name == "market_breadth":
+        got = snap.get("breadth_all")
+        if not isinstance(got, dict):
+            return {**head, "error": "the wide scan has not been read yet"}
+        body = {"advancers": got.get("advancers"), "decliners": got.get("decliners"),
+                "names": got.get("names"), "by_move": got.get("buckets"),
+                "sector_leaders": got.get("leaders"), "basis": got.get("basis")}
+    elif name == "themes":
+        body = {"themes": [
+            {"etf": s.get("key"), "theme": s.get("label"), "last": s.get("last"),
+             "day_pct": _r2(s.get("day_pct")), "week_pct": _r2(s.get("week_pct")),
+             "month_pct": _r2(s.get("month_pct")), "vs_spy_day": _r2(s.get("rs_day")),
+             "vs_spy_week": _r2(s.get("rs_week")), "vs_spy_month": _r2(s.get("rs_month"))}
+            for s in snap.get("themes") or [] if isinstance(s, dict) and s.get("key") != "SPY"]}
     elif name == "past_notes":
         h = need("history")
         if not isinstance(h, dict):
@@ -1129,7 +1358,9 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
                 "all": [_source_line(k, s) for k, s in rows],
                 "wire_feeds_down": [feed_line(f) for f in feeds if _source_trouble(f)],
                 "wire_feeds": [feed_line(f) for f in feeds]}
-    return _cap({**head, **body})
+    wide = name in ("breakouts", "pre_market_gappers", "after_hours_gappers", "day_2_3",
+                    "stock_news", "dashboard", "sector_heatmap")
+    return _cap({**head, **body}, WIDE_CHARS if wide else MAX_CHARS)
 
 
 # --------------------------------------------------------------------------
@@ -1144,7 +1375,7 @@ def run(
     brief: Callable[[str | None], dict[str, Any] | None],
     plan: Callable[[str | None], dict[str, Any] | None],
     now: datetime | None = None,
-    more: Mapping[str, Callable[[], Any]] | None = None,
+    more: Mapping[str, Callable[..., Any]] | None = None,
 ) -> dict[str, Any]:
     """Answer one tool call. Always a dict; an unknown name or a name the
     scanner does not track comes back as `{"error": ...}` the model can read,

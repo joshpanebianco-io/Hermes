@@ -1,6 +1,9 @@
 fastapi>=0.115,<0.116
 starlette>=0.40,<0.42
 uvicorn[standard]>=0.30
+# The live quote stream (sources/stream.py). uvicorn[standard] brings it anyway;
+# named here because this service now uses it directly.
+websockets>=14
 # Windows has no zoneinfo database of its own, and every clock in this service
 # is defined in a named zone (ET for the session markers, seven city zones for
 # the board). The deliberate exception to the stdlib-only rule.

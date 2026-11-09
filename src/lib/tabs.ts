@@ -15,6 +15,9 @@
  * was even on the bar. Now the bar is one list for both desks, cut by what a
  * page is FOR rather than which book it is about:
  *
+ *   Dashboard  the session on one page, built from the tabs below: the read,
+ *              the game plan, the top setups, the list, the news, the sectors
+ *              (owner, 2026-11-09)
  *   Macro      what is happening and what is scheduled — the wire, the
  *              calendar, prints and the Fed path, the diaries, earnings,
  *              rates, rotation, the movers, the macro board
@@ -46,6 +49,7 @@ export const DESKS: readonly { key: Desk; label: string; short: string }[] = [
 ];
 
 export const TABS = [
+  { key: "dashboard", label: "Dashboard" },
   { key: "terminal", label: "Macro" },
   { key: "structure", label: "Structure" },
   { key: "scanner", label: "Scanner" },

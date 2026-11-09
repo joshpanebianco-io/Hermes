@@ -2,6 +2,7 @@
 
 import type { OptContract, OptionsCtx, OptionsFlow, ScanRow } from "@/types/scanner";
 import { estTitle, optionsPick, premiumHue, shortDate, strike } from "@/components/panels/ScanTable";
+import { CARD } from "@/components/panels/ScanWide";
 import { Tick } from "@/components/ui/Tick";
 import { OptionsFiguresPopover } from "@/components/vol/OptionsFigures";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
@@ -31,7 +32,7 @@ export function ScanOptions({ r }: { r: ScanRow }) {
   const o = r.options;
   const prefs = useOptionsPrefs();
   return (
-    <section className="px-6 py-4" aria-label={`${r.sym} options`}>
+    <section className={CARD} aria-label={`${r.sym} options`}>
       <div className="mb-2.5 flex items-baseline gap-2">
         <h3 className="text-[13.5px] font-semibold text-ink">Options</h3>
         {o?.asof && (

@@ -21,9 +21,12 @@ final figures are in, each open track takes that day's bar and new Day 1s are
 added. The very first run seeds yesterday's Day 1s from `[1]` and `[2]`; a Day 3
 appears the session after that, and no earlier one can be recovered from this feed.
 
-NO SECOND SCORE. A row says what the name did and where it stands against its own
-levels, in words; the table sorts on what has held. The 0-100 rank needs bars and
-was audited on 5 Nov (see tools/fit_score.py). Pure but for the file.
+ITS OWN ROUGH ORDER, NOT THE SCANNER'S SCORE (owner, 2026-11-10: "follow the
+screenshots closely"; theirs ranks this table on prev-day levels, volume and news).
+The 0-100 rank needs bars and was audited on 5 Nov (see tools/fit_score.py). This one
+is a sum of three named parts from what the wide read has (`score_of`), a judgement
+with no outcome test behind it, and the row's words still say what the name did.
+Pure but for the file.
 """
 
 from __future__ import annotations
@@ -98,6 +101,27 @@ def state_of(side: str, basis: str, hi: float | None, lo: float | None, last: fl
 
 
 KIND_ORDER = {"confirmed": 0, "inside": 1, "watch": 2, "failed": 3}
+
+#: Points for the story, by its grade (catalysts.py).
+NEWS_POINTS = {1: 25.0, 2: 15.0, 3: 8.0}
+
+
+def score_of(side: str, kind: str, last: float, pdh: float, pdl: float,
+             vol_vs_normal: float | None, tier: int | None) -> int:
+    """The table's rough 0-100 order, in three parts. Pure.
+
+    Where price stands in yesterday's range from the trade's side: up to 35, and 10
+    more for being through its level. The volume against a normal day: up to 30, full
+    at twice normal. The news: 25, 15 or 8 by its grade. A failed track is halved.
+    """
+    span = pdh - pdl
+    pos = (last - pdl) / span if span > 0 else 0.5
+    pos = max(0.0, min(1.0, pos if side == "long" else 1.0 - pos))
+    beyond = last > pdh if side == "long" else last < pdl
+    total = pos * 35.0 + (10.0 if beyond else 0.0)
+    total += min((vol_vs_normal or 0.0) / 2.0, 1.0) * 30.0
+    total += NEWS_POINTS.get(tier or 0, 0.0)
+    return round(total * (0.5 if kind == "failed" else 1.0))
 
 
 class MomentumStore:
@@ -207,6 +231,22 @@ class MomentumStore:
                 out[t["sym"]] = s
         return out
 
+    def strong(self, today: date, session_on: bool, min_move: float = DEFAULT_MOVE,
+               cap: float = DEFAULT_CAP) -> dict[str, dict[str, Any]]:
+        """{sym: {stage, move, side}} for the tracks past the table's own defaults, on
+        Day 2 or later: what the pool's rank reads (sources/pool.in_play), so a name
+        coiling after a 20% day is promoted onto the list without being tracked by hand.
+        A name with two tracks is its youngest."""
+        out: dict[str, dict[str, Any]] = {}
+        with self._lock:
+            tracks = [t for t in self.tracks.values()
+                      if abs(t["move"]) >= min_move and (t.get("cap") or 0) >= cap]
+        for t in tracks:
+            s = self.stage(t, today, session_on)
+            if s >= 2 and (t["sym"] not in out or s < out[t["sym"]]["stage"]):
+                out[t["sym"]] = {"stage": s, "move": t["move"], "side": t["side"]}
+        return out
+
     def names(self, cap: float = DEFAULT_CAP) -> list[str]:
         """The names worth the live stream, biggest Day 1 volume first."""
         with self._lock:
@@ -240,16 +280,31 @@ class MomentumStore:
                                        r["low"] if basis != "pre" else None, e["last"], e["pdh"],
                                        e["pdl"], d1_low, d1_high)
             level = e["pdh"] if side == "long" else e["pdl"]
+            story = catalyst(sym)
+            # Volume against normal FOR THIS POINT IN THE DAY. Before the open it is the
+            # pre-market's, where 5% of a day is normal. In the session it is the
+            # reading's time-of-day figure: a whole day's average made every name read
+            # a tenth of normal at 10:00 and full by the close, so the score drifted
+            # up all session and the volume part said nothing in the morning (audit,
+            # 2026-11-11). Once the day is whole, the day against an average one.
+            if basis == "pre":
+                normal = (e["adv_pct"] or 0.0) / 5.0
+            elif basis == "rth" and e.get("rvol") is not None:
+                normal = float(e["rvol"])
+            else:
+                normal = (e["adv_pct"] or 0.0) / 100.0
             rows.append({
                 "sym": sym, "name": r["name"], "cap": r["cap"], "sector": r["sector"],
                 "side": side, "stage": stage, "moved": moved, "move": move, "vx": vx,
                 "chg": e["chg"], "last": e["last"], "pdh": e["pdh"], "pdl": e["pdl"],
                 "level": level,
                 "to_level": round((e["last"] / level - 1.0) * 100.0, 1) if level else None,
-                "adv_pct": e["adv_pct"], "state": words, "kind": kind,
+                "vol": e.get("vol"), "adv_pct": e["adv_pct"], "state": words, "kind": kind,
+                "score": score_of(side, kind, e["last"], e["pdh"], e["pdl"], normal,
+                                  story.get("tier") if story else None),
                 "through": e["pd_state"] != "inside", "live": e["live"],
                 "since": round((e["last"] / d1c - 1.0) * 100.0, 2) if d1c else None,
-                "catalyst": catalyst(sym), "tracked": sym in tracked, "pinned": sym in pinned,
+                "catalyst": story, "tracked": sym in tracked, "pinned": sym in pinned,
             })
 
         for t in self.snapshot():
@@ -296,7 +351,7 @@ class MomentumStore:
             "through": lambda x: x["through"],
         }.get(chip)
         kept = [x for x in rows if keep(x)] if keep else rows
-        kept.sort(key=lambda x: (KIND_ORDER[x["kind"]], x["stage"], -(x["vx"] or 0.0)))
+        kept.sort(key=lambda x: (-x["score"], KIND_ORDER[x["kind"]], x["stage"]))
         for x in kept:
             x["spark"] = spark(x["sym"])
         return {"chips": counts, "rows": kept, "shown": len(kept), "matched": len(rows),

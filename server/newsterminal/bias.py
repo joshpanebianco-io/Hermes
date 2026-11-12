@@ -62,17 +62,25 @@ FAMILY_NAMES: dict[str, tuple[str, str]] = {
     "rates": ("Rates & dollar", "Rates & dollar"),
     "risk": ("Risk appetite", "Risk"),
     "catalysts": ("Catalysts", "Catalysts"),
-    "positioning": ("Positioning", "Positioning"),
     "participation": ("Participation", "Participation"),
     "levels": ("Index levels", "Levels"),
 }
 
-#: The futures board's reads. Event risk is in none: it is a damper, not a vote.
+#: The futures board's reads. Two are in no family, because neither is a side: event
+#: risk is a damper, and dealer gamma is a regime.
+#
+# GAMMA DOES NOT VOTE (owner, 2026-11-12: "gamma levels incorrect bias - positive
+# doesnt mean bullish and vice versa"). It was the whole of a "positioning" family,
+# long with spot above the flip and short below it, which is the regime by another
+# name: positive gamma counted as a long vote and negative as a short one, a fifth of
+# the score in the New York session. The regime says how far a move runs (damped
+# above the flip, amplified below it), in either direction, and that is where it
+# stays: the board's line on how to treat the score (`treatment`), and its own row,
+# marked as never a side. The family is gone and its weight is shared out below.
 BOARD_FAMILY: dict[str, str] = {
     "yields": "rates", "dollar": "rates", "silver": "rates",
     "vix_dir": "risk", "vix_curve": "risk", "credit": "risk",
     "prints": "catalysts", "hw_prints": "catalysts",
-    "gamma": "positioning",
     "value": "structure", "session": "structure", "trend10m": "structure",
     "frame": "daily", "daily200": "daily",
     "sectors": "participation", "leaders": "participation",
@@ -88,15 +96,23 @@ TAPE_FAMILY: dict[str, str] = {
 }
 
 # ---- the weights, by session: a judgement, stated once ------------------------------
+#
+# Gamma's share (5, 5, 15 and 20 of each hundred) went back to the families that are
+# sides, each in proportion to what it already had, to the nearest whole number: no
+# family's standing against another changed, and two that were level are still
+# level. So a score is what the old one would have been with gamma's vote taken out,
+# and nothing else moved. That is why these are not round numbers. Before, in the same
+# order: Asia 40 / 20 / 15 / 15 / 5, London 35 / 25 / 15 / 15 / 5, the New York
+# pre-open 25 / 20 / 15 / 15 / 10, the session 25 / 15 / 15 / 10 / 10 / 5.
 BOARD_WEIGHTS: dict[str, dict[str, int]] = {
-    "asia": {"structure": 40, "daily": 20, "rates": 15, "catalysts": 15, "risk": 5,
-             "positioning": 5, "participation": 0},
-    "london": {"structure": 35, "rates": 25, "daily": 15, "catalysts": 15, "risk": 5,
-               "positioning": 5, "participation": 0},
-    "ny_pre": {"catalysts": 25, "rates": 20, "structure": 15, "risk": 15, "positioning": 15,
-               "daily": 10, "participation": 0},
-    "ny_live": {"structure": 25, "positioning": 20, "rates": 15, "risk": 15, "catalysts": 10,
-                "participation": 10, "daily": 5},
+    "asia": {"structure": 42, "daily": 21, "rates": 16, "catalysts": 16, "risk": 5,
+             "participation": 0},
+    "london": {"structure": 37, "rates": 26, "daily": 16, "catalysts": 16, "risk": 5,
+               "participation": 0},
+    "ny_pre": {"catalysts": 29, "rates": 24, "structure": 18, "risk": 18, "daily": 11,
+               "participation": 0},
+    "ny_live": {"structure": 31, "rates": 19, "risk": 19, "catalysts": 12, "participation": 12,
+                "daily": 7},
 }
 
 #: Before the open the sector and leader reads are yesterday's, so the tape is its
@@ -204,10 +220,31 @@ def read(votes: list[dict[str, Any]], family_of: dict[str, str], weights: dict[s
     }
 
 
+#: With less than this share of the session's weight able to vote, the tape's lean is
+#: weak at most (`tape_read`).
+THIN_COVERAGE = 50
+
+
 def tape_read(votes: list[dict[str, Any]], scan_session: str) -> dict[str, Any]:
-    """The stocks desk's tape count, weighed. Pure."""
+    """The stocks desk's tape count, weighed. Pure.
+
+    A LEAN ON TWO READS IS NOT A MODERATE TAPE (owner, 2026-11-11: "do what you
+    recommend"). Overnight only SPY and QQQ against their levels can vote: at
+    20:13 ET on 10 Nov both were a third of a percent up after hours, which is one
+    family and 35% of the pre-open's weight, and the card read "Long +100,
+    moderate" with plans capped at four. The score is right (every read that can
+    vote agrees), and it is a thin read. So with under THIN_COVERAGE of the weight
+    live the grade is weak at most, the ceiling follows it, and `thin` tells the
+    page to print the count beside the score. Strong already needed 60%; this is
+    the same idea one grade down. The futures board (`board_read`) is not changed.
+    """
     key = tape_key(scan_session)
-    return read(votes, TAPE_FAMILY, TAPE_WEIGHTS[key], key)
+    r = read(votes, TAPE_FAMILY, TAPE_WEIGHTS[key], key)
+    r["thin"] = r["bias"] is not None and r["coverage"] < THIN_COVERAGE
+    if r["thin"] and r["grade"] in ("strong", "moderate"):
+        r["grade"] = "weak"
+        r["max_conviction"] = MAX_CONVICTION["weak"]
+    return r
 
 
 def _side(x: float) -> str | None:

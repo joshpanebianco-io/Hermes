@@ -109,6 +109,43 @@ export function HelmLoader({
   );
 }
 
+/*
+ * A WHOLE PAGE WAITING FOR ITS FIRST ANSWER IS A CARD (owner, 2026-11-11: "when dashboard
+ * loads it should have have card in the middle, right now it's empty and jsut have the
+ * header and footer cards and looks weird", then "same with sectors etc and make sure we
+ * fixed it every in the app").
+ *
+ * Under Luminous every block of a page is a card on the ground, so a page that had not
+ * answered yet was the header, the status rail and the helm on bare ground between them:
+ * it read as a page that failed to draw. The wait takes the room the page is about to
+ * fill and is a card itself, the helm in the middle of it. `qt-wait` is painted by
+ * Luminous only (globals.css): under Quiet a framed page's frame is already
+ * the box, and a caller with no frame passes its own card class.
+ *
+ * PageNote is the same card for the page that ANSWERED with nothing to show (the scanner
+ * has not built yet, the collector is offline): the words in the middle of the card,
+ * not a line of text on the ground.
+ */
+const WAIT = "qt-wait flex min-h-[240px] flex-1 flex-col items-center justify-center";
+
+/** A page's first load: the helm in the middle of the card the page is about to fill. */
+export function PageLoader({ label, size = 56, className }: { label: string; size?: number; className?: string }) {
+  return (
+    <div className={cn(WAIT, className)}>
+      <HelmLoader label={label} size={size} />
+    </div>
+  );
+}
+
+/** A page with nothing to show yet, and why: the same card, the words in the middle. */
+export function PageNote({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn(WAIT, className)}>
+      <p className="max-w-[620px] px-6 py-5 text-center text-[12px] leading-[1.5] text-ink-3">{children}</p>
+    </div>
+  );
+}
+
 /** The helm at text size, beside a few words — for a table cell or a line of copy. */
 export function HelmInline({ label, size = 14, className }: { label: string; size?: number; className?: string }) {
   const id = useHelmId();

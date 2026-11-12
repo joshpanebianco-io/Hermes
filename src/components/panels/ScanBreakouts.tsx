@@ -2,20 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BreakoutChip, BreakoutsPayload } from "@/types/scanner";
-import { HelmLoader } from "@/components/ui/HelmLoader";
+import { PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import {
   CatalystCell,
   Chips,
   Choice,
-  GroupHead,
+  Head,
   Menu,
-  NameCell,
   RangeCell,
+  RvolBar,
+  Showing,
   Spark,
+  StatCard,
   TD,
   TH,
-  TrackButton,
-  VolCell,
+  TickerCell,
+  TickerFilter,
+  VolPct,
   capWord,
   dayName,
   delayedLine,
@@ -23,7 +26,7 @@ import {
   isStr,
   pctText,
   rowProps,
-  useWalk,
+  rowTags,
   volWord,
 } from "@/components/panels/ScanWide";
 import { num } from "@/lib/format";
@@ -31,6 +34,7 @@ import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
+import { usePinsChanged } from "@/lib/usePinsChanged";
 
 /**
  * Breakouts — every US stock against its levels, not forty.
@@ -45,7 +49,7 @@ import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
  * goes on the list with Track, where it is read live and its signals fire.
  *
  * NEWS COMES BEFORE SIZE. Through both ranges first, then a fresh major story, then
- * relative volume: the signal log says news is what makes a move run. The Catalyst
+ * relative volume: the signal log says news is what makes a move run. The News
  * column is the most important story of the last day, not the newest, which on a
  * big mover is nearly always an analyst's note written after it.
  *
@@ -54,13 +58,13 @@ import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 
 const CHIPS: ReadonlyArray<{ key: BreakoutChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "both", label: "Both ranges", title: "Through the pre-market range and the previous day's range, the same way" },
+  { key: "pinned", label: "Pinned", title: "The names you starred" },
   { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened 2% or more away from the previous close" },
-  { key: "through", label: "Through PDH / PDL" },
+  { key: "both", label: "Both ranges", title: "Through the pre-market range and the previous day's range, the same way" },
+  { key: "through", label: "Outside day", title: "Through the previous day's high or low" },
   { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range" },
   { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
-  { key: "pinned", label: "Pinned" },
 ];
 const CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
 const VOLS = [0, 1e5, 5e5, 1e6, 5e6].map((value) => ({ value, label: volWord(value) }));
@@ -71,7 +75,7 @@ const SECTORS = ["", "XLK", "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XL
 }));
 const COLS = ["catalyst", "move", "levels", "chart", "volume"] as const;
 type Col = (typeof COLS)[number];
-const COL_NAME: Record<Col, string> = { catalyst: "Catalyst", move: "Move", levels: "Levels", chart: "Chart", volume: "Volume" };
+const COL_NAME: Record<Col, string> = { catalyst: "News", move: "Move", levels: "Levels", chart: "Chart", volume: "Volume" };
 type Sort = "rank" | "rvol" | "chg" | "gap" | "vol";
 
 const BASIS_WORD: Record<BreakoutsPayload["basis"], string> = {
@@ -90,6 +94,7 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
   const [theme, setTheme] = usePersisted<string>("brk.theme", "", isStr);
   const [sort, setSort] = usePersisted<Sort>("brk.sort", "rank", oneOf("rank", "rvol", "chg", "gap", "vol"));
   const [cols, setCols] = usePersisted<Col[]>("brk.cols", [...COLS], manyOf(...COLS));
+  const [find, setFind] = useState("");
   const [data, setData] = useState<BreakoutsPayload | null>(null);
   const seq = useRef(0);
   const ticker = useTicker();
@@ -111,6 +116,8 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
       /* the last read stays on screen */
     }
   }, [q]);
+  // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
+  usePinsChanged(load);
 
   const on = data?.ok ? data.basis !== "last" : false;
   useEffect(() => {
@@ -119,52 +126,51 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
     return () => clearInterval(id);
   }, [load, on]);
 
-  const syms = useMemo(() => data?.rows.map((r) => r.sym) ?? [], [data]);
-  useWalk(syms);
-
-  if (!data) return <HelmLoader label="Reading the market" size={48} minHeight={420} />;
+  const typed = find.trim().toUpperCase();
+  const rows = useMemo(() => (data?.rows ?? []).filter((r) => !typed || r.sym.includes(typed)), [data, typed]);
+  // A card where the view will be, not the helm on the ground (ui/HelmLoader PageLoader).
+  if (!data) return <PageLoader label="Reading the market" />;
   if (!data.ok) {
     return (
-      <p className="px-6 py-10 text-center text-[12px] text-ink-3">
+      <PageNote>
         {data.offline ? `${data.offline.reason}.` : (data.error ?? "The wide read has not landed yet: it is one request, a few seconds after a start.")}
-      </p>
+      </PageNote>
     );
   }
 
   const has = (c: Col) => cols.includes(c);
   const toggle = (c: Col) => setCols((was) => (was.includes(c) ? was.filter((x) => x !== c) : [...was, c]));
   const summary = [capWord(cap), vol ? volWord(vol) : null, rvol ? `RVol ${rvol}×+` : null, sector || null, theme || null].filter(Boolean).join(" · ");
-  const header = (k: Sort, label: string, title?: string) => (
+  const header = (k: Sort, label: string, hint: string, title?: string, right?: boolean) => (
     <button type="button" title={title} onClick={() => setSort(sort === k ? "rank" : k)} className={cn("qt-cap text-[10.5px] hover:text-ink-2", sort === k ? "text-ink" : "text-ink-3")}>
-      {label}
-      {sort === k ? " ↓" : ""}
+      <Head label={`${label}${sort === k ? " ↓" : ""}`} hint={hint} right={right} />
     </button>
   );
-  const groups: Array<{ label: string; span: number }> = [{ label: "", span: 1 }];
-  if (has("catalyst")) groups.push({ label: "Catalyst", span: 1 });
-  if (has("move")) groups.push({ label: "Move", span: 3 });
-  if (has("levels")) groups.push({ label: "Levels", span: 2 });
-  if (has("chart")) groups.push({ label: "Chart", span: 1 });
-  if (has("volume")) groups.push({ label: "Volume", span: 1 });
-  groups.push({ label: "", span: 1 });
   const s = data.stats;
+  const refreshed = () => {
+    void load();
+    onTrackChanged?.();
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-baseline gap-x-8 gap-y-1 border-b border-ring px-6 py-3">
-        <Stat value={s.up} hue="text-call-fig" word={data.basis === "pre" ? "▲ above PDH" : "▲ above PMH and PDH"} />
-        <Stat value={s.down} hue="text-put-fig" word={data.basis === "pre" ? "▼ below PDL" : "▼ below PML and PDL"} />
-        <Stat value={s.top_rvol ? `${s.top_rvol.v.toFixed(1)}×` : "—"} word={s.top_rvol ? `top RVol · ${s.top_rvol.sym}` : "top RVol"} />
-        <Stat value={s.top_move ? pctText(s.top_move.v, 1) : "—"} word={s.top_move ? `top mover · ${s.top_move.sym}` : "top mover"} />
-        <p className="fig ml-auto text-[11px] text-ink-3" title={data.basis === "pre" ? "Before the open the pre-market range is still forming, so Both ranges reads the previous day's levels alone." : undefined}>
-          {BASIS_WORD[data.basis]} · {dayName(data.day)} · {data.scanned.toLocaleString()} scanned · {delayedLine(data.read_age_min, data.delayed_min, s.live)}
-        </p>
+      <div className="qt-stats flex shrink-0 flex-wrap items-stretch border-b border-ring">
+        <StatCard glyph="up" tint="up" value={s.up} hue="text-call-fig" label="Bullish" sub={data.basis === "pre" ? "above PDH" : `above PMH and PDH · ${s.pdh} above PDH`} />
+        <StatCard glyph="down" tint="down" value={s.down} hue="text-put-fig" label="Bearish" sub={data.basis === "pre" ? "below PDL" : `below PML and PDL · ${s.pdl} below PDL`} />
+        <StatCard glyph="pulse" tint="news" value={s.top_rvol ? `${s.top_rvol.v.toFixed(1)}×` : "—"} hue="text-desk-markets" label="Top RVol" sub={s.top_rvol?.sym} />
+        <StatCard glyph="star" tint="move" value={s.top_move ? pctText(s.top_move.v, 2) : "—"} hue="text-desk-policy" label="Top mover" sub={s.top_move?.sym} />
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-6 py-2.5">
+      <div className="qt-bar flex shrink-0 flex-wrap items-center gap-2 border-b border-ring px-4 py-2">
         <Chips items={CHIPS} on={chip} set={setChip} counts={data.chips} />
         <div className="ml-auto flex items-center gap-2">
-          <span className="fig text-[11px] text-ink-3">{data.shown === data.matched ? `${data.shown} showing` : `${data.shown} of ${data.matched}`}</span>
+          {/* What the read is and how old, in the bar with the table's other facts, where
+              Day 2/3 has it (owner, 2026-11-11: it was a loose line at the end of the
+              stat tiles, and "sticks out"). */}
+          <p className="fig text-[11px] whitespace-nowrap text-ink-3" title={data.basis === "pre" ? "Before the open the pre-market range is still forming, so Both ranges reads the previous day's levels alone." : undefined}>
+            {BASIS_WORD[data.basis]} · {dayName(data.day)} · {delayedLine(data.read_age_min, data.delayed_min, s.live)}
+          </p>
+          <TickerFilter value={find} onChange={setFind} />
           <Menu label={<>Filters · <span className="fig">{summary}</span></>}>
             <Choice label="Market cap" options={CAPS} value={cap} set={setCap} />
             <Choice label="Volume" options={VOLS} value={vol} set={setVol} />
@@ -194,55 +200,57 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
               ))}
             </span>
           </Menu>
+          <Showing shown={rows.length} total={data.scanned} word="scanned" />
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        {data.rows.length === 0 ? (
+      <div className="qt-sheet min-h-0 flex-1 overflow-auto">
+        {rows.length === 0 ? (
           <p className="px-6 py-10 text-center text-[12px] text-ink-3">
             Nothing here at these filters. {data.scanned.toLocaleString()} names scanned: try loosening relative volume or market cap.
           </p>
         ) : (
-          <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-left">
+          <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left">
             <thead className="sticky top-0 z-20">
-              <GroupHead groups={groups} />
               <tr>
-                <th scope="col" className={cn(TH, "sticky left-0 z-30 w-[148px]")}>
-                  Ticker
+                <th scope="col" className={cn(TH, "sticky left-0 z-30 w-[226px]")}>
+                  <Head label="Ticker" hint="symbol · price" />
                 </th>
-                {has("catalyst") && <th scope="col" className={TH}>Most important story</th>}
+                {has("catalyst") && <th scope="col" className={TH}><Head label="News" hint="most important first" /></th>}
                 {has("move") && (
                   <>
-                    <th scope="col" className={cn(TH, "text-right")}>{header("rvol", "RVol", "Against the 30-day average; by time of day in the session")}</th>
-                    <th scope="col" className={cn(TH, "text-right")}>{header("chg", "Chg", "Against the previous close")}</th>
-                    <th scope="col" className={cn(TH, "text-right")}>{header("gap", "Gap", "The open against the previous close")}</th>
+                    <th scope="col" className={TH}>
+                      {data.basis === "rth"
+                        ? header("rvol", "RVol", "vs usual by now", "Volume so far against the same time of day on the last five sessions: TradingView's figure, fifteen minutes behind")
+                        : header("rvol", "RVol", "day vs 30-day avg", "The session's whole volume against the 30-day average day: the same figure as the Volume column's share of an average day. In the session it is read by time of day instead.")}
+                    </th>
+                    <th scope="col" className={cn(TH, "text-right")}>{header("chg", "Chg", "vs prev close", "Against the previous close", true)}</th>
+                    <th scope="col" className={cn(TH, "text-right")}>{header("gap", "Gap", "open vs prev close", "The open against the previous close", true)}</th>
                   </>
                 )}
                 {has("levels") && (
                   <>
-                    <th scope="col" className={TH}>PM range</th>
-                    <th scope="col" className={TH}>PD range</th>
+                    <th scope="col" className={TH}><Head label="PM range" hint="locks at 09:30" /></th>
+                    <th scope="col" className={TH}><Head label="PD range" hint="vs PDH / PDL" /></th>
                   </>
                 )}
-                {has("chart") && <th scope="col" className={TH}>Today</th>}
-                {has("volume") && <th scope="col" className={cn(TH, "text-right")}>{header("vol", "Volume")}</th>}
-                <th scope="col" className={TH} />
+                {has("chart") && <th scope="col" className={TH}><Head label="Spark" hint="today" /></th>}
+                {has("volume") && <th scope="col" className={TH}>{header("vol", "Volume", "vs ADV")}</th>}
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((r) => (
+              {rows.map((r) => (
                 <tr key={r.sym} {...rowProps(r.sym, ticker === r.sym)}>
-                  <td className={cn(TD, "sticky left-0 z-10", ticker === r.sym ? "bg-surface-2" : "bg-bg group-hover:bg-surface")}>
-                    <NameCell
+                  <td className={cn(TD, "sticky left-0 z-10 w-[226px]", ticker === r.sym ? "bg-surface-2" : "bg-bg group-hover:bg-surface")}>
+                    <TickerCell
                       sym={r.sym}
-                      side={r.both === "up" || (r.both === null && r.pd_state === "above") ? "long" : r.both === "down" || (r.both === null && r.pd_state === "below") ? "short" : null}
-                      price={num(r.last)}
-                      sub={
-                        <>
-                          {r.live && <span className="qt-cap ml-1.5 text-[9px] text-call-fig" title="Moving on the live stream">live</span>}
-                          {(r.stage ?? 0) >= 2 && <span className="qt-cap ml-1.5 text-[9px] text-ink-2" title={`Day ${r.stage} of a multi-day move`}>day {r.stage}</span>}
-                        </>
-                      }
+                      name={r.name}
+                      price={`$${num(r.last)}`}
+                      tags={rowTags({ pd: r.pd_state, pm: r.pm_state, inside: r.inside, news: r.catalyst != null, stage: r.stage, verdict: r.verdict })}
+                      pinned={r.pinned}
+                      onPinned={refreshed}
+                      tracked={r.tracked}
+                      onTrack={refreshed}
                     />
                   </td>
                   {has("catalyst") && (
@@ -252,9 +260,11 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
                   )}
                   {has("move") && (
                     <>
-                      <td className={cn(TD, "fig text-right text-[12px]", (r.rvol ?? 0) >= 3 ? "text-ink" : "text-ink-2")}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</td>
-                      <td className={cn(TD, "fig text-right text-[12px]", (r.chg ?? 0) >= 0 ? "up" : "down")}>{pctText(r.chg)}</td>
-                      <td className={cn(TD, "fig text-right text-[12px]", (r.gap ?? 0) >= 0 ? "up" : "down")}>{pctText(r.gap)}</td>
+                      <td className={TD}>
+                        <RvolBar v={r.rvol} />
+                      </td>
+                      <td className={cn(TD, "fig text-right text-[12.5px]", (r.chg ?? 0) >= 0 ? "up" : "down")}>{pctText(r.chg)}</td>
+                      <td className={cn(TD, "fig text-right text-[12.5px]", (r.gap ?? 0) >= 0 ? "up" : "down")}>{pctText(r.gap)}</td>
                     </>
                   )}
                   {has("levels") && (
@@ -274,19 +284,9 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
                   )}
                   {has("volume") && (
                     <td className={TD}>
-                      <VolCell vol={r.vol} adv={r.adv_pct} />
+                      <VolPct vol={r.vol} adv={r.adv_pct} />
                     </td>
                   )}
-                  <td className={cn(TD, "text-right")}>
-                    <TrackButton
-                      sym={r.sym}
-                      tracked={r.tracked}
-                      onDone={() => {
-                        void load();
-                        onTrackChanged?.();
-                      }}
-                    />
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -294,14 +294,5 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
         )}
       </div>
     </div>
-  );
-}
-
-function Stat({ value, word, hue }: { value: number | string; word: string; hue?: string }) {
-  return (
-    <p className="flex items-baseline gap-2 whitespace-nowrap">
-      <span className={cn("fig text-[17px] leading-none", hue ?? "text-ink")}>{value}</span>
-      <span className="text-[11.5px] text-ink-3">{word}</span>
-    </p>
   );
 }

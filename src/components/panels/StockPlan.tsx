@@ -23,7 +23,8 @@ import { groupReleases } from "@/lib/releases";
 /** The engine's setup state in the words the Scanner prints — never the raw key. */
 const STATE_WORD: Record<string, string> = {
   retest: "Retest",
-  pullback: "Pulling back",
+  // Through its level, short of extended: the entry is the retest (ScanDetail.setupLabel).
+  pullback: "Through · retest",
   extended: "Extended",
   approaching: "Near a level",
   chop: "Inside — chop",
@@ -96,15 +97,20 @@ export function StockPlan({
   const [showDigest, setShowDigest] = useState(false);
   const plan = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
+  /** A loader is what the card holds (the first fetch, or a plan being written): stood in the middle of it. */
+  const waiting = !feed || (enabled && busy);
 
   return (
     <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+      {/* Shrinkable only side by side, and the card runs to the foot of its column
+          whatever it holds: the brief's arrangement, and its reasons (panels/Report). */}
+      <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
         <Module
           title="Game plan"
           large
           sub={plan ? [plan.et_label, plan.facts ? SESSION[plan.facts.session] : null].filter(Boolean).join(" · ") : "the New York session, from the scanner"}
-          bodyClassName="px-0 py-0"
+          className="xl:grow"
+          bodyClassName={cn("px-0 py-0", waiting && "flex flex-col justify-center")}
           error={
             feed?.offline && enabled
               ? `Collector unreachable — ${feed.offline.reason}. Showing the plan this page already holds.`
@@ -164,7 +170,7 @@ export function StockPlan({
         </Module>
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+      <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
         <PastList
           title="Past plans"
           noun="plan"
@@ -501,7 +507,7 @@ function RegimeContext({ f }: { f: PlanFacts }) {
               <li key={g.etf} className="flex items-baseline gap-2 text-[12px]">
                 <span className="fig w-[34px] text-ink-2">{g.etf}</span>
                 {g.regime && (
-                  <span className={cn("qt-cap text-[9.5px]", g.regime === "POS" ? "text-call-fig" : "text-put-fig")}>
+                  <span className="qt-cap text-[9.5px] text-ink-2">
                     {g.regime === "POS" ? "pos" : "neg"} <span className="normal-case">γ</span>
                   </span>
                 )}
@@ -790,7 +796,7 @@ function Facts({ n }: { n: PlanName }) {
           </>
         )}
       </>,
-      `Volume traded before the open, against the twenty-session average day${n.adv20 != null ? ` (${compact(n.adv20)})` : ""} — heavy pre-market volume is real interest, thin is a quote that can be pushed around`,
+      `Volume traded before the open, against the thirty-session average day${n.adv != null ? ` (${compact(n.adv)})` : ""} — heavy pre-market volume is real interest, thin is a quote that can be pushed around`,
     ]);
   }
   if (n.sector) {

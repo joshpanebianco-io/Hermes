@@ -59,11 +59,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Mapping
+from datetime import date as _date
 from datetime import datetime, timedelta
+from datetime import timedelta as _timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import ask, events, marketctx, optcalc, report, sessions, stockplan
+from . import holidays as holidays_mod
 
 ET = ZoneInfo("America/New_York")
 
@@ -129,25 +132,31 @@ _BOOK = {"type": "string", "enum": list(BOOKS)}
 PANELS: dict[str, str] = {
     "dashboard": "Dashboard · the session on one page: the read in words, the game plan (the "
                  "tape's bias, the focus sectors and themes, the counts of best setups, who "
-                 "reports), breadth, the top setups by score, the pinned list, the freshest "
-                 "major stock stories, and the eleven sectors with the stocks pushing each",
-    "sector_heatmap": "Scanner, Sectors · every sector and theme ETF with its day, week and "
+                 "reports), breadth, the top setups by score, the names in play by the pool's "
+                 "rank with whether the engine took each, the freshest major stock stories, and "
+                 "the eleven sectors with the stocks pushing each",
+    "sector_heatmap": "Sectors · every sector and theme ETF with its day, week and "
                       "month, how many of its $2bn+ stocks rose and fell and who led, and the "
                       "ninety-odd industry groups by their median stock (group, an ETF or an "
                       "industry name, lists that group's stocks)",
     "macro_board": "Macro · every quote on the board by group: the global indices, rates, "
                    "volatility, FX, energy, metals and crypto, each with its day's change and "
                    "whether it is live",
-    "regime": "Scanner, the top strip · VIX and its band, the curve, SPY's implied day, the "
+    "regime": "Stocks, the top strip · VIX and its band, the curve, SPY's implied day, the "
               "tape's bias, the next high-impact event, and the desk's lines on how to trade "
               "this band",
     "driver_board": "Structure, futures · per book, the score weighed by family for this "
                     "session, every vote with its threshold and reason, which reads can vote, "
                     "the grade, conflicts, event risk and the ceiling on conviction",
-    "the_book": "Structure · NQ/QQQ, ES/SPY, GC/GLD, YM and RTY: last, change and where "
-                "price sits in the day's range",
+    "the_book": "Futures, Overview · the contracts the card lists (NQ, ES, GC, YM and RTY) "
+                "and, for reference, the ETFs it no longer shows (QQQ, SPY, GLD): last, change "
+                "and where price sits in the day's range",
     "session_ranges": "Structure, futures · the four session boxes per book (high, low, "
                       "change, range, levels taken out), the overnight, and fuel",
+    "session_type": "Futures, Overview · per book, will New York trend or range: the night "
+                    "so far in ATRs, yesterday's shape, every condition that holds today with "
+                    "its count over two years of sessions, the call (a count, never a "
+                    "probability), and once New York has closed what the day was",
     "volume_profile": "Structure, futures · POC, VAH and VAL for the prior RTH, the overnight "
                       "and the developing session, the read, and yesterday's shape",
     "gamma": "Structure · dealer gamma per futures book (walls, flip, regime) and in ETF "
@@ -177,33 +186,34 @@ PANELS: dict[str, str] = {
     "index_movers": "Macro · all forty names on the map for NDX and SPX: weight, move and "
                     "contribution, and what they add up to (book narrows it to one index)",
     "sector_peers": "Macro, stocks · the watchlist's sector peers reporting this week",
-    "catalysts": "Analysis, futures · the brief's catalyst list: data, the Fed, auctions and "
+    "catalysts": "Futures, Brief · the brief's catalyst list: data, the Fed, auctions and "
                  "bellwether earnings, twelve hours back to three days out",
-    "pool": "Scanner · the pinned list, the pool behind it, today's promotions and why, the "
+    "pool": "Stocks · the pinned list, the pool behind it, today's promotions and why, the "
             "names in play that missed, and the options expiry rule",
-    "signal_log": "Scanner · the latest signals the engine saw, each with its outcome in R so "
+    "signal_log": "Stocks · the latest signals the engine saw, each with its outcome in R so "
                   "far (sym narrows it to one name)",
-    "record": "Scanner · the signal record over twenty sessions by kind, side and score band: "
+    "record": "Stocks · the signal record over twenty sessions by kind, side and score band: "
               "count, +1R rate, R held to the close with the stop kept, median best and worst",
-    "breakouts": "Scanner, Breakouts · the wide scan, every US stock at $2bn+ against its "
+    "breakouts": "Stocks, Breakouts · the wide scan, every US stock at $2bn+ against its "
                  "levels: names through both the pre-market and previous-day ranges, relative "
                  "volume, the gap, each name's most important story (fifteen minutes delayed "
                  "unless the live stream has it)",
-    "pre_market_gappers": "Scanner, Extended hours · the pre-market's gappers of 2% or more: "
+    "pre_market_gappers": "Stocks, Extended hours · the pre-market's gappers of 2% or more: "
                           "the move, volume against an average day, where each sits against "
                           "the day before, and its story (this session, or the last if none is on)",
-    "after_hours_gappers": "Scanner, Extended hours · the after-hours gappers of 2% or more, the "
+    "after_hours_gappers": "Stocks, Extended hours · the after-hours gappers of 2% or more, the "
                            "same way",
-    "day_2_3": "Scanner, Day 2/3 · names that made a Day 1 (a 20% move on 1.5x volume by "
+    "day_2_3": "Stocks, Day 2/3 · names that made a Day 1 (a 20% move on 1.5x volume by "
                "default), which day they are on, what they did since, and where they stand "
                "against PDH or PDL",
-    "stock_news": "Scanner · the freshest major company stories, tagged by ticker and kind "
+    "stock_news": "Stocks · the freshest major company stories, tagged by ticker and kind "
                   "(earnings, guidance, FDA, deal, offering)",
     "market_breadth": "Macro · advancers against decliners across every US stock at $2bn+ by "
                       "the size of the move, and each sector's leading stocks",
     "themes": "Macro · the theme ETFs (semis, software, cybersecurity, biotech, gold miners "
               "and the rest): day, week and month change and excess return against SPY",
-    "past_notes": "Analysis · the stored briefs and game plans, newest first, with the ids "
+    "past_notes": "Futures, Brief and Stocks, Game plan · the stored briefs and game plans, "
+                  "newest first, with the ids "
                   "note takes",
     "sources": "The status rail · every data source's health: down, stale or on a cached "
                "copy, with the error and the age, and each wire feed the same way",
@@ -213,6 +223,7 @@ PANELS: dict[str, str] = {
 DIGEST_PANEL: dict[str, str] = {
     "engine_driver_board": "driver_board", "the_book": "the_book",
     "session_ranges": "session_ranges", "overnight_sessions": "session_ranges",
+    "session_type_lean": "session_type",
     "volume_profile": "volume_profile", "gamma_levels": "gamma", "gamma": "gamma",
     "volatility": "volatility", "vol_term_structure": "volatility", "expiry": "expiry",
     "rates": "rates", "fed": "rates", "fed_ahead": "fed_diary",
@@ -233,11 +244,12 @@ SPEC: list[dict[str, Any]] = [
           "scanner tracks.",
           _params({"sym": {**_STR, "description": "Ticker, e.g. AMZN or SPY"}}, ["sym"])),
     _tool("scanner",
-          "The whole Scanner table, one line per watchlist name: score and side, the setup and "
-          "its entry with the distance in ten-minute ATRs, which levels have broken and how far "
-          "price has travelled toward the ones that have not, the day's move, relative volume, "
-          "relative strength against SPY, the 200 EMA side, the options read (implied against "
-          "realised, liquidity and spread, the front expected move) and earnings. Call it FIRST "
+          "The whole table on the Stocks tab, one line per watchlist name: score and side, the "
+          "setup and its entry with the distance in ten-minute ATRs, which levels have broken and "
+          "how far price has travelled toward the ones that have not, the day's move, relative "
+          "volume, relative strength against SPY, the 200 EMA side, the options read (implied "
+          "against realised, liquidity and spread, the front expected move) and earnings. Call "
+          "it FIRST "
           "for any question across names — which is closest to a break, the best or cleanest "
           "setup or options read, the strongest or weakest, a ranking or a comparison — then "
           "scanner_row for the one to three names worth reading in full.",
@@ -301,7 +313,9 @@ SPEC: list[dict[str, Any]] = [
     _tool("calendar",
           "The economic calendar for one ET day, one release per line: time, name, country, "
           "actual, consensus, previous, impact and the session it lands in. A full day leaves "
-          "out its impact-1 rows unless min_impact is given.",
+          "out its impact-1 rows unless min_impact is given. It also lists the market holidays "
+          "and early closes from that day through three weeks out: US stocks and the US bond "
+          "market (shut on Columbus Day and Veterans Day while stocks trade), London, Tokyo.",
           _params({"day": {**_STR, "description": "today, tomorrow, yesterday or YYYY-MM-DD; "
                                                   "default today"},
                    "min_impact": {"type": "integer", "minimum": 0, "maximum": 5,
@@ -313,13 +327,13 @@ SPEC: list[dict[str, Any]] = [
           "holiday.",
           _params({})),
     _tool("digest",
-          "The digest for a desk — what the Analysis brief (futures) or the Game plan (stocks) "
+          "The digest for a desk — what the futures brief or the Game plan (stocks) "
           "is written from. Large; use only when a question spans a whole desk. On the "
           "futures desk name a book to get just its sections.",
           _params({"desk": {"type": "string", "enum": ["futures", "stocks"]},
                    "book": _BOOK}, ["desk"])),
     _tool("note",
-          "A stored note: the latest Analysis brief or Game plan, or one by id, with when it "
+          "A stored note: the latest futures brief or Game plan, or one by id, with when it "
           "was written and how old it is. A brief's reads are per book; name one to get "
           "just its read.",
           _params({"kind": {"type": "string", "enum": ["brief", "plan"]},
@@ -731,9 +745,18 @@ def _calendar(snap: dict[str, Any], day: str, floor: Any = None) -> dict[str, An
         if r.get("actual") not in (None, "") and r.get("read"):
             line += f" · read: {str(r.get('read'))[:120]}"
         lines.append(line)
+    # The days a market is shut or shuts early, from the asked day through three weeks
+    # out (holidays.py): the Macro calendar lists them, so the tool does.
+    try:
+        d0 = _date.fromisoformat(day)
+        shut = [f"{h['date']} · {h['label']} · {h['name']}: {h['note']}"
+                for h in holidays_mod.notices(d0, d0 + _timedelta(days=21))]
+    except ValueError:
+        shut = []
     return _cap({"day": day, "releases": len(lines), "omitted_low_impact": omitted,
                  "format": "time name (country) · actual · consensus · previous · impact · session",
-                 "rows": lines})
+                 "rows": lines,
+                 "market_holidays_from_this_day": shut})
 
 
 def _heavy_line(r: dict[str, Any]) -> str:
@@ -834,7 +857,8 @@ def _futures_digest(snap: dict[str, Any], book: str | None) -> dict[str, Any]:
                  "earnings", "index_movers"}
     # The book's own sections first: the cap drops from the end, and the
     # driver board is the last thing a question about a book can do without.
-    first = ["engine_driver_board", "session_ranges", "volume_profile", "gamma_levels"]
+    first = ["engine_driver_board", "session_ranges", "session_type_lean", "volume_profile",
+             "gamma_levels"]
     books = (book,) if book else BOOKS
     out: dict[str, Any] = {"books": list(books)}
     for k in [*first, *(k for k in full if k not in first)]:
@@ -843,6 +867,9 @@ def _futures_digest(snap: dict[str, Any], book: str | None) -> dict[str, Any]:
             continue
         if isinstance(v, dict) and set(v) & set(BOOKS):
             out[k] = {b: v[b] for b in books if b in v}
+            # The session type's rule for reading it rides with its books.
+            if k == "session_type_lean":
+                out[k] = {**{kk: v[kk] for kk in ("how_to_read", "record") if kk in v}, **out[k]}
         else:
             out[k] = v
     # All three boards' votes were eleven thousand characters, and with them
@@ -916,8 +943,8 @@ def _note(got: dict[str, Any], kind: str, book: str | None,
 
 #: Panels read from the brief's digest, and those from the stocks desk's context.
 _FUTURES_DIGEST_PANELS = frozenset({
-    "driver_board", "the_book", "session_ranges", "volume_profile", "gamma", "volatility",
-    "expiry", "rates", "fed_diary", "cross_asset", "sector_rotation", "catalysts"})
+    "driver_board", "the_book", "session_ranges", "session_type", "volume_profile", "gamma",
+    "volatility", "expiry", "rates", "fed_diary", "cross_asset", "sector_rotation", "catalysts"})
 _MARKET_PANELS = frozenset({
     "gamma", "rates", "cross_asset", "tape_count", "breadth", "fuel", "index_options",
     "prints", "sector_peers"})
@@ -943,8 +970,11 @@ def _event_line(e: dict[str, Any]) -> str:
     if e.get("score") is not None:
         line += f" · score {_num(e.get('score'))}"
     if o:
-        line += (f" · {_num(o.get('r'))}R now, best {_num(o.get('mfe_r'))}R, "
-                 f"worst {_num(o.get('mae_r'))}R")
+        # `r` is the size of 1R in price, not a multiple: it read "0.0247R now". When the
+        # stop idea was nearer than the retest buffer, 1R is the buffer (scanlog).
+        unit = f"1R = {_num(o.get('r'))}" + (
+            " (the retest buffer; the stop idea was nearer)" if o.get("floored") else "")
+        line += f" · {unit}, best {_num(o.get('mfe_r'))}R, worst {_num(o.get('mae_r'))}R"
         if o.get("hit_1r"):
             line += " · reached +1R"
         if o.get("stopped"):
@@ -1052,6 +1082,20 @@ def _story(c: Any) -> str | None:
     return f"[{c.get('tag')}] {c.get('title')}{when}"
 
 
+def _verdict_text(v: Any) -> str | None:
+    """What the engine does with the name today, as the row's tag says it."""
+    if not isinstance(v, dict):
+        return None
+    state = v.get("state")
+    if state == "promoted":
+        return f"on the list from the pool at {v.get('mark')} ({v.get('reason')})"
+    if state == "inplay":
+        return f"in play {v.get('score')} but not on the list ({v.get('reason')}): track it"
+    if state in ("pinned", "hand", "tracked"):
+        return {"pinned": "pinned", "hand": "tracked by hand", "tracked": "on the list"}[state]
+    return None
+
+
 def _breakouts_body(g: dict[str, Any]) -> dict[str, Any]:
     """The Breakouts table as the page shows it: the whole list, one line a name."""
     def line(r: dict[str, Any]) -> str:
@@ -1066,6 +1110,9 @@ def _breakouts_body(g: dict[str, Any]) -> dict[str, Any]:
         s = _story(r.get("catalyst"))
         if s:
             bits.append(s)
+        v = _verdict_text(r.get("verdict"))
+        if v:
+            bits.append(v)
         return " · ".join(bits)
     return {"basis": g.get("basis"), "day": g.get("day"), "scanned": g.get("scanned"),
             "delayed_minutes": g.get("delayed_min"), "counts": g.get("chips"),
@@ -1081,11 +1128,15 @@ def _extended_body(g: dict[str, Any]) -> dict[str, Any]:
         s = _story(r.get("catalyst"))
         if s:
             bits.append(s)
+        v = _verdict_text(r.get("verdict"))
+        if v:
+            bits.append(v)
         return " · ".join(bits)
     return {"session": g.get("session"), "on_now": g.get("active"), "day": g.get("day"),
             "counts": g.get("chips"), "rows_on_the_page": g.get("matched"),
             "format": "sym last · move · volume · % of an average day · against the day's range "
-                      "· story",
+                      "· story · whether the engine scores it today (on the list, or in play "
+                      "and not)",
             "rows": [line(r) for r in g.get("rows") or []]}
 
 
@@ -1094,7 +1145,8 @@ def _day23_body(g: dict[str, Any]) -> dict[str, Any]:
         bits = [f"{r.get('sym')} {r.get('side')} Day {r.get('stage')}",
                 f"moved {r.get('moved')} {_num(r.get('move'))}% on {_num(r.get('vx'))}x volume",
                 f"latest {_num(r.get('chg'))}%", str(r.get("state")),
-                f"level {_num(r.get('level'))} ({_num(r.get('to_level'))}% away)"]
+                f"level {_num(r.get('level'))} ({_num(r.get('to_level'))}% away)",
+                f"rough score {_num(r.get('score'))}"]
         s = _story(r.get("catalyst"))
         if s:
             bits.append(s)
@@ -1161,9 +1213,9 @@ def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
         story = _story(r.get("catalyst"))
         return " · ".join([*bits, story] if story else bits)
 
-    def line(r: dict[str, Any]) -> str:
-        return (f"{r.get('sym')} {_num(r.get('last'))} · day {_pc(r.get('chg_pct'))} · extended "
-                f"hours {_pc(r.get('ext_pct'))}")
+    def inplay(r: dict[str, Any]) -> str:
+        engine = _verdict_text(r.get("verdict")) or "not on the list"
+        return f"{r.get('sym')} in play {_num(r.get('score'))} · {r.get('reason')} · {engine}"
 
     def story(s: dict[str, Any]) -> str:
         hours = round(float(s.get("age_min") or 0.0) / 60.0, 1)
@@ -1178,8 +1230,10 @@ def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
             "plan": g.get("plan"),
             "breadth": {k: breadth.get(k) for k in ("advancers", "decliners", "names", "buckets")},
             "top_setups": [setup(r) for r in rows("top")],
-            "pinned": [line(r) for r in rows("list")],
-            "added_today": [line(r) for r in rows("adds")],
+            "in_play": {"pool": {k: _d(g.get("inplay")).get(k) for k in
+                                 ("qualified", "promoted", "marks_done", "next_mark", "basis")},
+                        "names": [inplay(r) for r in _d(g.get("inplay")).get("rows") or []
+                                  if isinstance(r, dict)]},
             "stories": [story(s) for s in rows("stories")],
             "sectors": [f"{s.get('key')} {s.get('label')} {_pc(s.get('day_pct'))} "
                         f"({_pc(s.get('rs_day'))} vs SPY), leaders "
@@ -1246,6 +1300,10 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
     elif name == "session_ranges":
         body = {"ranges": _by_book(fd.get("session_ranges"), book),
                 "overnight": _by_book(fd.get("overnight_sessions"), book)}
+    elif name == "session_type":
+        st_lean = _d(fd.get("session_type_lean"))
+        body = {"how_to_read": st_lean.get("how_to_read"), "record": st_lean.get("record"),
+                "books": _by_book({k: v for k, v in st_lean.items() if k in BOOKS}, book)}
     elif name == "volume_profile":
         body = {"profile": _by_book(fd.get("volume_profile"), book)}
     elif name == "gamma":

@@ -43,6 +43,13 @@ name still shows yesterday's PMH. `pm_ref` is those columns as they stood before
 the session began, and a row that still equals them has no pre-market today. The
 post-market columns are guarded the same way.
 
+RELATIVE VOLUME OUTSIDE THE SESSION HAS TO BE WRITTEN DOWN. The screener's relative
+volume is a regular-session figure and no feed here gives a name's usual pre-market:
+Yahoo's pre-market bars carry no volume. So each evening every name's finished
+pre-market and after-hours volume goes on a thirty-session list (`pm_hist`, `ah_hist`),
+and five sessions make an average worth dividing by. Until a name has five, the
+figure is an estimate from its share of an average day and the row says so.
+
 A PERSONAL READ OF A PUBLIC PAGE'S DATA, like the pool: one request a pass, a browser
 User-Agent, a 403 or 429 answered with a ten-minute pause.
 """
@@ -108,6 +115,11 @@ DEFAULT_VOL = 5e5
 DEFAULT_RVOL = 2.0
 DEFAULT_PM_VOL = 1e5
 DEFAULT_AH_VOL = 5e4
+#: Sessions of extended-hours volume kept for each name, and how many make an average.
+VOL_KEEP = 30
+VOL_MIN_DAYS = 5
+#: What share of an average day counts as a normal extended session: the estimate's divisor.
+USUAL_ADV_PCT = {"pre": 5.0, "post": 2.0}
 
 #: Themes with a clean match in TradingView's `industry`, for the table's filter.
 THEMES: list[tuple[str, str, frozenset[str]]] = [
@@ -374,6 +386,10 @@ def evaluate(r: dict[str, Any], basis: str, read_at: float, *, pm_ok: bool, ah_o
             ext = (last / r["close"] - 1.0) * 100.0 if r["close"] else ext
         elif pdc:
             chg = (last / pdc - 1.0) * 100.0
+            if pre:
+                # Before the open the gap IS that move: it must follow the live trade
+                # too, or the row shows two figures for one thing.
+                gap = chg
 
     pd_state = "above" if last > pdh else "below" if last < pdl else "inside"
     if pmh is None or pml is None:
@@ -418,6 +434,8 @@ class Ctx:
     pinned: frozenset[str] = frozenset()
     tracked: frozenset[str] = frozenset()
     stage: dict[str, int] = field(default_factory=dict)
+    #: What the engine does with the name today (sources/pool.verdict), for the row.
+    verdict: Callable[[str], dict[str, Any] | None] = lambda _s: None
 
 
 def span_stats(rows: list[dict[str, Any]], column: str, leaders: int = 3) -> dict[str, Any]:
@@ -479,6 +497,11 @@ class UniverseStore:
         self.pause_until = 0.0
         self.pm_ref: dict[str, list[float | None]] = {}
         self.ah_ref: dict[str, list[float | None]] = {}
+        #: The session `pm_ref` was taken from, and each name's extended volumes by session.
+        self.pm_ref_day: str | None = None
+        self.vol_day: str | None = None
+        self.pm_hist: dict[str, list[int]] = {}
+        self.ah_hist: dict[str, list[int]] = {}
         self.sparks: dict[str, tuple[float, list[float]]] = {}
         self.spark_want: list[str] = []
         #: Each fund-defined theme's stocks (sources/holdings.py), set on the wide thread.
@@ -496,6 +519,10 @@ class UniverseStore:
         if isinstance(d, dict):
             self.pm_ref = d.get("pm_ref") or {}
             self.ah_ref = d.get("ah_ref") or {}
+            self.pm_ref_day = d.get("pm_ref_day")
+            self.vol_day = d.get("vol_day")
+            self.pm_hist = d.get("pm_hist") or {}
+            self.ah_hist = d.get("ah_hist") or {}
 
     def _save(self) -> None:
         tmp = self.path + ".tmp"
@@ -503,17 +530,61 @@ class UniverseStore:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"saved_utc": datetime.now(UTC).isoformat(), "pm_ref": self.pm_ref,
-                           "ah_ref": self.ah_ref}, f)
+                           "ah_ref": self.ah_ref, "pm_ref_day": self.pm_ref_day,
+                           "vol_day": self.vol_day, "pm_hist": self.pm_hist,
+                           "ah_hist": self.ah_hist}, f)
             os.replace(tmp, self.path)
         except OSError:
             pass
 
     # ---- the tick -----------------------------------------------------------
 
+    def _book_volumes(self, rows: list[dict[str, Any]], day: str) -> None:
+        """Once a session: each name's finished extended-hours volume onto its list.
+
+        A name that did not trade still shows the last session's figures, which is a
+        day of none, unless the reference was itself taken this evening (a restart
+        after the first read), when an unchanged row says nothing. A reference with no
+        date, from before dates were kept, is treated the same way: one night of a
+        quiet name's old figure costs less than a night of zeros for every name.
+        """
+        if self.vol_day == day:
+            return
+        ref_is_older = self.pm_ref_day is not None and self.pm_ref_day != day
+
+        def add(book: dict[str, list[int]], sym: str, v: float | None) -> None:
+            kept = book.setdefault(sym, [])
+            kept.append(int(v or 0))
+            del kept[:-VOL_KEEP]
+
+        for r in rows:
+            sym = r["sym"]
+            pm = self.pm_ref.get(sym) if ref_is_older else None
+            same = pm is not None and [r["pm_h"], r["pm_l"], r["pm_vol"]] == pm[:3]
+            add(self.pm_hist, sym, 0.0 if same else r["pm_vol"])
+            ah = self.ah_ref.get(sym)
+            same = ah is not None and [r["ah_c"], r["ah_vol"]] == ah[:2]
+            add(self.ah_hist, sym, 0.0 if same else r["ah_vol"])
+        self.vol_day = day
+
+    def _ext_rvol(self, sym: str, session: str, vol: float | None,
+                  adv_pct: float | None) -> tuple[float | None, bool]:
+        """(this session's volume against its own average, whether that is an estimate)."""
+        kept = (self.pm_hist if session == "pre" else self.ah_hist).get(sym) or []
+        if len(kept) >= VOL_MIN_DAYS:
+            mean = sum(kept) / len(kept)
+            return (round(vol / mean, 2) if vol and mean > 0 else None), False
+        if adv_pct is None:
+            return None, True
+        return round(adv_pct / USUAL_ADV_PCT[session], 2), True
+
     def _take(self, rows: list[dict[str, Any]], read_at: float, basis: str) -> None:
         if basis == "last":
+            day = session_day(datetime.fromtimestamp(read_at, UTC)).isoformat()
+            self._book_volumes(rows, day)
             self.pm_ref = {r["sym"]: [r["pm_h"], r["pm_l"], r["pm_vol"], r["pm_c"], r["pm_chg"]]
                            for r in rows}
+            self.pm_ref_day = day
             self._save()
         elif basis in ("pre", "rth"):
             self.ah_ref = {r["sym"]: [r["ah_c"], r["ah_vol"], r["ah_chg"]] for r in rows}
@@ -579,6 +650,31 @@ class UniverseStore:
               q: dict[str, Any] | None) -> dict[str, Any] | None:
         return evaluate(r, basis, self.read_at or 0.0, pm_ok=self.pm_ok(r, basis),
                         ah_ok=self.ah_ok(r, basis), q=q)
+
+    def premarket_of(self, sym: str, trading_day: date,
+                     now: datetime | None = None) -> dict[str, Any] | None:
+        """Today's pre-market for one name as the screener has it, in the shape the
+        scanner's own pre-market read has (sources/premarket.py), or None.
+
+        THE STAND-IN FOR NASDAQ'S READ (audit, 2026-11-11). The tracked names' pre-
+        market volume comes from Nasdaq, one request a name, and is half of the pre-
+        open score's in-play part. On 10 Nov Nasdaq refused the collector for thirteen
+        hours; the wide read holds the same figure for every name in the one request it
+        already makes, fifteen minutes behind. So a name Nasdaq has not answered for
+        takes this. None when no session is on, when the session is not `trading_day`'s
+        (20:00 to 20:15 ET the scanner's day has rolled and the screener's has not), or
+        when the name's columns are still the last session's.
+        """
+        now = now or datetime.now(UTC)
+        basis = basis_at(now)
+        r = self.by_sym.get(sym)
+        if r is None or basis == "last" or session_day(now) != trading_day:
+            return None
+        if r["pm_vol"] is None or not self.pm_ok(r, basis):
+            return None
+        at = self.read_at if self.read_at is not None else now.timestamp()
+        return {"volume": r["pm_vol"], "high": r["pm_h"], "low": r["pm_l"], "last": r["pm_c"],
+                "asof": datetime.fromtimestamp(at, UTC).isoformat(), "source": "screener"}
 
     def read_one(self, sym: str, ctx: Ctx, now: datetime | None = None) -> dict[str, Any] | None:
         """One name's reading, for the Day 2/3 table."""
@@ -828,6 +924,7 @@ class UniverseStore:
             e["tracked"] = e["sym"] in ctx.tracked
             e["pinned"] = e["sym"] in ctx.pinned
             e["stage"] = ctx.stage.get(e["sym"])
+            e["verdict"] = ctx.verdict(e["sym"])
             e["spark"] = self.spark(e["sym"])
             e["themes"] = self.themes_of(self.by_sym[e["sym"]])
         movers = [e for e in base if e["chg"] is not None]
@@ -855,14 +952,10 @@ class UniverseStore:
 
     # ---- Extended hours -----------------------------------------------------
 
-    def extended(self, ctx: Ctx, *, session: str = "pre", cap: float = DEFAULT_CAP,
-                 vol: float | None = None, chip: str = "all",
-                 now: datetime | None = None) -> dict[str, Any]:
-        """The gappers of one extended session: this one if it is on, else the last."""
-        now = now or datetime.now(UTC)
-        basis = basis_at(now)
+    def _gappers(self, ctx: Ctx, session: str, cap: float, floor: float,
+                 basis: str) -> list[dict[str, Any]]:
+        """Every name past the filters that moved in this extended session."""
         pre = session == "pre"
-        floor = (DEFAULT_PM_VOL if pre else DEFAULT_AH_VOL) if vol is None else vol
         active = basis == session
         out: list[dict[str, Any]] = []
         for r in self.rows:
@@ -894,27 +987,63 @@ class UniverseStore:
                 is_live = True
             state = "above" if last > hi else "below" if last < lo else "inside"
             avg = r["avg"]
+            adv_pct = _round(v / avg * 100.0 if v and avg else None, 1)
+            rvol, est = self._ext_rvol(r["sym"], session, v, adv_pct)
+            h1, l1 = r["h1"], r["l1"]
+            ok_pm = self.pm_ok(r, basis)
             out.append({"sym": r["sym"], "name": r["name"], "cap": r["cap"],
                         "sector": r["sector"], "float": r["float"], "last": round(last, 4),
-                        "chg": round(chg, 2), "vol": v,
-                        "adv_pct": _round(v / avg * 100.0 if v and avg else None, 1),
+                        "chg": round(chg, 2), "vol": v, "adv_pct": adv_pct,
+                        "rvol": rvol, "rvol_est": est, "session": session,
                         "hi": hi, "lo": lo, "state": state, "live": is_live,
+                        "pmh": r["pm_h"] if ok_pm else None, "pml": r["pm_l"] if ok_pm else None,
+                        "inside": (r["high"] is not None and r["low"] is not None
+                                   and h1 is not None and l1 is not None
+                                   and r["high"] <= h1 and r["low"] >= l1),
                         "catalyst": ctx.catalyst(r["sym"]), "tracked": r["sym"] in ctx.tracked,
-                        "pinned": r["sym"] in ctx.pinned, "stage": ctx.stage.get(r["sym"])})
+                        "pinned": r["sym"] in ctx.pinned, "stage": ctx.stage.get(r["sym"]),
+                        "verdict": ctx.verdict(r["sym"])})
+        return out
+
+    def extended(self, ctx: Ctx, *, session: str = "pre", cap: float = DEFAULT_CAP,
+                 vol: float | None = None, chip: str = "all",
+                 now: datetime | None = None) -> dict[str, Any]:
+        """The gappers of an extended session: this one if it is on, else the last. "all"
+        is both, a name that moved in each shown once, in the more recent of the two."""
+        now = now or datetime.now(UTC)
+        basis = basis_at(now)
+
+        def floor_of(s: str) -> float:
+            return (DEFAULT_PM_VOL if s == "pre" else DEFAULT_AH_VOL) if vol is None else vol
+
+        if session == "all":
+            newest = "pre" if basis in ("pre", "rth") else "post"
+            older = "post" if newest == "pre" else "pre"
+            out = self._gappers(ctx, newest, cap, floor_of(newest), basis)
+            seen = {e["sym"] for e in out}
+            out += [e for e in self._gappers(ctx, older, cap, floor_of(older), basis)
+                    if e["sym"] not in seen]
+            floor, active = floor_of("pre"), basis in ("pre", "post")
+        else:
+            floor, active = floor_of(session), basis == session
+            out = self._gappers(ctx, session, cap, floor, basis)
         out.sort(key=lambda e: (0 if (e["catalyst"] or {}).get("major") else 1, -abs(e["chg"])))
+        ups_all, downs_all = [e for e in out if e["chg"] > 0], [e for e in out if e["chg"] < 0]
         chips = {
             "all": len(out),
             "up": sum(1 for e in out if e["chg"] > 0),
             "down": sum(1 for e in out if e["chg"] < 0),
             "news": sum(1 for e in out if e["catalyst"]),
             "through": sum(1 for e in out if e["state"] != "inside"),
+            "inside": sum(1 for e in out if e["inside"]),
             "day23": sum(1 for e in out if (e["stage"] or 0) >= 2),
             "pinned": sum(1 for e in out if e["pinned"]),
         }
         kept = {
-            "up": [e for e in out if e["chg"] > 0], "down": [e for e in out if e["chg"] < 0],
+            "up": ups_all, "down": downs_all,
             "news": [e for e in out if e["catalyst"]],
             "through": [e for e in out if e["state"] != "inside"],
+            "inside": [e for e in out if e["inside"]],
             "day23": [e for e in out if (e["stage"] or 0) >= 2],
             "pinned": [e for e in out if e["pinned"]],
         }.get(chip, out)
@@ -929,9 +1058,16 @@ class UniverseStore:
             "session": session,
             "active": active,
             "volume_floor": floor,
+            "scanned": sum(1 for r in self.rows if (r["cap"] or 0) >= cap),
             "chips": chips,
-            "stats": {"up": ups[0] if ups else None, "down": downs[0] if downs else None},
-            "reference": (self._reference(ctx, session, cap, floor) if active and not out
+            "stats": {"up": ups[0] if ups else None, "down": downs[0] if downs else None,
+                      "through": chips["through"], "inside": chips["inside"],
+                      "gap_up": len(ups_all),
+                      "gap_up_news": sum(1 for e in ups_all if e["catalyst"]),
+                      "gap_down": len(downs_all),
+                      "gap_down_news": sum(1 for e in downs_all if e["catalyst"])},
+            "reference": (self._reference(ctx, "pre" if session == "all" else session, cap, floor)
+                          if active and not out
                           else by_size[:4]),
             "reference_is_last": active and not out,
             "shown": len(rows),

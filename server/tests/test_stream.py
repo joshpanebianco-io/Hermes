@@ -46,6 +46,14 @@ def ts(y: int, mo: int, d: int, h: int, mi: int, s: int = 0) -> float:
 MON_0945 = ts(2026, 11, 9, 9, 45)
 
 
+@pytest.fixture(autouse=True)
+def _monday(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stream's clock is pinned to the Monday these trades were written for: a
+    frame more than a day from now is not a trade, so a real clock fails every
+    test here the day after its dates."""
+    monkeypatch.setattr(stream.time, "time", lambda: ts(2026, 11, 9, 12, 0))
+
+
 def test_a_frame_reads_back_as_a_trade() -> None:
     got = stream.parse_frame(frame("NVDA", 179.97, int(MON_0945 * 1000), vol=123456),
                              now=MON_0945 + 2)

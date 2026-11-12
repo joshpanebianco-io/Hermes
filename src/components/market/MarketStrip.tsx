@@ -62,7 +62,7 @@ export function MarketStrip({ ctx, failed }: { ctx: MarketCtx | null; failed?: s
 
   return (
     <StripFrame>
-      <div className="grid grid-cols-2 divide-ring md:grid-cols-[minmax(0,1.45fr)_repeat(4,minmax(0,1fr))] md:divide-x">
+      <div className="qt-tiles grid grid-cols-2 divide-ring md:grid-cols-[minmax(0,1.45fr)_repeat(4,minmax(0,1fr))] md:divide-x">
         {/* ---- the count: which side, and how many signals agree ----------- */}
         <Cell label="Tape conviction" title={votesTip(c)} className="col-span-2 md:col-span-1">
           {c.total === 0 ? (
@@ -225,7 +225,8 @@ function StripFrame({ children }: { children: React.ReactNode }) {
     <section
       aria-label="Market conviction"
       className={cn(
-        "mx-2 mt-2 shrink-0 overflow-hidden rounded-lg border border-ring bg-surface",
+        // `qt-strip`: under Luminous the cells are tiles and this drops its rule (globals.css).
+        "qt-strip mx-2 mt-2 shrink-0 overflow-hidden rounded-lg border border-ring bg-surface",
         "qt:mx-0 qt:mt-0 qt:rounded-none qt:border-x-0 qt:border-t-0 qt:bg-transparent",
       )}
     >

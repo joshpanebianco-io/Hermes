@@ -5,7 +5,12 @@ import type { WireItem } from "@/types/terminal";
 import { Ago } from "@/components/ui/Ago";
 
 /**
- * The alert line — high-impact headlines, crawling, on every tab.
+ * The alert line — high-impact headlines, crawling, over the Macro tab.
+ *
+ * MACRO ONLY (owner, 2026-11-10: "remove the news rail above from everywhere
+ * except macro tab"). It ran over every tab; the other pages carry their own news
+ * where it bears on them (the Futures news, a name's news in the slide-out), and
+ * the crawl is the wire's, so it sits with the wire.
  *
  * A CRAWL, MATCHING GEXYGEN (owner instruction, 2026-08-31). The first cut was
  * a fixed row that scrolled by hand, on the argument that a moving target
@@ -90,7 +95,7 @@ export function AlertStrip({
 
   return (
     <div
-      className="flex items-stretch border-b border-ring bg-err/[0.07] qt:bg-transparent"
+      className="qt-crawl flex items-stretch border-b border-ring bg-err/[0.07] qt:bg-transparent"
       role="region"
       aria-label="High-impact headlines"
     >

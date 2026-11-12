@@ -100,7 +100,11 @@ export function Popover({
     const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
     const below = r.bottom + 6;
     const top = below + height > window.innerHeight - 8 ? Math.max(8, r.top - height - 6) : below;
-    el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+    // The rects are in real pixels; the panel's own lengths are in ITS pixels, which
+    // Luminous scales on a wide window (`.qt-pop`, globals.css). Unscaled, a panel
+    // opened at x = 2,000 landed at 2,200.
+    const z = Number(getComputedStyle(el).zoom) || 1;
+    el.style.transform = `translate(${Math.round(left / z)}px, ${Math.round(top / z)}px)`;
     el.style.visibility = "visible";
   }, [open, moved]);
 
@@ -131,7 +135,7 @@ export function Popover({
             tabIndex={-1}
             style={{ visibility: "hidden" }}
             className={cn(
-              "fixed top-0 left-0 z-50 outline-none",
+              "qt-pop fixed top-0 left-0 z-50 outline-none",
               "rounded-[8px] border border-ring-2 bg-surface shadow-[0_18px_60px_rgba(0,0,0,.6)] qt:rounded-[4px]",
               panelClassName,
             )}

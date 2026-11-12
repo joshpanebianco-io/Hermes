@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PoolView, Watchlist } from "@/types/scanner";
 import { age } from "@/lib/format";
+import { PINS_EVENT, putBack, recentUnpins, type Unpinned } from "@/lib/pins";
 import { segItem } from "@/lib/seg";
 
 /**
@@ -111,8 +112,27 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
     if (!symbols.includes(sym)) setText((t) => `${t.trim()} ${sym}`.trim());
   };
 
+  /*
+   * UNPINNED RECENTLY (lib/pins.ts): the names a star took off the list in the last
+   * week, in this browser, each with when. "Why is X not on the list?" is asked here,
+   * and until 2026-11-11 the answer for a name unpinned by a stray click was nothing
+   * at all. Putting one back writes it into the text where it sat, to be saved with
+   * the rest, as a promoted name is.
+   */
+  const [recent, setRecent] = useState<Unpinned[]>([]);
+  useEffect(() => {
+    const read = () => setRecent(recentUnpins());
+    read();
+    window.addEventListener(PINS_EVENT, read);
+    return () => window.removeEventListener(PINS_EVENT, read);
+  }, []);
+  const gone = recent.filter((u) => !symbols.includes(u.sym));
+  const putBackInText = (u: Unpinned) => setText(putBack(symbols, u).join(" "));
+
   return (
-    <div className="flex shrink-0 flex-col gap-2 border-b border-ring bg-surface-2/40 px-6 py-3">
+    // `qt-slab qt-editor`: under Luminous the editor is a card under the band, like every
+    // other block of the page; it was the one panel still lying on the ground.
+    <div className="qt-slab qt-editor flex shrink-0 flex-col gap-2 border-b border-ring bg-surface-2/40 px-6 py-3">
       <div className="flex items-baseline gap-3">
         <label htmlFor="scan-watchlist" className="qt-cap text-[10.5px] text-ink-3">
           Pinned
@@ -161,10 +181,32 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
           </button>
         </div>
       </div>
+      {gone.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ring/60 pt-2">
+          <span className="qt-cap text-[10.5px] text-ink-3">Unpinned recently</span>
+          {gone.map((u) => (
+            <button
+              key={u.sym}
+              type="button"
+              onClick={() => putBackInText(u)}
+              title={`Taken off the list with its star, ${unpinnedWhen(u.at)}. Click to put it back where it was, then Save.`}
+              {...segItem(false, { className: "border border-ring-2" })}
+            >
+              <span className="font-semibold text-ink">{u.sym}</span>
+              <span className="fig ml-1.5 text-[10.5px] text-ink-3">{unpinnedWhen(u.at)}</span>
+            </button>
+          ))}
+          <span className="text-[11px] text-ink-3">click one to put it back, then Save</span>
+        </div>
+      )}
       {pool && <PoolStrip pool={pool} pinned={symbols} busy={busy} onSwitch={switchPromotion} onPin={pin} />}
     </div>
   );
 }
+
+const UNPIN_AT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+/** "Tue 10:12 ET": when a name was unpinned, on New York's clock like the rest of the page. */
+const unpinnedWhen = (at: number) => `${UNPIN_AT.format(new Date(at)).replace(",", "")} ET`;
 
 function PoolStrip({
   pool,

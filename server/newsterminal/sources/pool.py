@@ -10,7 +10,7 @@ minute, three hundred would be ~200, against an unpublished limit whose answer
 — one HTTP 429 — pauses the whole scanner. So the wide read has to be a
 different, batched read that answers one question only, IS THIS NAME IN PLAY
 TODAY, and the names that are get promoted into the forty the Pine port runs
-on. A promoted name's first chart request returns five days of bars, so its
+on. A promoted name's first chart request returns twelve sessions of bars, so its
 levels, wave and score are complete within one fetch: no warm-up.
 
 WHERE THE POOL COMES FROM, PROBED 2026-10-24 (a Saturday, so Friday's figures).
@@ -56,6 +56,17 @@ an ATR of 1.5%+ (room for the retest to pay the premium), $10+ a share.
 Of Friday's 1,371 common lines and DRs that is 244 names; $1bn and 2.5% would
 have been 84, $250m and 1% 497.
 
+OPENED TO $2BN AND TO TODAY'S TURNOVER (owner, 2026-11-10: "the purpose of this
+whole scanner is going into the day to be able to identify the most high
+probability stocks with high volume and momentum and news moving it"). The
+Day 2/3 names are mostly $2bn to $5bn and trade $100m on an average day, and
+the morning's gappers often are too, so neither could ever be promoted: the
+query now starts at $2bn (the wide tables' own floor), and the turnover gate
+is met by an average day OR by today — $50m before the bell, $500m once it is
+on — OR by a strong Day 2/3 track (20%+ on 1.5x at $2bn+, momentum.strong),
+whose Day 1 volume says more about this week than its thirty-day average does.
+The ATR gate is waived for those tracks for the same reason. $10 stands for all.
+
 THE RANK — THE SCANNER'S OWN IN-PLAY ARITHMETIC (scanscore.in_play), applied
 to the pool: the gap in the name's own daily ATRs (8 points, from 0.10 ATR to
 0.75) and the pre-market volume as a share of an average day (8 points,
@@ -66,6 +77,12 @@ day (fifteen minutes into the session a name in play has traded a twentieth
 of its day; one in the news nearly half). Nothing under 4 points is promoted:
 a 0.4-ATR gap alone is 3.7, 1% of ADV before the bell alone is 5.5, so on a
 dead morning the list is just the pinned names, which is the right answer.
+Two parts more since 2026-11-10, for the trade the list is for (a break and
+retest of PMH/PML or PDH/PDL, best when the name is already outside the day
+before): 2 for a name through the previous day's high or low already (before
+the bell against the last session's, after it against the prior one's), and
+3 for a Day 2 or 2 for a Day 3+ of a strong move, where Day 1's high is the
+level. The reason names each: "through PDH", "day 2 of a +24% move".
 
 THE MARKS — WHEN THE LIST IS DECIDED. The pool is read every five minutes from
 04:00 to 10:30 ET on a trading day (half-hourly otherwise, so the panel is
@@ -125,12 +142,17 @@ COLUMNS = [
     "average_volume_30d_calc", "ATR", "market_cap_basic", "sector",
     "premarket_change", "premarket_volume", "premarket_close",
     "earnings_release_next_date", "earnings_release_date", "update_mode",
+    # The day's range and the previous session's, for the outside-day part: before
+    # the bell `high`/`low` ARE the previous session's (the wide read says the same).
+    "high", "low", "high[1]", "low[1]",
 ]
-MIN_CAP = 5_000_000_000.0
-RANGE = 2500
+MIN_CAP = 2_000_000_000.0
+RANGE = 4000
 
 # ---- the gates (module docstring) -------------------------------------------
 MIN_DOLLAR_VOL = 500_000_000.0
+#: Today's turnover meets the gate too: this much before the bell, MIN_DOLLAR_VOL after.
+MIN_PM_DOLLAR_VOL = 50_000_000.0
 MIN_ATR_PCT = 1.5
 MIN_PRICE = 10.0
 
@@ -139,13 +161,37 @@ MIN_PRICE = 10.0
 #: day; a twentieth of it earns the first point and nearly half the whole part.
 RVOL_MIN = 5.0
 RVOL_FULL = 40.0
+# PAST FULL, THE RANK STILL HAS TO TELL NAMES APART (owner, 2026-11-11: "do what you
+# recommend"). Both parts stopped at 8: a 0.75-ATR move and a 3-ATR one scored the
+# same, and so did 40% of a day's volume and 400%. On the evening of 10 Nov the top
+# ten read 21.0, 21.0, 21.0, 20.6, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, and the three
+# slots a pre-market mark has were going to whichever of them the tie-break put
+# first. So each part carries up to EXTRA more points for what lies beyond its full
+# mark, on a log scale to the far mark below: a move of 0.75 to 3 ATR, pre-market
+# volume of 4% to 40% of a day, a day's volume of 40% to 400%. Nothing under the
+# full mark changes, so who clears MIN_SCORE is who cleared it before; only the
+# order above it does. Read on that evening's ten: 28.1, 26.3, 26.2, 25.8, 25.6,
+# 25.5, 22.9, 22.3, 22.3, 21.6. A judgement on the scale, with no outcome test.
+EXTRA = 4.0
+GAP_FAR = 3.0
+PMVOL_FAR = 40.0
+RVOL_FAR = 400.0
 W_REPORT = 2
 #: A fresh major story that is not the report (sources/tvnews, owner 2026-11-09:
 #: "news is the engine of moves"). Three, so a 0.4-ATR gap (3.7, one short of the
 #: bar) gets promoted with news behind it, and news alone (3.0) does not: a story
 #: the tape is ignoring is not in play.
 W_NEWS = 3
+#: Already through the previous day's high or low (module docstring).
+W_OUTSIDE = 2
+#: A strong Day 2, and a Day 3 or later (momentum.strong).
+W_DAY2 = 3
+W_DAY3 = 2
 MIN_SCORE = 4.0
+#: The most a name can score: both parts and their extra, a story (worth more than
+#: the report it stands in for), a level taken, a Day 2. For a bar drawn to scale.
+SCORE_MAX = (W_GAP + EXTRA) + (W_PMVOL + EXTRA) + max(W_REPORT, W_NEWS) + W_OUTSIDE + max(
+    W_DAY2, W_DAY3)
 
 # ---- the marks and the clock ------------------------------------------------
 PRE_MARKS: tuple[tuple[int, str], ...] = (
@@ -268,6 +314,8 @@ def parse(doc: Any) -> tuple[list[dict[str, Any]], str | None]:
             "earn_next": earn_next,
             "earn_last": earn_last,
             "earn_last_when": last_when,
+            "high": _num(r.get("high")), "low": _num(r.get("low")),
+            "h1": _num(r.get("high[1]")), "l1": _num(r.get("low[1]")),
             "dollar_vol": (avg * close) if avg is not None and close is not None else None,
             "atr_pct": (atr / close * 100.0) if atr is not None and close else None,
             "delayed": str(r.get("update_mode") or "").startswith("delayed"),
@@ -275,14 +323,34 @@ def parse(doc: Any) -> tuple[list[dict[str, Any]], str | None]:
     return rows, None
 
 
-def qualify(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The gates (module docstring). Pure."""
+def today_turnover(r: dict[str, Any], basis: str) -> float | None:
+    """What the name has traded in dollars in the session the rank reads: the
+    pre-market's shares at its last print before the bell, the day's after. Pure."""
+    if basis == "pre":
+        v, px = r.get("pm_volume"), r.get("pm_close")
+    else:
+        v, px = r.get("volume"), r.get("close")
+    return v * px if v is not None and px is not None else None
+
+
+def qualify(rows: Iterable[dict[str, Any]], basis: str = "last",
+            strong: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """The gates (module docstring). `strong` are the Day 2/3 names, which pass the
+    turnover and ATR gates on their Day 1's say-so. Pure."""
+    keep = set(strong)
     out = []
     for r in rows:
         dv, ap, px = r.get("dollar_vol"), r.get("atr_pct"), r.get("close")
-        if dv is None or ap is None or px is None:
+        if px is None or px < MIN_PRICE:
             continue
-        if dv >= MIN_DOLLAR_VOL and ap >= MIN_ATR_PCT and px >= MIN_PRICE:
+        if r.get("symbol") in keep:
+            out.append(r)
+            continue
+        if dv is None or ap is None or ap < MIN_ATR_PCT:
+            continue
+        today = today_turnover(r, basis)
+        floor = MIN_PM_DOLLAR_VOL if basis == "pre" else MIN_DOLLAR_VOL
+        if dv >= MIN_DOLLAR_VOL or (today is not None and today >= floor):
             out.append(r)
     return out
 
@@ -302,15 +370,39 @@ def _clamp(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def in_play(row: dict[str, Any], basis: str, trading_day: date,
-            news: Callable[[str], str | None] | None = None) -> dict[str, Any]:
-    """One pool name's in-play read: the score, its parts and the reason. Pure.
+def beyond(x: float, full: float, far: float) -> float:
+    """The points past a part's full mark: none up to `full`, EXTRA at `far` and
+    over, on a log scale between (the note over EXTRA). Pure."""
+    if x <= full:
+        return 0.0
+    return EXTRA * _clamp(math.log(x / full) / math.log(far / full))
 
-    Worked examples, Friday 23 Oct 2026's reply (tests/fixtures/tv_pool_trim.json):
-      as "day"   KO    −2.76% on a 1.58 ATR: moved 2.63 = 1.67 ATR → 8.0 ;
-                       18.9M of a 16.4M average day = 115% → 8.0      → 16.0
+
+def outside_of(row: dict[str, Any], basis: str) -> str | None:
+    """"PDH" or "PDL" when the name is already through the previous day's high or
+    low: before the bell the pre-market last against the last session's range, after
+    it the day's last against the prior session's. None inside, or unread. Pure."""
+    if basis == "pre":
+        last, hi, lo = row.get("pm_close"), row.get("high"), row.get("low")
+    else:
+        last, hi, lo = row.get("close"), row.get("h1"), row.get("l1")
+    if last is None or hi is None or lo is None:
+        return None
+    return "PDH" if last > hi else "PDL" if last < lo else None
+
+
+def in_play(row: dict[str, Any], basis: str, trading_day: date,
+            news: Callable[[str], str | None] | None = None,
+            stage: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One pool name's in-play read: the score, its parts and the reason. Pure.
+    `stage` is the name's strong Day 2/3 track (momentum.strong), if it has one.
+
+    Worked examples, Friday 23 Oct 2026's reply (tests/fixtures/tv_pool_trim.json),
+    each part's points past its full mark after the plus (`beyond`):
+      as "day"   KO    −2.76% on a 1.58 ATR: moved 2.63 = 1.67 ATR → 8.0 + 2.3 ;
+                       18.9M of a 16.4M average day = 115% → 8.0 + 1.8 → 20.1
                  NVDA  −0.59% on a 6.06 ATR: 0.21 ATR → 8 × 0.11/0.65 = 1.3 ;
-                       76% of ADV → 8.0                                → 9.3
+                       76% of ADV → 8.0 + 1.1                          → 10.4
       as "pre"   SNDK  pre-market 1271.01 on a 1238.03 close, ATR 96.14:
                        0.34 ATR → 3.0 ; 193k of 8.58M = 2.25% of ADV →
                        8 × ln(2.25/0.25)/ln(16) = 6.3                   → 9.3
@@ -320,29 +412,34 @@ def in_play(row: dict[str, Any], basis: str, trading_day: date,
     atr, close, avg = row.get("atr"), row.get("close"), row.get("avg_vol")
     if basis == "pre":
         last, ref, vol = row.get("pm_close"), close, row.get("pm_volume")
-        vmin, vfull, vword = PMVOL_MIN, PMVOL_FULL, "pre-market"
+        vmin, vfull, vfar, vword = PMVOL_MIN, PMVOL_FULL, PMVOL_FAR, "pre-market"
     else:
         chg = row.get("change")
         ref = (close / (1.0 + chg / 100.0)
                if close is not None and chg is not None and chg > -100 else None)
         last, vol = close, row.get("volume")
-        vmin, vfull = RVOL_MIN, RVOL_FULL
+        vmin, vfull, vfar = RVOL_MIN, RVOL_FULL, RVOL_FAR
         vword = "today" if basis == "day" else "last session"
 
     gap_atr = (abs(last - ref) / atr
                if last is not None and ref is not None and atr is not None and atr > 0 else None)
-    gap_pts = (W_GAP * _clamp((gap_atr - GAP_MIN) / (GAP_FULL - GAP_MIN))
-               if gap_atr is not None else 0.0)
+    gap_pts = (W_GAP * _clamp((gap_atr - GAP_MIN) / (GAP_FULL - GAP_MIN)) + beyond(
+        gap_atr, GAP_FULL, GAP_FAR) if gap_atr is not None else 0.0)
     vol_pct = (vol / avg * 100.0) if vol is not None and avg is not None and avg > 0 else None
     vol_pts = 0.0
     if vol_pct is not None and vol_pct > vmin:
-        vol_pts = W_PMVOL * min(1.0, math.log(vol_pct / vmin) / math.log(vfull / vmin))
+        vol_pts = W_PMVOL * min(1.0, math.log(vol_pct / vmin) / math.log(vfull / vmin)) + beyond(
+            vol_pct, vfull, vfar)
 
     reports = report_read(row, trading_day)
     rep_pts = float(W_REPORT) if reports else 0.0
     # The report earns its own two; a story is only counted when there is no report.
     story = news(str(row.get("symbol") or "")) if news is not None and not reports else None
     news_pts = float(W_NEWS) if story else 0.0
+    through = outside_of(row, basis)
+    out_pts = float(W_OUTSIDE) if through else 0.0
+    day_n = int(stage["stage"]) if stage and isinstance(stage.get("stage"), int) else 0
+    day_pts = float(W_DAY2) if day_n == 2 else float(W_DAY3) if day_n >= 3 else 0.0
 
     bits = [
         (f"{'gap' if basis == 'pre' else 'moved'} {gap_atr:.2f} ATR"
@@ -353,12 +450,18 @@ def in_play(row: dict[str, Any], basis: str, trading_day: date,
         bits.append(reports)
     if story:
         bits.append(f"{story.lower()} news")
+    if through:
+        bits.append(f"through {through}")
+    if day_pts:
+        bits.append(f"day {day_n} of a {float(stage['move']):+.0f}% move")
     return {
-        "score": round(gap_pts + vol_pts + rep_pts + news_pts, 1),
+        "score": round(gap_pts + vol_pts + rep_pts + news_pts + out_pts + day_pts, 1),
         "reason": " · ".join(bits),
         "gap_atr": round(gap_atr, 2) if gap_atr is not None else None,
         "vol_pct": round(vol_pct, 2) if vol_pct is not None else None,
         "reports": reports,
+        "through": through,
+        "day": day_n or None,
     }
 
 
@@ -382,12 +485,13 @@ def report_read(row: dict[str, Any], trading_day: date) -> str | None:
 
 
 def rank(rows: Iterable[dict[str, Any]], clock: scan.Clock,
-         news: Callable[[str], str | None] | None = None) -> list[dict[str, Any]]:
+         news: Callable[[str], str | None] | None = None,
+         strong: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Every qualified name scored and sorted, best first. Pure."""
     basis = basis_for(clock)
     out = []
     for r in rows:
-        ip = in_play(r, basis, clock.trading_day, news)
+        ip = in_play(r, basis, clock.trading_day, news, (strong or {}).get(r["symbol"]))
         out.append({"symbol": r["symbol"], "name": r.get("name"),
                     "sector": TV_SECTOR.get(r.get("tv_sector") or ""),
                     "close": r.get("close"), "cap": r.get("cap"), **ip})
@@ -467,6 +571,37 @@ def promote(ranked: list[dict[str, Any]], pinned: Iterable[str], current: list[d
     return keep
 
 
+def verdict(entry: dict[str, Any] | None, pinned: bool, tracked: bool) -> dict[str, Any]:
+    """What the engine does with a name today, for a wide table's row (owner,
+    2026-11-10: the Extended hours pass should say which gappers get scored at the
+    open and which need Track). `entry` is PoolStore.entry. Pure.
+
+      pinned    on the list for good
+      hand      tracked by hand today
+      promoted  the pool took it, at `mark`
+      tracked   on the list by another route (an ad-hoc read)
+      inplay    in the pool over the bar, not taken: Track it
+      quiet     in the pool, under the bar
+      out       not in the pool (under $2bn, $10, or the turnover gate)
+    """
+    score = entry.get("score") if entry else None
+    mark = entry.get("mark") if entry else None
+    if pinned:
+        state = "pinned"
+    elif mark == "hand":
+        state = "hand"
+    elif mark:
+        state = "promoted"
+    elif tracked:
+        state = "tracked"
+    elif entry is None:
+        state = "out"
+    else:
+        state = "inplay" if isinstance(score, (int, float)) and score >= MIN_SCORE else "quiet"
+    return {"state": state, "score": score, "reason": entry.get("reason") if entry else None,
+            "mark": mark if mark != "hand" else None, "at": entry.get("at") if entry else None}
+
+
 def cadence(now: datetime) -> float:
     clock = scan.clock_at(now)
     active = clock.session == "pre" or (clock.session == "rth" and _minute(clock) < ACTIVE_UNTIL)
@@ -506,6 +641,9 @@ class PoolStore:
         self.manual: list[dict[str, Any]] = []
         #: The fresh-major-story read (sources/tvnews.NewsStore.major).
         self.news: Callable[[str], str | None] | None = None
+        #: The strong Day 2/3 tracks (momentum.strong), read once a tick.
+        self.stage: Callable[[], dict[str, dict[str, Any]]] | None = None
+        self.by_sym: dict[str, dict[str, Any]] = {}
         self._load()
 
     # ---- persistence --------------------------------------------------------
@@ -642,12 +780,14 @@ class PoolStore:
                 except (ValueError, TypeError) as e:
                     rows, err = [], f"unparseable: {e}"
                 if rows:
-                    self.rows = qualify(rows)
+                    strong = self.stage() if self.stage else {}
+                    self.rows = qualify(rows, basis_for(clock), strong)
                     self.screened = len(rows)
                     self.read_at = t - (r.age_min or 0.0) * 60.0
                     self.source = r.source
                     self.basis = basis_for(clock)
-                    self.ranked = rank(self.rows, clock, self.news)
+                    self.ranked = rank(self.rows, clock, self.news, strong)
+                    self.by_sym = {x["symbol"]: x for x in self.ranked}
                     self.error = r.error if r.source == "stale" else None
                     fresh = r.source == "live" or (r.age_min or 0.0) <= FRESH_MIN
                     if fresh:
@@ -672,6 +812,22 @@ class PoolStore:
             until = datetime.fromtimestamp(self.pause_until, scan.ET).strftime("%H:%M:%S")
             st.notes.append(f"TradingView refused (403/429) — paused until {until} ET")
         return st, read, changed
+
+    def entry(self, sym: str) -> dict[str, Any] | None:
+        """The name's place in the pool today: its rank entry, with the mark and the
+        time when promoted or tracked by hand. None when it is not in the pool."""
+        ranked = self.by_sym.get(sym)
+        with self._lock:
+            hand = next((p for p in self.manual if p["symbol"] == sym), None)
+            prom = next((p for p in self.promoted if p["symbol"] == sym), None)
+        hit = hand or prom
+        if ranked is None and hit is None:
+            return None
+        out = dict(ranked) if ranked is not None else {k: v for k, v in hit.items()
+                                                       if k not in ("mark", "at")}
+        if hit is not None:
+            out["mark"], out["at"] = hit.get("mark"), hit.get("at")
+        return out
 
     # ---- the panel ----------------------------------------------------------
 
@@ -701,7 +857,9 @@ class PoolStore:
             "qualified": len(self.rows),
             "basis": self.basis,
             "gates": {"cap_usd": MIN_CAP, "dollar_vol_usd": MIN_DOLLAR_VOL,
-                      "atr_pct": MIN_ATR_PCT, "price_usd": MIN_PRICE, "min_score": MIN_SCORE},
+                      "pm_dollar_vol_usd": MIN_PM_DOLLAR_VOL, "atr_pct": MIN_ATR_PCT,
+                      "price_usd": MIN_PRICE, "min_score": MIN_SCORE},
+            "score_max": SCORE_MAX,
             "top": [{**r, "promoted": r["symbol"] in shown} for r in top],
             "promoted": promoted,
             "day": self.day,

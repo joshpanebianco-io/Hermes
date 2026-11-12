@@ -2,8 +2,9 @@
 The scanner's feeds — bars, headlines and filings for every name on the watchlist.
 
 FREE, AND ENOUGH FOR THE STRATEGY. Yahoo's v8 chart endpoint gives any US stock
-five days of 5-minute OHLCV bars from 04:00 to 20:00 ET with no key — exactly
-what the Pine script reads through `request.security(…, session.extended)`. The
+5-minute OHLCV bars from 04:00 to 20:00 ET with no key — exactly what the Pine
+script reads through `request.security(…, session.extended)` — twelve sessions
+of them here (BARS_RANGE: ten prior sessions for RVOL and a spare). The
 same endpoint at a daily interval gives a year of sessions for the daily ATR,
 the daily frame (frame.py) and the realised earnings moves. Personal use only,
 like every other Yahoo read in this terminal.
@@ -54,7 +55,7 @@ import re
 import threading
 import time
 import urllib.parse
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any, NamedTuple
@@ -64,7 +65,7 @@ from ..config import BROWSER_UA, CACHE_DIR, UA
 from ..frame import frame_of
 from ..holidays import is_trading_day
 from ..http import CACHE, SourceStatus, clean_text, feed_body, fetch, json_body, rss_items
-from ..scanscore import adv20
+from ..scanscore import avg_day
 from .quotes import SPARK
 from .wire import gnews
 
@@ -111,6 +112,11 @@ _SYM = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,9}$")
 
 TICK_SEC = 15.0
 ACTIVE_SEC = 90.0
+#: The 5-minute download's range. Yahoo counts SESSIONS, not calendar days
+#: (checked 2026-11-10: 5d → 5, 15d → 15): today, the ten prior sessions RVOL
+#: reads (scan.RVOL_SESSIONS), and one spare for a half day. About 135 KB a
+#: name against 50 KB for five days — well inside the budget above.
+BARS_RANGE = "12d"
 BENCH_SEC = 30.0
 CLOSED_SEC = 900.0
 MAX_PER_TICK = 5
@@ -141,6 +147,11 @@ LIVE_CHUNK = 12
 CLOSE_LAG = float(scan.CLOSE_LAG_SEC)
 #: While a close is being read the bars job comes back this soon.
 BURST_TICK_SEC = 1.0
+#: Names that left the list during a day and still have signals to settle
+#: (`ScanStore.read_owed`): how many are read a tick, and how long one that could
+#: not be read waits before it is asked for again.
+OWED_PER_TICK = 2
+OWED_RETRY_SEC = 6 * 3600.0
 
 
 class LiveQuote(NamedTuple):
@@ -230,6 +241,11 @@ ALIASES: dict[str, list[str]] = {
     "MRVL": ["Marvell"], "SNDK": ["Sandisk", "SanDisk"], "CRWV": ["CoreWeave"],
     "NBIS": ["Nebius"], "GME": ["GameStop"], "SHOP": ["Shopify"],
 }
+#: Words a company's OWN feed calls it that are too common to match on the wire:
+#: MicroStrategy trades as "Strategy" now, and Arm's headlines say "Arm". Read with
+#: the aliases for whose story a headline is (catalysts.about), never for the wire's
+#: match, where "Strategy shift at the Fed" would land under MSTR.
+OWN_WORDS: dict[str, list[str]] = {"MSTR": ["Strategy"], "ARM": ["Arm"]}
 
 # EDGAR form types worth a line under a stock. Form 4 (insider trades) and 144
 # are left out: there are dozens a week on a megacap and they almost never move
@@ -314,6 +330,28 @@ def _last_close_mark(now: datetime) -> float:
         if d.weekday() < 5 and mark <= et_now:
             return mark.timestamp()
         d -= timedelta(days=1)
+
+
+#: Minutes of the ET day the daily bars are read again once the bell has rung, so
+#: today's row is held: its open is the official print, where the first 5-minute
+#: bar's is only the first trade Yahoo's bars caught (scan.technicals). Twice,
+#: because a name that opens late has no official open at the first.
+OPEN_MARKS: tuple[int, ...] = (scan.RTH_START + 3, scan.RTH_START + 35)
+
+
+def _last_open_mark(now: datetime) -> float:
+    """Epoch of today's newest open mark at or before `now`; 0.0 when there is none
+    (not a trading day, or before the first). Pure."""
+    et_now = now.astimezone(scan.ET)
+    d = et_now.date()
+    if not is_trading_day(d):
+        return 0.0
+    m = et_now.hour * 60 + et_now.minute
+    done = [x for x in OPEN_MARKS if x <= m]
+    if not done:
+        return 0.0
+    return datetime(d.year, d.month, d.day, done[-1] // 60, done[-1] % 60,
+                    tzinfo=scan.ET).timestamp()
 
 
 def _in_session_close(close: float) -> bool:
@@ -555,6 +593,39 @@ class ScanStore:
         self.stream: Any = None
         #: Names off the list read on request, and when (`ensure_adhoc`).
         self.adhoc: dict[str, float] = {}
+        #: Names off the list read so a finished day could be settled, and when each
+        #: was last asked for (`read_owed`).
+        self.owed: set[str] = set()
+        self.owed_tried: dict[str, float] = {}
+        #: Today's pre-market (high, low) for a name from a read that is not these
+        #: bars, when the collector has one (`pm_wide`): set by the collector.
+        self.pm_hint: Callable[[str, date], tuple[float | None, float | None] | None] | None = None
+        #: The widest such range seen for each name today, and the day it is for.
+        self.pm_seen: dict[str, tuple[date, float | None, float | None]] = {}
+
+    def pm_wide(self, sym: str, td: date) -> tuple[float | None, float | None] | None:
+        """Trading day `td`'s pre-market (high, low) for `sym` from the second read,
+        for `scan.technicals` to widen the bars' range with, or None.
+
+        THE WIDEST SEEN THAT DAY IS KEPT. A pre-market range only grows until it
+        locks at 09:30, so a later read that reaches less far (the screener's
+        columns rolling, a name dropping out of one read) or no read at all must
+        not narrow a level the day's signals have already been read against.
+        """
+        got = self.pm_hint(sym, td) if self.pm_hint is not None else None
+        day, hi, lo = self.pm_seen.get(sym, (td, None, None))
+        if day != td:
+            hi = lo = None
+        if got is not None:
+            h, low = got
+            if h is not None and h > 0 and (hi is None or h > hi):
+                hi = h
+            if low is not None and low > 0 and (lo is None or low < lo):
+                lo = low
+        if hi is None and lo is None:
+            return None
+        self.pm_seen[sym] = (td, hi, lo)
+        return hi, lo
 
     # ---- watchlist ----------------------------------------------------------
 
@@ -635,7 +706,7 @@ class ScanStore:
     def _fetch_bars(self, sym: str, fresh: bool = False) -> str | None:
         """`fresh` skips the ten-second cache: the close read needs bars read
         after the mark, and a copy cached five seconds before it is not that."""
-        url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="5d", iv="5m")
+        url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng=BARS_RANGE, iv="5m")
         r = fetch(url, key=f"scan5m_{sym}", ttl_sec=0.0 if fresh else 10.0, ua=BROWSER_UA,
                   timeout=15, stale_max_sec=900.0, validate=json_body)
         if not r.ok or r.source == "stale":
@@ -687,17 +758,24 @@ class ScanStore:
             return [], f"unparseable: {e}"
         return bars, None if bars else "no bars"
 
-    def _fetch_daily(self, sym: str) -> str | None:
+    def _fetch_daily(self, sym: str, fresh: bool = False) -> str | None:
         # A YEAR, NOT THREE MONTHS (2026-10-22): the daily frame wants the
         # 200-day average and the 52-week extremes, and the earnings number
         # wants the last four reports' reaction days. ~27 KB a name, six-hourly.
+        # `fresh` goes upstream whatever the cache holds: a copy made before a
+        # mark (the close, the open) is not the one the mark asks for, and the
+        # six-hour cache would otherwise hand it straight back.
         url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng="1y", iv="1d")
-        r = fetch(url, key=f"scan1y_{sym}", ttl_sec=DAILY_TTL, ua=BROWSER_UA, timeout=15,
-                  stale_max_sec=3 * 86400.0, validate=json_body)
-        if not r.ok:
+        r = fetch(url, key=f"scan1y_{sym}", ttl_sec=0.0 if fresh else DAILY_TTL, ua=BROWSER_UA,
+                  timeout=15, stale_max_sec=3 * 86400.0, validate=json_body)
+        # A stale copy served for a failed read backs the name off too: it is still
+        # older than its mark, and would otherwise be asked for again every tick.
+        if not r.ok or r.source == "stale":
             self._failed(self.daily_fails, sym, r.status, time.time())
+        else:
+            self.daily_fails.pop(sym, None)
+        if not r.ok:
             return r.error or "unavailable"
-        self.daily_fails.pop(sym, None)
         try:
             days = scan.parse_daily(r.json())
         except ValueError as e:
@@ -752,16 +830,24 @@ class ScanStore:
         self.burst_left = sum(1 for s in syms if closing(s) and not waiting(s, self.fails))
 
         # Daily bars must be FINAL for every finished session: the previous
-        # close is read off them (scan.technicals), and a copy fetched at 14:00
-        # carries that afternoon's price as the day's close. So they also go
-        # stale at the most recent weekday 16:20 ET — after the closing print.
-        mark = _last_close_mark(now)
+        # close, high and low are read off them (scan.technicals), and a copy
+        # fetched at 14:00 carries that afternoon's price as the day's close. So
+        # they also go stale at the most recent weekday 16:20 ET — after the
+        # closing print — and just after the open, for today's official open
+        # (OPEN_MARKS). A copy older than its mark is read again from Yahoo, not
+        # from the six-hour cache: until 2026-11-11 the cache answered, so the
+        # final bar could arrive as late as 22:20.
+        mark = max(_last_close_mark(now), _last_open_mark(now))
+
+        def before_mark(s: str) -> bool:
+            return self.daily_at.get(s, 0.0) < mark
+
         stale_daily = [] if paused else [
             s for s in syms
-            if (t - self.daily_at.get(s, 0.0) >= DAILY_TTL or self.daily_at.get(s, 0.0) < mark)
+            if (t - self.daily_at.get(s, 0.0) >= DAILY_TTL or before_mark(s))
             and not waiting(s, self.daily_fails)]
         for sym in stale_daily[:DAILY_PER_TICK]:
-            err = self._fetch_daily(sym)
+            err = self._fetch_daily(sym, fresh=before_mark(sym))
             if err:
                 errors.append(f"{sym} daily: {err}")
 
@@ -922,14 +1008,15 @@ class ScanStore:
             name = (self.meta.get(s) or {}).get("shortName") or self.sec_names.get(s)
             return scan.technicals(bars, self.daily.get(s) or [], clock, name=name,
                                    official=scan.official_close(self.meta.get(s)),
-                                   asof=self.fetched.get(s))
+                                   asof=self.fetched.get(s), daily_asof=self.daily_at.get(s),
+                                   pm_wide=self.pm_wide(s, clock.trading_day))
 
         t = tech(sym)
         if t is None:
             return None
         row = scan.row_of(sym, t, tech("SPY"), tech("QQQ"), clock)
         row["sector"] = SECTOR.get(sym) or self.pool_sectors.get(sym) or sector
-        row["adv20"] = adv20([d.volume for d in (self.daily.get(sym) or [])
+        row["adv"] = avg_day([d.volume for d in (self.daily.get(sym) or [])
                               if d.day < clock.trading_day])
         row["frame"] = frame_of(self.daily.get(sym) or [], clock.trading_day)
         return row
@@ -951,14 +1038,16 @@ class ScanStore:
             # see scan.CLOSE_LAG_SEC.
             techs[sym] = scan.technicals(bars, self.daily.get(sym) or [], clock, name=name,
                                          official=scan.official_close(self.meta.get(sym)),
-                                         asof=self.fetched.get(sym))
+                                         asof=self.fetched.get(sym),
+                                         daily_asof=self.daily_at.get(sym),
+                                         pm_wide=self.pm_wide(sym, clock.trading_day))
         rows: dict[str, dict[str, Any]] = {}
         for sym, tech in techs.items():
             row = scan.row_of(sym, tech, techs.get("SPY"), techs.get("QQQ"), clock)
             # The static table first; a promoted name the table does not know
             # takes the pool's sector (sources/pool.TV_SECTOR), else none.
             row["sector"] = SECTOR.get(sym) or self.pool_sectors.get(sym)
-            row["adv20"] = adv20([d.volume for d in (self.daily.get(sym) or [])
+            row["adv"] = avg_day([d.volume for d in (self.daily.get(sym) or [])
                                   if d.day < clock.trading_day])
             # The daily frame (frame.py): levels from the finished sessions;
             # the read against the live print is done on the read path.
@@ -974,6 +1063,78 @@ class ScanStore:
             "fetched": dict(self.fetched),
             "errors": dict(self.errors),
         }
+
+    def read_owed(self, owed: dict[str, set[str]], now: float | None = None) -> list[str]:
+        """Read, once, the names that have signals from a FINISHED day and are no
+        longer being fetched, so `day_signals` can settle that day. Returns the names
+        read this tick. `owed` is {day: names} (scanlog.EventLog.unchecked).
+
+        A NAME THAT LEFT THE LIST DURING ITS DAY WAS NEVER SETTLED (audit,
+        2026-11-11). The pool swaps its promotions as the morning goes and the owner
+        edits the pinned list; from that minute the name's bars stop, `day_signals`
+        wants bars read after the bell, and so its signals stayed unchecked and their
+        outcomes open for good: logged, shown, and never in the record. 70 events on
+        30 name-days in eight sessions stood that way (RCL 27 Oct, RBLX 30 Oct, MAR
+        2 Nov, NVDA 10 Nov), 25 of them an (L) or (E) whose result was frozen at the
+        minute the name left. A restart loses the bars in memory too, so a name that
+        was watched to the bell and is off the list by 20:00 went the same way.
+
+        ONE READ, AFTER THE BELL, AND THE DAILY COPY FIRST. The replay reads its
+        levels off the settled daily bar (scan.technicals); settled against bars
+        alone, a signal can fail to reappear for a few cents and be withdrawn. So
+        the daily copy is read first, and without one read after that bell the bars
+        are not read either and nothing changes. The 5-minute range is twelve
+        sessions (BARS_RANGE), so a day is in reach for about two weeks; past that
+        the name is read once, `day_signals` passes it over, and it is not asked for
+        again. The rotation's backoff and its 429 pause hold here too.
+        """
+        t = time.time() if now is None else now
+        if self.pause_until > t:
+            return []
+        tracked = set(self.symbols())
+        # Each name's latest owed bell (a copy read after it is after them all) and
+        # its oldest owed day (the first to leave the bars' reach goes first).
+        bell_of: dict[str, float] = {}
+        first_of: dict[str, str] = {}
+        for day in sorted(owed):
+            d = date.fromisoformat(day)
+            m = scan.rth_end(d)
+            bell = datetime(d.year, d.month, d.day, m // 60, m % 60, tzinfo=scan.ET).timestamp()
+            for sym in owed[day]:
+                if sym in tracked or not _SYM.match(sym):
+                    continue
+                bell_of[sym] = max(bell_of.get(sym, 0.0), bell)
+                first_of.setdefault(sym, day)
+
+        def due(s: str) -> bool:
+            if s in self.bars and self.fetched.get(s, 0.0) >= bell_of[s] + CLOSE_LAG:
+                return False  # read after that bell already: day_signals has what it needs
+            if self.owed_tried.get(s, 0.0) + OWED_RETRY_SEC > t:
+                return False
+            return self.fails.get(s, (0, 0.0))[1] <= t and self.daily_fails.get(s, (0, 0.0))[1] <= t
+
+        done: list[str] = []
+        for sym in sorted((s for s in bell_of if due(s)), key=lambda s: (first_of[s], s)):
+            if len(done) >= OWED_PER_TICK or self.pause_until > t:
+                break
+            self.owed_tried[sym] = t
+            # Marked before the read: whatever copy of its bars ends up held, this is
+            # a name nobody was watching to the bell (EventLog.settle, `known_only`).
+            self.owed.add(sym)
+            settled = bell_of[sym] + scan.DAILY_SETTLE_SEC
+            if self.daily_at.get(sym, 0.0) < settled:
+                self._fetch_daily(sym, fresh=True)
+                if self.daily_at.get(sym, 0.0) < settled:
+                    continue
+            self._fetch_bars(sym, fresh=True)
+            if sym in self.bars and self.fetched.get(sym, 0.0) >= bell_of[sym] + CLOSE_LAG:
+                done.append(sym)
+        return done
+
+    def unwatched(self) -> set[str]:
+        """Names whose bars were read off the list, for a settle or a chart: a day
+        settled on them checks what was logged and adds nothing (EventLog.settle)."""
+        return (self.owed | set(self.adhoc)) - set(self.symbols())
 
     def day_signals(self, day: date, syms: Iterable[str]
                     ) -> dict[str, tuple[list[dict[str, Any]], int | None]]:
@@ -992,7 +1153,10 @@ class ScanStore:
             bars, at = self.bars.get(sym), self.fetched.get(sym, 0.0)
             if not bars or at < bell.timestamp() + CLOSE_LAG or bars[0].t > first:
                 continue
-            tech = scan.technicals(bars, self.daily.get(sym) or [], clock, asof=at)
+            # The same daily copy the live rows read, by the same rule, so the day is
+            # settled against the levels its signals fired on.
+            tech = scan.technicals(bars, self.daily.get(sym) or [], clock, asof=at,
+                                   daily_asof=self.daily_at.get(sym))
             if tech.ok and tech.rth_today:
                 out[sym] = (tech.signals, tech.final_to)
         return out
@@ -1005,7 +1169,7 @@ class ScanStore:
         Never for a table entry: SpaceX's filer is "SPACE EXPLORATION…", which
         would make every headline with "space" in it SpaceX's."""
         if sym in ALIASES:
-            return list(ALIASES[sym])
+            return [*ALIASES[sym], *OWN_WORDS.get(sym, [])]
         first = (self.sec_names.get(sym) or "").split(" ")[0].strip(",.")
         return [first] if len(first) >= 4 else []
 

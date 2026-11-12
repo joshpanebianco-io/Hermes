@@ -15,7 +15,7 @@ import { CrossAsset, PrintsFed, SectorPeers } from "@/components/market/Schedule
 import type { MarketFeed } from "@/lib/useMarket";
 import { useWatchlistEarnings } from "@/lib/useWatchlistEarnings";
 import { boardReady } from "@/lib/ready";
-import { HelmLoader } from "@/components/ui/HelmLoader";
+import { PageLoader } from "@/components/ui/HelmLoader";
 import { ageStep } from "@/lib/format";
 
 /**
@@ -102,10 +102,12 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
     return [...base, ...add].sort((a, b) => a.date.localeCompare(b.date) || (b.market_cap ?? 0) - (a.market_cap ?? 0));
   }, [data.earnings, extra]);
 
+  // Waiting is a card where the board will be (ui/HelmLoader PageLoader), inset as the
+  // board's cards are under Luminous; Quiet gives the wait no paint or inset.
   if (!boardReady(data, SOURCES, feed)) {
     return (
-      <main className="flex min-h-0 flex-1 items-center justify-center">
-        <HelmLoader label="Loading the desk" size={64} />
+      <main className="flex min-h-0 flex-1 flex-col lum:p-[var(--lum-gap)]">
+        <PageLoader label="Loading the desk" size={64} />
       </main>
     );
   }
@@ -117,7 +119,8 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
     <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
       {/* ---- left: what the market is doing ------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <MRotation rows={data.sectors ?? NONE} themes={data.themes ?? NONE} leaders={data.breadth_all?.leaders} cashOpen={cashOpen} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
+        {/* The sectors only: the themes are the Sectors tab's cards (2026-11-10). */}
+        <MRotation rows={data.sectors ?? NONE} leaders={data.breadth_all?.leaders} cashOpen={cashOpen} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
         <MBreadth data={data.breadth_all} ageMin={age("breadth_all")} />
         <MMovers indices={data.constituents?.indices ?? EMPTY} cashOpen={cashOpen} ageMin={age("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
         <MRates rates={data.rates} pm={data.policy_meetings} ageMin={age("rates")} error={st.rates?.ok === false ? st.rates.error : null} />
@@ -131,7 +134,7 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
 
       {/* ---- right: what is scheduled ------------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <MCalendar rows={data.calendar ?? NONE} ageMin={age("calendar")} error={st.calendar?.ok === false ? st.calendar.error : null} />
+        <MCalendar rows={data.calendar ?? NONE} holidays={data.holidays ?? NONE} ageMin={age("calendar")} error={st.calendar?.ok === false ? st.calendar.error : null} />
         {(ctx || loading) && <MPrintsFed prints={ctx?.prints ?? NONE} fed={ctx?.fed ?? null} builtUtc={ctx?.built_utc ?? ""} loading={loading} />}
         <MFed
           rows={data.fed ?? NONE}

@@ -481,8 +481,9 @@ def test_every_panel_answers_by_name() -> None:
         assert out.get("panel") == name and "failed" not in str(out.get("error")), (name, out)
         assert len(json.dumps(out, default=str)) <= tools.MAX_CHARS + 200, name
     log = _panel({"name": "signal_log", "sym": "amzn"})
+    # `r` is the size of 1R in price, which the line used to print as "1.2R now".
     assert log["rows"] == ["2026-10-29 10:20 AMZN (L) short PDL at 241 · stop 242 · score 77"
-                           " · 1.2R now, best 2R, worst 0.3R · reached +1R"]
+                           " · 1R = 1.2, best 2R, worst 0.3R · reached +1R"]
     assert _panel({"name": "signal_log"})["rows"][-1].endswith("· withdrawn")
     assert len(_panel({"name": "past_notes"})["briefs"]) == tools.MAX_PAST_NOTES
     assert "error" in _panel({"name": "pool"}, more=None)      # the collector's own state
@@ -506,7 +507,12 @@ def test_the_heat_map_and_the_dashboard_read_as_the_pages_show_them() -> None:
             "top": [{"sym": "SPCX", "last": 135.64, "chg_pct": 8.62, "ext_pct": 1.02,
                      "score": {"total": 40, "side": "long"},
                      "setup": {"state": "forming", "level": "PDH"}}],
-            "list": [{"sym": "SPY", "last": 736.53, "chg_pct": 0.31, "ext_pct": None}], "adds": [],
+            "inplay": {"qualified": 282, "promoted": 1, "marks_done": ["08:00"],
+                       "next_mark": "09:00", "basis": "pre",
+                       "rows": [{"sym": "SE", "score": 20.0, "reason": "gap 1.66 ATR · through PDL",
+                                 "verdict": {"state": "promoted", "mark": "08:00", "reason": "r"}},
+                                {"sym": "ASX", "score": 14.5, "reason": "day 4 of a -21% move",
+                                 "verdict": {"state": "inplay", "score": 14.5, "reason": "r"}}]},
             "stories": [{"syms": ["IRTC"], "tag": "Earnings", "title": "Plunges", "provider": "W",
                          "age_min": 90.0}],
             "rotation": [{"key": "XLK", "label": "Technology", "day_pct": 1.45, "rs_day": 1.14,
@@ -528,7 +534,10 @@ def test_the_heat_map_and_the_dashboard_read_as_the_pages_show_them() -> None:
     dash = _panel({"name": "dashboard"}, more=more)
     assert dash["top_setups"] == ["SPCX score 40 long · forming PDH · last 135.64 · day +8.62% · "
                                   "extended hours +1.02%"]
-    assert dash["pinned"] == ["SPY 736.53 · day +0.31% · extended hours n/a"]
+    assert dash["in_play"]["pool"]["next_mark"] == "09:00"
+    assert dash["in_play"]["names"] == [
+        "SE in play 20 · gap 1.66 ATR · through PDL · on the list from the pool at 08:00 (r)",
+        "ASX in play 14.5 · day 4 of a -21% move · in play 14.5 but not on the list (r): track it"]
     assert dash["stories"] == ["IRTC [Earnings] Plunges (W, 1.5h ago)"]
     assert dash["sectors"] == ["XLK Technology +1.45% (+1.14% vs SPY), leaders FROG",
                                "XLF Fin -0.59% (-0.90% vs SPY), leaders none yet"]

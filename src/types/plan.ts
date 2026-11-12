@@ -121,7 +121,7 @@ export interface PlanName {
   /** Big caps in the same sector reporting from today through three trading days out. */
   peers?: Array<{ sym: string; date: string; when: string; days: number }>;
   /** Twenty-session average daily volume. */
-  adv20?: number | null;
+  adv?: number | null;
   /**
    * THE PRE-OPEN MODE (2026-10-14). Whether PMH / PML are still forming; the
    * final levels a plan may take as its target, nearest first; the strategy's

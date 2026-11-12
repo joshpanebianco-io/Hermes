@@ -340,7 +340,9 @@ export interface DriverVote {
   note: string;
   /** False when it cannot vote at this hour: shut or missing, which is not the same as flat. */
   live: boolean;
-  /** Which family it scores in; event risk has none, being a damper. */
+  /** For a read in no family: why it is never a side, in the collector's words. */
+  aside?: string;
+  /** Which family it scores in; event risk (a damper) and dealer gamma (a regime) have none. */
   family: string | null;
 }
 
@@ -645,11 +647,85 @@ export interface FedEvent {
   major: boolean;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Session type — will New York trend or range (newsterminal/daytype.py)       */
+/* -------------------------------------------------------------------------- */
+
+export type DayCall = "range" | "trend" | "mixed" | "none";
+
+export interface DayHold {
+  condition: string;
+  /** The card's own figure for the condition ("0.31 ATR so far"), when it has one. */
+  shown: string | null;
+  n: number;
+  trend: number;
+  range: number;
+  /** Which side the condition's counts vote for; null when it only shows. */
+  vote: "range" | "trend" | null;
+}
+
+export interface DayLean {
+  call: DayCall;
+  word: string;
+  /** The voting conditions with their counts, in one line. */
+  why: string;
+  holds: DayHold[];
+  base: { n: number; trend: number; range: number };
+  night: { atr: number | null; done: boolean | null; asia: number | null; london: number | null; pre: number | null };
+  prev: { type: string | null; dir: string | null; range_atr: number | null };
+}
+
+/** The day's own label once New York has closed (the ladder's rule). */
+export interface DayLabel {
+  type: "trend" | "range" | "normal";
+  dir: "up" | "down" | null;
+  inside: boolean | null;
+  range_atr: number | null;
+  close_pos: number | null;
+}
+
+export interface DayTypeBook {
+  card: Record<string, unknown>;
+  lean: DayLean;
+  label: DayLabel | null;
+}
+
+export interface DayType {
+  day: string;
+  /** Null for a book whose ranges or daily bars have not arrived. */
+  books: Record<string, DayTypeBook | null>;
+  record: Record<string, { n: number; backfill: number; live: number; from: string | null; to: string | null }>;
+  error?: string;
+}
+
+/**
+ * A day a market the desk trades through is shut or shuts early (server holidays.py):
+ * US stocks and bonds as one row, London, Tokyo. Hand-kept from the published schedules.
+ */
+export interface HolidayNotice {
+  /** The ET calendar day, "2026-11-11". */
+  date: string;
+  market: "us" | "uk" | "japan";
+  country: string;
+  region: Region;
+  /** The holiday: "Veterans Day". */
+  name: string;
+  kind: "closed" | "early";
+  /** What is shut, in a few words: "US bond market closed". */
+  label: string;
+  /** What that does to the session and the reads. */
+  note: string;
+  /** The calendar's own scale: 5 the NYSE shut, 4 the bond market alone, 3 an early close or a foreign holiday. */
+  score: number;
+}
+
 export interface Terminal {
   ok: boolean;
   built_utc: string;
   started_utc: string;
   clock: Clock;
+  /** Yesterday through three weeks out. Absent from an older collector. */
+  holidays?: HolidayNotice[];
   status: Record<string, SourceStatus>;
   age_min: Record<string, number>;
   quotes: Quote[];
@@ -678,6 +754,8 @@ export interface Terminal {
   };
   /** The live levels ladder per book, computed per request (report.live_ladders). */
   ladders?: Record<string, BriefLadder | null>;
+  /** Will New York trend or range, per book, computed on read (daytype.py). */
+  daytype?: DayType;
   constituents: { indices: Record<string, IndexMovers> };
   fed: FedEvent[];
   auctions: AuctionEvent[];
@@ -907,7 +985,8 @@ export interface BriefGamma {
 
 export interface BriefCatalyst {
   id: string;
-  kind: "data" | "fed" | "auction" | "earnings";
+  /** "holiday" is a day a market is shut or shuts early (holidays.py); absent from a brief stored before 2026-11-12. */
+  kind: "data" | "fed" | "auction" | "earnings" | "holiday";
   when: string;
   ts?: number;
   title: string;

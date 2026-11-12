@@ -187,3 +187,201 @@ def cme_halt(d: date) -> time | None:
     if d in EARLY_CLOSES:
         return CME_EARLY_HALT
     return None
+
+
+# ------------------------------------------------- the bond market, London, Tokyo
+#
+# THE OTHER CALENDARS THE DESK TRADES THROUGH (owner, 2026-11-12: "macro section
+# doesnt list bank holidays etc?"). It did not, and nothing else here knew them
+# either. On Wed 11 Nov 2026, Veterans Day, stocks traded and the cash Treasury
+# market did not: the 10-year never printed, Treasury published no curve, and the
+# evening's brief quoted Tuesday's +10bp as the day's move and leaned on it. A day
+# the bond market is shut is a fact about every rates read on the page, and a day
+# London or Tokyo is shut is a fact about how thin that session is.
+#
+# THE BOND MARKET KEEPS SIFMA'S RECOMMENDED CLOSES, not the NYSE's table: it shuts
+# for Columbus Day and Veterans Day when stocks trade, and where the NYSE shuts for
+# Good Friday 2026 it closes at noon. Early closes are 14:00 ET unless listed.
+#
+# THE SOURCES, all read 2026-11-12:
+#   US bonds  https://www.sifma.org/resources/general/holiday-schedule/ (US
+#             section): 2026 in full and New Year's Day 2027. The rest of 2027 was
+#             not yet published.
+#   UK        https://www.gov.uk/bank-holidays.json, the england-and-wales
+#             division: 2026 to 2028.
+#   Japan     the same SIFMA page's Japan section, its Japanese holidays only (it
+#             also lists the US and UK closes its members observe): 2026 and New
+#             Year's Day 2027.
+#
+# THEY RUN OUT, each at its own date (`*_COVERED`), and past it the calendar says
+# nothing rather than guessing. tests/test_holidays.py fails once today is past a
+# table's end, which is the reminder to read the page again.
+BOND_HOLIDAYS: dict[date, str] = {
+    date(2026, 1, 1): "New Year's Day",
+    date(2026, 1, 19): "Martin Luther King Day",
+    date(2026, 2, 16): "Presidents Day",
+    date(2026, 5, 25): "Memorial Day",
+    date(2026, 6, 19): "Juneteenth",
+    date(2026, 7, 3): "Independence Day (observed)",
+    date(2026, 9, 7): "Labor Day",
+    date(2026, 10, 12): "Columbus Day",
+    date(2026, 11, 11): "Veterans Day",
+    date(2026, 11, 26): "Thanksgiving Day",
+    date(2026, 12, 25): "Christmas Day",
+    date(2027, 1, 1): "New Year's Day",
+}
+#: The bond market's early closes: when, and the holiday the page lists it under.
+BOND_EARLY: dict[date, tuple[time, str]] = {
+    date(2026, 4, 3): (time(12, 0), "Good Friday"),
+    date(2026, 5, 22): (time(14, 0), "Friday before Memorial Day"),
+    date(2026, 7, 2): (time(14, 0), "Day before Independence Day (observed)"),
+    date(2026, 11, 27): (time(14, 0), "Day after Thanksgiving"),
+    date(2026, 12, 24): (time(14, 0), "Christmas Eve"),
+    date(2026, 12, 31): (time(14, 0), "New Year's Eve"),
+}
+BOND_COVERED = (date(2026, 1, 1), date(2027, 1, 1))
+
+UK_HOLIDAYS: dict[date, str] = {
+    date(2026, 1, 1): "New Year's Day",
+    date(2026, 4, 3): "Good Friday",
+    date(2026, 4, 6): "Easter Monday",
+    date(2026, 5, 4): "Early May bank holiday",
+    date(2026, 5, 25): "Spring bank holiday",
+    date(2026, 8, 31): "Summer bank holiday",
+    date(2026, 12, 25): "Christmas Day",
+    date(2026, 12, 28): "Boxing Day (substitute day)",
+    date(2027, 1, 1): "New Year's Day",
+    date(2027, 3, 26): "Good Friday",
+    date(2027, 3, 29): "Easter Monday",
+    date(2027, 5, 3): "Early May bank holiday",
+    date(2027, 5, 31): "Spring bank holiday",
+    date(2027, 8, 30): "Summer bank holiday",
+    date(2027, 12, 27): "Christmas Day (substitute day)",
+    date(2027, 12, 28): "Boxing Day (substitute day)",
+    date(2028, 1, 3): "New Year's Day (substitute day)",
+    date(2028, 4, 14): "Good Friday",
+    date(2028, 4, 17): "Easter Monday",
+    date(2028, 5, 1): "Early May bank holiday",
+    date(2028, 5, 29): "Spring bank holiday",
+    date(2028, 8, 28): "Summer bank holiday",
+    date(2028, 12, 25): "Christmas Day",
+    date(2028, 12, 26): "Boxing Day",
+}
+UK_COVERED = (date(2026, 1, 1), date(2028, 12, 31))
+
+JP_HOLIDAYS: dict[date, str] = {
+    date(2026, 1, 1): "New Year's Day",
+    date(2026, 1, 2): "Bank Holiday",
+    date(2026, 1, 12): "Coming-of-Age Day",
+    date(2026, 2, 11): "National Foundation Day",
+    date(2026, 2, 23): "Emperor's Birthday",
+    date(2026, 3, 20): "Vernal Equinox Day",
+    date(2026, 4, 29): "Showa Day",
+    date(2026, 5, 4): "Greenery Day",
+    date(2026, 5, 5): "Children's Day",
+    date(2026, 5, 6): "Constitution Day (observed)",
+    date(2026, 7, 20): "Marine Day",
+    date(2026, 8, 11): "Mountain Day",
+    date(2026, 9, 21): "Respect-for-the-Aged Day",
+    date(2026, 9, 22): "Silver Week bridge holiday",
+    date(2026, 9, 23): "Autumnal Equinox",
+    date(2026, 10, 12): "Health and Sports Day",
+    date(2026, 11, 3): "Culture Day",
+    date(2026, 11, 23): "Labour Thanksgiving Day",
+    date(2026, 12, 31): "Bank Holiday",
+    date(2027, 1, 1): "New Year's Day",
+}
+JP_COVERED = (date(2026, 1, 1), date(2027, 1, 1))
+
+
+def _in(span: tuple[date, date], d: date) -> bool:
+    return span[0] <= d <= span[1]
+
+
+def bond_closed(d: date) -> str | None:
+    """The holiday the cash Treasury market is shut for on `d`, or None: a day it
+    trades, or one past the end of the table."""
+    return BOND_HOLIDAYS.get(d)
+
+
+def bond_early(d: date) -> time | None:
+    """When the bond market closes early on `d`, or None."""
+    e = BOND_EARLY.get(d)
+    return e[0] if e else None
+
+
+def _hm(t: time) -> str:
+    return f"{t.hour:02d}:{t.minute:02d}"
+
+
+def _us_notice(d: date) -> dict[str, object] | None:
+    """What is shut or shut early in the United States on `d`, as one row."""
+    stock, half = HOLIDAYS.get(d), EARLY_CLOSES.get(d)
+    bond, bond_half = BOND_HOLIDAYS.get(d), BOND_EARLY.get(d)
+    if not (stock or half or bond or bond_half):
+        return None
+    futures = ("Globex is shut too." if d in CME_CLOSED
+               else "Index and metal futures trade to a 13:00 ET halt.")
+    if stock and bond:
+        name, kind, score, label = stock, "closed", 5, "US markets closed"
+        note = f"The NYSE and the bond market are shut. {futures}"
+    elif stock:
+        name, kind, score = stock, "closed", 5
+        label = (f"NYSE closed · bonds to {_hm(bond_half[0])} ET" if bond_half else "NYSE closed")
+        note = (f"The NYSE is shut{' and the bond market closes early' if bond_half else ''}. "
+                f"{futures}")
+    elif bond:
+        name, kind, score, label = bond, "closed", 4, "US bond market closed"
+        note = ("Stocks and futures trade as usual. Cash Treasuries do not: the 10-year does "
+                "not print and Treasury publishes no curve for the day, so every yield on the "
+                "page is the session before's.")
+    elif half and bond_half:
+        name, kind, score = half, "early", 3
+        label = f"Early close · stocks 13:00, bonds {_hm(bond_half[0])} ET"
+        note = "The NYSE closes at 13:00 ET and index futures halt at 13:15; a thin afternoon."
+    elif half:
+        name, kind, score, label = half, "early", 3, "NYSE closes early, 13:00 ET"
+        note = "The NYSE closes at 13:00 ET and index futures halt at 13:15; a thin afternoon."
+    else:
+        assert bond_half is not None
+        name, kind, score = bond_half[1], "early", 3
+        label = f"Bond market closes early, {_hm(bond_half[0])} ET"
+        note = "Stocks trade the full day. Cash Treasuries stop early, so the rates reads go quiet."
+    return {"date": d.isoformat(), "market": "us", "country": "United States", "region": "us",
+            "name": name, "kind": kind, "label": label, "note": note, "score": score}
+
+
+def notices(lo: date, hi: date) -> list[dict[str, object]]:
+    """Every day from `lo` to `hi` a market the desk trades through is shut or shuts
+    early, in date order: the United States (stocks, bonds, or both, as one row), then
+    London, then Tokyo. A day outside a table's years has no row from it. Pure."""
+    out: list[dict[str, object]] = []
+    d = lo
+    while d <= hi:
+        us = _us_notice(d)
+        if us:
+            out.append(us)
+        uk = UK_HOLIDAYS.get(d)
+        if uk:
+            out.append({
+                "date": d.isoformat(), "market": "uk", "country": "United Kingdom",
+                "region": "uk", "name": uk, "kind": "closed", "label": "UK bank holiday",
+                "note": "London's cash markets are shut: no UK data, and a thinner London "
+                        "session in the futures.",
+                "score": 3})
+        jp = JP_HOLIDAYS.get(d)
+        if jp:
+            out.append({
+                "date": d.isoformat(), "market": "japan", "country": "Japan", "region": "apac",
+                "name": jp, "kind": "closed", "label": "Japan holiday",
+                "note": "Tokyo's cash markets are shut: no Japan data, and a thinner Asia "
+                        "session in the futures.",
+                "score": 3})
+        d += timedelta(days=1)
+    return out
+
+
+def coverage() -> dict[str, str]:
+    """The last day each of the other tables answers for, for the tests and the page."""
+    return {"us_bonds": BOND_COVERED[1].isoformat(), "uk": UK_COVERED[1].isoformat(),
+            "japan": JP_COVERED[1].isoformat()}

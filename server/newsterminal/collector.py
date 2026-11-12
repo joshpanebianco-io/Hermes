@@ -47,26 +47,33 @@ is fine as long as it says eleven minutes.
 from __future__ import annotations
 
 import contextlib
+import json
 import sys
 import threading
 import time
 import traceback
+import urllib.parse
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import config, drivers, marketctx
+from . import config, daytype, drivers, marketctx, structure
 from . import dashboard as dash_mod
+from . import futures as fut_mod
 from . import momentum as mom_mod
+from . import report as report_mod
 from . import scan as scan_mod
+from .config import BROWSER_UA
 from .expiry import state as expiry_state
-from .http import CACHE, SourceStatus
+from .holidays import early_close, is_trading_day, prev_trading_day
+from .holidays import notices as holiday_notices
+from .http import CACHE, SourceStatus, fetch, json_body
 from .policy import meetings_priced
 from .scanlog import EventLog
 from .scanscore import build as scanner_build
-from .scanscore import earnings_for, next_report
-from .sessions import session_state
+from .scanscore import earnings_for, names_of, next_report
+from .sessions import globex_trade_date, session_state
 from .sources import auctions as auc_src
 from .sources import calendar as cal_src
 from .sources import cboepc as pc_src
@@ -91,7 +98,7 @@ from .sources import stream as stream_src
 from .sources import tvnews as tvnews_src
 from .sources import universe as uni_src
 from .sources import wire as wire_src
-from .volterm import implied_day, vix_month
+from .volterm import BOOK_DP, implied_day, vix_month
 from .volterm import state as volterm_state
 
 ET = ZoneInfo("America/New_York")
@@ -122,6 +129,12 @@ _SCANNER_KEYS = frozenset({"scanner", "scan_news", "scan_sec", "scan_earn"})
 # seconds to run again in instead of its interval — the scanner's close read
 # and the live layer's back-off pace themselves that way.
 Job = tuple[Callable[[], float | None], float, float]
+
+
+def market_holidays(today: date | None = None) -> list[dict[str, object]]:
+    """Yesterday through three weeks out, on New York's calendar."""
+    day = today or datetime.now(ET).date()
+    return holiday_notices(day - timedelta(days=1), day + timedelta(days=21))
 
 
 class Collector:
@@ -155,6 +168,8 @@ class Collector:
         # time, so a build from older bars can never land after a newer one.
         self._scan_build_lock = threading.Lock()
         self._live_logged = 0.0
+        #: The one-off rework of the signal record on the floored stop has run.
+        self._refloored = False
         # The scanner's event log (scanlog.py): the alerts' feed and the record
         # each signal's outcome is kept in. Loaded from disk so ids keep counting.
         self.events = EventLog()
@@ -187,10 +202,28 @@ class Collector:
         self.stream = stream_src.PriceStream()
         self.scan.stream = self.stream
         self.stock_news = tvnews_src.NewsStore()
+        self.stock_news.names = self._called
+        # Only the table's names are held against a headline that does not carry them
+        # (catalysts.story): a filer's first word is a guess at what the wire writes.
+        self.stock_news.sure = scan_src.ALIASES.__contains__
         self.universe = uni_src.UniverseStore()
+        # The scanner's pre-market range is checked against these two reads, which
+        # are not Yahoo's bars (`_pm_range`; scan.technicals says why).
+        self.scan.pm_hint = self._pm_range
         self.holdings = hold_src.HoldingsStore()
         self.momentum = mom_mod.MomentumStore()
         self.pool.news = self.stock_news.major
+        self.pool.stage = self._strong
+        # The session-type record (daytype.py): a card per book before the bell,
+        # its label after the close. Loaded so a restart keeps the day's marks.
+        # The backfill's rows beside it are the record's larger half, and the
+        # base-rate tables over both are built once and kept until a label lands.
+        self.daytypes = daytype.SessionLog()
+        self._dt_record = daytype.load_backfill()
+        self._dt_tables: dict[str, dict[str, Any]] = {}
+        self._dt_meta: dict[str, Any] = {}
+        self._dt_key: tuple[int, int] = (-1, -1)
+        self._dt_lock = threading.Lock()
 
         now = time.monotonic()
         # The board, on a thread of its own (module docstring): it is the block
@@ -256,6 +289,9 @@ class Collector:
             # in the morning, half-hourly otherwise; the tick is short so a
             # mark (08:00, 09:00, 09:25, 10:00 ET) is met within seconds.
             "pool": (self._do_pool, pool_src.TICK_SEC, now + 4.0),
+            # The session-type record (daytype.py): a card at 09:25 ET, its label
+            # after the close. The same short tick, so a mark is met in seconds.
+            "daytype": (self._do_daytype, 20.0, now + 8.0),
         }
         # The live layer, alone (module docstring); it paces itself.
         self._live_jobs: dict[str, Job] = {
@@ -442,6 +478,13 @@ class Collector:
 
     def _do_calendar(self) -> None:
         rows, st = cal_src.collect()
+        # TradingView's calendar, read while Nasdaq is refusing, lists no speeches:
+        # the Board's own (the "fed" source) join its rows (sources/calendar.py).
+        if st.ok:
+            with self._lock:
+                fed = list(self._state.get("fed") or [])
+            rows = cal_src.with_fed_speeches(rows, fed)
+            st.items = len(rows)
         self._commit("calendar", rows if st.ok else None, st)
 
     def _do_rates(self) -> None:
@@ -473,13 +516,36 @@ class Collector:
         try:
             payload = self.scanner_payload()
             self.events.observe(payload, dict(self.scan.bars), fetched=dict(self.scan.fetched))
+            # Once a start: the signals settled before the stop had a floor, worked
+            # again from whatever bars are still held (scanlog.EventLog.refloor).
+            if not self._refloored:
+                self._refloored = True
+                done = self.events.refloor(self._held_bars)
+                if done["seen"]:
+                    st_rf = SourceStatus("Signal record")
+                    st_rf.ok, st_rf.source, st_rf.items = True, "live", done["ruled"]
+                    st_rf.notes = [f"stop floor: {done['ruled']} of {done['seen']} settled signals "
+                                   f"read by it, {done['floored']} moved, {done['skipped']} left "
+                                   "as they were (bars gone)"]
+                    self._log("scan_events", st_rf)
             # A finished day's signals, settled once against bars read after its
             # bell (scanlog's "second look"). Cheap when there is nothing to do:
             # only names with unchecked events and a post-bell download replay.
-            for day, syms in self.events.unchecked(str(payload.get("trading_day") or "")).items():
+            owed = self.events.unchecked(str(payload.get("trading_day") or ""))
+            # A name that left the list during its day is read once more, after the
+            # bell, so its signals settle like any other's (ScanStore.read_owed).
+            read = self.scan.read_owed(owed)
+            if read:
+                st_ow = SourceStatus("Signal record")
+                st_ow.ok, st_ow.source, st_ow.items = True, "live", len(read)
+                st_ow.notes = [f"read to settle a finished day: {', '.join(read)} "
+                               "(off the list before its bell)"]
+                self._log("scan_events", st_ow)
+            quiet = self.scan.unwatched()
+            for day, syms in owed.items():
                 got = self.scan.day_signals(date.fromisoformat(day), syms)
                 if got:
-                    self.events.settle(day, got)
+                    self.events.settle(day, got, known_only=quiet)
         except Exception as e:  # noqa: BLE001 — see module docstring
             st_ev = SourceStatus("Scanner events")
             st_ev.error = f"{e.__class__.__name__}: {e}"
@@ -487,6 +553,21 @@ class Collector:
             traceback.print_exc()
         # Soon while a close read is unfinished, on time for the next one.
         return self.scan.wake_in()
+
+    def _held_bars(self, sym: str) -> list[scan_mod.Bar] | None:
+        """A name's 5-minute bars as far back as anything here holds them: the
+        scanner's own for a name on the list, else the last download left on disk
+        from the day it was tracked. No fetch."""
+        bars = self.scan.bars.get(sym)
+        if bars:
+            return bars
+        blob = CACHE.read(f"scan5m_{sym}")
+        if blob is None:
+            return None
+        try:
+            return scan_mod.parse_chart(json.loads(blob))[0] or None
+        except (ValueError, TypeError, KeyError):
+            return None
 
     def _do_live(self) -> float:
         st, delay = self.scan.tick_live()
@@ -516,6 +597,27 @@ class Collector:
             self._log("scan_live", st)
         return delay
 
+    def futures_bars(self, book: str, tf: str = "10m") -> dict[str, Any]:
+        """One futures book's chart (futures.series): the contract's own bars from
+        Yahoo, cached a few seconds, and the levels from the live ladder."""
+        book = book.strip().upper()
+        sym = fut_mod.SYMBOL.get(book)
+        if sym is None or tf not in fut_mod.SOURCE:
+            return {"ok": False, "sym": book, "tf": tf, "error": "not a futures book or view"}
+        iv, rng = fut_mod.SOURCE[tf]
+        ttl = 20.0 if iv == "1m" else 600.0 if iv == "1d" else 45.0
+        r = fetch(fut_mod.CHART.format(sym=urllib.parse.quote(sym), rng=rng, iv=iv),
+                  key=f"fut_{book}_{iv}_{rng}", ttl_sec=ttl, ua=BROWSER_UA, timeout=12,
+                  stale_max_sec=1800.0, validate=json_body)
+        if not r.ok:
+            return {"ok": False, "sym": book, "tf": tf, "error": r.error or "no bars"}
+        try:
+            bars = fut_mod.parse(r.json())
+        except (ValueError, TypeError):
+            bars = []
+        ladder = report_mod.live_ladder(self.snapshot(), book)
+        return fut_mod.series(bars, tf, datetime.now(UTC), ladder, book)
+
     def scanner_bars(self, sym: str, tf: str = "10m") -> dict[str, Any]:
         """One name's mini-chart series (scan.chart_series) off the bars held —
         plus, for the 1m and 3m views, a one-minute download made here, on the
@@ -537,7 +639,9 @@ class Collector:
         # marking a signal the row does not have would be its own phantom.
         tech = scan_mod.technicals(bars, daily, clock,
                                    official=scan_mod.official_close(self.scan.meta.get(sym)),
-                                   asof=self.scan.fetched.get(sym))
+                                   asof=self.scan.fetched.get(sym),
+                                   daily_asof=self.scan.daily_at.get(sym),
+                                   pm_wide=self.scan.pm_wide(sym, clock.trading_day))
         bars1: list[scan_mod.Bar] | None = None
         if scan_mod.CHART_TF.get(tf, 600) < 300:
             bars1, err = self.scan.bars_1m(sym)
@@ -608,13 +712,23 @@ class Collector:
     def _catalyst(self, sym: str) -> dict[str, Any] | None:
         return self.stock_news.catalyst(sym, ref=uni_src.news_anchor(datetime.now(UTC)))
 
+    def _strong(self) -> dict[str, dict[str, Any]]:
+        """The strong Day 2/3 tracks, for the pool's rank (momentum.strong)."""
+        now = datetime.now(UTC)
+        return self.momentum.strong(now.astimezone(ET).date(), uni_src.basis_at(now) != "last")
+
+    def _called(self, sym: str) -> list[str]:
+        """What a headline calls the company, for the news store's lead test."""
+        return names_of(self.scan.aliases(sym), self.scan.own_names(sym))
+
     def _ctx(self) -> uni_src.Ctx:
         now = datetime.now(UTC)
         basis = uni_src.basis_at(now)
+        pinned, tracked = frozenset(self.scan.pinned()), frozenset(self.scan.symbols())
         return uni_src.Ctx(
-            quote=self.stream.quote, catalyst=self._catalyst,
-            pinned=frozenset(self.scan.pinned()), tracked=frozenset(self.scan.symbols()),
-            stage=self.momentum.stages(now.astimezone(ET).date(), basis != "last"))
+            quote=self.stream.quote, catalyst=self._catalyst, pinned=pinned, tracked=tracked,
+            stage=self.momentum.stages(now.astimezone(ET).date(), basis != "last"),
+            verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked))
 
     def breakouts(self, **kw: Any) -> dict[str, Any]:
         return self.universe.breakouts(self._ctx(), **kw)
@@ -643,9 +757,27 @@ class Collector:
 
     def dashboard(self) -> dict[str, Any]:
         """The Dashboard, off what the Scanner and Macro already hold."""
+        pinned, tracked = frozenset(self.scan.pinned()), frozenset(self.scan.symbols())
+        view = self.pool.view(pinned)
+
+        def price(sym: str) -> float | None:
+            q = self.stream.quote(sym)
+            p = q.get("price") if q else None
+            return float(p) if isinstance(p, int | float) else None
+
+        inplay = dash_mod.in_play(
+            list(self.pool.ranked), view,
+            verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked),
+            price=price) if view.get("ok") else None
+        def tradable(sym: str) -> bool:
+            # On the list, or at the pool's floor in the wide read: the names this desk
+            # could act on. The news flow is every US listing.
+            cap = (self.universe.raw(sym) or {}).get("cap")
+            return sym in tracked or (isinstance(cap, int | float) and cap >= pool_src.MIN_CAP)
+
         return dash_mod.build(self.scanner_payload(), self.snapshot(), self.breakouts(),
-                              self.day23(), self.stock_news.top(),
-                              session_day=uni_src.cards_day(datetime.now(UTC)))
+                              self.day23(), self.stock_news.top(keep=tradable),
+                              session_day=uni_src.cards_day(datetime.now(UTC)), inplay=inplay)
 
     def day23(self, min_move: float = mom_mod.DEFAULT_MOVE, cap: float = mom_mod.DEFAULT_CAP,
               chip: str = "all") -> dict[str, Any]:
@@ -688,9 +820,33 @@ class Collector:
         self._commit("options", None, st)
 
     def _do_premarket(self) -> None:
-        st = self.premarket.tick(self.scan.watchlist())
+        watch = self.scan.watchlist()
+        st = self.premarket.tick(watch)
+        if not st.ok:
+            # Nasdaq is not answering. The rows take the screener's figures for a name
+            # it has not answered for (`_pm_range`, `scanner_payload`), so the rail
+            # reports what the pages have, not the request that failed.
+            td = self.scan.clock(datetime.now(UTC)).trading_day
+            covered = sum(1 for s in watch if self.universe.premarket_of(s, td) is not None)
+            st = pre_src.covered_by_screener(st, covered, len(watch))
         # Like the chains: the reads stay in the store and join the rows on read.
         self._commit("premarket", None, st)
+
+    def _pm_range(self, sym: str, td: date) -> tuple[float | None, float | None] | None:
+        """`td`'s pre-market (high, low) for one name from a read that is not the
+        scanner's own bars: Nasdaq's when it has answered for the name, else the wide
+        scan's screener (fifteen minutes behind, every name in one request). None when
+        neither holds today's. `ScanStore.pm_wide` keeps the widest of what this
+        returns, and `scan.technicals` takes whichever of it and the bars reaches
+        further."""
+        got = self.premarket.view(td).get(sym) or self.universe.premarket_of(sym, td)
+        if not got:
+            return None
+
+        def num(v: Any) -> float | None:
+            return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
+
+        return num(got.get("high")), num(got.get("low"))
 
     def _do_scan_news(self) -> None:
         st = self.scan.tick_news()
@@ -743,6 +899,140 @@ class Collector:
             fn, interval, _due = self._premarket_jobs["pool"]
             self._premarket_jobs["pool"] = (fn, interval, time.monotonic())
 
+    def _unlabelled(self, day: str, book: str) -> dict[str, Any] | None:
+        card = self.daytypes.get(day, book)
+        return card if card is not None and card.get("type") is None else None
+
+    @staticmethod
+    def _daytype_inputs(assets: dict[str, Any], frames: dict[str, Any], book: str
+                        ) -> tuple[list[dict[str, Any]], float | None]:
+        """One book's session rows and daily ATR, the card's two inputs."""
+        sessions = (assets.get(book) or {}).get("sessions") or []
+        frame = frames.get(book) or {}
+        atr = frame.get("atr14") if isinstance(frame, dict) and frame.get("ok") else None
+        return sessions, (float(atr) if isinstance(atr, int | float) else None)
+
+    def _daytype_tables(self) -> dict[str, dict[str, Any]]:
+        """The base-rate tables per book (daytype.rate_table) over the record — the
+        backfill's rows and the live log's labelled days after them — rebuilt only
+        when the log gains a label."""
+        live = self.daytypes.rows()
+        key = (len(live), sum(1 for r in live if r.get("type")))
+        with self._dt_lock:
+            if key == self._dt_key:
+                return self._dt_tables
+            tables: dict[str, dict[str, Any]] = {}
+            meta: dict[str, Any] = {}
+            for book in daytype.BOOKS:
+                back = self._dt_record.get(book) or []
+                last = str(back[-1].get("day")) if back else None
+                rows = [*back, *self.daytypes.labelled(book, after=last)]
+                tables[book] = daytype.rate_table(rows)
+                meta[book] = {"n": len(rows), "backfill": len(back),
+                              "live": len(rows) - len(back),
+                              "from": rows[0].get("day") if rows else None,
+                              "to": rows[-1].get("day") if rows else None}
+            self._dt_tables, self._dt_meta, self._dt_key = tables, meta, key
+            return tables
+
+    def _session_types(self, src: dict[str, Any]) -> dict[str, Any]:
+        """The session-type read per book (daytype.py) off blocks already held —
+        `src` is the snapshot, or the state's ranges, history, gex, calendar and
+        quotes: the card as it stands now (the night so far before the bell, the
+        finished night after it), what the record says of a day like it, and the
+        day's own label once New York has closed. Computed on read, like volterm;
+        the log's card at 09:25 is the one of record."""
+        now = datetime.now(UTC)
+        day = globex_trade_date(now)
+        tables = self._daytype_tables()
+        out: dict[str, Any] = {"day": day.isoformat(), "books": {}, "record": self._dt_meta}
+        if not is_trading_day(day):
+            return out
+        assets = (src.get("ranges") or {}).get("assets") or {}
+        frames = (src.get("history") or {}).get("books") or {}
+        gex = (src.get("gex") or {}).get("assets") or {}
+        vt = src.get("volterm") or volterm_state(src.get("quotes") or [])
+        vix, ratio = daytype.vix_of(vt)
+        prints = daytype.prints_of(src.get("calendar") or [], day)
+        prev_key = prev_trading_day(day).isoformat()
+        for book in daytype.BOOKS:
+            sessions, atr = self._daytype_inputs(assets, frames, book)
+            if not sessions or atr is None:
+                out["books"][book] = None
+                continue
+            dp = BOOK_DP.get(book, 0)
+            card = daytype.card_from_live(
+                book, day, sessions, atr,
+                yesterday=structure.yesterday(sessions, atr, None, dp),
+                fuel=structure.fuel(sessions, atr, None, dp), vix=vix, vix_ratio=ratio,
+                gamma=daytype.gamma_of(gex.get(book)), em=None, prints=prints, now=now,
+                half_day=early_close(day) is not None,
+                prev_card=self.daytypes.get(prev_key, book))
+            done = daytype.label_from_live(card, sessions, atr, now)
+            label = ({k: done.get(k) for k in ("type", "dir", "inside", "range_atr", "close_pos")}
+                     if done.get("type") else None)
+            out["books"][book] = {"card": card, "label": label,
+                                  "lean": daytype.lean(card, tables.get(book) or {})}
+        return out
+
+    def _do_daytype(self) -> float | None:
+        """The session-type record (daytype.py): at CARD_AT one card per book with
+        what was known before the bell; from LABEL_AT the label, off the finished
+        New York row. The log keeps the day's marks, so a restart neither repeats
+        a card nor loses a label, and a card a restart made late says so. The
+        previous session's card is labelled too when its window was missed: the
+        finished row stays the box's latest, dated, until the next session starts.
+        A minute's retry while the ranges or the daily bars are still to arrive."""
+        now = datetime.now(UTC)
+        et = now.astimezone(ET)
+        day = et.date()
+        key, prev_key = day.isoformat(), prev_trading_day(day).isoformat()
+        to_write = ([b for b in daytype.BOOKS if self.daytypes.get(key, b) is None]
+                    if is_trading_day(day) and et.time() >= daytype.CARD_AT else [])
+        to_label = [(k, b) for k in (key, prev_key) for b in daytype.BOOKS
+                    if (k != key or et.time() >= daytype.LABEL_AT) and self._unlabelled(k, b)]
+        if not to_write and not to_label:
+            return None
+        snap = self.snapshot()
+        assets = (snap.get("ranges") or {}).get("assets") or {}
+        frames = (snap.get("history") or {}).get("books") or {}
+        gex = (snap.get("gex") or {}).get("assets") or {}
+        waiting, done = False, 0
+        if to_write:
+            vix, ratio = daytype.vix_of(snap.get("volterm"))
+            prints = daytype.prints_of(snap.get("calendar") or [], day)
+        for book in to_write:
+            sessions, atr = self._daytype_inputs(assets, frames, book)
+            if not sessions or atr is None:
+                waiting = True
+                continue
+            dp = BOOK_DP.get(book, 0)
+            em = (report_mod.live_ladder(snap, book) or {}).get("em")
+            self.daytypes.put(daytype.card_from_live(
+                book, day, sessions, atr,
+                yesterday=structure.yesterday(sessions, atr, None, dp),
+                fuel=structure.fuel(sessions, atr, em, dp), vix=vix, vix_ratio=ratio,
+                gamma=daytype.gamma_of(gex.get(book)), em=em, prints=prints, now=now,
+                half_day=early_close(day) is not None,
+                prev_card=self.daytypes.get(prev_key, book)))
+            done += 1
+        for k, book in to_label:
+            sessions, atr = self._daytype_inputs(assets, frames, book)
+            prior = self.daytypes.get(k, book)
+            card = (daytype.label_from_live(prior, sessions, atr, now)
+                    if prior and sessions else None)
+            if card is None or card.get("type") is None:
+                # Today's row is still to finish; yesterday's, if it is gone, is gone.
+                waiting = waiting or k == key
+                continue
+            self.daytypes.put(card)
+            done += 1
+        if done:
+            st = SourceStatus("daytype")
+            st.items = done
+            self._log("daytype", st.settle(True, "card"))
+        return 60.0 if waiting else None
+
     def watchlist_payload(self, rejected: list[str] | None = None) -> dict[str, Any]:
         """The /api/scanner/watchlist read: the pinned list and the pool's view."""
         pinned = self.scan.pinned()
@@ -762,6 +1052,11 @@ class Collector:
         if st.ok:
             with self._lock:
                 self._state["fomc"] = fomc
+                # After a start the calendar is read two seconds before this is:
+                # its speeches (see _do_calendar) are added now, not ten minutes on.
+                held = self._state.get("calendar")
+                if isinstance(held, list):
+                    self._state["calendar"] = cal_src.with_fed_speeches(held, rows)
 
     def _do_auctions(self) -> None:
         rows, st = auc_src.collect()
@@ -848,7 +1143,8 @@ class Collector:
                                               "scanner_events.jsonl", "scanner_preopen.jsonl",
                                               "iv_history.jsonl", "scanner_momentum.json",
                                               "scanner_universe.json", "stream_check.json",
-                                              "oi_log.jsonl", "cboe_pc.jsonl"))
+                                              "oi_log.jsonl", "cboe_pc.jsonl",
+                                              "session_types.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
         self._thread = threading.Thread(target=self._run, name="collector", daemon=True)
@@ -903,6 +1199,11 @@ class Collector:
             # Pure date arithmetic on the ET calendar, so it is computed on read
             # rather than polled — there is no upstream to be stale against.
             "expiry": expiry_state(),
+            # The days a market the desk trades through is shut or shuts early: US
+            # stocks and bonds, London, Tokyo (holidays.py, hand-kept from the
+            # published schedules). Yesterday through three weeks out, for the
+            # Macro calendar; a table read, so on read as well.
+            "holidays": market_holidays(),
             # Arithmetic on the board, like `expiry` — no upstream to be
             # stale against, so it is computed on read rather than polled.
             "volterm": {
@@ -934,6 +1235,12 @@ class Collector:
             snap["drivers"] = drivers.build(snap, self.scan.clock(datetime.now(UTC)).session)
         except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
             snap["drivers"] = {"books": {}, "error": f"{e.__class__.__name__}: {e}"}
+        # Will New York trend or range (daytype.py): the same arithmetic on the
+        # blocks above and the record on disk, so it is computed on read too.
+        try:
+            snap["daytype"] = self._session_types(snap)
+        except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
+            snap["daytype"] = {"books": {}, "error": f"{e.__class__.__name__}: {e}"}
         return snap
 
     def scanner_payload(self) -> dict[str, Any]:
@@ -950,9 +1257,10 @@ class Collector:
             scan = self._state.get("scanner") or {}
             parts = {k: self._state.get(k) for k in
                      ("quotes", "sectors", "calendar", "scan_earn", "wire", "scan_news",
-                      "scan_sec", "context")}
+                      "scan_sec", "context", "ranges", "history", "gex")}
             cons = self._state.get("constituents")
             st = self._status.get("scanner")
+            cal_st = self._status.get("calendar")
         if extra_rows:
             scan = {**scan, "rows": {**(scan.get("rows") or {}), **extra_rows}}
         watch = self.scan.watchlist() if watch is None else watch
@@ -966,6 +1274,14 @@ class Collector:
         daily = {s: list(self.scan.daily.get(s) or []) for s in watch}
         flow_ctx = {s: {"oi_prev": self.options.oi.prev(s, td),
                         "vol_hist": self.options.oi.volumes(s, td)} for s in watch}
+        # Nasdaq's pre-market read, and the wide read's for any name Nasdaq has not
+        # answered for today (UniverseStore.premarket_of says why).
+        premkt = dict(self.premarket.view(td))
+        for s in watch:
+            if s not in premkt:
+                alt = self.universe.premarket_of(s, td)
+                if alt is not None:
+                    premkt[s] = alt
         payload = scanner_build(
             scan,
             quotes=parts["quotes"] or [],
@@ -978,13 +1294,16 @@ class Collector:
                       *self.stock_news.headlines(s)] for s in watch},
             filings=parts["scan_sec"] or {},
             aliases={s: self.scan.aliases(s) for s in watch},
+            own={s: self.scan.own_names(s) for s in watch},
+            # The table's names are held to; a filer's first word is a guess.
+            sure=scan_src.ALIASES.__contains__,
             status=st.as_dict() if st else None,
             watchlist=watch,
             clock=clock,
             options=self.options.view(),
             closes=closes,
             iv_hist={sym: self.options.history.series(sym) for sym in watch},
-            premkt=self.premarket.view(td),
+            premkt=premkt,
             sector_map=scan_src.SECTOR,
             daily=daily,
             shorts=self.shorts.view(),
@@ -1001,6 +1320,7 @@ class Collector:
             pinned=pinned,
             top_story=self._catalyst,
             news_limit=news_limit,
+            calendar_ok=bool(cal_st.ok) if cal_st is not None else None,
         )
         # Which day of a multi-day move each name is on, for the Day 2/3 preset.
         stages = self._ctx().stage
@@ -1008,6 +1328,9 @@ class Collector:
         for r in payload.get("rows") or []:
             r["stage"] = stages.get(r.get("sym"))
             r["spark"] = self.universe.spark(str(r.get("sym")))
+        # No session type here (owner, 2026-11-11): the Scanner's strip carried NQ's
+        # trend-or-range lean for a day, and it is a futures read on a stocks page.
+        # The snapshot's `daytype` still feeds the Futures tab and the Dashboard.
         return payload
 
     def market_payload(self) -> dict[str, Any]:

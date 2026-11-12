@@ -42,13 +42,24 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import frame, marketctx, optcalc, releases, targets
-from .catalysts import NOISE, TIER_PENALTY, TIER_POINTS, grade
+from .catalysts import (
+    NOISE,
+    TALK,
+    TIER_PENALTY,
+    TIER_POINTS,
+    about,
+    analyst_upgrade,
+    grade,
+    move_grade,
+    moved,
+    story,
+)
 from .holidays import next_trading_day
 from .scan import Clock
 from .sources.shortint import squeeze_flag
@@ -121,19 +132,27 @@ W_PMVOL = 8
 PMVOL_MIN = 0.25  # % of ADV — nothing below it (Nasdaq's quiet names sit at 0.1–0.3)
 PMVOL_FULL = 4.0  # % of ADV for the whole part; log-scaled between the two
 # DOUBLED (2026-11-05): a catalyst with the side reached +1R 63% of the time against
-# 51% with none, and the penalty for one against it stays as it was, at -6, because
-# those signals did not do worse on the hit rate.
-W_CATALYST = 12
+# 51% with none. RAISED TO 20 (owner, 2026-11-10: "news is what stocks actually move on
+# since we trade high momentum and volume break and retests"): on twenty sessions the
+# catalyst was worth +0.82 R held inside each day against -0.06 R for RS, which has 25,
+# and at 12 it ranked below the frame. The tiers under it are catalysts.TIER_POINTS.
+W_CATALYST = 20
 CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08:00)
 # THE CATALYST IS ITS OWN PART NOW, ALL SESSION (owner, 2026-10-23: "i want
 # the rankings to be as high probability as possible"). It used to be a count
 # of fresh headlines inside the pre-open "in play" part; it now reads the
 # DIRECTION of four things against the side — a report's surprise sign, a
 # rating or target change, guidance raised or cut, an offering or a material
-# 8-K — and earns with the side, costs against it, and ignores a story that
-# only describes the price move. A prior, not a finding: logged on every
-# signal so tools/fit_score.py can keep it or throw it out.
-P_CATALYST = -6
+# 8-K — and earns with the side, costs against it. A story that says the name
+# moved and why is read by the move's direction since 2026-11-10 (catalysts.moved):
+# "Broadcom Stocks Jump 8.21% as Investors Eye $21.7 Billion AI Revenue Guide" is
+# the news the stock is moving on, and it earned nothing because it is not a
+# rating. A prior, not a finding: logged on every signal so tools/fit_score.py
+# can keep it or throw it out. Major news against the side costs 10 (2026-11-10;
+# it was 6, the same as an analyst's note).
+P_CATALYST = -10
+#: An offering filed against a long keeps the old six: a form, not a headline.
+P_OFFERING = -6
 W_INPLAY = W_GAP + W_PMVOL
 # THE CLOCK, FROM THE RECORD (1,258 settled signals to 2026-11-04): (L)/(E) signals
 # in the first thirty minutes reached +1R 39% of the time and in the last hour 36%,
@@ -209,8 +228,12 @@ EVENT_RECENT_MIN = 15
 
 NEWS_MAX = 8
 #: Average daily volume: the last ADV_SESSIONS completed sessions; a listing
-#: younger than ADV_MIN sessions has none.
-ADV_SESSIONS = 20
+#: younger than ADV_MIN sessions has none. THIRTY (2026-11-10, it was twenty): the
+#: one window every "share of an average day" on the desk now reads — the pool,
+#: the wide scan and the Day 2/3 ledger take TradingView's 30-day average, and the
+#: screener offers no twenty. RVOL is another thing (scan.RVOL_SESSIONS): volume
+#: SO FAR against the same time of day, which a whole-day average cannot give.
+ADV_SESSIONS = 30
 ADV_MIN = 10
 #: Sector peers' reports, from the trading day through this many trading days on.
 PEER_DAYS = 3
@@ -425,7 +448,7 @@ def _dur(m: float) -> str:
 # ------------------------------------------------------------------ the joins
 
 
-def adv20(volumes: list[float]) -> float | None:
+def avg_day(volumes: list[float]) -> float | None:
     """Average daily volume over the last ADV_SESSIONS completed sessions. Pure.
 
     `volumes` are the daily bars' volumes BEFORE the trading day, oldest first —
@@ -442,8 +465,8 @@ def adv20(volumes: list[float]) -> float | None:
 def premkt_for(read: dict[str, Any] | None, adv: float | None) -> dict[str, Any] | None:
     """The row's `premkt` from today's Nasdaq read (sources/premarket.py). Pure.
 
-    `pct_adv` is pre-market share volume as a percentage of the twenty-session
-    average day — 5% before the bell is a name in play; 0.3% is not.
+    `pct_adv` is pre-market share volume as a percentage of the average day
+    (ADV_SESSIONS) — 5% before the bell is a name in play; 0.3% is not.
     """
     if not read:
         return None
@@ -451,8 +474,12 @@ def premkt_for(read: dict[str, Any] | None, adv: float | None) -> dict[str, Any]
     pct = (round(vol / adv * 100.0, 2)
            if isinstance(vol, (int, float)) and isinstance(adv, (int, float)) and adv > 0
            else None)
-    return {"volume": vol, "pct_adv": pct, "high": read.get("high"), "low": read.get("low"),
-            "last": read.get("last"), "asof": read.get("asof")}
+    out = {"volume": vol, "pct_adv": pct, "high": read.get("high"), "low": read.get("low"),
+           "last": read.get("last"), "asof": read.get("asof")}
+    # "screener" when the wide read stood in for Nasdaq's (fifteen minutes behind).
+    if read.get("source"):
+        out["source"] = read["source"]
+    return out
 
 
 def peers_for(sym: str, sector: str | None, earnings: list[dict[str, Any]],
@@ -531,7 +558,8 @@ def earnings_for(sym: str, rows: list[dict[str, Any]], trading_day: date) -> dic
 
 
 _RATING = re.compile(
-    r"upgrad|downgrad|price target|\bPT\b|initiat|reiterat|overweight|underweight|"
+    r"downgrad|price target|\bPT\b|initiat\w* (?:coverage|at\b|with\b)|coverage initiated|"
+    r"reiterat|overweight|underweight|"
     r"outperform|underperform|\bbuy rating|\bsell rating|neutral rating", re.I)
 _EARN = re.compile(
     r"earnings|results|\bEPS\b|revenue|guidance|outlook|quarter|\bQ[1-4]\b|beats?\b|miss(es)?\b",
@@ -540,8 +568,9 @@ _FILING = re.compile(r"\b8-K\b|\b10-[QK]\b|SEC filing|files? for|offering|prospe
 
 
 def news_kind(title: str) -> str:
-    """rating | earnings | filing | news, from the headline alone. Pure."""
-    if _RATING.search(title):
+    """rating | earnings | filing | news, from the headline alone. Pure.
+    An upgrade is a rating only in an analyst's sentence (catalysts.analyst_upgrade)."""
+    if _RATING.search(title) or analyst_upgrade(title):
         return "rating"
     if _EARN.search(title):
         return "earnings"
@@ -554,19 +583,41 @@ def _story(title: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", title.lower())[:80]
 
 
+def names_of(aliases: Sequence[str], own: Sequence[str] = ()) -> list[str]:
+    """The words a headline calls the company: the table's or the filer's short
+    name, and the own feed's looser first word. Pure."""
+    return [*aliases, *(n for n in own if n and n not in aliases)]
+
+
 def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
              aliases: list[str], now: datetime, limit: int | None = NEWS_MAX,
-             ) -> list[dict[str, Any]]:
+             names: Sequence[str] = (), strict: bool = True) -> list[dict[str, Any]]:
     """The ticker's own headlines plus any wire story that names it. Pure.
 
     THE WIRE MATCH IS STRICT ON PURPOSE: the cashtag, or a company name written
     as a proper noun on a word boundary. "Meta" in "metadata" or "Intel" in
     "intelligence" would put a macro tape's worth of noise under a stock.
+
+    AND THE STORY HAS TO BE THE NAME'S (owner, 2026-11-10). A feed for a ticker
+    carries any story that names it: GOOGL's held "AMD Stock Rises On Google Cloud
+    Deal, Wall Street Upgrade", and AMZN's a Dow wrap. A story that names the
+    company only after its first joiner is dropped (catalysts.about); `names` are
+    the words the headline would call it by.
+
+    AND IT HAS TO BE A STORY (owner, 2026-11-11: "only … news that can actually
+    impact the market and stocks"). `catalysts.story` is the one test, for this list
+    and for the lead story alike: the lead names the company (a headline that does not
+    name it at all is somebody else's, where the names are known), and it describes
+    an event, not a template, a diary note, a preview, an opinion, a list or a recap.
+    102 of the 254 stories under the thirty-six names that morning were not. `strict`
+    is whether the names are the table's (see catalysts.story): a guessed name is not
+    held against a headline that does not carry it.
     """
     now_ts = now.timestamp()
     cutoff = now_ts - NEWS_DAYS * 86400
     pats = [re.compile(rf"\${re.escape(sym)}\b")]
     pats += [re.compile(rf"\b{re.escape(a)}\b") for a in aliases if a]
+    called = names or names_of(aliases)
     items: list[dict[str, Any]] = [dict(x) for x in own]
     for w in wire:
         title = w.get("title") or ""
@@ -579,6 +630,9 @@ def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
     for it in sorted(items, key=lambda x: -(x.get("ts") or 0)):
         ts = it.get("ts")
         if ts is not None and ts < cutoff:
+            continue
+        if story(it.get("title") or "", sym, called, str(it.get("publisher") or ""),
+                 strict) is None:
             continue
         k = _story(it.get("title") or "")
         if not k or k in seen:
@@ -642,17 +696,24 @@ def in_play(row: dict[str, Any], premkt: dict[str, Any] | None) -> tuple[float, 
 # netted. The kinds the headline classifier assigns (news_kind) were never
 # trusted as catalysts (13 of 31 names on 2026-10-14 were "rating" on
 # reiterations); these patterns are narrower and name the action.
+# "UPGRADE" IS READ BY catalysts.analyst_upgrade, not by its stem here: a Christmas
+# tree's "major holiday upgrade" cost Home Depot's short six (audit, 2026-11-11). And
+# A BID IS GOOD NEWS FOR THE TARGET ONLY: "takeover offer" and "buyout bid" were bullish
+# for whichever name the headline led with, so "IDP Education mulls Blackstone's revised
+# $571 million takeover offer" cost a Blackstone short ten. The passive forms stay
+# ("to be acquired", "acquired by"), whose subject is the company being bought; a
+# target's own jump on a bid is read as its move (catalysts.moved).
 _BULL = re.compile(
-    r"upgrad|rais\w* (?:its |the |their )?(?:price )?target|"
+    r"rais\w* (?:its |the |their )?(?:price )?target|"
     r"lift\w* (?:its |the )?(?:price )?target|price target (?:raised|lifted|increased|hiked)|"
     r"raised to (?:buy|outperform|overweight|strong buy)|"
     r"initiat\w*[^.]{0,40}\b(?:buy|outperform|overweight)\b|reiterat\w*[^.]{0,20}\bbuy\b|"
     r"rais\w* (?:full[- ]year |fy ?\d* |annual |its |the )?(?:guidance|outlook|forecast)|"
-    r"hik\w* (?:its |the )?(?:guidance|outlook|forecast)|\bbeats?\b|"
+    r"hik\w* (?:its |the )?(?:guidance|outlook|forecast)|"
+    r"(?:guidance|outlook|forecast) (?:raised|lifted|hiked|boosted)|\bbeats?\b|"
     r"\btops? (?:estimates|expectations)|"
     r"\bfda (?:approv|clear)|approved by the fda|met (?:its |the )?primary endpoint|"
     r"positive (?:phase|topline|trial|data)|to be acquired|acquired by|"
-    r"takeover (?:bid|offer)|buyout (?:bid|offer)|"
     r"\b(?:wins?|awarded)\b[^.]{0,40}\bcontract\b",
     re.I)
 _BEAR = re.compile(
@@ -664,7 +725,9 @@ _BEAR = re.compile(
     r"initiat\w*[^.]{0,40}\b(?:sell|underperform|underweight)\b|"
     r"cut\w* (?:full[- ]year |fy ?\d* |annual |its |the )?(?:guidance|outlook|forecast)|"
     r"lower\w* (?:its |the )?(?:guidance|outlook|forecast)|slash\w* (?:guidance|outlook|forecast)|"
-    r"withdraw\w* (?:its )?guidance|\bmiss(?:es|ed)?\b|\bfalls? short\b|"
+    r"withdraw\w* (?:its )?guidance|"
+    r"(?:guidance|outlook|forecast) (?:cut|lowered|slashed|trimmed|withdrawn)|"
+    r"\bmiss(?:es|ed)?\b|\bfalls? short\b|"
     r"\b(?:secondary|stock|share) offering|\bprobe\b|investigat|\brecall\b|lawsuit|"
     r"\bfda (?:rejects?|declines?|refuses?)|complete response letter|clinical hold|"
     r"(?:trial|study) (?:fails|failed)|failed (?:to meet|its) primary|\bbankrupt|\bchapter 11\b",
@@ -675,7 +738,8 @@ _OFFERING_FORMS = ("S-1", "S-3", "424B", "F-1", "F-3")
 def headline_direction(title: str) -> str | None:
     """"bull", "bear", or None — the four catalyst kinds, by what the title says
     was done, never by the price move it describes. Both ways at once is None."""
-    bull, bear = bool(_BULL.search(title)), bool(_BEAR.search(title))
+    bull = bool(_BULL.search(title)) or analyst_upgrade(title)
+    bear = bool(_BEAR.search(title))
     if bull == bear:
         return None
     return "bull" if bull else "bear"
@@ -683,17 +747,20 @@ def headline_direction(title: str) -> str | None:
 
 def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
                   news: list[dict[str, Any]] | None,
-                  filings: list[dict[str, Any]] | None) -> dict[str, Any]:
+                  filings: list[dict[str, Any]] | None, sym: str | None = None,
+                  names: Sequence[str] = ()) -> dict[str, Any]:
     """The catalyst part: {pts, note, against} — points with the side (up to
     W_CATALYST), P_CATALYST against it with the item quoted in `against`, zero
     with no directional item. Pure.
 
     Items: a report since the close with its surprise sign (W_CATALYST); a
     headline since the close with a direction, GRADED BY WHAT IT IS
-    (catalysts.py, owner 2026-11-09): a beat, guidance, an FDA readout or a deal
-    W_CATALYST, an upgrade or downgrade 8, a price-target tweak 3, a law firm's
-    notice nothing; an offering filed in the last three days (3, bear); a
-    bankruptcy 8-K (W_CATALYST, bear). The strongest item each way decides;
+    (catalysts.py, owner 2026-11-09): a beat, guidance, an FDA readout, a deal or
+    the name's move with its reason W_CATALYST, an upgrade or downgrade 12, a
+    price-target tweak 3, a law firm's notice nothing. The direction is what the
+    headline says was done, else which way it says the name moved (`sym` and
+    `names` find the name in it; catalysts.moved). An offering filed in the last
+    three days (3, bear); a bankruptcy 8-K (W_CATALYST, bear). The strongest item each way decides;
     against wins a tie, because the downside of ranking a name into its own bad
     news is the larger one. A minor note against the side costs 3 where it used
     to cost the full penalty, since it now earns only 3 with it.
@@ -710,8 +777,35 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
              if isinstance(h, dict) and h.get("age_min") is not None
              and h["age_min"] <= CATALYST_FRESH_MIN]
     for h in fresh:
-        g = grade(str(h.get("title") or ""))
-        d = headline_direction(str(h.get("title") or "")) if g.tier != NOISE else None
+        title = str(h.get("title") or "")
+        g = grade(title)
+        # NOTHING HAPPENED, OR NOT TO THIS NAME (audit, 2026-11-11, on that evening's
+        # list: six of the twenty rows the catalyst had scored were misread). A preview
+        # or an opinion describes no event, so it has no direction ("Will Broadcom Beat
+        # Estimates Again in Its Next Earnings Report?" was a twenty-point beat). And
+        # where the company's name is known and the headline does not carry it, the
+        # story is somebody else's that the feed filed here: "Trade Desk's Jeff Green
+        # Says Growth Still Falls Short" paid a Netflix short, and a morning round-up's
+        # "Huang faces FBI probe" cost SpaceX ten. A name the table has no words for is
+        # still left to its feed.
+        if g.tier == NOISE:
+            continue
+        if sym and names and about(title, sym, names) is None:
+            continue
+        mv = moved(title, sym, names) if sym else None
+        # The name's own move, not a wrap: "Amazon Stocks Rise 4.05% as JPMorgan Adds
+        # It to Focus List" is a List by its words until Amazon is known to lead it.
+        # AND NOT A PREVIEW EITHER (2026-11-11): "NBIS Stock Jumps Over 11% On CoreWeave
+        # Boost: Analysts Expect Over Six-Fold Growth In Sales In Upcoming Q3 Report" is
+        # talk by its second half, so it led Nebius's row as its move (catalysts.story
+        # reads it so) and earned the score nothing. Asked before talk is set aside.
+        if mv and g.tag in ("List", "Preview"):
+            g = move_grade(title) or g
+        if g.tag in TALK:
+            continue
+        d = headline_direction(title)
+        if d is None:
+            d = mv
         if d is None:
             continue
         pub = str(h.get("publisher") or "").strip()
@@ -725,7 +819,7 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         form = str((f or {}).get("form") or "")
         desc = str((f or {}).get("desc") or form)
         if form.startswith(_OFFERING_FORMS):
-            items.append(("bear", 3, f"offering filed: {desc[:60]}", P_CATALYST))
+            items.append(("bear", 3, f"offering filed: {desc[:60]}", P_OFFERING))
         elif form.startswith("8-K") and "bankruptcy" in desc.lower():
             items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}", P_CATALYST))
     if side not in ("long", "short") or not items:
@@ -889,7 +983,24 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     s = (row.get("lvl_state") or 0) * d
     if d and s in W_STRUCTURE:
         pts = W_STRUCTURE[s]
-        note = ("outside both levels" if s == 2 else "outside one level (inside setup)")
+        # Which one, in the strategy's own words: through the previous day's level is
+        # an outside setup, through the pre-market's alone an inside one. It used to
+        # say "(inside setup)" for both, which was wrong for a name over PDH and
+        # under PMH.
+        broke = row.get("broken") or {}
+        day_key, pm_key = ("pdh", "pmh") if d > 0 else ("pdl", "pml")
+        word = "above" if d > 0 else "below"
+        if s == 2:
+            note = "outside both levels"
+        elif broke.get(day_key) and not (row.get("levels") or {}).get("pm_done"):
+            # Before the bell there is no pre-market level to have taken yet.
+            note = f"{word} {day_key.upper()}: an outside setup, the pre-market range not set yet"
+        elif broke.get(day_key):
+            note = f"{word} {day_key.upper()} only: an outside setup, {pm_key.upper()} not taken"
+        elif broke.get(pm_key):
+            note = f"{word} {pm_key.upper()} only: an inside setup, inside yesterday's range"
+        else:
+            note = "outside one level"
     elif state == "approaching":
         pts, note = W_APPROACH, f"approaching {setup.get('level') or 'a level'}"
     else:
@@ -1082,6 +1193,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           news: dict[str, list[dict[str, Any]]], filings: dict[str, list[dict[str, Any]]],
           aliases: dict[str, list[str]], status: dict[str, Any] | None,
           watchlist: list[str], clock: Clock, now: datetime | None = None,
+          own: dict[str, list[str]] | None = None,
           options: dict[str, tuple[optcalc.Chain, float]] | None = None,
           closes: dict[str, list[float]] | None = None,
           iv_hist: dict[str, list[float]] | None = None,
@@ -1099,8 +1211,18 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           pool: dict[str, Any] | None = None,
           pinned: list[str] | None = None,
           top_story: Callable[[str], dict[str, Any] | None] | None = None,
-          news_limit: int | None = NEWS_MAX) -> dict[str, Any]:
+          news_limit: int | None = NEWS_MAX,
+          calendar_ok: bool | None = None,
+          sure: Callable[[str], bool] | None = None) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
+
+    `sure` says whether a name's words are the table's, and so can be held against a
+    headline that does not carry them (catalysts.story's `strict`); None trusts them all.
+
+    `calendar_ok` is whether the economic calendar is loading (None: not known). No
+    next release with the calendar down is a gap, not a clear morning, and the page
+    must be able to say which (audit, 2026-11-11: Nasdaq had refused the feed for
+    twelve hours and the page read "None scheduled").
 
     `promoted` is {symbol: why} for the names the pool put on the list today
     (sources/pool.py), `pool` the pool's own view and `pinned` the owner's
@@ -1124,6 +1246,10 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
 
     reg = regime(quotes, {k: rows_in.get(k) for k in ("SPY", "QQQ", "IWM")}, calendar,
                  session, now, context=context)
+    reg["calendar_ok"] = calendar_ok
+    if calendar_ok is False and reg.get("event") is None:
+        reg["notes"].append("The economic calendar is not loading, so the next release is "
+                            "unknown — check the day's prints before taking a level.")
     # THE TAPE COUNT BEFORE THE SCORE (marketctx.conviction_for), on the
     # technical rows as they stand: the Market line reads it, and the Market
     # tab prints the same count. Its failure is a missing count, never a
@@ -1160,8 +1286,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         earn = earnings_for(sym, earnings, td) or next_report((earn_next or {}).get(sym), td)
         # The catalyst reads every headline it can see: the row carries the newest
         # eight, and an analyst's note on top of them must not hide the report.
+        called = names_of(aliases.get(sym) or [], (own or {}).get(sym) or [])
         all_news = news_for(sym, news.get(sym) or [], wire, aliases.get(sym) or [], now,
-                            limit=None)
+                            limit=None, names=called, strict=sure(sym) if sure else True)
         nws = all_news[:NEWS_MAX]
         fil = [f for f in (filings.get(sym) or [])][:FILINGS_MAX]
         row["earnings"] = earn
@@ -1177,16 +1304,16 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         row["filings"] = fil
         # The name's average day, and its pre-market against it — context on
         # every row, and before the bell part of the score (in play).
-        adv = base.get("adv20")
-        row["adv20"] = adv if isinstance(adv, (int, float)) else None
-        row["premkt"] = premkt_for((premkt or {}).get(sym), row["adv20"])
+        adv = base.get("adv")
+        row["adv"] = adv if isinstance(adv, (int, float)) else None
+        row["premkt"] = premkt_for((premkt or {}).get(sym), row["adv"])
         # The daily frame against the live print (frame.read); the levels
         # themselves (`frame`) ride along from the bars job.
         row["frame_read"] = frame.read(base.get("frame"), row.get("last"))
         row["short"] = (shorts or {}).get(sym)
         row["promoted"] = (promoted or {}).get(sym)
         side0 = (row.get("setup") or {}).get("side")
-        cat = catalyst_read(side0, earn, all_news, fil)
+        cat = catalyst_read(side0, earn, all_news, fil, sym=sym, names=called)
         if row.get("ok"):
             row["score"] = score_row(row, reg, srs, earn, event, session,
                                      premkt=row["premkt"], news=nws,
@@ -1310,7 +1437,7 @@ def _empty(sym: str, age: float | None, why: str) -> dict[str, Any]:
         "setup": {"side": None, "state": "chop", "level": None, "entry": None, "note": why},
         "signals": [], "score": {"total": 0, "side": None, "parts": []}, "flags": [],
         "earnings": None, "news": [], "filings": [], "options": None,
-        "adv20": None, "premkt": None, "peers": [],
+        "adv": None, "premkt": None, "peers": [],
         "frame": None, "frame_read": None, "short": None, "targets": [], "record": None,
         "promoted": None,
     }

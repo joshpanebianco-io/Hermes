@@ -5,6 +5,8 @@ import { Module } from "@/components/ui/Module";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { Sparkline } from "@/components/ui/Sparkline";
+import { AssetIcon, hasAssetIcon } from "@/components/ui/AssetIcon";
+import { TickerLogo } from "@/components/ui/TickerLogo";
 import { autoDp, dir, feedNote, num, quoteChg } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -69,7 +71,7 @@ export function Board({
               </div>
               <ul>
                 {rows.map((q) => (
-                  <Row key={q.key} q={q} />
+                  <Row key={q.key} q={q} mark={g.key === "core"} />
                 ))}
               </ul>
             </div>
@@ -88,12 +90,14 @@ export function Board({
  * grain contract between sessions). The tooltip says which, how late and as
  * of when. A live row looks exactly as it always did.
  */
-function Row({ q }: { q: Quote }) {
+function Row({ q, mark }: { q: Quote; mark?: boolean }) {
   const chg = quoteChg(q);
   const note = feedNote(q);
   const ink = q.feed === "closed" || q.feed === "stale" ? "text-ink-3" : "text-ink";
   return (
     <li className="hit flex items-center gap-2 px-3 py-[3px]" title={note ? `${q.name} — ${note}` : q.name}>
+      {/* The book's own rows wear their marks: a future its badge or ingot, a fund its logo. */}
+      {mark && (hasAssetIcon(q.key) ? <AssetIcon id={q.key} size={16} className="block shrink-0 text-ink-2" /> : <TickerLogo sym={q.key} size={16} />)}
       <span className="fig w-[52px] shrink-0 truncate text-[11px] text-ink-2">{q.key}</span>
       <Tick
         value={num(q.last, q.last >= 1000 ? autoDp(q.last) : undefined)}

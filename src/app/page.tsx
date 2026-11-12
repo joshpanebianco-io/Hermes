@@ -5,7 +5,7 @@ import { failureReason, offlineTerminal } from "@/lib/offline";
 import { cookies } from "next/headers";
 import { THEME_COOKIE, parseTheme } from "@/lib/theme";
 import { UI_COOKIE, parseUi } from "@/lib/ui";
-import { isDesk, pageTitle, resolveTab, type Desk } from "@/lib/tabs";
+import { pageTitle, resolveTab } from "@/lib/tabs";
 
 /**
  * The terminal, server-rendered once and then polled by the client.
@@ -62,8 +62,8 @@ async function getReport(): Promise<ReportFeed | null> {
 
 /**
  * The browser tab's title, named on the server so it is right on the first
- * frame — "HERMES · Stocks & Options · Scanner". The client keeps it in step
- * as you move (Terminal.tsx).
+ * frame — "HERMES · Scanner". The client keeps it in step as you move
+ * (Terminal.tsx).
  */
 export async function generateMetadata({
   searchParams,
@@ -71,9 +71,8 @@ export async function generateMetadata({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<Metadata> {
   const sp = await searchParams;
-  const named = resolveTab(sp.tab);
-  const desk: Desk = isDesk(sp.desk) ? sp.desk : (named?.desk ?? "futures");
-  return { title: pageTitle(named?.tab ?? "terminal", desk) };
+  const named = resolveTab(sp.tab, sp.desk);
+  return { title: pageTitle(named?.tab ?? "terminal") };
 }
 
 /**
@@ -93,10 +92,10 @@ export default async function Page({
 }) {
   const sp = await searchParams;
   // Current keys and the old ones alike (lib/tabs.ts resolveTab): a link to
-  // the report or the plan opens Analysis on that half.
-  const named = resolveTab(sp.tab);
+  // the report opens Futures on its Brief, one to the plan the Scanner on its
+  // Game plan, and one to the Analysis tab whichever half its `?desk=` named.
+  const named = resolveTab(sp.tab, sp.desk);
   const initialTab = named?.tab ?? "terminal";
-  const initialDesk: Desk | undefined = isDesk(sp.desk) ? sp.desk : named?.desk;
   /*
    * WHETHER THE URL ASKED AT ALL, which is not the same question as which tab
    * it asked for. `?tab=terminal` and a bare `/` both resolve to "terminal"
@@ -119,7 +118,8 @@ export default async function Page({
       initialTabPinned={initialTabPinned}
       initialTheme={theme}
       initialUi={ui}
-      initialDesk={initialDesk}
+      initialScanView={named?.scan}
+      initialFutView={named?.fut}
     />
   );
 }

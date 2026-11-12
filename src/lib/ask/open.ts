@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Open Hermes from anywhere — the header's Ask key, the keyboard, a panel.
+ * Open Hermes from anywhere — the status rail's Ask button, a panel.
  *
  * A window event rather than a context: the panel is mounted once beside the
  * page, and the things that open it sit in different branches of the tree.

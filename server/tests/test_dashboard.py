@@ -145,10 +145,30 @@ def test_the_top_setups_are_the_engines_own_order_of_what_scored() -> None:
     assert "news" not in p["top"][0]
 
 
-def test_the_list_keeps_the_pinned_order_and_the_days_adds_are_separate() -> None:
+def test_in_play_is_the_pools_rank_with_the_engines_verdict() -> None:
+    ranked = [{"symbol": "SPY", "score": 9.0, "reason": "moved 1 ATR"},
+              {"symbol": "SE", "name": "Sea", "score": 20.0, "through": "PDL", "day": None,
+               "reason": "gap 1.66 ATR · pre-market 8.1% of ADV · reports today · through PDL"},
+              {"symbol": "ASX", "name": "ASE", "score": 14.5, "through": "PDH", "day": 4,
+               "reason": "gap 0.90 ATR · through PDH · day 4 of a -21% move"}]
+    view = {"ok": True, "qualified": 282, "screened": 2030, "basis": "pre",
+            "promoted": [{"symbol": "SE"}], "marks_done": ["08:00"], "next_mark": "09:00",
+            "slots": 7, "on": True}
+    got = d.in_play(ranked, view,
+                    verdict=lambda s: {"state": "promoted" if s == "SE" else "inplay",
+                                       "mark": "08:00" if s == "SE" else None},
+                    price=lambda s: 74.0 if s == "SE" else None)
+    # The benchmarks never; the rest in the pool's order with price and verdict joined.
+    assert [r["sym"] for r in got["rows"]] == ["SE", "ASX"]
+    assert got["rows"][0]["last"] == 74.0 and got["rows"][0]["verdict"]["state"] == "promoted"
+    assert got["rows"][1]["last"] is None and got["rows"][1]["day"] == 4
+    assert (got["qualified"], got["promoted"], got["next_mark"]) == (282, 1, "09:00")
+    assert d.in_play(ranked, view, verdict=lambda _s: None, price=lambda _s: None,
+                     limit=1)["rows"][0]["sym"] == "SE"
+    # The page carries the card, and My list is gone.
     p = page()
-    assert [r["sym"] for r in p["list"]] == ["AAPL", "SPCX"]
-    assert [r["sym"] for r in p["adds"]] == ["ADD"]
+    assert p["inplay"] is None and "list" not in p and "adds" not in p
+    assert d.build({}, {}, {}, {}, [], session_day=FRI, inplay=got)["inplay"] is got
 
 
 def test_the_plan_counts_continuations_not_day_ones() -> None:
@@ -161,8 +181,10 @@ def test_focus_is_what_beat_spy_best_first() -> None:
     plan = page()["plan"]
     assert [f["key"] for f in plan["focus"]] == ["XLK", "XLC"]          # not SPY, RSP or a laggard
     assert [f["key"] for f in plan["themes"]] == ["WGMI"]
+    # The card passes the tape's read through as it is given, `thin` included: this fixture
+    # predates it (2 reads of 11 at +100 is what the engine now calls thin and weak).
     assert plan["bias"] == {"side": "long", "score": 100, "grade": "moderate", "live": 2,
-                            "total": 11, "cap": 4}
+                            "total": 11, "cap": 4, "thin": None}
 
 
 def test_reports_are_the_sessions_own_before_the_open_first_biggest_first() -> None:

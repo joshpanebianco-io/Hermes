@@ -47,6 +47,6 @@ test("the reader's settings read as the Settings tab sets them", () => {
   assert.match(on, /off, so every name gets the weekly/);
   assert.match(on, /on, for the \(L\) retest, the ◆ breakout, names scoring 40 or more; sound on, desktop notifications off/);
   const unset = prefsBlock({ budget: null, zeroDte: true, alerts: { on: false, desktop: false, sound: false, kinds: [], minScore: 0 } });
-  assert.match(unset, /not set, so the Scanner shows no contract count/);
+  assert.match(unset, /not set, so the Stocks tab shows no contract count/);
   assert.match(unset, /Alerts: off\./);
 });

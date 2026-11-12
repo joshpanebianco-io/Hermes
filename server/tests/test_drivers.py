@@ -64,7 +64,12 @@ def test_nq_board_counts_the_votes_and_names_the_conflict() -> None:
     assert v["credit"]["vote"] == "short"
     assert v["vix_dir"]["vote"] == "short"
     assert v["vix_curve"]["vote"] == "neutral"  # 18 / 20 = 0.90 sits on the calm bound
-    assert v["gamma"]["vote"] == "short" and "200 below the flip (0.4σ)" in v["gamma"]["note"]
+    # Below the flip in negative gamma: said, and not a short vote (owner, 2026-11-12:
+    # "positive doesnt mean bullish and vice versa"). It is in no family and has its own line.
+    assert v["gamma"]["vote"] == "neutral" and "200 below the flip (0.4σ)" in v["gamma"]["note"]
+    assert v["gamma"]["value"].startswith("negative γ · below flip")
+    assert v["gamma"]["family"] is None and v["gamma"]["aside"].startswith("never a side")
+    assert "negative is not bearish" in v["gamma"]["note"]
     assert v["value"]["vote"] == "short" and v["value"]["value"] == "below (VAL 30,100)"
     assert v["session"]["vote"] == "short" and "Asia's low is taken out" in v["session"]["note"]
     assert v["frame"]["vote"] == "short"

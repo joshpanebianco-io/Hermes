@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { NamePayload, Side } from "@/types/scanner";
+import type { NamePayload } from "@/types/scanner";
 import { ScanChart } from "@/components/panels/ScanChart";
-import { ScanDetail, emBand, sideHue } from "@/components/panels/ScanDetail";
-import { TrackButton, capShort, isNum } from "@/components/panels/ScanWide";
+import { ScanDetail, emBand } from "@/components/panels/ScanDetail";
+import { Glyph, TrackButton, isNum } from "@/components/panels/ScanWide";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { Tick } from "@/components/ui/Tick";
 import { HelmLoader } from "@/components/ui/HelmLoader";
@@ -12,9 +12,10 @@ import { setAskFocus } from "@/lib/ask/open";
 import { dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
-import { closeTicker, togglePin, useTicker } from "@/lib/ticker";
+import { closeTicker, openSearch, togglePin, useTicker } from "@/lib/ticker";
 import { useNow } from "@/lib/useNow";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { usePinsChanged } from "@/lib/usePinsChanged";
 
 /**
  * The slide-out: one name, large, from anywhere (owner, 2026-11-09).
@@ -24,13 +25,15 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
  * 1,180 on the owner's 2560 screen, which is what reading a retest needs.
  *
  * THE TABLE BEHIND IT STAYS LIVE. The screenshots this came from dim the page and
- * block it; here another click swaps the name without closing, and ↑ ↓ walk the
- * list, because the job is going through thirty names, not reading one. So it is
- * not a dialog: no backdrop and no focus trap.
+ * block it; here another click swaps the name without closing, because the job is
+ * going through thirty names, not reading one. So it is not a dialog: no backdrop
+ * and no focus trap.
  *
- * Esc closes it, F makes it full width, its left edge drags, and the width is
- * remembered. It sits inside the page, between the header and the status rail,
- * and Hermes's panel floats above it.
+ * Esc closes it, the header's buttons make it full width and close it, its left
+ * edge drags, and the width is remembered. It sits inside the page, between the
+ * header and the status rail, and Hermes's panel floats above it. Its single-key
+ * controls (F, V, the arrows walking the list) and the legend of them along its
+ * foot went on 2026-11-11, at the owner's word.
  */
 
 const isPct = (v: unknown): v is number => isNum(v) && v >= 40 && v <= 100;
@@ -69,6 +72,13 @@ export function TickerDrawer() {
     return () => clearInterval(id);
   }, [sym, session, load]);
 
+  // A star in a table, or the Undo on the unpin notice, changed the list: the header's
+  // own star reads the name again so it shows the truth.
+  const reload = useCallback(() => {
+    if (sym) void load(sym);
+  }, [sym, load]);
+  usePinsChanged(reload);
+
   // A new name starts blank rather than showing the last one's row under its ticker.
   useEffect(() => {
     setData(null);
@@ -88,12 +98,11 @@ export function TickerDrawer() {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      // Esc closes it, as it closes a menu or the search. F for full width went with the
+      // other single-key controls (owner, 2026-11-11); the button in the header does it.
       if (e.key === "Escape") {
         e.preventDefault();
         closeTicker();
-      } else if (e.key === "f" || e.key === "F") {
-        e.preventDefault();
-        setFull((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -120,26 +129,44 @@ export function TickerDrawer() {
 
   if (!sym) return null;
   const r = data?.row ?? null;
-  const side: Side | null = r ? (r.setup.side ?? r.score.side) : null;
+  // THE MOVE IN DOLLARS, FROM THE SAME TWO PRICES AS THE PERCENT BESIDE IT. The percent is
+  // the regular session's (before the open, the last session's own). The dollars used to be
+  // the last trade less the previous close, which outside the session is a different move:
+  // GEV read "+9.96 (-3.90%)" on the evening of 10 Nov 2026, the after-hours gain beside
+  // the day's loss. So they are worked back from the percent and the price it ends at: the
+  // last trade in the session, the close after it, the previous close before the open.
+  const move = (() => {
+    if (!r || r.chg_pct == null || r.chg_pct <= -100) return null;
+    const session = data?.session;
+    const end =
+      session === "pre" || session === "closed"
+        ? r.levels.pdc
+        : session === "post" && r.ext_pct != null && r.last != null
+          ? r.last / (1 + r.ext_pct / 100)
+          : r.last;
+    return end != null ? end - end / (1 + r.chg_pct / 100) : null;
+  })();
 
   return (
     <aside
       ref={panel}
       aria-label={`${sym}, detail`}
-      className="absolute inset-y-0 right-0 z-40 flex min-w-0 flex-col border-l border-ring-2 bg-bg shadow-[-18px_0_60px_rgba(0,0,0,.45)]"
+      className="qt-drawer absolute inset-y-0 right-0 z-40 flex min-w-0 flex-col border-l border-ring-2 bg-bg shadow-[-18px_0_60px_rgba(0,0,0,.45)]"
       style={{ width: full ? "100%" : `min(100%, max(860px, ${width}%))` }}
     >
       {!full && <div onPointerDown={startDrag} className="absolute inset-y-0 -left-[3px] z-10 w-[6px] cursor-col-resize" aria-hidden title="Drag to resize" />}
 
-      <header className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-ring px-4 py-2.5">
-        <span className={cn("text-[14px]", side ? sideHue(side) : "text-ink-3")}>{side === "long" ? "▲" : side === "short" ? "▼" : "·"}</span>
-        <TickerLogo sym={sym} size={22} className="self-center" />
-        <span className="text-[21px] leading-none font-semibold text-ink">{sym}</span>
-        {r?.name && <span className="max-w-[240px] truncate text-[12.5px] text-ink-3">{r.name}</span>}
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ring px-4 py-2">
+        <TickerLogo sym={sym} size={22} />
+        <span className="text-[18px] leading-none font-semibold text-ink">{sym}</span>
+        {r?.name && <span className="max-w-[220px] truncate text-[12.5px] text-ink-3">{r.name}</span>}
         {r && (
           <>
-            <Tick value={num(r.last)} className="fig text-[17px] text-ink" />
-            <Tick value={pct(r.chg_pct)} className={cn("fig text-[13px]", dir(r.chg_pct))} />
+            <Tick value={`$${num(r.last)}`} className="fig text-[15px] text-ink" />
+            <span className={cn("fig text-[13px]", dir(r.chg_pct))}>
+              {move != null && `${move >= 0 ? "+" : ""}${move.toFixed(r.last != null && r.last < 1 ? 4 : 2)} `}
+              (<Tick value={pct(r.chg_pct)} />)
+            </span>
             {r.ext_pct != null && (
               <span className="fig text-[12px] text-ink-3">
                 {data?.session === "pre" ? "pre" : "post"} <span className={dir(r.ext_pct)}>{pct(r.ext_pct)}</span>
@@ -148,16 +175,29 @@ export function TickerDrawer() {
           </>
         )}
         {data?.stage != null && <span className="qt-cap text-[10px] text-ink-2" title="Which day of a multi-day move this is">Day {data.stage}</span>}
-        {r?.market_cap != null && <span className="fig text-[11.5px] text-ink-3">{capShort(r.market_cap)}</span>}
 
-        <div className="ml-auto flex items-center gap-2 self-center">
+        <button
+          type="button"
+          onClick={openSearch}
+          title="Find any ticker or company (Ctrl+K)"
+          className="hit mx-auto flex h-[28px] w-[clamp(160px,20%,300px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
+        >
+          <Glyph name="search" size={12} />
+          <span className="min-w-0 flex-1 truncate text-left">Search ticker or company…</span>
+          <span className="fig shrink-0 rounded-[3px] border border-ring-2 px-1.5 text-[10px]">Ctrl K</span>
+        </button>
+
+        <div className="flex items-center gap-2">
           {data && !data.tracked && <TrackButton sym={sym} tracked={false} onDone={() => void load(sym)} />}
           <button
             type="button"
             onClick={() => void togglePin(sym).then(() => load(sym))}
-            title={data?.pinned ? "Pinned: always on the list. Click to unpin." : "Pin: keep this name on the list for good"}
+            // Not until the name has been read: the star showed ☆ for every name while
+            // it loaded, and a click in that half second on a pinned one unpinned it.
+            disabled={!data}
+            title={!data ? "Reading the name…" : data.pinned ? "Pinned: always on the list. Click to unpin." : "Pin: keep this name on the list for good"}
             aria-pressed={data?.pinned ?? false}
-            {...segItem(data?.pinned ?? false, { className: "border border-ring-2" })}
+            {...segItem(data?.pinned ?? false, { className: "border border-ring-2 disabled:opacity-40" })}
           >
             {data?.pinned ? "★" : "☆"}
           </button>
@@ -170,23 +210,23 @@ export function TickerDrawer() {
           >
             TradingView ↗
           </a>
-          <button type="button" onClick={() => setFull((v) => !v)} title="Full width (F)" {...segItem(full, { className: "border border-ring-2" })}>
+          <button type="button" onClick={() => setFull((v) => !v)} title={full ? "Back to its own width" : "Full width"} {...segItem(full, { className: "border border-ring-2" })}>
             ⤢
           </button>
-          <button type="button" onClick={closeTicker} title="Close (Esc)" {...segItem(false, { className: "border border-ring-2" })}>
+          <button type="button" onClick={closeTicker} title="Close" {...segItem(false, { className: "border border-ring-2" })}>
             ✕
           </button>
         </div>
       </header>
 
       <div className="@container min-h-0 flex-1">
-        <div className="grid h-full min-h-0 grid-rows-[minmax(320px,52%)_minmax(0,1fr)] @min-[900px]:grid-cols-[minmax(0,1fr)_400px] @min-[900px]:grid-rows-1">
+        <div className="grid h-full min-h-0 grid-rows-[minmax(320px,52%)_minmax(0,1fr)] @min-[900px]:grid-cols-[minmax(0,1fr)_360px] @min-[900px]:grid-rows-1">
           <section aria-label={`${sym} chart`} className="min-h-0 min-w-0">
             <ScanChart key={sym} sym={sym} state={r?.lvl_state ?? 0} em={r ? emBand(r) : null} />
           </section>
           <section aria-label={`${sym} detail`} className="min-h-0 min-w-0 overflow-y-auto border-t border-ring @min-[900px]:border-t-0 @min-[900px]:border-l">
             {r ? (
-              <ScanDetail r={r} bench={bench} now={now} tracked={Boolean(data?.tracked)} />
+              <ScanDetail r={r} bench={bench} now={now} tracked={Boolean(data?.tracked)} stage={data?.stage ?? null} />
             ) : data ? (
               <p className="px-5 py-8 text-center text-[12px] text-ink-3">{data.offline ? `${data.offline.reason}.` : (data.error ?? "No data for this name yet.")}</p>
             ) : failed ? (
@@ -197,6 +237,7 @@ export function TickerDrawer() {
           </section>
         </div>
       </div>
+
     </aside>
   );
 }

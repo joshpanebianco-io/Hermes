@@ -42,6 +42,23 @@ worst excursion in R, whether +1R (and +2R) came before the stop, and where
 price stood 30 and 60 minutes after the signal bar and at the close. That is
 the dataset the heuristic weights in scanscore.py can later be fitted to.
 
+NEVER NEARER THAN THE RETEST BUFFER (owner, 2026-11-11: "do what you recommend").
+A signal bar that closes on its low puts the script's stop two cents away (or on
+the entry itself), and the record counted that as the trade. So R is the stop's
+distance or the signal's `risk_min` (a quarter of the ten-minute ATR at its bar,
+the script's own buffer), whichever is larger, and the stop is counted hit that
+far from the entry. `outcome.floored` says when the floor is what set it, and
+the stop shown is still the script's. Signals settled before that date were
+worked again from the bars still held (`EventLog.refloor`), their first outcome
+kept under `outcome_raw`; the ones whose bars were gone stay as they were, and
+`stats` counts how many of each the record holds.
+
+HOW FAR IT REACHES: 84 of the 893 settled signals read with it, 9%, every one an
+(L), which on the script's own stop reached +1R 30% of the time against 41 to
+52% for the bands above (the table is beside scan.risk_of). It is NOT the third
+of the record the first audit counted: that was stops under 0.25% of price, and
+a quarter of the ten-minute ATR is about 0.13% of price.
+
 ON A TEN-MINUTE BAR THE ORDER INSIDE IT IS UNKNOWN. When one bar reaches both
 +1R and the stop, the log counts it STOPPED — the conservative reading, since a
 record that flatters the strategy is worse than none. Outcomes are read off the
@@ -53,15 +70,28 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import statistics
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from .config import CACHE_DIR
 from .holidays import close_minute
-from .scan import BAR_SEC, CLOSE_LAG_SEC, ET, SRC_SEC, Bar, fmt_px
+from .scan import (
+    ATR_LEN,
+    BAR_SEC,
+    BUF_MULT,
+    CLOSE_LAG_SEC,
+    ET,
+    SRC_SEC,
+    Bar,
+    atr,
+    fmt_px,
+    resample,
+    risk_of,
+)
 
 EVENTS_FILE = os.path.join(CACHE_DIR, "scanner_events.jsonl")
 #: The list as it stood before the bell, one line a day, beside the events: the
@@ -123,10 +153,15 @@ def blank_outcome() -> dict[str, Any]:
             "final": False}
 
 
+#: The earliest bars a floor is worked back from: the ten-minute ATR needs its
+#: fourteen bars and a few dozen more before it has settled on the name's range.
+REFLOOR_MIN_BARS = 60
+
+
 def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price: float,
            stop: float | None, score: int | None, note: str, day: str,
            now_ts: float, parts: dict[str, Any] | None = None,
-           ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+           ctx: dict[str, Any] | None = None, risk_min: Any = None) -> dict[str, Any]:
     live = now_ts - (bar_t + BAR_SEC) <= LIVE_LAG_SEC
     ev: dict[str, Any] = {
         "id": 0,
@@ -141,6 +176,10 @@ def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price:
         "level": level,
         "price": round(float(price), 4),
         "stop": round(float(stop), 4) if stop is not None else None,
+        # The least the stop's distance is counted as (module docstring).
+        "risk_min": (round(float(risk_min), 4)
+                     if kind in TRADES and isinstance(risk_min, (int, float)) and risk_min > 0
+                     else None),
         # The row's score NOW — which is the signal's only when found live.
         "score": score if live else None,
         # The score's parts at the signal (2026-10-22), for tools/fit_score.py:
@@ -181,7 +220,31 @@ def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None
         text = str(sg.get("note") or "")
         note = f"{_LABEL[kind]} {side} — {text[:1].lower()}{text[1:]}"
         out.append(_event(sym, kind, side, sg.get("level"), int(sg["t"]), sg["price"],
-                          sg.get("stop"), score, note, day, now_ts, parts, ctx))
+                          sg.get("stop"), score, note, day, now_ts, parts, ctx,
+                          risk_min=sg.get("risk_min")))
+    return out
+
+
+def shape_ctx(r: dict[str, Any]) -> dict[str, Any]:
+    """A row's own day shape in its daily ATRs: yesterday's range and close position,
+    the pre-market range, and the gap (the pre-market last against the previous close
+    while the pre-market is on, else nothing). Pure; None where a figure is missing."""
+    lv = r.get("levels") or {}
+    atr = r.get("atr_d")
+    pdh, pdl, prev = lv.get("pdh"), lv.get("pdl"), r.get("prev_close")
+    pmh, pml = lv.get("pmh"), lv.get("pml")
+    pm_last = (r.get("premkt") or {}).get("last")
+    ok = lambda *xs: all(isinstance(x, int | float) and not isinstance(x, bool) for x in xs)  # noqa: E731
+    out: dict[str, Any] = {"pd_range_atr": None, "pd_close_pos": None, "pm_range_atr": None,
+                           "gap_atr": None}
+    if ok(pdh, pdl, atr) and atr > 0:
+        out["pd_range_atr"] = round((pdh - pdl) / atr, 3)
+        if ok(prev) and pdh > pdl:
+            out["pd_close_pos"] = round((prev - pdl) / (pdh - pdl), 3)
+    if ok(pmh, pml, atr) and atr > 0:
+        out["pm_range_atr"] = round((pmh - pml) / atr, 3)
+    if ok(pm_last, prev, atr) and atr > 0:
+        out["gap_atr"] = round((pm_last - prev) / atr, 3)
     return out
 
 
@@ -198,7 +261,11 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
         ctx = {"rank": rank, "of": len(good), "rs": (r.get("rs") or {}).get("SPY"),
                "rs_1h": (r.get("rs_1h") or {}).get("SPY"),
                "rvol": r.get("rvol"), "atr_b": r.get("atr_b"),
-               "state": (r.get("setup") or {}).get("state")}
+               "state": (r.get("setup") or {}).get("state"),
+               # The name's own day shape, for the session-type question (daytype.py,
+               # 2026-11-10): yesterday's range in its daily ATRs and where it closed,
+               # the pre-market range and the gap in the same unit. Logged, not scored.
+               **shape_ctx(r)}
         out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts, ctx)
         if session != "rth" or r.get("last") is None:
             continue
@@ -252,8 +319,16 @@ def revalidate(ev: dict[str, Any], found: dict[str, dict[str, Any]], final_to: i
         ev.setdefault("revised", {"price": ev.get("price"), "stop": ev.get("stop"),
                                   "note": ev.get("note")})
         ev["price"], ev["stop"], ev["note"] = cur["price"], cur.get("stop"), cur["note"]
+        ev["risk_min"] = cur.get("risk_min")
         if ev.get("outcome") is not None:
             ev["outcome"] = blank_outcome()
+        changed = True
+    # A signal logged before the floor existed takes it while its outcome is still
+    # open, so the day it is settled on is settled by the one rule. A settled one is
+    # left to `EventLog.refloor`, which keeps what it replaces.
+    elif (ev.get("risk_min") is None and cur.get("risk_min") is not None
+          and not (ev.get("outcome") or {}).get("final")):
+        ev["risk_min"] = cur["risk_min"]
         changed = True
     return changed
 
@@ -284,11 +359,20 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
     day = date.fromisoformat(ev["day"])
     close_ts = _session_close_ts(day)
     known = now_ts if asof is None else min(now_ts, asof - CLOSE_LAG_SEC)
-    if stop is None or abs(entry - float(stop)) <= 0:
+    # R is the stop's distance, never less than the signal's floor: the stop is
+    # counted hit that far from the entry, and +1R that far the other way. A STOP
+    # EXACTLY ON THE ENTRY IS THE FLOOR'S OWN CASE, NOT A SIGNAL WITH NO R (audit,
+    # 2026-11-11): an (L) whose bar closes on its low has a distance of nothing, and
+    # until then it was sent back unmeasured before the floor was looked at (ARM
+    # 29 Oct 12:00, PH 5 Nov 13:50, SHOP 9 Nov 14:00). Only a stop on the entry with
+    # no floor to read it through has nothing to be measured in.
+    dist = abs(entry - float(stop)) if stop is not None else 0.0
+    r = risk_of(entry, float(stop), ev.get("risk_min")) if stop is not None else 0.0
+    if r <= 0:
         out["final"] = known >= close_ts
         return out
-    r = abs(entry - float(stop))
     out["r"] = round(r, 4)
+    out["floored"] = r > dist + 1e-9
     s = 1.0 if ev["side"] == "long" else -1.0
     t0 = int(ev["t"])
     start = t0 if ev["kind"] == "E" else t0 + BAR_SEC
@@ -351,6 +435,18 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
     return out
 
 
+def floor_at(bars5: list[Bar], bar_t: int) -> float | None:
+    """The stop's floor for a signal on the ten-minute bar that opens at `bar_t`:
+    the retest buffer there, BUF_MULT x the ATR, worked from the bars up to it as the
+    scanner works it. None when the bars do not hold that bar, or too few come before
+    it for the ATR to have settled. Pure."""
+    bars10 = resample([b for b in bars5 if b.t < bar_t + BAR_SEC])
+    if len(bars10) < max(REFLOOR_MIN_BARS, ATR_LEN + 1) or bars10[-1].t != bar_t:
+        return None
+    a = atr(bars10)[-1]
+    return a * BUF_MULT if a else None
+
+
 def preopen_line(rows: Iterable[dict[str, Any]], day: str, now: datetime) -> dict[str, Any]:
     """The list as it stands before the bell, best first, for one line of the log. Pure."""
     good = [r for r in rows if r.get("ok")]
@@ -407,8 +503,14 @@ def stats(events: Iterable[dict[str, Any]], days: int, today: date) -> dict[str,
                                 [e for e in rows if e["kind"] == kind and e["side"] == side]))
     groups += [group("score ≥ 60", scored(60, 1e9)), group("score 40–59", scored(40, 60)),
                group("score < 40", scored(-1e9, 40))]
+    # How much of the record is on the floored stop (module docstring): `ruled` were
+    # read with a floor to hand, `floored` are the ones it moved the stop on, and the
+    # rest are older signals whose bars were gone before they could be worked again.
+    ruled = sum(1 for e in rows if e.get("risk_min") is not None)
+    floored = sum(1 for e in rows if (e.get("outcome") or {}).get("floored"))
     return {"days": days, "from": (start + timedelta(days=1)).isoformat(),
-            "to": today.isoformat(), "total": len(rows), "groups": groups}
+            "to": today.isoformat(), "total": len(rows), "groups": groups,
+            "floor": {"ruled": ruled, "floored": floored, "unruled": len(rows) - ruled}}
 
 
 def record_table(events: Iterable[dict[str, Any]], days: int,
@@ -593,15 +695,24 @@ class EventLog:
         return out
 
     def settle(self, day: str, by_sym: dict[str, tuple[list[dict[str, Any]], int | None]],
-               now: datetime | None = None) -> int:
+               now: datetime | None = None, known_only: Iterable[str] = ()) -> int:
         """Settle a FINISHED day against its signals replayed from bars read after
         its close — {name: (signals, final_to)}. Each logged event is checked
         (`revalidate`) and marked `checked` once the bars reach the bell; a
         signal those bars hold that was never logged is logged now, not live.
-        Returns how many events changed or were added."""
+        Returns how many events changed or were added.
+
+        `known_only` names the names that were NOT being watched to the bell: one
+        that left the list during the day and was read again afterwards for this
+        (sources/scanner.ScanStore.read_owed), or one read for a chart. What was
+        logged for it is checked like anything else; a signal the bars hold that
+        was never logged is NOT added. A name's earlier signals are on its row
+        the minute it joins the list, so those are logged then; what it did after
+        it left was on nobody's screen, and the log is of what the engine showed."""
         now = now or datetime.now(UTC)
         now_ts = now.timestamp()
         close = _session_close_ts(date.fromisoformat(day))
+        quiet = set(known_only)
         n = 0
         with self._lock:
             for sym, (signals, final_to) in by_sym.items():
@@ -616,7 +727,7 @@ class EventLog:
                         e["checked"] = True
                         hit = True
                     n += hit
-                if not whole:
+                if not whole or sym in quiet:
                     continue
                 for k, c in got.items():
                     if k in self._keys:
@@ -630,6 +741,112 @@ class EventLog:
             if n:
                 self._save(now.astimezone(ET).date())
         return n
+
+    def refloor(self, bars_of: Callable[[str], list[Bar] | None],
+                now: datetime | None = None) -> dict[str, int]:
+        """Work the signals settled before the stop had a floor again, where the bars
+        still allow it (module docstring). Returns {seen, ruled, floored, skipped}.
+
+        NOTHING IS LOST, AND IT CAN BE RUN AGAIN. For each settled (L)/(E) with no
+        `risk_min`: the floor is taken from the bars held for the name (`floor_at`),
+        and where it would have moved the stop the outcome is read again from those
+        bars, the first one kept under `outcome_raw`. A signal is left exactly as it
+        was when its bars are gone, do not reach back far enough for an ATR, or stop
+        short of that day's bell: a result read from part of a day is worse than the
+        one on file. Before the first change is written the file as it stood is
+        copied beside itself (`.before-floor`), once.
+
+        Two more kinds of settled signal are read again here, by the same rule and
+        with the same first outcome kept (audit, 2026-11-11): one whose stop sat
+        exactly on its entry and so came back with no R, and one settled with an R
+        and no bar read after it (`unread`).
+        """
+        now = now or datetime.now(UTC)
+        now_ts = now.timestamp()
+        counts = {"seen": 0, "ruled": 0, "floored": 0, "skipped": 0}
+
+        def unread(e: dict[str, Any]) -> bool:
+            """Settled with an R and no bar read after it, on a day that went on: its
+            bars were not to hand an hour after the bell and it was settled anyway
+            (SETTLE_ANYWAY_SEC), as "neither". GEV's (L) at 10:00 on 28 Oct 2026 stood
+            that way; the bars say it was stopped. An (L) on the day's last bar has
+            nothing after it and is not one of these."""
+            o = e.get("outcome") or {}
+            if o.get("r") is None or o.get("mfe_r") is not None:
+                return False
+            t0 = int(e["t"])
+            start = t0 if e.get("kind") == "E" else t0 + BAR_SEC
+            return start < _session_close_ts(date.fromisoformat(e["day"]))
+
+        def due(e: dict[str, Any]) -> bool:
+            o = e.get("outcome") or {}
+            if (e.get("kind") not in TRADES or e.get("retracted") or e.get("stop") is None
+                    or not o.get("final")):
+                return False
+            # No floor yet; or a floor and still no R (a stop exactly on its entry,
+            # settled while that was sent back unmeasured, compute_outcome); or an R
+            # and nothing read after it.
+            return e.get("risk_min") is None or o.get("r") is None or unread(e)
+
+        with self._lock:
+            syms = sorted({str(e.get("sym")) for e in self.events if due(e)})
+        # The bars are read outside the lock: for a name off today's list that is a
+        # file to parse, and the page's reads of the log should not wait on it.
+        held = {s: bars_of(s) for s in syms}
+        with self._lock:
+            for e in self.events:
+                if not due(e):
+                    continue
+                counts["seen"] += 1
+                bars = held.get(str(e.get("sym")))
+                floor = floor_at(bars, int(e["t"])) if bars else None
+                close_ts = _session_close_ts(date.fromisoformat(e["day"]))
+                if not bars or floor is None or bars[-1].t + SRC_SEC < close_ts:
+                    counts["skipped"] += 1
+                    continue
+                rm = round(floor, 4)
+                price, stop = float(e["price"]), float(e["stop"])
+                if rm <= 0:
+                    counts["skipped"] += 1
+                    continue
+                real = risk_of(price, stop, rm) <= abs(price - stop) + 1e-9
+                blind = unread(e)
+                again = (compute_outcome({**e, "risk_min": rm}, bars, now_ts)
+                         if blind or not real else None)
+                if again is not None and blind and real and again.get("mfe_r") is None:
+                    again = None  # these bars hold nothing after it either
+                if again is None:
+                    # The stop was already a real distance: nothing to read again.
+                    if e.get("risk_min") is None:
+                        e["risk_min"] = rm
+                        e["outcome"] = {**e["outcome"], "floored": False}
+                        counts["ruled"] += 1
+                    else:
+                        counts["skipped"] += 1
+                    continue
+                if not again.get("final") or again == e["outcome"]:
+                    counts["skipped"] += 1
+                    continue
+                e["risk_min"] = rm
+                # The FIRST outcome is the one kept: a signal worked a second time
+                # (the stop on its entry) does not write the first one over.
+                e.setdefault("outcome_raw", e["outcome"])
+                e["outcome"] = again
+                counts["ruled"] += 1
+                counts["floored"] += bool(again.get("floored"))
+            if counts["ruled"]:
+                self._backup_once()
+                self._save(now.astimezone(ET).date())
+        return counts
+
+    def _backup_once(self) -> None:
+        """The log as it stood before the first refloor, beside it. Best effort."""
+        root, ext = os.path.splitext(self._path)
+        keep = f"{root}.before-floor{ext}"
+        if os.path.exists(keep) or not os.path.exists(self._path):
+            return
+        with contextlib.suppress(OSError):
+            shutil.copy2(self._path, keep)
 
     def since(self, since: int, limit: int = 200) -> dict[str, Any]:
         """Events with id > since, and `retracted`: the ids of the last

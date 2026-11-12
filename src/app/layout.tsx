@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Condensed } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Condensed, JetBrains_Mono } from "next/font/google";
 import { cookies } from "next/headers";
 import { Tooltips } from "@/components/ui/Tooltips";
 import { THEME_COOKIE, parseTheme, themeStyle } from "@/lib/theme";
@@ -30,6 +30,19 @@ const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   variable: "--font-plex-mono",
+  display: "swap",
+});
+
+/*
+ * LUMINOUS GLASS'S FIGURES — JetBrains Mono, as GEXYGEN's Luminous sets them. A
+ * variable only, like Plex: `.ui-lum` in globals.css points --font-mono at it. Its
+ * text is the system's own sans since 2026-11-11 (Saira and Saira Condensed were
+ * loaded here until then), so there is nothing to load for it.
+ */
+const jbMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-jbmono",
   display: "swap",
 });
 
@@ -75,7 +88,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html
       lang="en"
       style={themeStyle(theme)}
-      className={cn(plex.variable, plexCond.variable, plexMono.variable, uiClass(ui))}
+      className={cn(plex.variable, plexCond.variable, plexMono.variable, jbMono.variable, uiClass(ui))}
     >
       <body>
         {children}

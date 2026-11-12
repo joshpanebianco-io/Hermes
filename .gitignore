@@ -20,6 +20,12 @@ server/cache/
 
 .claude/settings.local.json
 
+# A logo saved under a Windows device name (CON is Concentra's ticker), left by an
+# early run of scripts/fetch-logos.mjs, which skips those names now. Git cannot index
+# it on Windows, and a checkout that contained it would fail there. The app does not
+# use it: that ticker keeps its letter tile.
+public/logos/CON.webp
+
 # Editor/tool droppings
 *.tmp
 # dev.ps1 -Restart drops this beside server\run.ps1 for one restart in place.

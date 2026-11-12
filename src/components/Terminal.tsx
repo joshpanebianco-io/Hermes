@@ -3,32 +3,53 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { CalendarRow, ReportFeed, Terminal as TerminalData } from "@/types/terminal";
 import { Header } from "@/components/shell/Header";
+import { Sidebar } from "@/components/shell/Sidebar";
+import { SideHeader } from "@/components/shell/SideHeader";
 import { StatusRail } from "@/components/shell/StatusRail";
 import { Scanner } from "@/components/panels/Scanner";
 import { Settings } from "@/components/panels/Settings";
-import { Analysis } from "@/components/panels/Analysis";
+import { StockPlan } from "@/components/panels/StockPlan";
 import { Dashboard } from "@/components/Dashboard";
 import { MacroBoard } from "@/components/MacroBoard";
-import { StructureBoard } from "@/components/StructureBoard";
+import { FuturesBoard } from "@/components/futures/FuturesBoard";
+import { IndexBoard } from "@/components/IndexBoard";
+import { FUT_NAME, FUT_VIEW_KEYS, type FutView } from "@/lib/futures";
+import type { MarketFeed } from "@/lib/useMarket";
 import { AlertStrip } from "@/components/shell/AlertStrip";
+import { SectorsBoard } from "@/components/SectorsBoard";
+import { QuoteTiles } from "@/components/market/QuoteTiles";
+import { DASH_GROUPS, SCAN_GROUPS, SIDE_FUT_GROUPS, SIDE_GROUPS } from "@/lib/quoteTiles";
 import { ScanAlerts } from "@/components/shell/ScanAlerts";
+import { PinUndo } from "@/components/shell/PinUndo";
 import { AskPanel } from "@/components/ask/AskPanel";
 import { TickerDrawer } from "@/components/ticker/TickerDrawer";
+import { closeTicker } from "@/lib/ticker";
 import { TickerSearch } from "@/components/ticker/TickerSearch";
 import { HermesTab } from "@/components/hermes/HermesTab";
 import { useHermes } from "@/lib/hermes/useHermes";
 import { useMarket } from "@/lib/useMarket";
-import { openAsk } from "@/lib/ask/open";
 import { DEFAULT_THEME, type ThemeChoice } from "@/lib/theme";
 import { DEFAULT_UI, type UiMode } from "@/lib/ui";
 import { UiProvider } from "@/components/state/UiMode";
 import { OfflineProvider } from "@/components/state/Offline";
 import { cn } from "@/lib/cn";
 import { useReport } from "@/lib/useReport";
-import { useStockPlan } from "@/lib/useStockPlan";
+import { useStockPlan, type PlanController } from "@/lib/useStockPlan";
 import { useFrameLight, type FrameFx } from "@/lib/useFrameLight";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
-import { DESK_TABS, TABS, TAB_KEYS, askTab, isDesk, pageTitle, type Desk, type Tab } from "@/lib/tabs";
+import {
+  SCAN_VIEWS,
+  SCAN_VIEW_KEYS,
+  TAB_KEYS,
+  askTab,
+  deskOf,
+  isDesk,
+  pageTitle,
+  tabLabel,
+  type Desk,
+  type ScanView,
+  type Tab,
+} from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
 import { shareUnchanged } from "@/lib/share";
 
@@ -83,7 +104,8 @@ export function Terminal({
   initialTabPinned,
   initialTheme = DEFAULT_THEME,
   initialUi = DEFAULT_UI,
-  initialDesk,
+  initialScanView,
+  initialFutView,
 }: {
   initial: TerminalData;
   initialReport: ReportFeed | null;
@@ -92,8 +114,10 @@ export function Terminal({
   initialTabPinned?: boolean;
   initialTheme?: ThemeChoice;
   initialUi?: UiMode;
-  /** The Analysis half the URL named (`?desk=`, or an old `?tab=report` / `plan` link); unset, the remembered one. */
-  initialDesk?: Desk;
+  /** The view the URL named inside its tab (an old `?tab=plan` link is the Scanner's Game plan); unset, the remembered one. */
+  initialScanView?: ScanView;
+  /** The same for Futures: an old `?tab=report` link is its Brief. */
+  initialFutView?: FutView;
 }) {
   // Held here rather than in Settings so the tab can be left and returned to
   // without the picker forgetting what is selected. The cookie is the durable
@@ -157,18 +181,18 @@ export function Terminal({
   }, [storedTab]);
 
   /*
-   * THE DESK IS THE ANALYSIS TAB'S QUESTION, nothing else's (owner,
-   * 2026-10-30 — see lib/tabs.ts). It is the half of that tab you last read,
-   * remembered; a link may name it (`?desk=`), and an old link to the report
-   * or the plan names it by implication (lib/tabs.ts resolveTab) — either
-   * wins over what is remembered, written through so the next load agrees.
+   * THE DESK IS ONLY WHAT A QUESTION TO HERMES IS LABELLED WITH (lib/tabs.ts): the
+   * side of the terminal the reader was last on, remembered. It was the Analysis
+   * tab's switch until that tab went (2026-11-11); now a page that belongs to one
+   * side says so as it is opened, and Macro, Hermes and Settings leave it be.
    */
-  const [desk, setDeskState] = usePersisted<Desk>("desk", initialDesk ?? "futures", isDesk);
+  const [desk, setDesk] = usePersisted<Desk>("desk", "futures", isDesk);
   useEffect(() => {
-    if (initialDesk) setDeskState(initialDesk);
-    // The URL's say, once, after storage has had its turn (usePersisted).
+    const d = deskOf(tab);
+    if (d && d !== desk) setDesk(d);
+    // The page's say when the page changes, not when the remembered desk loads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tab]);
 
   /*
    * The tab is written to the URL with replaceState rather than a navigation.
@@ -176,7 +200,15 @@ export function Terminal({
    * re-run the server component and re-fetch the collector to show something
    * the client is holding — all to change one query parameter.
    */
+  const tabNow = useRef(tab);
+  tabNow.current = tab;
   const setTab = useCallback((t: Tab) => {
+    // THE SLIDE-OUT BELONGS TO THE PAGE IT WAS OPENED ON (owner, 2026-11-10): a
+    // chart left out over the Scanner stayed out over the Dashboard. A tab click
+    // is a change of subject, so the drawer goes with the page — from the bar
+    // alone now that the number keys are gone; the Scanner's own view strip is not a
+    // change of page and leaves it be.
+    if (t !== tabNow.current) closeTicker();
     setTabState(t);
     setStoredTab(t);
     urlPinned.current = false;
@@ -189,62 +221,49 @@ export function Terminal({
     }
   }, [setStoredTab]);
 
-  /**
-   * The desk — the brief or the plan on Analysis, the futures or the stocks
-   * half of Structure — one remembered choice for both tabs, and named in
-   * the URL while a tab that wears the switch is open.
+  /*
+   * THE SCANNER'S VIEW IS HELD HERE, NOT IN THE SCANNER, because the Dashboard's links
+   * open a view by name and the question to Hermes is labelled with it. The Scanner's
+   * own strip reads and writes the same value.
    */
-  const setDesk = useCallback((d: Desk) => {
-    setDeskState(d);
-    if (typeof window !== "undefined") {
-      const u = new URL(window.location.href);
-      if (!DESK_TABS.has(tab)) u.searchParams.set("tab", "analysis");
-      u.searchParams.set("desk", d);
-      window.history.replaceState(null, "", u);
-    }
-  }, [setDeskState, tab]);
+  const [scanView, setScanView] = usePersisted<ScanView>("scan.view", "setups", oneOf(...SCAN_VIEW_KEYS));
+  // The Futures section's view: the overview, a book, or the brief.
+  const [futView, setFutView] = usePersisted<FutView>("fut.view", "overview", oneOf(...FUT_VIEW_KEYS));
+  useEffect(() => {
+    // The URL's say, once, after storage has had its turn (usePersisted): a link
+    // to the plan or the report opens that view, whatever was open there last.
+    if (initialScanView) setScanView(initialScanView);
+    if (initialFutView) setFutView(initialFutView);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const openScan = useCallback(
+    (v: ScanView) => {
+      setScanView(v);
+      setTab("scanner");
+    },
+    [setScanView, setTab],
+  );
+  // The Sidebar interface lists the Futures views beside the pages: one click opens one.
+  const openFut = useCallback(
+    (v: FutView) => {
+      setFutView(v);
+      setTab("futures");
+    },
+    [setFutView, setTab],
+  );
 
   /*
-   * THE KEYBOARD. The number keys reach the tabs in bar order, D flips the desk — in place
-   * on Structure and Analysis, and from any other tab it goes to Analysis —
-   * A opens Hermes. Never while typing — the
-   * watchlist editor, the inputs and Hermes's own box own their keys — and
-   * never with a modifier held, so the browser's own shortcuts are untouched.
+   * NO KEYBOARD CONTROLS (owner, 2026-11-11: "can we remove the key board controls and
+   * from the settings too"). The number keys reached the tabs and A opened Hermes; a
+   * single key pressed outside a field changed the page. The tabs are the bar's, and
+   * Hermes is the status rail's button. What is left is what any page does: Esc closes
+   * what is open, and Ctrl+K is the search box's own, written on it.
    */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
-      if (e.key === "d" || e.key === "D") {
-        e.preventDefault();
-        if (!DESK_TABS.has(tab)) setTab("analysis");
-        setDesk(desk === "futures" ? "stocks" : "futures");
-        return;
-      }
-      // A — ask Hermes; again to put it away.
-      if (e.key === "a" || e.key === "A") {
-        e.preventDefault();
-        openAsk();
-        return;
-      }
-      const n = Number(e.key);
-      if (Number.isInteger(n) && n >= 1) {
-        const t = TABS[n - 1];
-        if (t) {
-          e.preventDefault();
-          setTab(t.key);
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [desk, tab, setTab, setDesk]);
 
-  // The browser tab says where you are: "HERMES · Structure", "HERMES · Analysis · Futures".
+  // The browser tab says where you are: "HERMES · Scanner".
   useEffect(() => {
-    document.title = pageTitle(tab, desk);
-  }, [tab, desk]);
+    document.title = pageTitle(tab);
+  }, [tab]);
 
   const [data, setData] = useState<TerminalData>(initial);
   const [lastPoll, setLastPoll] = useState<Date | null>(null);
@@ -292,45 +311,31 @@ export function Terminal({
 
   const st = data.status ?? {};
   const raw = data.age_min ?? {};
+  const link = data.offline || !data.ok ? "offline" : lost ? "lost" : "live";
+  /*
+   * THE SIDEBAR INTERFACE HAS A SHELL OF ITS OWN (lib/ui.ts): the pages down the left
+   * and, beside them, a header that names the page and carries the prices and the
+   * search. Everything under a header is the same in every interface, so it is built
+   * once (`below`) and set under whichever header this interface has.
+   */
+  const side = ui === "side";
+  const quoteRow = (groups: readonly (readonly string[])[], form: { spread?: boolean; pills?: boolean } = {}) => (
+    <QuoteTiles quotes={data.quotes ?? NONE} groups={groups} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} {...form} />
+  );
 
-  return (
-    <UiProvider value={ui}>
-    <OfflineProvider value={Boolean(data.offline)}>
-    <div className="h-screen overflow-hidden p-2 sm:p-3 qt:p-0 qt:sm:p-0">
-      <div
-        ref={frameRef}
-        className={cn(
-          "app-frame flex h-full w-full flex-col overflow-hidden",
-          `fx-${fx}`,
-          // Every figure that changes glitches before it glows. Subtle is the
-          // whole useful range at this type size — see the note in globals.css
-          // — so it is a constant rather than another switch in Settings.
-          "fx-glitch-subtle",
-        )}
-      >
-        {/* The travelling light's ring and the gradient that turns inside it —
-            see `.frame-light` in globals.css and useFrameLight. */}
-        <div className="frame-light" aria-hidden>
-          <div className="frame-light__spin" />
-        </div>
-
-        <Header
-          clock={data.clock ?? null}
-          quotes={data.quotes ?? []}
-          implied={data.volterm?.books}
-          vixMonth={data.volterm?.vix_month}
-          link={data.offline || !data.ok ? "offline" : lost ? "lost" : "live"}
-          onRefresh={load}
-          tab={tab}
-          onTab={setTab}
-        />
-
-        <AlertStrip items={data.wire ?? NONE} />
+  const below = (
+    <>
+        {/* Macro's own, where the wire is (owner, 2026-11-10: "remove the news rail
+            above from everywhere except macro tab"). */}
+        {tab === "terminal" && <AlertStrip items={data.wire ?? NONE} />}
         {/* Raises the scanner's alerts on every tab — see the file. */}
         <ScanAlerts />
-        {/* The assistant, mounted once; the rail's key and A open it. It is
-            told the tab as the collector names it — Analysis as its half. */}
-        <AskPanel tab={askTab(tab, desk)} />
+        {/* Says so when a star takes a name off the pinned list, with an Undo. */}
+        <PinUndo />
+        {/* The assistant, mounted once; the status rail's button opens it. It is
+            told the page as the collector names it: the Brief view as "report",
+            the Game plan view as "plan". */}
+        <AskPanel tab={askTab(tab, scanView, futView)} />
         <TickerSearch />
 
         {lost && !data.offline && (
@@ -353,17 +358,24 @@ export function Terminal({
         {/* The page and the slide-out over it, between the header and the status rail. */}
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {tab === "dashboard" ? (
-            <Dashboard calendar={data.calendar ?? NONE} onOpen={setTab} />
+            <Dashboard
+              calendar={data.calendar ?? NONE}
+              onOpen={setTab}
+              onScan={openScan}
+              // In the Sidebar interface the four are in the header beside the page's
+              // name, so the read's card does not carry them a second time.
+              prices={side ? undefined : quoteRow(DASH_GROUPS, { spread: true })}
+            />
           ) : tab === "settings" ? (
             <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
           ) : tab === "hermes" ? (
             <HermesTab hermes={hermes} desk={desk} />
-          ) : tab === "analysis" ? (
-            <Analysis desk={desk} onDesk={setDesk} report={report} plan={plan} />
           ) : tab === "scanner" ? (
-            <ScannerTab calendar={data.calendar ?? NONE} />
-          ) : tab === "structure" ? (
-            <StructureBoard data={data} market={market} desk={desk} onDesk={setDesk} />
+            <ScannerTab calendar={data.calendar ?? NONE} view={scanView} onView={setScanView} data={data} market={market} plan={plan} />
+          ) : tab === "futures" ? (
+            <FuturesBoard data={data} view={futView} onView={setFutView} report={report} />
+          ) : tab === "sectors" ? (
+            <SectorsBoard prices={quoteRow(SCAN_GROUPS)} />
           ) : (
             <MacroBoard data={data} market={market} />
           )}
@@ -371,11 +383,68 @@ export function Terminal({
         </div>
 
         <MStatusRail status={st} ages={raw} feeds={data.wire_feeds} pollSec={POLL_SEC} lastPoll={lastPoll} />
+    </>
+  );
+
+  return (
+    <UiProvider value={ui}>
+    <OfflineProvider value={Boolean(data.offline)}>
+    <div className="h-screen overflow-hidden p-2 sm:p-3 qt:p-0 qt:sm:p-0">
+      <div
+        ref={frameRef}
+        className={cn(
+          "app-frame flex h-full w-full flex-col overflow-hidden",
+          `fx-${fx}`,
+          // Every figure that changes glitches before it glows. Subtle is the
+          // whole useful range at this type size — see the note in globals.css
+          // — so it is a constant rather than another switch in Settings.
+          "fx-glitch-subtle",
+        )}
+      >
+        {/* The travelling light's ring and the gradient that turns inside it —
+            see `.frame-light` in globals.css and useFrameLight. */}
+        <div className="frame-light" aria-hidden>
+          <div className="frame-light__spin" />
+        </div>
+
+        {side ? (
+          <div className="qt-side-shell flex min-h-0 flex-1">
+            <Sidebar tab={tab} scanView={scanView} futView={futView} onTab={setTab} onScan={openScan} onFut={openFut} />
+            <div className="qt-side-main flex min-h-0 min-w-0 flex-1 flex-col">
+              <SideHeader
+                title={shellTitle(tab, scanView, futView)}
+                // Each desk's own prices beside its pages' names; the search finds
+                // stocks, so the Futures pages do not carry it (lib/quoteTiles).
+                quotes={quoteRow(tab === "futures" ? SIDE_FUT_GROUPS : SIDE_GROUPS, { pills: true })}
+                search={tab !== "futures"}
+                clock={data.clock ?? null}
+                link={link}
+                onRefresh={load}
+              />
+              {below}
+            </div>
+          </div>
+        ) : (
+          <>
+            <Header clock={data.clock ?? null} link={link} onRefresh={load} tab={tab} onTab={setTab} />
+            {below}
+          </>
+        )}
       </div>
     </div>
     </OfflineProvider>
     </UiProvider>
   );
+}
+
+/**
+ * The page's name, as the Sidebar interface's header says it: the page, or on a page
+ * with views the one that is open.
+ */
+function shellTitle(tab: Tab, scan: ScanView, fut: FutView): string {
+  if (tab === "scanner") return SCAN_VIEWS.find((v) => v.key === scan)?.label ?? tabLabel(tab);
+  if (tab === "futures") return fut === "overview" ? "Futures" : fut === "brief" ? "Futures brief" : `${fut} · ${FUT_NAME[fut]}`;
+  return tabLabel(tab);
 }
 
 /*
@@ -388,7 +457,32 @@ const NONE: never[] = [];
  * The Scanner with its own thirty-second clock for the headline ages — the
  * only time it prints — so its tick re-renders the scanner, not the shell.
  */
-function ScannerTab({ calendar }: { calendar: CalendarRow[] }) {
+function ScannerTab({
+  calendar,
+  view,
+  onView,
+  data,
+  market,
+  plan,
+}: {
+  calendar: CalendarRow[];
+  view: ScanView;
+  onView: (v: ScanView) => void;
+  data: TerminalData;
+  market: MarketFeed;
+  /** The written game plan's state, the Terminal's, so a plan being written survives a change of page. */
+  plan: PlanController;
+}) {
   const now = useNow(30_000);
-  return <Scanner now={now} calendar={calendar} />;
+  return (
+    <Scanner
+      now={now}
+      calendar={calendar}
+      view={view}
+      onView={onView}
+      index={view === "index" ? <IndexBoard data={data} market={market} /> : null}
+      plan={view === "plan" ? <StockPlan {...plan} /> : null}
+      prices={<QuoteTiles quotes={data.quotes ?? []} groups={SCAN_GROUPS} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} />}
+    />
+  );
 }

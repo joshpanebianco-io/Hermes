@@ -140,7 +140,7 @@ export function StatusRail({
         <button
           type="button"
           onClick={openAsk}
-          title="Ask Hermes to explain anything on the terminal — or press A"
+          title="Ask Hermes to explain anything on the terminal"
           className="hit flex items-center gap-1.5 rounded-[4px] border border-ring-2 bg-surface-2 px-2.5 py-1 text-ink-2 hover:border-ink-4 hover:bg-surface-3 hover:text-ink"
         >
           <AskGlyph />

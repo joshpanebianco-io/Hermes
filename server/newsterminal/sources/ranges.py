@@ -72,12 +72,16 @@ from .profiles import CHART as V8_CHART
 
 ET = ZoneInfo("America/New_York")
 
-# Which books get segmented. Deliberately only the three actually traded: this
-# costs one extra request and forty instruments' worth of it would buy nothing.
+# Which books get segmented. Deliberately only the ones actually traded: this
+# costs one extra request each and forty instruments' worth would buy nothing.
+# Silver and crude joined with the Futures section (owner, 2026-11-10); their
+# "RTH" is the New York cash session, as gold's always has been.
 ASSETS: list[tuple[str, str]] = [
     ("NQ", "NQ=F"),
     ("ES", "ES=F"),
     ("GC", "GC=F"),
+    ("SIL", "SI=F"),
+    ("CL", "CL=F"),
 ]
 
 

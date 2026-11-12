@@ -109,13 +109,13 @@ def test_an_old_summary_on_disk_still_loads_with_its_flow() -> None:
 # --- average daily volume -----------------------------------------------------------------
 
 
-def test_adv20_averages_the_last_twenty_completed_sessions() -> None:
-    vols = [1e6] * 5 + [2e6] * 20
-    assert scanscore.adv20(vols) == 2e6
-    assert scanscore.adv20([0.0, 3e6] + [1e6] * 19) == pytest.approx((3e6 + 19e6) / 20)
-    assert scanscore.adv20([5e5] * 10) == 5e5
-    assert scanscore.adv20([5e5] * 9) is None
-    assert scanscore.adv20([5e5] * 9 + [0.0] * 5) is None
+def test_the_average_day_is_the_last_thirty_completed_sessions() -> None:
+    vols = [1e6] * 5 + [2e6] * 30
+    assert scanscore.avg_day(vols) == 2e6
+    assert scanscore.avg_day([0.0, 3e6] + [1e6] * 29) == pytest.approx((3e6 + 29e6) / 30)
+    assert scanscore.avg_day([5e5] * 10) == 5e5
+    assert scanscore.avg_day([5e5] * 9) is None
+    assert scanscore.avg_day([5e5] * 9 + [0.0] * 5) is None
 
 
 # --- pre-market: Nasdaq's page ------------------------------------------------------------
@@ -379,7 +379,7 @@ def test_peer_flag_text() -> None:
 def _ok_row(sym: str, sector: str | None) -> dict[str, Any]:
     r = scanscore._empty(sym, 1.0, "test")
     r.update({"ok": True, "error": None, "sector": sector, "last": 100.0})
-    r.pop("adv20")
+    r.pop("adv")
     return r
 
 
@@ -394,22 +394,22 @@ def test_join_with_every_new_field_absent() -> None:
                         **_common(["NVDA", "AAPL"]))
     rows = {r["sym"]: r for r in p["rows"]}
     nv = rows["NVDA"]
-    assert nv["adv20"] is None and nv["premkt"] is None and nv["peers"] == []
+    assert nv["adv"] is None and nv["premkt"] is None and nv["peers"] == []
     assert nv["options"] is None and not any(f["text"].startswith("Peer") for f in nv["flags"])
     # A name with no bars yet still carries the keys.
-    assert rows["AAPL"]["adv20"] is None and rows["AAPL"]["premkt"] is None
+    assert rows["AAPL"]["adv"] is None and rows["AAPL"]["premkt"] is None
     assert rows["AAPL"]["peers"] == []
 
 
 def test_join_with_every_new_field_present() -> None:
     base = _ok_row("NVDA", "XLK")
-    base["adv20"] = 200_000_000.0
+    base["adv"] = 200_000_000.0
     read = {"volume": 5_000_000, "high": 190.0, "low": 185.0, "last": 189.0,
             "asof": "2026-10-13T07:55:00-04:00"}
     p = scanscore.build({"rows": {"NVDA": base}}, earnings=[_earn("TSM", "2026-10-15", "pre")],
                         premkt={"NVDA": read}, sector_map=SECTOR, **_common(["NVDA"]))
     nv = p["rows"][0]
-    assert nv["adv20"] == 200_000_000.0
+    assert nv["adv"] == 200_000_000.0
     assert nv["premkt"] == {**read, "pct_adv": 2.5}
     assert nv["peers"] == [{"sym": "TSM", "date": "2026-10-15", "when": "pre", "days": 2}]
     assert nv["flags"][-1] == {"kind": "earnings", "tone": "info", "text": "Peer TSM reports Thu"}

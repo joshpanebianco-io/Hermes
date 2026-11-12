@@ -21,12 +21,12 @@ from newsterminal import scan
 from newsterminal.config import BROWSER_UA
 from newsterminal.http import fetch
 from newsterminal.scan import ET
-from newsterminal.sources.scanner import CHART
+from newsterminal.sources.scanner import BARS_RANGE, CHART
 
 
 def bars_for(sym: str) -> tuple[list[scan.Bar], list[scan.DayBar]]:
     q = urllib.parse.quote(sym)
-    r = fetch(CHART.format(sym=q, rng="5d", iv="5m"), key=f"probe5m_{sym}", ttl_sec=60,
+    r = fetch(CHART.format(sym=q, rng=BARS_RANGE, iv="5m"), key=f"probe5m_{sym}", ttl_sec=60,
               ua=BROWSER_UA)
     d = fetch(CHART.format(sym=q, rng="3mo", iv="1d"), key=f"probe1d_{sym}", ttl_sec=3600,
               ua=BROWSER_UA)

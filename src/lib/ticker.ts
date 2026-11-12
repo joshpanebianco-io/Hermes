@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { notePinned, noteUnpinned } from "@/lib/pins";
 
 /**
  * Open any ticker from anywhere: a row in any table, the search box, an alert.
@@ -61,6 +62,10 @@ export async function togglePin(sym: string): Promise<string | null> {
     const after = (await r.json()) as { error?: string; rejected?: string[] };
     if (!r.ok || after.error) return after.error ?? `HTTP ${r.status}`;
     if (after.rejected?.includes(sym)) return `${sym} was refused`;
+    // An unpin is said out loud and can be undone (lib/pins.ts); a pin clears the
+    // name from the ones offered back. Either way the pages read the list again.
+    if (has) noteUnpinned({ sym, index: got.symbols.indexOf(sym), at: Date.now() });
+    else notePinned(sym);
     return null;
   } catch (e) {
     return e instanceof Error ? e.message : "request failed";

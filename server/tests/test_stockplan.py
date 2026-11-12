@@ -562,8 +562,8 @@ FLOW = {"call_vol": 5000, "put_vol": 2500, "pc_vol": 0.5, "call_oi": 40000, "put
                                "volume": 900, "oi": 3000}]}
 
 
-def test_names_carry_flow_premarket_peers_and_adv20() -> None:
-    row = {**_row("AAA", 80, "long", options={**OPTS, "flow": FLOW}), "adv20": 51234567.4,
+def test_names_carry_flow_premarket_peers_and_adv() -> None:
+    row = {**_row("AAA", 80, "long", options={**OPTS, "flow": FLOW}), "adv": 51234567.4,
            "premkt": {"volume": 812345.0, "pct_adv": 1.5856, "high": 102.0, "low": 100.0,
                       "last": 101.0, "asof": "08:45"},
            "peers": [{"sym": "BBB", "date": "2026-10-15", "when": "after", "days": 2}]}
@@ -571,10 +571,10 @@ def test_names_carry_flow_premarket_peers_and_adv20() -> None:
     assert n["flow"] == {"pc_vol": 0.5, "lean": "calls", "vol_oi": 0.11,
                          "top": {"strike": 105.0, "right": "C", "expiry": "2026-10-16",
                                  "volume": 1800, "oi": 4200}}
-    assert n["premkt"] == {"volume": 812345, "pct_adv": 1.6} and n["adv20"] == 51234567
+    assert n["premkt"] == {"volume": 812345, "pct_adv": 1.6} and n["adv"] == 51234567
     assert n["peers"] == [{"sym": "BBB", "date": "2026-10-15", "when": "after", "days": 2}]
     bare = sp._name(_row("CCC", 60, "long"))
-    assert (bare["flow"], bare["premkt"], bare["peers"], bare["adv20"]) == (None, None, [], None)
+    assert (bare["flow"], bare["premkt"], bare["peers"], bare["adv"]) == (None, None, [], None)
 
 
 def test_facts_and_digest_carry_the_market_blocks(monkeypatch: Any, tmp_path: Any) -> None:

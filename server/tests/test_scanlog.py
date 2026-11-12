@@ -220,7 +220,10 @@ def test_a_live_signal_carries_where_it_stood_on_the_list() -> None:
     live = scanlog.candidates(rows, "rth", "2026-11-05", now)
     assert [e["sym"] for e in live] == ["B"]
     assert live[0]["ctx"] == {"rank": 2, "of": 2, "rs": 0.4, "rs_1h": -0.2, "rvol": 1.5,
-                              "atr_b": 0.8, "state": "forming"}
+                              "atr_b": 0.8, "state": "forming",
+                              # The name's own shape (daytype, 2026-11-10): none here, no levels.
+                              "pd_range_atr": None, "pd_close_pos": None, "pm_range_atr": None,
+                              "gap_atr": None}
     late = datetime(2026, 11, 5, 13, 0, tzinfo=ET)
     assert "ctx" not in scanlog.candidates(rows, "rth", "2026-11-05", late)[0]
 
@@ -241,6 +244,58 @@ def test_the_chart_starts_at_the_previous_open_and_carries_today_s_vwap() -> Non
     assert out["vwap"][0] is None and out["vwap"][-1] == 11.0  # (12+10+11)/3, RTH only
     assert [s["kind"] for s in out["sessions"]] == ["rth", "pre", "rth"]
     assert out["levels"]["pdh"] == 11
+
+
+def test_the_chart_carries_the_20_and_50_emas_and_vwaps_deviation() -> None:
+    # Sixty five-minute bars of one session, every price a cent higher each bar.
+    rth = [Bar(ts(2026, 10, 13, 9, 30) + i * 300, 10 + i * 0.01, 10.2 + i * 0.01,
+               9.8 + i * 0.01, 10 + i * 0.01, 100.0) for i in range(60)]
+    clock = scan.clock_at(et(2026, 10, 13, 15, 0))
+    tech = scan.technicals(rth, [], clock)
+    five = scan.chart_series(rth, clock, tech, tf="5m")
+    closes = [b.close for b in rth]
+    assert len(five["bars"]) == 60
+    assert len(five["ema20"]) == len(five["ema50"]) == len(five["vwap_sd"]) == 60
+    assert five["ema20"] == [round(x, 4) for x in scan.ema(closes, 20)]
+    assert five["ema50"] == [round(x, 4) for x in scan.ema(closes, 50)]
+    # Ten-minute bars are thirty: the 20 is there, and the 50 is blank rather than a
+    # 50 EMA of thirty bars.
+    ten = scan.chart_series(rth, clock, tech)
+    assert len(ten["bars"]) == 30 and ten["ema20"][-1] is not None
+    assert set(ten["ema50"]) == {None} and set(ten["ema200"]) == {None}
+    # VWAP's deviation, volume-weighted from 09:30: nothing on the first bar, then the
+    # spread of the typical prices so far. Equal volume, so it is their plain deviation:
+    # 0.01 x sqrt((60^2 - 1) / 12) over the sixty bars.
+    sd = five["vwap_sd"]
+    assert sd[0] == 0.0 and sd[10] < sd[-1]
+    assert abs(sd[-1] - 0.01 * ((60 ** 2 - 1) / 12) ** 0.5) < 1e-4
+    assert abs(five["vwap"][-1] - (10 + 0.01 * 59 / 2)) < 1e-4
+    # No deviation where there is no VWAP: before the bell, and on the daily view.
+    pre = [Bar(ts(2026, 10, 13, 8, 0) + i * 300, 10, 10.5, 9.5, 10, 50.0) for i in range(6)]
+    early = scan.chart_series(pre + rth, clock, tech, tf="5m")
+    assert early["vwap_sd"][:6] == [None] * 6 and early["vwap_sd"][6] == 0.0
+    day = scan.chart_series(rth, clock, tech, tf="D")
+    assert set(day["vwap_sd"]) == {None} and len(day["ema20"]) == len(day["bars"])
+
+
+def test_the_longer_chart_views_sit_on_the_clock_and_keep_their_signals() -> None:
+    pre = [Bar(ts(2026, 10, 13, 9, 0) + i * 300, 10, 11, 9, 10, 100.0) for i in range(6)]
+    rth = [Bar(ts(2026, 10, 13, 9, 30) + i * 300, 10, 12, 10, 11, 200.0) for i in range(30)]
+    clock = scan.clock_at(et(2026, 10, 13, 12, 0))
+    tech = scan.technicals(pre + rth, [], clock)
+    tech.signals = [{"t": ts(2026, 10, 13, 10, 40), "kind": "L", "side": "long", "price": 11.0}]
+
+    half = scan.chart_series(pre + rth, clock, tech, tf="30m")
+    assert [b["t"] for b in half["bars"]][:2] == [ts(2026, 10, 13, 9, 0), ts(2026, 10, 13, 9, 30)]
+    assert [s["kind"] for s in half["sessions"]] == ["pre", "rth"]
+    assert half["signals"][0]["t"] == ts(2026, 10, 13, 10, 30)
+
+    hour = scan.chart_series(pre + rth, clock, tech, tf="60m")
+    # The 09:00 bar holds the open, so it is the session's, not the pre-market's.
+    assert hour["bars"][0]["t"] == ts(2026, 10, 13, 9, 0)
+    assert [s["kind"] for s in hour["sessions"]] == ["rth"]
+    assert hour["signals"][0]["t"] == ts(2026, 10, 13, 10, 0)
+    assert hour["bars"][0]["v"] == 6 * 100.0 + 6 * 200.0
 
 
 # --- the second look: retract, correct, settle (audit, 2026-10-14) ----------------------
@@ -315,6 +370,28 @@ def test_a_finished_day_settles_once_against_bars_read_after_its_bell(tmp_path: 
     by_t = {e["t"]: e for e in log.events}
     assert by_t[t1]["retracted"] and not by_t[t2].get("retracted")
     assert by_t[t3]["live"] is False and by_t[t3]["score"] is None  # logged now, never alerted
+    assert all(e["checked"] for e in log.events)
+    assert log.unchecked("2026-10-14") == {}
+
+
+def test_a_name_that_left_the_list_is_checked_and_nothing_is_added(tmp_path: Any) -> None:
+    # RCL on Tue 27 Oct 2026: promoted, an (L) at 09:40 and two (E)s, swapped out by
+    # the pool before lunch, and never settled. Read again after the bell, what was
+    # logged is settled; the afternoon's signals, which nobody was shown, are not
+    # logged now.
+    log = EventLog(str(tmp_path / "ev.jsonl"))
+    t1, t2 = ts(2026, 10, 13, 10, 0), ts(2026, 10, 13, 11, 0)
+    log.observe(payload([row(signals=[l_signal(t1), l_signal(t2, 102, 101)])]), {},
+                et(2026, 10, 13, 11, 10))
+    close = ts(2026, 10, 13, 16, 0)
+    t3 = ts(2026, 10, 13, 14, 0)
+    n = log.settle("2026-10-13", {"AAPL": ([l_signal(t2, 102, 101), l_signal(t3, 103, 102)],
+                                           close)}, et(2026, 10, 13, 20, 30),
+                   known_only={"AAPL"})
+    assert n == 2
+    by_t = {e["t"]: e for e in log.events}
+    assert set(by_t) == {t1, t2}  # 14:00's was on nobody's screen
+    assert by_t[t1]["retracted"] and not by_t[t2].get("retracted")
     assert all(e["checked"] for e in log.events)
     assert log.unchecked("2026-10-14") == {}
 

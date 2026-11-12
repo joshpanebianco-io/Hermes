@@ -138,6 +138,61 @@ def test_the_table_reads_a_track_against_now() -> None:
     assert got["chips"]["day2"] == 1 and got["chips"]["long"] == 1
 
 
+def test_in_the_session_the_volume_is_read_for_the_time_of_day() -> None:
+    s = store()
+    s.update([row()], FRI)
+    rows = {"APP": row()}
+
+    def reading(rvol: float | None) -> Any:
+        def read(sym: str) -> dict[str, Any]:
+            r = rows[sym]
+            return {"last": r["close"], "chg": r["chg"], "pdh": r["h1"], "pdl": r["l1"],
+                    "adv_pct": 12.0, "rvol": rvol, "pd_state": "above", "live": False}
+        return read
+
+    def score(rvol: float | None, basis: str) -> int:
+        got = _table(s, rows, read=reading(rvol), basis=basis, today=date(2026, 11, 9))
+        return int(got["rows"][0]["score"])
+
+    # 10:00 ET: 12% of an average day traded, which for the hour is 2.4x normal. Against
+    # a whole day that was 0.12 of normal and worth 2 of the 30; for the hour it is all 30.
+    assert score(2.4, "rth") - score(None, "rth") == 28
+    # With the day finished, the day's volume against an average day, as before.
+    assert score(2.4, "last") == score(None, "last")
+
+
+@pytest.mark.parametrize(
+    ("args", "want"),
+    [
+        # At the top of the range and through it, twice normal volume, a major story.
+        (("long", "confirmed", 110.0, 100.0, 90.0, 2.0, 1), 35 + 10 + 30 + 25),
+        # The same place, nothing else going for it.
+        (("long", "confirmed", 110.0, 100.0, 90.0, 0.0, None), 45),
+        # Halfway through the range, half of normal-times-two, a minor story.
+        (("long", "watch", 95.0, 100.0, 90.0, 1.0, 3), 40),  # 17.5 + 15 + 8, rounded to even
+        # A short reads the same range from the other end.
+        (("short", "confirmed", 89.0, 100.0, 90.0, None, 2), 35 + 10 + 15),
+        (("short", "watch", 100.0, 100.0, 90.0, None, None), 0),
+        # A failed track is halved.
+        (("long", "failed", 110.0, 100.0, 90.0, 2.0, 1), 50),
+        # A flat range cannot divide by nothing.
+        (("long", "inside", 100.0, 100.0, 100.0, None, None), 18),  # 17.5, rounded to even
+    ],
+)
+def test_the_tables_rough_order_is_three_named_parts(args: tuple[Any, ...], want: int) -> None:
+    assert m.score_of(*args) == want
+
+
+def test_the_table_is_ordered_by_that_score_and_says_the_volume() -> None:
+    s = store()
+    s.update([row(), row("B")], FRI)
+    got = _table(s, {"APP": row(), "B": row("B")})
+    r = got["rows"][0]
+    assert isinstance(r["score"], int) and "vol" in r
+    scores = [x["score"] for x in got["rows"]]
+    assert scores == sorted(scores, reverse=True)
+
+
 def test_the_filters_take_a_track_out_without_losing_it() -> None:
     s = store()
     s.update([row(move=None, c1=120.0, c2=100.0, h1=125.0, l1=110.0)], FRI)   # a 20% Day 1
@@ -145,3 +200,26 @@ def test_the_filters_take_a_track_out_without_losing_it() -> None:
     rows = {"APP": row(c1=120.0, c2=100.0, h1=125.0, l1=110.0)}
     assert len(_table(s, rows, min_move=30.0)["rows"]) == 0
     assert len(_table(s, rows, min_move=20.0)["rows"]) == 1
+
+
+def test_the_strong_tracks_are_what_the_pool_reads() -> None:
+    s = m.MomentumStore(path="nul")
+    s.tracks, s.last_day = {}, None
+    s._start({"sym": "BIG", "name": None, "cap": 3e9, "sector": None}, date(2026, 11, 6), 24.3,
+             3.0, {}, [])
+    s._start({"sym": "SMALL", "name": None, "cap": 5e8, "sector": None}, date(2026, 11, 6), 30.0,
+             3.0, {}, [])
+    s._start({"sym": "MILD", "name": None, "cap": 3e9, "sector": None}, date(2026, 11, 6), 12.0,
+             2.0, {}, [])
+    s._start({"sym": "BIG", "name": None, "cap": 3e9, "sector": None}, date(2026, 11, 9), -21.0,
+             2.0, {}, [])
+    s.last_day = "2026-11-09"
+    # Tuesday the 10th, a session on: the 6th is Day 3, the 9th Day 2; the youngest wins.
+    assert s.strong(date(2026, 11, 10), True) == {
+        "BIG": {"stage": 2, "move": -21.0, "side": "short"}}
+    # Only names past the table's defaults, and nothing still on its Day 1.
+    assert s.strong(date(2026, 11, 10), True, min_move=10.0, cap=0.0) == {
+        "BIG": {"stage": 2, "move": -21.0, "side": "short"},
+        "SMALL": {"stage": 3, "move": 30.0, "side": "long"},
+        "MILD": {"stage": 3, "move": 12.0, "side": "long"}}
+    assert s.strong(date(2026, 11, 9), True) == {"BIG": {"stage": 2, "move": 24.3, "side": "long"}}

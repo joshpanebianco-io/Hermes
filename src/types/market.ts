@@ -56,6 +56,8 @@ export interface Conviction {
   grade: "strong" | "moderate" | "weak" | "none";
   /** The highest conviction a plan may carry on this tape. */
   max_conviction: 1 | 2 | 3 | 4 | 5;
+  /** A lean with under half the session's weight able to vote: weak at most, and printed with its count. */
+  thin?: boolean;
   votes: Vote[];
 }
 

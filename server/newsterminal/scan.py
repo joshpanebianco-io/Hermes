@@ -41,6 +41,7 @@ those changes which bar fires, so they stay in this order.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, NamedTuple
@@ -72,6 +73,13 @@ def post_end(d: date) -> int:
 
 SRC_SEC = 300  # Yahoo's 5-minute bars
 BAR_SEC = 600  # the 10-minute chart the script is built for
+#: RVOL compares volume so far with the same time of day on this many prior
+#: sessions. Ten since 2026-11-10 (it was four, the whole five-day download): one
+#: earnings day in the window then moves the figure a tenth, not a quarter, and a
+#: name whose normal changed reads as normal again within two weeks. The download
+#: is sized for it (sources/scanner.BARS_RANGE); signals logged before that date
+#: carry the four-session figure in their `ctx`.
+RVOL_SESSIONS = 10
 
 # A BAR IS CONFIRMED BY THE DOWNLOAD, NOT BY THE CLOCK (audit, 2026-10-14). The
 # clock passing 09:50 does not put the 09:40 bar's last prints in a copy of the
@@ -89,10 +97,67 @@ BUF_MULT = 0.25  # "Retest buffer (× ATR 14)"
 NEAR_PCT = 0.90  # "'About to break' alert at progress ≥ %"
 RS_BARS = 6  # "Last N bars" — one hour on the 10m
 
+# THE LEAST A STOP IS COUNTED AS: THE SCRIPT'S OWN RETEST BUFFER. The script's "stop
+# idea" is the signal bar's low (its high for a short), and a bar that closes on its
+# low puts that stop a cent or two away, or on the entry itself: GOOGL's (L) at 11:40
+# on 6 Nov 2026 bought 286.98 with the stop idea two cents under it, 1R = $0.02 on a
+# $287 stock. Nobody trades that stop, and the record read as if they did (stopped,
+# 119R against). So a stop's distance is never counted as less than the buffer the
+# script itself calls a retest by (BUF_MULT x the ten-minute ATR at the signal's
+# bar): each (L) and (E) carries it as `risk_min`, and the record
+# (scanlog.compute_outcome) and the contract's risk (optcalc.trade_plan) both read
+# the stop through it. The script's own stop idea is still what is shown.
+#
+# WHAT IT REACHES, IN ITS OWN UNIT (2026-11-11; the 893 settled signals whose bars
+# were still held, 12 sessions, 26 Oct to 10 Nov 2026, each on the script's own
+# stop). The audit that prompted the floor measured stops as a share of PRICE (531 of
+# 1,580 under 0.25% of price, +1R 42% against 49 to 50% for the rest) and that is a
+# different unit: the ten-minute ATR is a median 0.54% of price, so a quarter of it
+# is about 0.13%. The floor binds 84 signals, 9% and not a third, every one an (L):
+#
+#     stop, in 10m ATRs     n    +1R  stopped   +1R by half of the record
+#     under 0.25           81    30%    70%     33% of 39, 26% of 42
+#     0.25 to 0.50        120    43%    55%     52% of 54, 36% of 66
+#     0.50 to 0.75        199    52%    47%     59% of 85, 47% of 114
+#     0.75 to 1.00        225    48%    49%     56% of 124, 39% of 101
+#     1.00 to 1.50        197    49%    44%     54% of 109, 42% of 88
+#     1.50 and over        68    41%    21%     53% of 38, 27% of 30
+#
+# and three more with the stop on the entry, which had no R at all. Read on the
+# floor the 84 reach +1R 44% of the time: 11 that were stopped get there first.
+#
+# WHY A QUARTER AND NOT MORE. Under it the 5-minute bars cannot say which came
+# first: 35 of that band's 57 stops were on a bar that also reached +1R, which the
+# record counts as stopped (scanlog); between a quarter and a half it is 7 of 67,
+# above a half 1 of 305. So the band's 30% is the bars' resolution as much as the
+# trade, and the floor ends about where that does. Above it the record has nothing
+# to say for a higher one: read with no floor, a quarter, a half and three quarters,
+# the whole record reaches +1R 46.3, 47.6, 47.8 and 48.2% of the time, and the band
+# a half would add moves from 43% to 47% (52 to 56 and 36 to 39 by half). The floor
+# is in ATRs, so a quiet stock's is small: GME's 2.47c stop on 10 Nov, the one that
+# started the look, is 0.27 of its 9.2c ATR and stands as it was (it lost on any
+# stop up to a whole ATR). A quarter is a judgement, like the buffer it borrows;
+# raising it is the owner's call.
+
+
+def risk_of(price: float, stop: float, risk_min: Any = None) -> float:
+    """A stop's distance from its entry, never counted as less than `risk_min` (the
+    note above). Pure."""
+    dist = abs(float(price) - float(stop))
+    if isinstance(risk_min, (int, float)) and not isinstance(risk_min, bool) and risk_min > 0:
+        return max(dist, float(risk_min))
+    return dist
+
 # How far past a broken level price may run before the level stops being the
 # entry and VWAP / the 8 EMA wave takes over — the owner's "super far above or
 # below". In 10-minute ATRs, the unit the retest buffer is already measured in.
 EXT_ATR = 2.5
+
+#: A session's daily row is its final bar in a copy downloaded this long after the
+#: close (the closing print and the official range take a few minutes to land), and
+#: carries the official open in one downloaded this long after 09:30.
+DAILY_SETTLE_SEC = 15 * 60.0
+DAILY_OPEN_SEC = 60.0
 
 # The script's daily ATR is seeded at the first day it has bars for: four
 # thousand 10-minute extended bars (calc_bars_count) is ~41 sessions back. The
@@ -167,7 +232,44 @@ def parse_chart(doc: Any, step: int = 0) -> tuple[list[Bar], dict[str, Any]]:
                            p.volume + b.volume)
         elif not bars or k > bars[-1].t:
             bars.append(b)
-    return bars, meta
+    return within_day(bars, meta, step), meta
+
+
+def within_day(bars: list[Bar], meta: dict[str, Any], step: int = SRC_SEC) -> list[Bar]:
+    """The bars, with no regular-session bar of the chart's own day reaching past
+    that day's official high and low. Pure.
+
+    A STRAY PRINT IS NOT A TRADE (audit, 2026-11-11). On Tue 10 Nov six of forty
+    names carried a 13:00 bar whose high was exactly the previous close: MSFT's
+    read 545.18 on a day whose high was 544.15, with the stock at 530. Left in, it
+    is the day's high (and tomorrow's PDH), and a wick back through a broken level
+    is what the retest test looks for. The chart's own `regularMarketDayHigh` and
+    `regularMarketDayLow` are the day's official range as of the quote, so a bar of
+    that session that ended before the quote cannot have traded outside it; its
+    wicks are brought in to the range (never past its own open and close). The
+    newest bar is left alone while the session is on: it can hold a trade the
+    quote has not caught up with. Pre-market and after-hours bars are not touched;
+    the official range is the regular session's.
+    """
+    hi, lo, at = (meta.get("regularMarketDayHigh"), meta.get("regularMarketDayLow"),
+                  meta.get("regularMarketTime"))
+    if not (isinstance(hi, (int, float)) and isinstance(lo, (int, float))
+            and isinstance(at, (int, float)) and hi >= lo > 0):
+        return bars
+    quote = datetime.fromtimestamp(int(at), ET)
+    day = quote.date()
+    start = int(datetime(day.year, day.month, day.day, tzinfo=ET).timestamp())
+    first, last = start + RTH_START * 60, start + rth_end(day) * 60
+    closed = int(at) >= last
+    out: list[Bar] = []
+    for b in bars:
+        inside = first <= b.t < last and (closed or b.t + step <= int(at) - 60)
+        if inside and (b.high > hi or b.low < lo):
+            top, bottom = max(b.open, b.close), min(b.open, b.close)
+            b = Bar(b.t, b.open, max(min(b.high, hi), top), min(max(b.low, lo), bottom), b.close,
+                    b.volume)
+        out.append(b)
+    return out
 
 
 def parse_daily(doc: Any) -> list[DayBar]:
@@ -455,12 +557,14 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
     e_arm: dict[str, bool] = {"long": False, "short": False}
 
     def sig(kind: str, side: str, level: str | None, t: int, price: float, note: str,
-            stop: float | None = None) -> None:
+            stop: float | None = None, floor: float | None = None) -> None:
         # `t` (the bar's open, epoch) and `stop` (the script's "stop idea") ride
         # along for the event log and the chart; the row's own readers ignore them.
+        # `risk_min` is the least a stop's distance is counted as (`risk_of`).
         out.signals.append({"kind": kind, "side": side, "level": level, "at_et": _hm(t),
                             "price": round(price, 4), "note": note, "t": t,
-                            "stop": round(stop, 4) if stop is not None else None})
+                            "stop": round(stop, 4) if stop is not None else None,
+                            "risk_min": round(floor, 4) if floor else None})
 
     for n, i in enumerate(rth_ix):
         b = bars10[i]
@@ -487,12 +591,12 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
             lv = "PDH" if res["PDH"][1] else "PMH"
             sig("L", "long", lv, b.t, b.close,
                 f"Retest of {lv} {fmt_px(levels[lv].price)} with the 8 EMA wave at the level"
-                f" · stop idea below {fmt_px(b.low)}", stop=b.low)
+                f" · stop idea below {fmt_px(b.low)}", stop=b.low, floor=buf)
         if l_short:
             lv = "PDL" if res["PDL"][1] else "PML"
             sig("L", "short", lv, b.t, b.close,
                 f"Retest of {lv} {fmt_px(levels[lv].price)} with the 8 EMA wave at the level"
-                f" · stop idea above {fmt_px(b.high)}", stop=b.high)
+                f" · stop idea above {fmt_px(b.high)}", stop=b.high, floor=buf)
 
         conf = {"long": False, "short": False}
         for side in ("long", "short"):
@@ -506,7 +610,7 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
                 stop = "below" if side == "long" else "above"
                 sig("E", side, None, b.t, e_trg[side],
                     f"Broke {word} the (E) candle {fmt_px(e_trg[side])}"
-                    f" · stop idea {stop} {fmt_px(e_stp[side])}", stop=e_stp[side])
+                    f" · stop idea {stop} {fmt_px(e_stp[side])}", stop=e_stp[side], floor=buf)
                 e_bar[side] = None
 
         # ---- the sigBar block ------------------------------------------------
@@ -535,7 +639,7 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
                 word = "above" if side == "long" else "below"
                 sig("E", side, None, b.t, e_trg[side],
                     f"Broke {word} the (E) candle {fmt_px(e_trg[side])} (bar still open)",
-                    stop=e_stp[side])
+                    stop=e_stp[side], floor=(atr10[forming] or 0.0) * BUF_MULT)
                 e_bar[side] = None
 
     for side in ("long", "short"):
@@ -572,10 +676,18 @@ class Tech:
     mv_roll: float | None = None
     pdh: float | None = None
     pdl: float | None = None
+    #: The same two from the 5-minute bars alone, for the page to compare (they
+    #: miss the opening prints; `technicals` says how often).
+    pdh_bars: float | None = None
+    pdl_bars: float | None = None
     pdc: float | None = None
     pdh_day: date | None = None
     pmh: float | None = None
     pml: float | None = None
+    #: The same two from the 5-minute bars alone, for the page to compare: on a day the
+    #: bars start late they stop short of the range (`technicals`, `pm_wide`).
+    pmh_bars: float | None = None
+    pml_bars: float | None = None
     pm_done: bool = False
     vwap: float | None = None
     wave_hi: float | None = None
@@ -588,6 +700,8 @@ class Tech:
     day_hi: float | None = None
     day_lo: float | None = None
     open: float | None = None
+    #: The open is the daily bar's (the official print), not the first 5-minute bar's.
+    open_official: bool = False
     rth_today: bool = False
     #: The latest 10-minute bar's low/high (forming or not) — the retest zone test.
     bar_low: float | None = None
@@ -621,6 +735,34 @@ def official_close(meta: dict[str, Any] | None) -> tuple[date, float] | None:
     return (dt.date(), float(p)) if _mod(dt) >= rth_end(dt.date()) else None
 
 
+def official_range(day: DayBar | None, hi: float, lo: float) -> tuple[float, float]:
+    """A session still trading: the 5-minute bars' high and low (`hi`, `lo`), widened
+    to the daily row's where that reaches further. The row is a copy from earlier in
+    the session, so it can add what the bars missed and cannot stand for the range
+    by itself. A FINISHED session's range is its settled daily bar outright (see
+    `technicals`). Pure."""
+    if day is None:
+        return hi, lo
+    return max(hi, day.high), min(lo, day.low)
+
+
+def daily_row(rows: dict[date, DayBar], d: date, daily_asof: float | None, today_cal: date,
+              after_min: int | None = None, slack: float = DAILY_SETTLE_SEC) -> DayBar | None:
+    """The daily copy's row for session `d`, when the copy can be trusted for it:
+    downloaded `slack` seconds past minute `after_min` of that day (its close by
+    default, so the row is the finished bar). With no download time known, any day
+    before the calendar date `today_cal`. Else None. Pure."""
+    row = rows.get(d)
+    # A row that is not a bar (a high under its low, a zero) is no evidence of anything.
+    if row is None or not row.high >= row.low > 0:
+        return None
+    if daily_asof is None:
+        return row if d < today_cal else None
+    minute = rth_end(d) if after_min is None else after_min
+    mark = datetime(d.year, d.month, d.day, tzinfo=ET).timestamp() + minute * 60
+    return row if daily_asof >= mark + slack else None
+
+
 def _vwap(bars: list[Bar]) -> float | None:
     pv = sum((b.high + b.low + b.close) / 3.0 * b.volume for b in bars)
     v = sum(b.volume for b in bars)
@@ -629,8 +771,14 @@ def _vwap(bars: list[Bar]) -> float | None:
 
 def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
                name: str | None = None, official: tuple[date, float] | None = None,
-               asof: float | None = None) -> Tech:
+               asof: float | None = None, daily_asof: float | None = None,
+               pm_wide: tuple[float | None, float | None] | None = None) -> Tech:
     """Everything the script computes for one symbol, as of `clock.now`. Pure.
+
+    `pm_wide` is the trading day's pre-market (high, low) from a read other than
+    these bars, or None: PMH and PML take whichever reaches further (see where
+    they are set). A fact about today, like `official`: None when replaying a past
+    day.
 
     Bars that OPEN after `clock.now` are ignored, so the same function replays
     any past instant from a later download — which is how the boundary table in
@@ -642,6 +790,12 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     once it closed CLOSE_LAG_SEC before that download; until then it is still
     the forming bar, whatever the clock says. None (a replay from a later
     download) confirms by the clock alone.
+
+    `daily_asof` is when `daily` was downloaded (epoch). A session's daily row is
+    read for its high, low and open only from a copy made after the fact: a
+    quarter hour past that session's close for the previous day's range, a minute
+    past 09:30 for today's open. Unknown (a replay, a test) trusts every day before
+    the calendar date, the rule the previous close already goes by.
     """
     tech = Tech(name=name)
     now_ts = int(clock.now.timestamp())
@@ -681,13 +835,35 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
             return daily_close[d]
         return fallback
 
+    # PDH AND PDL ARE THE OFFICIAL DAY'S, NOT THE 5-MINUTE BARS' ALONE (audit,
+    # 2026-11-11). Yahoo's 5-minute bars leave out the opening cross and the first
+    # prints after the bell, and a session's high or low is often made right there:
+    # over 440 name-sessions (forty names, 26 Oct to 9 Nov) the bars' high sat under
+    # the daily bar's by more than 5c on 23 and their low over it on 31, never the
+    # other way. AVGO's high on 6 Nov was 311.52 and the bars said 306.20, so on
+    # Monday the list called it through a PDH it had not reached. Yahoo's daily bar
+    # agreed with TradingView's to the cent on all 37 names checked for 9 Nov, and it
+    # is the bar a chart draws the level from. So once the daily copy holds that
+    # session's FINISHED bar (`daily_row`), the range is that bar's, outright. Not
+    # whichever reaches further: the bars also carry strays the day never traded
+    # (`within_day`; MSFT's 545.18 on 10 Nov would have been Wednesday's PDH).
+    # Until then, the 5-minute bars. `pdh_bars` / `pdl_bars` keep their figures so
+    # the page can say when the two disagree.
+    daily_bar = {d.day: d for d in daily}
+
+    def day_row(d: date, after_min: int, slack: float) -> DayBar | None:
+        return daily_row(daily_bar, d, daily_asof, today_cal, after_min, slack)
+
     prior = [d for d in sorted(by_day) if d < td and rth_of(d)]
     d1 = prior[-1] if prior else None
     d2 = prior[-2] if len(prior) > 1 else None
     if d1 is not None:
         r1 = rth_of(d1)
-        tech.pdh = max(bars[i].high for i in r1)
-        tech.pdl = min(bars[i].low for i in r1)
+        tech.pdh_bars = max(bars[i].high for i in r1)
+        tech.pdl_bars = min(bars[i].low for i in r1)
+        done = day_row(d1, rth_end(d1), DAILY_SETTLE_SEC)
+        tech.pdh, tech.pdl = ((done.high, done.low) if done is not None
+                              else (tech.pdh_bars, tech.pdl_bars))
         tech.pdc = close_of(d1, bars[r1[-1]].close)
         tech.pdh_day = d1
     ppdc = close_of(d2, bars[rth_of(d2)[-1]].close) if d2 is not None else None
@@ -698,15 +874,41 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     if pm:
         tech.pmh = max(bars[i].high for i in pm)
         tech.pml = min(bars[i].low for i in pm)
+    tech.pmh_bars, tech.pml_bars = tech.pmh, tech.pml
+    # THE PRE-MARKET RANGE IS THE WIDER OF THE BARS' AND A SECOND READ'S (2026-11-11).
+    # On Wed 11 Nov Yahoo had no pre-market bar before 05:20 ET for any Nasdaq-listed
+    # name (26 of the 34 on the list; the NYSE names and every earlier session began at
+    # 04:00), so PMH and PML were the high and low of what was left: NVDA's low read
+    # 177.02 against a pre-market low of 172.66, SNDK's 931.00 against 905.37, MU's
+    # 768.36 against 758.88. Those are the levels the strategy trades. `pm_wide` is
+    # today's pre-market high and low from a read that is not these bars (Nasdaq's, or
+    # the wide scan's screener: the caller's `ScanStore.pm_wide`); the level is
+    # whichever reaches further, so a short download cannot narrow the range and a
+    # late screener (it runs fifteen minutes behind) cannot either. On the five NYSE
+    # names whose bars were whole that morning the screener was never the wider one.
+    if pm_wide is not None:
+        hi, lo = pm_wide
+        if hi is not None and hi > 0 and (tech.pmh is None or hi > tech.pmh):
+            tech.pmh = hi
+        if lo is not None and lo > 0 and (tech.pml is None or lo < tech.pml):
+            tech.pml = lo
     tech.pm_done = clock.pm_locked
     td_end = rth_end(td)
     rth = [i for i in today if RTH_START <= mods[i] < td_end]
     tech.rth_today = bool(rth)
     d_cl: float | None = None
     if rth:
-        tech.day_hi = max(bars[i].high for i in rth)
-        tech.day_lo = min(bars[i].low for i in rth)
-        tech.open = bars[rth[0]].open
+        # Today's range and open by the same rule. THE OPEN IS THE DAILY BAR'S ONCE
+        # IT IS HELD: the first 5-minute bar's open is the first trade Yahoo's bars
+        # caught, which on those 440 name-sessions was more than 0.10% from the
+        # official open on 96 of them (MU on 10 Nov: 710.82 against 717.37, a gap
+        # read as -3.05% that was -2.15%). The store fetches the daily bars again
+        # just after the bell for it (sources/scanner.open_marks).
+        today_bar = day_row(td, RTH_START, DAILY_OPEN_SEC)
+        tech.day_hi, tech.day_lo = official_range(
+            today_bar, max(bars[i].high for i in rth), min(bars[i].low for i in rth))
+        tech.open = today_bar.open if today_bar is not None else bars[rth[0]].open
+        tech.open_official = today_bar is not None
         d_cl = bars[rth[-1]].close
         # Once the bell has rung, today's close is the official print too.
         if _mod(clock.now.astimezone(ET)) >= td_end:
@@ -738,7 +940,8 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
         tech.vwap = _vwap([bars[i] for i in rth]) if rth else None
 
     # RVOL by time of day: completed regular-session bars up to now, against the
-    # same window on the prior sessions in the download (two at least).
+    # same window on the RVOL_SESSIONS prior sessions in the download (two at
+    # least) — the mean of them, as TradingView's is.
     if rth:
         now_mod = _mod(clock.now)
         cum_today = sum(bars[i].volume for i in rth if bars[i].t + SRC_SEC <= now_ts)
@@ -749,7 +952,7 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
             cum = sum(bars[i].volume for i in rth_of(d) if mods[i] + SRC_SEC // 60 <= now_mod)
             if cum > 0:
                 priors.append(cum)
-            if len(priors) >= 4:
+            if len(priors) >= RVOL_SESSIONS:
                 break
         if len(priors) >= 2 and cum_today > 0:
             tech.rvol = cum_today / (sum(priors) / len(priors))
@@ -838,7 +1041,8 @@ def _session_of(day: date, m: int) -> str | None:
 #: The chart's timeframes (owner instruction, 2026-10-14: "a toggle for the
 #: time frames on the chart — 1m 3m 5m 10m D"), in seconds. 10m is the one the
 #: script's signals are read on; the others are views of the same tape.
-CHART_TF: dict[str, int] = {"1m": 60, "3m": 180, "5m": 300, "10m": 600, "D": 86400}
+CHART_TF: dict[str, int] = {"1m": 60, "3m": 180, "5m": 300, "10m": 600, "30m": 1800,
+                            "60m": 3600, "D": 86400}
 #: The most bars an intraday chart ships — the pane draws at most about a
 #: hundred, and the EMA is computed on everything before the cut regardless.
 CHART_MAX = 400
@@ -846,9 +1050,21 @@ CHART_MAX = 400
 CHART_DAYS = 90
 
 
+#: The chart's other averages, beside the wave and the 200 (owner, 2026-11-11: "can we
+#: add ema's for 20 and 50"). Drawn only when the reader picks them.
+CHART_EMAS: tuple[int, ...] = (20, 50)
+
+
+def _chart_emas(closes: list[float]) -> dict[int, list[float]]:
+    """Each of CHART_EMAS over every close held, or an empty list where there are
+    fewer closes than its length: a 50 EMA of thirty bars is not a 50 EMA. Pure."""
+    return {n: ema(closes, n) if len(closes) >= n else [] for n in CHART_EMAS}
+
+
 def _empty_chart(tf: str, error: str) -> dict[str, Any]:
     return {"ok": False, "tf": tf, "error": error, "bars": [], "ema8": [], "ema9": [],
-            "ema10": [], "vwap": [], "levels": {}, "history": [], "sessions": [], "signals": []}
+            "ema10": [], "ema20": [], "ema50": [], "vwap": [], "vwap_sd": [], "levels": {},
+            "history": [], "sessions": [], "signals": []}
 
 
 def _levels_out(tech: Tech) -> dict[str, Any]:
@@ -856,7 +1072,9 @@ def _levels_out(tech: Tech) -> dict[str, Any]:
             "pml": _r(tech.pml), "pm_done": tech.pm_done}
 
 
-def history_levels(bars5: list[Bar], trading_day: date, since: int) -> list[dict[str, Any]]:
+def history_levels(bars5: list[Bar], trading_day: date, since: int,
+                   daily: list[DayBar] | None = None, daily_asof: float | None = None,
+                   today_cal: date | None = None) -> list[dict[str, Any]]:
     """Each EARLIER session's four levels, over that session's regular hours —
     the Pine script's "keep previous days' levels". Pure.
 
@@ -869,7 +1087,13 @@ def history_levels(bars5: list[Bar], trading_day: date, since: int) -> list[dict
     it), drawn across that day's 09:30 to its close.
 
     `since` is the first bar the chart ships; days before it are not drawn.
+
+    `daily` widens each PDH / PDL to the official day's, by the rule the row's own
+    levels go by (`technicals`), so an earlier day's lines sit where that day's
+    scanner had them. `today_cal` is the calendar date the copy is read on.
     """
+    rows = {d.day: d for d in daily or []}
+    cal = today_cal or trading_day
     days: dict[date, dict[str, list[float]]] = {}
     for b in bars5:
         dt = datetime.fromtimestamp(b.t, ET)
@@ -888,10 +1112,16 @@ def history_levels(bars5: list[Bar], trading_day: date, since: int) -> list[dict
             continue
         pre = days[d]["pre"]
         prior = days[order[i - 1]]["rth"] if i > 0 else []
-        for key, vals, pick in (("PDH", prior, max), ("PDL", prior, min),
-                                ("PMH", pre, max), ("PML", pre, min)):
-            if vals:
-                out.append({"key": key, "v": _r(pick(vals)), "from": t0, "to": t1,
+        found: dict[str, float] = {}
+        if prior:
+            done = daily_row(rows, order[i - 1], daily_asof, cal)
+            found["PDH"], found["PDL"] = ((done.high, done.low) if done is not None
+                                          else (max(prior), min(prior)))
+        if pre:
+            found["PMH"], found["PML"] = max(pre), min(pre)
+        for key in ("PDH", "PDL", "PMH", "PML"):
+            if key in found:
+                out.append({"key": key, "v": _r(found[key]), "from": t0, "to": t1,
                             "day": d.isoformat()})
     return out
 
@@ -932,6 +1162,7 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
     closes = [b.close for b in bars]
     e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
     e200 = ema(closes, structure.EMA_LEN) if len(closes) >= structure.EMA_LEN else []
+    extra = _chart_emas(closes)
 
     # From the previous session's 09:30 (the PDH/PDL day) — or the start of the
     # download if that day is not in it — and never more than CHART_MAX bars.
@@ -944,13 +1175,19 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
 
     td = clock.trading_day
     vwap: list[float | None] = []
+    # VWAP's volume-weighted standard deviation, for the chart's bands. Taken about
+    # the session's first typical price, as futures.anchored does, so the variance is
+    # not the difference of two numbers near a price squared.
+    vwap_sd: list[float | None] = []
     pv = vol = 0.0
+    ref = svd = svd2 = 0.0
     sessions: list[dict[str, Any]] = []
     span_day: date | None = None
     for b in bars[start:]:
         dt = datetime.fromtimestamp(b.t, ET)
         m = _mod(dt)
-        kind = _session_of(dt.date(), m)
+        # An hour bar holding the open is the session's, so a long bar reads by its last minute.
+        kind = _session_of(dt.date(), m + (step // 60 - 1 if step > BAR_SEC else 0))
         if kind is not None:
             # One span per session per day, gaps included: a thin name's
             # one-minute pre-market has minutes with no trade, and each gap
@@ -964,17 +1201,28 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
             # A bar with no volume yet (the live one, before its first print
             # is counted) holds VWAP where it was rather than breaking the line.
             if b.volume > 0:
-                pv += (b.high + b.low + b.close) / 3.0 * b.volume
+                tp = (b.high + b.low + b.close) / 3.0
+                if vol == 0:
+                    ref = tp
+                pv += tp * b.volume
                 vol += b.volume
+                svd += b.volume * (tp - ref)
+                svd2 += b.volume * (tp - ref) ** 2
             vwap.append(round(pv / vol, 4) if vol > 0 else None)
+            vwap_sd.append(round(math.sqrt(max(0.0, svd2 / vol - (svd / vol) ** 2)), 4)
+                           if vol > 0 else None)
         else:
             vwap.append(None)
+            vwap_sd.append(None)
 
     def cut(xs: list[float]) -> list[float | None]:
-        return [round(x, 4) for x in xs[start:]]
+        # A list too short to hold the average (`_chart_emas`) ships as blanks.
+        return [round(x, 4) for x in xs[start:]] if xs else [None] * (len(bars) - start)
 
     def at(t: int) -> int:
-        return (t + BAR_SEC - 1) // step * step if step < BAR_SEC else t
+        # A shorter view marks the bar holding the signal's last minute; a longer one
+        # the bar the ten-minute signal falls inside.
+        return (t + BAR_SEC - 1) // step * step if step < BAR_SEC else t - t % step
 
     return {
         "ok": True,
@@ -982,10 +1230,13 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         "bars": [{"t": b.t, "o": round(b.open, 4), "h": round(b.high, 4), "l": round(b.low, 4),
                   "c": round(b.close, 4), "v": b.volume} for b in bars[start:]],
         "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
-        "ema200": cut(e200) if e200 else [None] * (len(bars) - start),
+        "ema20": cut(extra[20]), "ema50": cut(extra[50]),
+        "ema200": cut(e200),
         "vwap": vwap,
+        "vwap_sd": vwap_sd,
         "levels": _levels_out(tech),
-        "history": history_levels(bars5, td, bars[start].t),
+        "history": history_levels(bars5, td, bars[start].t, daily, daily_asof,
+                                  clock.now.astimezone(ET).date()),
         "sessions": sessions,
         "signals": [{"t": at(x["t"]), "kind": x["kind"], "side": x["side"], "price": x["price"]}
                     for x in tech.signals if x.get("t") is not None],
@@ -1035,10 +1286,11 @@ def _daily_chart(daily: list[DayBar], bars5: list[Bar], clock: Clock, tech: Tech
     closes = [x.close for x in days]
     e8, e9, e10 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
     e200 = ema(closes, structure.EMA_LEN) if len(closes) >= structure.EMA_LEN else []
+    extra = _chart_emas(closes)
     start = max(0, len(days) - CHART_DAYS)
 
     def cut(xs: list[float]) -> list[float | None]:
-        return [round(x, 4) for x in xs[start:]]
+        return [round(x, 4) for x in xs[start:]] if xs else [None] * (len(days) - start)
 
     def t_of(d: date) -> int:
         return int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
@@ -1050,8 +1302,10 @@ def _daily_chart(daily: list[DayBar], bars5: list[Bar], clock: Clock, tech: Tech
                   "l": round(x.low, 4), "c": round(x.close, 4), "v": x.volume}
                  for x in days[start:]],
         "ema8": cut(e8), "ema9": cut(e9), "ema10": cut(e10),
-        "ema200": cut(e200) if e200 else [None] * (len(days) - start),
+        "ema20": cut(extra[20]), "ema50": cut(extra[50]),
+        "ema200": cut(e200),
         "vwap": [None] * (len(days) - start),
+        "vwap_sd": [None] * (len(days) - start),
         "levels": _levels_out(tech),
         "sessions": [],
         "signals": [],
@@ -1293,6 +1547,14 @@ def row_of(sym: str, t: Tech, spy: Tech | None, qqq: Tech | None,
             "vwap": _r(t.vwap), "wave_hi": _r(t.wave_hi), "wave_lo": _r(t.wave_lo),
             "ema8": _r(t.ema8), "day_hi": _r(t.day_hi), "day_lo": _r(t.day_lo),
             "open": _r(t.open), "ema200": _r(t.ema200),
+            # The 5-minute bars' own high and low for that session, for the page to
+            # say when the official level sits past them, and whether the open is
+            # the official print yet (see `technicals`).
+            "pdh_bars": _r(t.pdh_bars), "pdl_bars": _r(t.pdl_bars),
+            "open_official": t.open_official,
+            # The pre-market range as these bars alone have it: narrower than `pmh` /
+            # `pml` on a day the bars start late and a second read fills the range in.
+            "pmh_bars": _r(t.pmh_bars), "pml_bars": _r(t.pml_bars),
         },
         "trend200": t.trend200,
         "ema200_slope": t.ema200_slope,

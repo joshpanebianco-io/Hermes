@@ -2,14 +2,14 @@ import { NextResponse } from "next/server";
 import type { ScanBars } from "@/types/scanner";
 import { scanProxy } from "@/lib/scanProxy";
 
-/** One name's bars on `?tf=` (1m, 3m, 5m, 10m, D), wave, VWAP and levels — what the detail pane's chart draws. */
+/** One name's bars on `?tf=` (1m, 3m, 5m, 10m, 30m, 60m, D), wave, VWAP and levels — what the detail pane's chart draws. */
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 // The collector's own watchlist rule; anything else never leaves the web half.
 const SYM = /^[A-Z0-9][A-Z0-9.-]{0,9}$/;
-const TF = new Set(["1m", "3m", "5m", "10m", "D"]);
+const TF = new Set(["1m", "3m", "5m", "10m", "30m", "60m", "D"]);
 
 const empty = (sym: string): ScanBars => ({
   ok: false,

@@ -1,42 +1,35 @@
 "use client";
 
-import type { Clock, ImpliedBook, Quote, VolTerm } from "@/types/terminal";
-import { dir, feedNote, inMin, num, quoteChg } from "@/lib/format";
+import type { Clock } from "@/types/terminal";
+import { inMin } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { Tick } from "@/components/ui/Tick";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
-import { stripTiles } from "@/lib/headerStrip";
 import { TABS, type Tab } from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
 import { localClock, readerClock } from "@/lib/clock";
-import { curveShape } from "@/lib/vix";
-import { VixPopover, type VixFacts } from "@/components/vol/VixBands";
-import { HeaderStrip, stripInk } from "@/components/shell/HeaderStrip";
 
 /**
- * The header rail — identity on the left, state on the right.
+ * The header rail — identity on the left, the pages in the centre, state on the right.
  *
- * THE TICKER STRIP IS NOT A CRAWL. It is a fixed row of the instruments this
- * desk actually trades, always in the same order and always in the same place.
- * A scrolling strip is the thing every finance site does and it is wrong for
- * an instrument: you cannot glance at a moving target, and the whole value of
- * a header row is that NQ is always in the same six centimetres of glass.
- */
-/*
- * ONE STRIP FOR BOTH DESKS (2026-10-30, with the one tab bar — lib/tabs.ts).
- * Each desk used to read its own: the futures books and the macro that moves
- * them, or the index ETFs the options trade on with the vol pair that prices
- * them. Now it is one row in trading order — the three books, the two index
- * ETFs, VIX for the level and VVIX for how fast it can move, the 10-year,
- * the dollar, crude, bitcoin (lib/headerStrip.ts) — with the New York
- * open-or-close countdown on the right, under the session.
+ * NO PRICES UP HERE (owner, 2026-11-10: "lets remove the" eleven instruments "from
+ * the top and move them in there appropriate places else where and lets move the nav
+ * bar to the centre", then "swap outright"). The strip ran the books, the index ETFs,
+ * the vol pair and the macro over every page. Each now sits on the page that uses it
+ * (lib/quoteTiles): the books on Futures, the macro on Macro's board, SPY, QQQ, IWM
+ * and VIX in the Scanner's masthead, all eleven in one row atop the Dashboard. The
+ * band is the lockup, the tabs and the clock, so the tabs can stand in its middle.
+ *
+ * THE TABS ARE CENTRED ON THE WINDOW, not on the room between the lockup and the
+ * clock: the band is three columns, the outer two of equal width, so the tabs do not
+ * slide when the clock's line lengthens. A window too narrow for that lets the outer
+ * columns take what they need, and the tabs move off centre rather than overlap.
  */
 
 /**
- * The New York clock, beside the strip. `short` is Quiet's: under the "Overlap"
- * label "closes in 5h 45m" read as the overlap ending, so it names New York.
+ * The New York clock, beside the session. `short` is the stacked form's: under the
+ * "Overlap" label "closes in 5h 45m" read as the overlap ending, so it names New York.
  */
-function nyClock(clock: Clock | null): { label: string; short: string; value: string; title: string } | null {
+export function nyClock(clock: Clock | null): { label: string; short: string; value: string; title: string } | null {
   const ny = clock?.sessions.find((x) => x.key === "newyork");
   if (!ny) return null;
   if (ny.holiday) return { label: "NYSE", short: "NYSE", value: "Holiday", title: `${ny.holiday} — US markets are closed` };
@@ -47,20 +40,12 @@ function nyClock(clock: Clock | null): { label: string; short: string; value: st
 
 export function Header({
   clock: rawClock,
-  quotes,
-  implied,
-  vixMonth,
   link,
   onRefresh,
   tab,
   onTab,
 }: {
   clock: Clock | null;
-  quotes: Quote[];
-  /** The books' implied day (the terminal snapshot's volterm.books) for the VIX panel; the stocks desk passes none. */
-  implied?: ImpliedBook[];
-  /** The VIX against its own month (volterm.vix_month), for the same panel. */
-  vixMonth?: VolTerm["vix_month"];
   /**
    * The page's own link to its data: "live" while polls land, "lost" once
    * one has failed (the figures on screen are from the last poll that did),
@@ -77,61 +62,33 @@ export function Header({
   // The reader's own time beside New York's: the owner trades the NY session
   // from Australia, where 09:30 ET is past midnight. Null on New York time.
   const local = readerClock(now);
-  // Classic's second row. Quiet's strip draws itself in the band (HeaderStrip).
-  const strip = stripTiles(quotes).map((x) => x.quote);
   const ny = nyClock(clock);
   const tabs = TABS;
-  /*
-   * THE VIX FIGURE OPENS THE BANDS, ON BOTH DESKS (owner, 2026-10-21: "include
-   * the header vix too"). The header has quotes, not the scanner's regime, so
-   * the curve is read here from the VIX3M print on the same feed, with
-   * volterm's own flat band — and the band off the level, with lib/vix's copy
-   * of scanscore's rule. Same answer, same thresholds, no second opinion.
-   */
-  const vix3m = quotes.find((q) => q.key === "VIX3M")?.last ?? null;
-  const vvix = quotes.find((q) => q.key === "VVIX")?.last ?? null;
-  const vixFacts = (q: Quote): VixFacts => {
-    const ratio = vix3m && vix3m > 0 ? q.last / vix3m : null;
-    return {
-      last: q.last,
-      pct: q.pct,
-      ratio,
-      shape: curveShape(ratio),
-      vvix,
-      implied: implied ?? null,
-      month: vixMonth ?? null,
-    };
-  };
-  const vixTitle = (note: string | null) => [note, "Click for what the level means"].filter(Boolean).join("\n");
 
   return (
     <header className="flex flex-col gap-0 border-b border-ring">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 qt:h-[64px] qt:flex-nowrap qt:gap-x-4 qt:px-5 qt:py-0 roomy:gap-x-6 roomy:px-6">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 md:grid md:grid-cols-[minmax(max-content,1fr)_auto_minmax(max-content,1fr)] qt:h-[64px] qt:gap-x-4 qt:px-5 qt:py-0 roomy:gap-x-6 roomy:px-6">
         {/*
          * THE LOCKUP, A STEP LARGER (owner, 2026-10-13: "increase the hermesx
          * and logo slightly more") — the same mono word and the same helm, at
          * a size that reads as the head of the band rather than a caption.
          */}
-        <div className="flex shrink-0 items-center gap-2 qt:gap-2.5">
+        <div className="flex shrink-0 items-center gap-2 md:col-start-1 md:justify-self-start qt:gap-2.5">
           <Mark />
           {/* The helm alone in a tight window: the word is the widest thing in the
-              band, and the strip and the clock are worth more than it there. */}
+              band, and the tabs and the clock are worth more than it there. */}
           <span className="wordmark fig text-[18px] font-semibold tracking-[0.14em] qt:text-[19px] qt:max-[1179px]:hidden">
             HERMES
           </span>
         </div>
-        {/* A hairline between the lockup and the controls, as the status group
-            already has on the right — Quiet separates with rules, not space. */}
-        <span aria-hidden className="hidden h-7 w-px shrink-0 bg-ring-2 qt:block" />
 
         {/*
-         * THE TABS SIT BESIDE THE WORDMARK, NOT ABOVE THE PANELS. The
-         * instrument, the note written off it, and the controls for both — all
-         * chrome-level views of one session, so they belong in the chassis
-         * beside the clock and the state light rather than in a bar that would
-         * push the board down by its own height.
+         * THE TABS SIT IN THE BAND, NOT ABOVE THE PANELS. The instrument, the note
+         * written off it, and the controls for both — all chrome-level views of one
+         * session, so they belong in the chassis between the lockup and the clock
+         * rather than in a bar that would push the board down by its own height.
          */}
-        <nav className="flex shrink-0 items-center gap-0.5 qt:gap-1" aria-label="Tabs">
+        <nav className="flex shrink-0 flex-wrap items-center gap-0.5 md:col-start-2 md:justify-self-center qt:gap-1" aria-label="Tabs">
           {tabs.map((t, i) => (
             <button
               key={t.key}
@@ -159,19 +116,15 @@ export function Header({
           ))}
         </nav>
 
-        {/* Quiet carries the strip in the band, so the board starts higher than a
-            second row would let it. */}
-        <HeaderStrip quotes={quotes} ny={ny} vixFacts={vixFacts} vixTitle={vixTitle} />
-
         {/* The clock rides the right-side status group (owner, 2026-09-01):
             time, session, feed state and the refresh are all "is this thing
             current" answers, and they read better as one cluster than with
             the clock orphaned beside the tabs. */}
-        <div className="ml-auto flex shrink-0 items-center gap-2 qt:ml-0 qt:gap-3 qt:self-stretch qt:border-l qt:border-ring qt:pl-5 roomy:gap-2 roomy:pl-6">
-          {/* Compact Quiet stacks it, about 200px narrower than the one line: the
-              session over the New York countdown, New York's time over the reader's.
-              In the overlap "Overlap" takes the session's line, and the phase it
-              replaces is on the hover. Full screen and Classic keep the one line. */}
+        <div className="ml-auto flex shrink-0 items-center gap-2 md:col-start-3 md:ml-0 md:justify-self-end qt:gap-3 roomy:gap-2">
+          {/* A narrow Quiet window stacks it, about 250px narrower than the one line:
+              the session over the New York countdown, New York's time over the
+              reader's. In the overlap "Overlap" takes the session's line, and the phase
+              it replaces is on the hover. A wide window and Classic keep the one line. */}
           {clock && (
             <>
               <div
@@ -206,6 +159,12 @@ export function Header({
                   </span>
                 )}
                 <span className="hidden text-[10.5px] text-ink-3 sm:inline qt:text-[12px]">{clock.phase.label}</span>
+                {ny && (
+                  <span className="mr-2 hidden text-[10.5px] whitespace-nowrap text-ink-3 sm:inline qt:text-[12px]" title={ny.title}>
+                    <span aria-hidden className="mr-2 text-ink-4">·</span>
+                    {ny.label} <span className="fig text-ink">{ny.value}</span>
+                  </span>
+                )}
                 <span className="fig text-[13px] text-ink qt:text-[15px]">{clock.et_time}</span>
                 <span className="eyebrow text-[9px]">ET</span>
                 {local && (
@@ -264,42 +223,16 @@ export function Header({
           </button>
         </div>
       </div>
-
-      {strip.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ring/60 bg-surface/50 px-3 py-1.5 qt:hidden">
-          {strip.map((q) => {
-            const chg = quoteChg(q);
-            const figure = (
-              <>
-                <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{q.key}</span>
-                <Tick value={num(q.last)} className={cn("fig text-[11.5px]", stripInk(q))} />
-                <Tick value={chg.text} className={cn("fig text-[10px]", dir(chg.v))} />
-              </>
-            );
-            return q.key === "VIX" ? (
-              <VixPopover key={q.key} facts={vixFacts(q)} title={vixTitle(feedNote(q))} className="-mx-1 flex items-baseline gap-1.5 px-1">
-                {figure}
-              </VixPopover>
-            ) : (
-              <div key={q.key} className="flex items-baseline gap-1.5" title={feedNote(q) ?? undefined}>
-                {figure}
-              </div>
-            );
-          })}
-          {ny && (
-            <div className="flex items-baseline gap-1.5" title={ny.title}>
-              <span className="fig text-[9.5px] tracking-wider text-ink-3 uppercase">{ny.label}</span>
-              <span className="fig text-[11.5px] text-ink">{ny.value}</span>
-            </div>
-          )}
-        </div>
-      )}
     </header>
   );
 }
 
-/** The two-ring lockup. Chrome hues — decoration, never data. */
-function Mark() {
+/**
+ * The two-ring lockup. Chrome hues — decoration, never data. `gradientId` is for a
+ * second copy on the same page: two SVGs sharing a gradient id read the first one's,
+ * and a hidden first one paints the visible one blank.
+ */
+export function Mark({ gradientId = "hermes-grad" }: { gradientId?: string }) {
   return (
     <svg
       // A step larger with the word (owner, 2026-10-13); sized by class so
@@ -335,7 +268,7 @@ function Mark() {
           * half of the cycle, and the wrap jumped back to the full range.
           */}
         <linearGradient
-          id="hermes-grad"
+          id={gradientId}
           gradientUnits="userSpaceOnUse"
           spreadMethod="repeat"
           x1="0"
@@ -385,8 +318,8 @@ function Mark() {
       <g transform="rotate(-10 256 256) translate(512 0) scale(-1 1)">
         <path
           className="hermes-mark"
-          fill="url(#hermes-grad)"
-          stroke="url(#hermes-grad)"
+          fill={`url(#${gradientId})`}
+          stroke={`url(#${gradientId})`}
           strokeWidth={8}
           d={HERMES_MARK_D}
         />

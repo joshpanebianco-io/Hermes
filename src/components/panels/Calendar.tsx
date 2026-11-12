@@ -1,13 +1,13 @@
 "use client";
 
 import { useMemo } from "react";
-import type { CalendarRow, Impact, Region } from "@/types/terminal";
+import type { CalendarRow, HolidayNotice, Impact, Region } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { cn } from "@/lib/cn";
 import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { segItem } from "@/lib/seg";
 import { isPending } from "@/lib/events";
-import { groupReleases, subLabel, type Release } from "@/lib/releases";
+import { countryCode, groupReleases, subLabel, type Release } from "@/lib/releases";
 import { useNow } from "@/lib/useNow";
 import { PrintPopover, READ_WORD, readTone } from "@/components/vol/PrintRead";
 
@@ -108,11 +108,18 @@ const MINE: Record<CalendarScope, { sub: string; on: string; off: string; keep: 
 
 export function Calendar({
   rows,
+  holidays = NO_HOLIDAYS,
   ageMin,
   error,
   scope = "futures",
 }: {
   rows: CalendarRow[];
+  /**
+   * The days a market is shut or shuts early (owner, 2026-11-12: "macro section doesnt
+   * list bank holidays etc?"). Neither calendar feed carries them, so they are the
+   * collector's own table (holidays.py): US stocks and bonds, London, Tokyo.
+   */
+  holidays?: HolidayNotice[];
   ageMin?: number | null;
   error?: string | null;
   scope?: CalendarScope;
@@ -188,6 +195,18 @@ export function Calendar({
         .slice(0, 8),
     };
   }, [releases, tiers, coreOnly, region, mine, nowMs]);
+
+  // The holidays the filters leave: the region chip narrows them as it does the releases,
+  // and the stocks desk's Mine keeps the US ones (it trades New York only). Yesterday's
+  // stays for a day, dimmed: a bond holiday is why this morning's yields are two days old.
+  const hols = useMemo(() => {
+    const today = etToday(nowMs);
+    return holidays
+      .filter((h) => (region === "all" || h.region === region) && !(coreOnly && scope === "stocks" && h.region !== "us"))
+      .map((h) => ({ h, days: today ? dayGap(today, h.date) : 0 }))
+      .filter((x) => x.days >= -1)
+      .slice(0, 5);
+  }, [holidays, region, coreOnly, scope, nowMs]);
 
   return (
     <Module
@@ -267,6 +286,33 @@ export function Calendar({
           );
         })}
       </div>
+
+      {hols.length > 0 && (
+        <>
+          <Head plain>Holidays and early closes</Head>
+          <ul>
+            {hols.map(({ h, days }) => (
+              <li
+                key={`${h.date}-${h.market}`}
+                title={`${h.name}, ${dayLong(h.date)}. ${h.note}`}
+                className={cn("hit flex items-baseline gap-2 px-3 py-[3px]", days < 0 && "opacity-60")}
+              >
+                <span className={cn("fig w-[84px] shrink-0 text-[10px] whitespace-nowrap", days === 0 ? "text-ink" : "text-ink-3")}>{dayWord(days, h.date)}</span>
+                {/* The calendar's own dot: amber where New York is shut, as a release that stops the tape is. */}
+                <span
+                  className={cn("w-[6px] shrink-0 self-center rounded-full", h.score >= 5 ? "h-[6px] bg-flip" : h.score >= 4 ? "h-[5px] bg-ink-3" : "h-[4px] bg-ink-4")}
+                  aria-hidden
+                />
+                <span className="fig hidden w-[24px] shrink-0 text-[9.5px] text-ink-3 sm:block">{country(h.country)}</span>
+                <span className="min-w-0 flex-1 truncate text-[11px] @max-[470px]:whitespace-normal">
+                  <span className={days === 0 ? "text-ink" : "text-ink-2"}>{h.label}</span>
+                  <span className="text-ink-3"> · {h.name}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       {upcoming.length === 0 && recent.length === 0 ? (
         <p className="px-3 py-6 text-center text-[11px] text-ink-3">
@@ -360,8 +406,9 @@ function Rows({ rel }: { rel: CalRelease }) {
   return (
     <>
       <Row r={rel.lead} tip={tip} />
-      {rel.subs.map((s) => (
-        <Row key={s.event} r={s} sub={subLabel(s.event, rel.lead.event)} />
+      {/* By position too: the UK's GDP comes as four series all named "GDP". */}
+      {rel.subs.map((s, i) => (
+        <Row key={`${s.event}-${i}`} r={s} sub={subLabel(s.event, rel.lead.event)} />
       ))}
     </>
   );
@@ -380,20 +427,46 @@ function etDay(r: CalendarRow): string {
   });
 }
 
-function Head({ children }: { children: React.ReactNode }) {
+function Head({ children, plain }: { children: React.ReactNode; plain?: boolean }) {
   return (
     // Sticky inside the panel's own scroll, so the column names stay in view
-    // down a long day.
-    <div className="qt-band qt-sticky sticky top-0 z-[2] flex items-baseline justify-between border-y border-ring/40 bg-surface-2 px-3 py-1 first:border-t-0">
+    // down a long day. `plain` is a band over rows with no figures (the holidays):
+    // it scrolls away with them rather than sitting over the releases.
+    <div className={cn("qt-band flex items-baseline justify-between border-y border-ring/40 bg-surface-2 px-3 py-1 first:border-t-0", !plain && "qt-sticky sticky top-0 z-[2]")}>
       <span className="eyebrow text-[9px]">{children}</span>
       {/* Names the three figure columns once, instead of three tooltips a
           reader has to discover. Order matches the rows: what printed, what
           was expected, what it was last time. */}
-      <span className="fig text-[8.5px] tracking-wide text-ink-3 @max-[470px]:hidden">
-        act · cons<span className="hidden md:inline"> · prev</span>
-      </span>
+      {!plain && (
+        <span className="fig text-[8.5px] tracking-wide text-ink-3 @max-[470px]:hidden">
+          act · cons<span className="hidden md:inline"> · prev</span>
+        </span>
+      )}
     </div>
   );
+}
+
+const NO_HOLIDAYS: HolidayNotice[] = [];
+
+/** New York's calendar day as "2026-11-11"; null until the page's clock has ticked. */
+function etToday(nowMs: number | null): string | null {
+  return nowMs == null ? null : new Date(nowMs).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+/** Whole days from one ISO date to another: 1 is tomorrow, -1 yesterday. */
+function dayGap(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000);
+}
+
+const dayLong = (iso: string) =>
+  new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+
+/** "Today", "Tomorrow", "Yesterday", else "Thu 26 Nov". */
+function dayWord(days: number, iso: string): string {
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  if (days === -1) return "Yesterday";
+  return new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 /**
@@ -493,24 +566,5 @@ function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
   );
 }
 
-/** Three letters is enough to place a release and costs a third of the width. */
-function country(c: string): string {
-  const map: Record<string, string> = {
-    "United States": "US",
-    "Euro Zone": "EZ",
-    "United Kingdom": "UK",
-    Germany: "DE",
-    Japan: "JP",
-    China: "CN",
-    Canada: "CA",
-    Australia: "AU",
-    France: "FR",
-    Italy: "IT",
-    Switzerland: "CH",
-    "South Korea": "KR",
-    "Hong Kong": "HK",
-    India: "IN",
-    Brazil: "BR",
-  };
-  return map[c] ?? c.slice(0, 2).toUpperCase();
-}
+/** The release's country in two letters (lib/releases, where the Futures cards read it too). */
+const country = countryCode;

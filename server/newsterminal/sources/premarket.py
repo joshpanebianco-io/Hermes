@@ -214,6 +214,33 @@ def cadence(now: datetime) -> float:
     return EARLY_SEC if et.hour * 60 + et.minute < FAST_FROM else NAME_SEC
 
 
+def covered_by_screener(st: SourceStatus, covered: int, total: int) -> SourceStatus:
+    """`st` as the rail should show it when Nasdaq has not answered but the wide read's
+    screener holds today's pre-market for `covered` of the `total` names. Returns `st`.
+
+    THE RAIL SAID "PREMARKET never" IN RED ALL MORNING, AND NOTHING WAS MISSING (owner,
+    2026-11-11: "what is the purpose of haivng tha tpremarket never there? canw e get
+    rid of it?"). That entry is this source, and Nasdaq was refusing it. But a name
+    Nasdaq has not answered for takes the screener's figures
+    (`UniverseStore.premarket_of`), so every pre-market volume, high and low was on
+    the page. A source nothing is missing from is not a failure, and an entry that is
+    lit every morning teaches the reader to stop looking at the rail. So while the
+    stand-in holds any of the names this source is live: it counts the names covered,
+    says whose figures they are first in its notes, and keeps Nasdaq's own notes (the
+    refusal, the back-off) after that. With neither answering it is the failure it
+    was, and the rail says so.
+    """
+    if st.ok or covered <= 0:
+        return st
+    st.settle(True, what="read")
+    st.items = covered
+    # Nasdaq's error is in the notes; left here it would print beside a live source.
+    st.error = None
+    st.notes = [f"{covered} of {total} from TradingView's screener, 15 min delayed: "
+                "Nasdaq is not answering", *st.notes]
+    return st
+
+
 def _open_ts(day: date) -> float:
     return datetime(day.year, day.month, day.day, OPEN // 60, OPEN % 60,
                     tzinfo=scan.ET).timestamp()

@@ -363,6 +363,67 @@ def test_the_page_has_yesterdays_gappers_while_nothing_has_traded_yet() -> None:
     assert got["reference"][0]["sym"] == "OLD"
 
 
+def test_a_gapper_carries_both_ranges_and_the_counts_the_page_leads_with() -> None:
+    rows = [row("UP", pm_chg=12.0, pm_c=110.0, pm_vol=5e5, high=101.0, low=98.0),
+            row("IN", pm_chg=-8.0, pm_c=99.0, pm_vol=2e5, high=96.5, low=94.5)]
+    cat = {"title": "x", "tier": 1, "major": True}
+    got = store_with(rows).extended(u.Ctx(catalyst=lambda s: cat if s == "UP" else None),
+                                    session="pre", now=SUN)
+    up = next(r for r in got["rows"] if r["sym"] == "UP")
+    assert (up["pmh"], up["pml"], up["session"]) == (99.5, 98.5, "pre")
+    inside = next(r for r in got["rows"] if r["sym"] == "IN")
+    assert inside["inside"] and not up["inside"]
+    assert got["stats"] | {"up": None, "down": None} == {
+        "up": None, "down": None, "through": 2, "inside": 1, "gap_up": 1, "gap_up_news": 1,
+        "gap_down": 1, "gap_down_news": 0}
+    assert got["chips"]["inside"] == 1 and got["scanned"] == 2
+
+
+def test_all_sessions_lists_a_name_that_moved_in_both_once_in_the_newer() -> None:
+    rows = [row("BOTH", pm_chg=9.0, pm_vol=5e5, ah_chg=-4.0, ah_c=95.0, ah_vol=2e5),
+            row("AH", pm_chg=0.1, pm_vol=5e5, ah_chg=6.0, ah_c=95.0, ah_vol=2e5)]
+    s = store_with(rows)
+    # Mid-session the morning's pre-market is newer than last night's after-hours.
+    got = s.extended(u.Ctx(), session="all", now=et(2026, 11, 9, 11, 0))
+    assert {(r["sym"], r["session"]) for r in got["rows"]} == {("BOTH", "pre"), ("AH", "post")}
+    # On a Sunday night the Friday evening is the newer of the two.
+    got = s.extended(u.Ctx(), session="all", now=SUN)
+    assert {(r["sym"], r["session"]) for r in got["rows"]} == {("BOTH", "post"), ("AH", "post")}
+
+
+def test_extended_volume_is_an_estimate_until_five_sessions_are_written_down() -> None:
+    s = store_with([row("X", pm_chg=9.0, pm_vol=5e5, avg=1e6)])
+    r = s.extended(u.Ctx(), session="pre", now=SUN)["rows"][0]
+    assert (r["adv_pct"], r["rvol"], r["rvol_est"]) == (50.0, 10.0, True)
+    s.pm_hist = {"X": [100_000] * 4}
+    assert s.extended(u.Ctx(), session="pre", now=SUN)["rows"][0]["rvol_est"]
+    s.pm_hist = {"X": [100_000] * 5}
+    r = s.extended(u.Ctx(), session="pre", now=SUN)["rows"][0]
+    assert (r["rvol"], r["rvol_est"]) == (5.0, False)
+
+
+def test_each_evening_books_the_extended_volume_once_and_a_quiet_name_as_none() -> None:
+    a, b = row("A", pm_vol=4e5, ah_vol=1e5), row("B", pm_vol=9e5, ah_vol=3e5)
+    s = store_with([a, b])
+    s.pm_ref = {"B": [b["pm_h"], b["pm_l"], b["pm_vol"], 1.0, 1.0]}   # B did not trade today
+    s.ah_ref = {"B": [b["ah_c"], b["ah_vol"], 1.0]}
+    s.pm_ref_day = "2026-11-06"
+    s._book_volumes([a, b], "2026-11-09")
+    s._book_volumes([a, b], "2026-11-09")
+    assert s.pm_hist == {"A": [400_000], "B": [0]} and s.ah_hist == {"A": [100_000], "B": [0]}
+    # A restart after tonight's first read: the reference is tonight's, and says nothing.
+    s.pm_ref_day = "2026-11-10"
+    s._book_volumes([b], "2026-11-10")
+    assert s.pm_hist["B"] == [0, 900_000]
+    # The first night after this shipped: the reference on file has no date.
+    s.pm_ref_day, s.vol_day = None, None
+    s._book_volumes([b], "2026-11-12")
+    assert s.pm_hist["B"] == [0, 900_000, 900_000]
+    s.pm_hist = {"A": list(range(30))}
+    s._book_volumes([a], "2026-11-11")
+    assert len(s.pm_hist["A"]) == u.VOL_KEEP and s.pm_hist["A"][-1] == 400_000
+
+
 def test_search_is_exact_then_prefix_then_name_biggest_first() -> None:
     rows = [row("AP", name="Ampco", cap=4e8), row("APP", name="Applovin", cap=1e11),
             row("MSFT", name="Microsoft", cap=3e12), row("ZZ", name="Apple Hospitality", cap=3e9)]
@@ -421,3 +482,39 @@ def test_a_names_sector_comes_from_its_industry(sym: str, industry: str, want: s
     rows, _ = u.parse({"data": [{"s": f"NYSE:{sym}", "d": d}]})
     assert rows[0]["sector"] == want
     assert u.parse({"data": "x"})[1] == "no data array in the reply"
+
+
+def test_the_wide_rows_carry_the_engines_verdict() -> None:
+    rows = [row("UP", pm_chg=12.0, pm_c=110.0, pm_vol=5e5)]
+    said = {"state": "inplay", "score": 6.1, "reason": "gap 1.4 ATR", "mark": None, "at": None}
+    ctx = u.Ctx(verdict=lambda s: said if s == "UP" else None)
+    got = store_with(rows).extended(ctx, session="pre", now=SUN)
+    assert got["rows"][0]["verdict"] == said
+    assert store_with(rows).extended(u.Ctx(), session="pre", now=SUN)["rows"][0]["verdict"] is None
+
+
+def test_the_wide_reads_pre_market_stands_in_for_nasdaqs() -> None:
+    mon = date(2026, 11, 9)
+    s = store_with([row("UP", pm_vol=5e5, pm_h=110.0, pm_l=104.0, pm_c=109.0),
+                    row("QUIET", pm_vol=2e5)])
+    # QUIET has not traded this morning: its columns are still Friday's.
+    s.pm_ref = {"QUIET": [99.5, 98.5, 2e5, 99.2, 0.4]}
+
+    def got(at: datetime, sym: str = "UP", day: date = mon) -> float | None:
+        r = s.premarket_of(sym, day, at)
+        return r["volume"] if r else None
+
+    rows = [(at.strftime("%a %H:%M"), got(at)) for at in (
+        et(2026, 11, 9, 4, 14), et(2026, 11, 9, 4, 15), et(2026, 11, 9, 9, 29),
+        et(2026, 11, 9, 12, 0), et(2026, 11, 9, 19, 59), et(2026, 11, 9, 20, 15),
+        et(2026, 11, 8, 12, 0))]
+    # when it is asked → the pre-market volume it answers for Monday's row
+    assert rows == [("Mon 04:14", None), ("Mon 04:15", 5e5), ("Mon 09:29", 5e5),
+                    ("Mon 12:00", 5e5), ("Mon 19:59", 5e5), ("Mon 20:15", None),
+                    ("Sun 12:00", None)]
+    # 20:00 to 20:15 ET the scanner's day is Tuesday and the screener's is still Monday.
+    assert got(et(2026, 11, 9, 20, 5), day=date(2026, 11, 10)) is None
+    assert got(et(2026, 11, 9, 8, 0), "QUIET") is None
+    full = s.premarket_of("UP", mon, et(2026, 11, 9, 8, 0))
+    assert full is not None and full["source"] == "screener"
+    assert (full["high"], full["low"], full["last"]) == (110.0, 104.0, 109.0)

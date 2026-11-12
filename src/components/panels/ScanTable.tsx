@@ -1,12 +1,23 @@
 "use client";
 
-import type { RefObject } from "react";
-import type { OptContract, OptionsCtx, ScanRow, Side } from "@/types/scanner";
+import type { OptContract, OptionsCtx, ScanRow, ScanSession, Side } from "@/types/scanner";
 import { Tick } from "@/components/ui/Tick";
 import { HelmInline } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { levelGlyph, setupLabel, sideHue } from "@/components/panels/ScanDetail";
-import { CatalystCell, GroupHead, RangeCell, Spark, VolCell, gapOf, pctText } from "@/components/panels/ScanWide";
+import {
+  CatalystCell,
+  Head,
+  RangeCell,
+  RvolBar,
+  ScoreBar as ScoreTier,
+  Spark,
+  TickerCell,
+  VolPct,
+  gapOf,
+  pctText,
+  rowTags,
+} from "@/components/panels/ScanWide";
 import { compact, dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { useOptionsPrefs } from "@/lib/optionsPrefs";
@@ -28,8 +39,18 @@ import { togglePin } from "@/lib/ticker";
  * puts at risk.
  *
  * OVERVIEW IS THE ONE IT OPENS ON (owner, 2026-11-09: "i like how it is a bit more
- * streamlined"): the name, the score, the setup, the story, the move, the two ranges
- * in words, the day's line and the volume. Ranked keeps every column the Pine has.
+ * streamlined"), in the screenshots' order since 2026-11-10: the name with its tags,
+ * the story, the move, the two ranges in words, the day's line, the volume, then the
+ * setup and the score the list is ranked on. Ranked keeps every column the Pine has.
+ *
+ * IMPLIED AGAINST REALISED IS ON THE OPTIONS COLUMNS ALONE (owner, 2026-11-11: "is iv
+ * vs realised column worth having as a column?"). Overview closed on it and Ranked
+ * carried it as "Options". Measured that morning it read the market's last month and
+ * the report date, not the name: 30 of 40 rows said "cheap", SPY, QQQ and IWM among
+ * them, where three weeks before most said "rich"; and it sets a 30-day figure against
+ * a contract that runs zero to two days. Only the two cells went. The figure is
+ * computed as before, still settles long against spread when R cannot
+ * (optcalc.structure_pick), and shows on the Options columns and in the slide-out.
  *
  * THE TICKER STAYS PUT. Rank and ticker are pinned to the left edge, so on a
  * narrow screen the table scrolls sideways under them rather than losing which
@@ -39,6 +60,7 @@ import { togglePin } from "@/lib/ticker";
 export type ColSet = "overview" | "ranked" | "options";
 export type SortKey = "score" | "rs" | "rvol" | "chg" | "gap" | "ext" | "vol" | "trend" | "ivrv" | "em";
 type Bench = "SPY" | "QQQ";
+type Session = ScanSession;
 
 /* -------------------------------------------------------------------------- */
 
@@ -51,80 +73,106 @@ export function ScanTable({
   now,
   selected,
   onPick,
-  onStep,
-  tbody,
   budget,
   pinned,
   onPinned,
+  session,
 }: {
   rows: ScanRow[];
   cols: ColSet;
   bench: Bench;
+  /** The scanner's session, for what a column means before the bell and after it. */
+  session: Session;
   sort: SortKey;
   onSort: (k: SortKey) => void;
   now: number | null;
   selected: string | null;
   onPick: (sym: string) => void;
-  onStep: (sym: string, delta: number) => void;
-  tbody: RefObject<HTMLTableSectionElement | null>;
   budget: number | null;
   /** The owner's list, for each row's star. */
   pinned: ReadonlySet<string>;
   onPinned: () => void;
 }) {
   const th = { cur: sort, onSort };
+  // Before the bell (and overnight) the regular change is the last session's own, and no
+  // time-of-day volume exists yet: two columns say what they hold instead.
+  const before = session === "pre" || session === "closed";
   return (
-    <table className="w-full min-w-[1280px] border-separate border-spacing-0 text-left">
+    <table className="w-full min-w-[1340px] border-separate border-spacing-0 text-left">
+      {/* One row of column names. A band of group names sat over it (News, Move, Levels,
+          Chart, Volume, Setup, Options, each with a coloured rule) until the owner asked
+          for it to go on 2026-11-11; every column still says what it is. */}
       <thead className="sticky top-0 z-20">
-        {cols === "overview" && (
-          <GroupHead
-            groups={[
-              { label: "", span: 2 },
-              { label: "Setup", span: 2 },
-              { label: "Catalyst", span: 1 },
-              { label: "Move", span: 3 },
-              { label: "Levels", span: 2 },
-              { label: "Chart", span: 1 },
-              { label: "Volume", span: 1 },
-              { label: "Options", span: 1 },
-            ]}
-          />
-        )}
         <tr>
-          <Th pin={0} className="w-[34px] text-right">
-            #
-          </Th>
-          <Th pin={34} className="w-[142px]">
-            Ticker
-          </Th>
           {cols === "overview" ? (
             <>
-              <Th k="score" {...th} className="w-[72px]">
-                Score
+              <Th pin={0} className="w-[250px]">
+                <Head label="Ticker" hint="symbol · price" />
               </Th>
-              <Th title="Where the trade is right now, the entry, and today's latest signal">Setup</Th>
-              <Th title="The most important story of the last day, not the newest">Most important story</Th>
-              <Th k="rvol" {...th} right title="Regular-session volume to now against the same time of day on the prior sessions">
-                RVol
+              <Th title="The most important story of the last day, not the newest">
+                <Head label="News" hint="most important first" />
               </Th>
-              <Th k="chg" {...th} right title="Against the previous close; pre or post under it">
-                Chg
+              <Th
+                k="rs"
+                {...th}
+                right
+                title={`Relative strength vs ${bench}: the move since the previous close in this name's own daily ATRs, less ${bench}'s in its own. Up to a quarter of the score, and what the Pine's scanner sorts by.`}
+              >
+                <Head label="RS" hint={`vs ${bench}`} right />
+              </Th>
+              <Th
+                k="rvol"
+                {...th}
+                title={
+                  before
+                    ? "No time-of-day figure exists before the bell, so this is the pre-market's volume as a share of an average day: the figure the pre-open rank reads, from 0.25% to 4%. Relative volume starts at the open."
+                    : "Regular-session volume to now against the same time of day on the ten prior sessions"
+                }
+              >
+                <Head label="RVol" hint={before ? "pre-mkt · % of ADV" : "vs usual"} />
+              </Th>
+              <Th
+                k="chg"
+                {...th}
+                right
+                title={
+                  before
+                    ? "The last regular session's change, as the Pine prints it before the open; under it, where the pre-market or the after-hours stands against that session's close"
+                    : "The regular session against the previous close; after the bell, the after-hours move under it"
+                }
+              >
+                <Head label="Chg" hint={before ? "last session" : "vs prev close"} right />
               </Th>
               <Th k="gap" {...th} right title={GAP_TIP}>
-                Gap
+                <Head label="Gap" hint="open vs prev close" right />
               </Th>
-              <Th>PM range</Th>
-              <Th>PD range</Th>
-              <Th>Today</Th>
-              <Th k="vol" {...th} right>
-                Volume
+              <Th>
+                <Head label="PM range" hint="locks at 09:30" />
               </Th>
-              <Th k="ivrv" {...th} right title="IV30 and whether premium is cheap, fair or rich against 20-day realised">
-                IV
+              <Th>
+                <Head label="PD range" hint="vs PDH / PDL" />
+              </Th>
+              <Th>
+                <Head label="Spark" hint="today" />
+              </Th>
+              <Th k="vol" {...th} title="Today's volume, and its share of an average day">
+                <Head label="Volume" hint="vs ADV" />
+              </Th>
+              <Th title="Where the trade is right now, the entry, and today's latest signal">
+                <Head label="Setup" hint="entry · latest signal" />
+              </Th>
+              <Th k="score" {...th} className="w-[104px]">
+                <Head label="Score" hint="setup, 0–100" />
               </Th>
             </>
           ) : cols === "ranked" ? (
             <>
+              <Th pin={0} className="w-[34px] text-right">
+                #
+              </Th>
+              <Th pin={34} className="w-[142px]">
+                Ticker
+              </Th>
               <Th k="score" {...th} className="w-[72px]">
                 Score
               </Th>
@@ -171,13 +219,16 @@ export function ScanTable({
               <Th center title="▲ above · ▼ below the 200 EMA on ten-minute bars — the side filter: longs above it, shorts below, a retest into it tends to fail">
                 200
               </Th>
-              <Th k="ivrv" {...th} right title="Implied volatility against 20-day realised: whether premium is cheap, fair or rich">
-                Options
-              </Th>
               <Th>Catalysts</Th>
             </>
           ) : (
             <>
+              <Th pin={0} className="w-[34px] text-right">
+                #
+              </Th>
+              <Th pin={34} className="w-[142px]">
+                Ticker
+              </Th>
               <Th k="score" {...th} className="w-[72px]">
                 Score
               </Th>
@@ -218,7 +269,7 @@ export function ScanTable({
           )}
         </tr>
       </thead>
-      <tbody ref={tbody}>
+      <tbody>
         {rows.map((r, i) => (
           <Row
             key={r.sym}
@@ -226,13 +277,13 @@ export function ScanTable({
             rank={i + 1}
             cols={cols}
             bench={bench}
+            session={session}
             now={now}
             on={selected === r.sym}
             budget={budget}
             pinned={pinned.has(r.sym)}
             onPinned={onPinned}
             onPick={() => onPick(r.sym)}
-            onStep={(d) => onStep(r.sym, d)}
           />
         ))}
       </tbody>
@@ -317,25 +368,25 @@ function Row({
   rank,
   cols,
   bench,
+  session,
   now,
   on,
   budget,
   pinned,
   onPinned,
   onPick,
-  onStep,
 }: {
   r: ScanRow;
   rank: number;
   cols: ColSet;
   bench: Bench;
+  session: Session;
   now: number | null;
   on: boolean;
   budget: number | null;
   pinned: boolean;
   onPinned: () => void;
   onPick: () => void;
-  onStep: (delta: number) => void;
 }) {
   const side = r.score.side;
   // Pinned cells need their own ground, or the scrolled columns show through.
@@ -387,12 +438,11 @@ function Row({
     tabIndex: 0,
     onClick: onPick,
     onKeyDown: (e: React.KeyboardEvent) => {
+      // Enter on a row that has the focus opens it. The arrows walking the list went
+      // with the other keyboard controls (owner, 2026-11-11).
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         onPick();
-      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        onStep(e.key === "ArrowDown" ? 1 : -1);
       }
     },
     "aria-selected": on,
@@ -414,12 +464,11 @@ function Row({
   }
 
   if (cols === "options") return <OptionsRow r={r} lead={lead} handlers={handlers} budget={budget} />;
-  if (cols === "overview") return <OverviewRow r={r} lead={lead} handlers={handlers} now={now} />;
+  if (cols === "overview") return <OverviewRow r={r} bench={bench} session={session} pinBg={pinBg} pinned={pinned} onPinned={onPinned} handlers={handlers} now={now} />;
 
   const rs = r.rs[bench];
   const entry = r.setup.entry;
   const last = lastSignal(r, now);
-  const o = r.options;
   return (
     <tr {...handlers}>
       {lead}
@@ -461,7 +510,7 @@ function Row({
           // Before the open: Nasdaq's pre-market tally, against a normal day.
           <span
             className="fig text-[12px] text-ink-2"
-            title={`Pre-market volume${r.premkt.pct_adv != null ? ` — ${r.premkt.pct_adv.toFixed(1)}% of the 20-day average day` : ""} (Nasdaq, about fifteen minutes delayed)`}
+            title={`Pre-market volume${r.premkt.pct_adv != null ? ` — ${r.premkt.pct_adv.toFixed(1)}% of the thirty-session average day` : ""} (Nasdaq, about fifteen minutes delayed)`}
           >
             <span className="qt-cap mr-1 text-[9px] text-ink-3">PM</span>
             {compact(r.premkt.volume)}
@@ -513,16 +562,6 @@ function Row({
       <td className={cn(TD, "text-center")}>
         <Trend200 r={r} />
       </td>
-      <td className={cn(TD, "text-right whitespace-nowrap")}>
-        {o && o.ok && o.iv30 != null ? (
-          <span className="fig text-[11.5px]" title={`IV30 ${o.iv30.toFixed(1)}% vs RV20 ${o.rv20?.toFixed(1) ?? "—"}%`}>
-            <span className="text-ink-2">{o.iv30.toFixed(0)}%</span>
-            {o.premium && <span className={cn("qt-cap ml-1.5 text-[9.5px]", premiumHue(o.premium))}>{o.premium}</span>}
-          </span>
-        ) : (
-          <Dash />
-        )}
-      </td>
       <td className={TD}>
         <Catalysts r={r} />
       </td>
@@ -536,43 +575,52 @@ function Row({
 
 function OverviewRow({
   r,
-  lead,
+  bench,
+  session,
+  pinBg,
+  pinned,
+  onPinned,
   handlers,
   now,
 }: {
   r: ScanRow;
-  lead: React.ReactNode;
+  bench: Bench;
+  session: Session;
+  pinBg: string;
+  pinned: boolean;
+  onPinned: () => void;
   handlers: Record<string, unknown>;
   now: number | null;
 }) {
   const L = r.levels;
+  const rs = r.rs[bench];
   const last = lastSignal(r, now);
   const entry = r.setup.entry;
-  const o = r.options;
   const pmState = L.pmh == null || L.pml == null ? null : !L.pm_done ? "forming" : r.last == null ? "inside" : r.last > L.pmh ? "above" : r.last < L.pml ? "below" : "inside";
   const pdState = r.last == null || L.pdh == null || L.pdl == null ? "inside" : r.last > L.pdh ? "above" : r.last < L.pdl ? "below" : "inside";
   const vol = r.volume ?? r.premkt?.volume ?? null;
-  const adv = vol != null && r.adv20 ? (vol / r.adv20) * 100 : null;
+  const adv = vol != null && r.adv ? (vol / r.adv) * 100 : null;
+  const inside = L.day_hi != null && L.day_lo != null && L.pdh != null && L.pdl != null && L.day_hi <= L.pdh && L.day_lo >= L.pdl;
+  const side = r.score.side;
   return (
     <tr {...(handlers as React.HTMLAttributes<HTMLTableRowElement>)}>
-      {lead}
-      <td className={TD}>
-        <ScoreBar v={r.score.total} record={r.record} />
-      </td>
-      <td className={cn(TD, "whitespace-nowrap")}>
-        <p className={cn("text-[12px] leading-[1.3]", setupHue(r))}>{setupLabel(r)}</p>
-        <p className="fig mt-0.5 text-[10.5px] text-ink-3">
-          {entry && (
-            <>
-              {entry.kind === "EMA8" ? "8 EMA" : entry.kind} {num(entry.price)}
-            </>
-          )}
-          {last && (
-            <span className={cn("ml-2", last.fresh && cn("font-semibold", sideHue(last.side)))} title={last.fresh ? "Fired in the last 30 minutes" : "Today's latest signal"}>
-              {last.text}
-            </span>
-          )}
-        </p>
+      <td className={cn(TD, "sticky left-0 z-10 w-[250px]", pinBg)}>
+        <TickerCell
+          sym={r.sym}
+          name={r.name}
+          price={r.last != null ? `$${num(r.last)}` : null}
+          sub={r.sector}
+          tags={rowTags({
+            pd: pdState,
+            pm: pmState,
+            inside,
+            news: r.catalyst != null,
+            stage: r.stage,
+            pool: r.promoted ? `From the pool at ${r.promoted.mark} ET — ${r.promoted.reason}` : null,
+          })}
+          pinned={pinned}
+          onPinned={onPinned}
+        />
       </td>
       <td className={TD}>
         {r.catalyst ? (
@@ -585,10 +633,24 @@ function OverviewRow({
           <span className="text-[12px] text-ink-3">—</span>
         )}
       </td>
-      <td className={cn(TD, "fig text-right text-[12px]", (r.rvol ?? 0) >= 1.5 ? "text-ink" : "text-ink-2")}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</td>
+      <td className={cn(TD, "text-right")}>
+        <Tick
+          value={rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}
+          className={cn("fig text-[12.5px]", rs == null ? "text-ink-3" : rs >= 0.05 ? "up" : rs <= -0.05 ? "down" : "text-ink-2")}
+        />
+      </td>
+      <td className={TD}>
+        <RvolCell r={r} />
+      </td>
       <td className={cn(TD, "fig text-right leading-[1.3]")}>
         <Tick value={pct(r.chg_pct)} className={cn("block text-[12px]", dir(r.chg_pct))} />
-        {r.ext_pct != null && <span className={cn("block text-[10.5px]", dir(r.ext_pct))}>{pctText(r.ext_pct)}</span>}
+        {r.ext_pct != null && (
+          // Which move the second line is: it read as a bare second percentage.
+          <span className="block text-[10.5px] whitespace-nowrap">
+            <span className="qt-cap mr-1 text-[9px] text-ink-3">{session === "pre" ? "pre" : "after"}</span>
+            <span className={dir(r.ext_pct)}>{pctText(r.ext_pct)}</span>
+          </span>
+        )}
       </td>
       <td className={cn(TD, "text-right")}>
         <GapCell r={r} />
@@ -603,17 +665,35 @@ function OverviewRow({
         <Spark pts={r.spark} w={76} />
       </td>
       <td className={TD}>
-        <VolCell vol={vol} adv={adv} />
-      </td>
-      <td className={cn(TD, "text-right whitespace-nowrap")}>
-        {o && o.ok && o.iv30 != null ? (
-          <span className="fig text-[11.5px]" title={`IV30 ${o.iv30.toFixed(1)}% vs RV20 ${o.rv20?.toFixed(1) ?? "—"}%`}>
-            <span className="text-ink-2">{o.iv30.toFixed(0)}%</span>
-            {o.premium && <span className={cn("qt-cap ml-1.5 text-[9.5px]", premiumHue(o.premium))}>{o.premium}</span>}
+        {r.volume == null && vol != null && (
+          <span className="qt-cap mr-1 text-[9px] text-ink-3" title="Pre-market volume: the regular session has not traded yet">
+            PM
           </span>
-        ) : (
-          <Dash />
         )}
+        <VolPct vol={vol} adv={adv} />
+      </td>
+      <td className={cn(TD, "whitespace-nowrap")}>
+        <p className={cn("text-[12px] leading-[1.3]", setupHue(r))}>
+          {side && <span className="mr-1 text-[10px]">{side === "long" ? "▲" : "▼"}</span>}
+          {setupLabel(r)}
+        </p>
+        <p className="fig mt-0.5 text-[10.5px] text-ink-3">
+          {entry && (
+            <span title={`The entry reference, and how far price is from it in ten-minute ATRs (${entry.dist_atr >= 0 ? "+" : ""}${entry.dist_atr.toFixed(2)})`}>
+              {entry.kind === "EMA8" ? "8 EMA" : entry.kind} {num(entry.price)}
+              <span className="mx-1 text-ink-4">·</span>
+              {entryAway(entry.dist_atr)}
+            </span>
+          )}
+          {last && (
+            <span className={cn("ml-2", last.fresh && cn("font-semibold", sideHue(last.side)))} title={last.fresh ? "Fired in the last 30 minutes" : "Today's latest signal"}>
+              {last.text}
+            </span>
+          )}
+        </p>
+      </td>
+      <td className={TD}>
+        <ScoreTier v={r.score.total} title={`${r.score.total} of 100 — a heuristic rank, not a probability${recordTip(r.record)}`} />
       </td>
     </tr>
   );
@@ -948,6 +1028,42 @@ function flagShort(kind: ScanRow["flags"][number]["kind"], text: string): string
   }
 }
 
+/** "2.0 ATR below": where the entry sits from price, in ten-minute ATRs. */
+function entryAway(dist: number): string {
+  const d = Math.abs(dist);
+  if (d < 0.05) return "at it";
+  // `dist` is price less the entry: positive is price above it, so the entry is below.
+  return `${d.toFixed(1)} ATR ${dist > 0 ? "below" : "above"}`;
+}
+
+/**
+ * RELATIVE VOLUME, OR BEFORE THE BELL THE PRE-MARKET'S SHARE OF AN AVERAGE DAY. Volume
+ * by time of day starts at the open, so until then the column was a dash on every row
+ * at the hour the list is read to pick names. The share of an average day already
+ * traded is what the pre-open rank reads (scanscore.in_play: nothing under 0.25%, all
+ * of its points at 4%), and the bar is drawn on that scale.
+ */
+function RvolCell({ r }: { r: ScanRow }) {
+  if (r.rvol != null) return <RvolBar v={r.rvol} />;
+  const p = r.premkt?.pct_adv;
+  if (p == null) return <span className="text-[12px] text-ink-3" title="No volume read yet">—</span>;
+  const hue = p >= 4 ? "text-flip-fig" : p >= 1 ? "text-ink" : "text-ink-2";
+  const src = r.premkt?.source === "screener" ? "TradingView's screener, fifteen minutes behind" : "Nasdaq";
+  return (
+    <div
+      className="min-w-[84px]"
+      title={`Pre-market volume is ${p.toFixed(2)}% of an average day${r.premkt?.volume != null ? ` (${compact(r.premkt.volume)} shares)` : ""}, from ${src}. The pre-open rank reads it from 0.25% to 4%. Relative volume by time of day starts at the open.`}
+    >
+      <p className={cn("fig text-[12.5px] leading-none", hue)}>
+        {p.toFixed(1)}%<span className="qt-cap ml-1 text-[9px] text-ink-3">pre</span>
+      </p>
+      <div className="relative mt-[6px] h-[3px] bg-[var(--qt-track,var(--ring))]">
+        <span className={cn("absolute inset-y-0 left-0", p >= 4 ? "bg-flip-fig" : "bg-ink-3")} style={{ width: `${Math.min(p / 4, 1) * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function setupHue(r: ScanRow): string {
   const s = r.setup.state;
   if (s === "retest") return cn("font-semibold", r.setup.side ? sideHue(r.setup.side) : "text-ink");
@@ -1052,7 +1168,9 @@ export function sortValue(r: ScanRow, k: SortKey, bench: Bench): number | null {
     case "rs":
       return r.rs[bench];
     case "rvol":
-      return r.rvol;
+      // Before the bell the column shows the pre-market's share of an average day, so
+      // it sorts on that. Never both at once: a row has one or the other.
+      return r.rvol ?? r.premkt?.pct_adv ?? null;
     case "chg":
       return r.chg_pct;
     case "gap":
@@ -1060,7 +1178,7 @@ export function sortValue(r: ScanRow, k: SortKey, bench: Bench): number | null {
     case "ext":
       return r.ext_pct;
     case "vol":
-      return r.volume;
+      return r.volume ?? r.premkt?.volume ?? null;
     case "trend":
       return r.trend;
     case "ivrv":

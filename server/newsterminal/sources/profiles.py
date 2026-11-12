@@ -30,11 +30,13 @@ CHART = (
     "?range=5d&interval=5m"
 )
 
-# The three books, same futures contracts the ranges panel segments.
+# The books, same futures contracts the ranges panel segments.
 ASSETS: list[tuple[str, str]] = [
     ("NQ", "NQ=F"),
     ("ES", "ES=F"),
     ("GC", "GC=F"),
+    ("SIL", "SI=F"),
+    ("CL", "CL=F"),
 ]
 
 

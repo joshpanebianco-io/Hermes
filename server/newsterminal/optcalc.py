@@ -77,6 +77,7 @@ from zoneinfo import ZoneInfo
 
 from . import targets
 from .holidays import close_minute, is_trading_day
+from .scan import risk_of
 
 ET = ZoneInfo("America/New_York")
 
@@ -625,8 +626,16 @@ def trade_plan(row: dict[str, Any], side: str) -> tuple[float | None, float | No
         if s.get("kind") not in ("L", "E") or s.get("side") != side:
             continue
         stop, price = _f(s.get("stop")), _f(s.get("price"))
-        if stop is not None and price is not None and sign * (last - stop) > 0:
-            return price, stop, f"the ({s.get('kind')}) signal's stop"
+        if stop is not None and price is not None:
+            # The signal's stop, never nearer than its floor (scan.risk_of): a bar
+            # that closed on its low put the script's stop two cents away, and the
+            # premium "at risk" to that stop read as next to nothing.
+            risk = risk_of(price, stop, s.get("risk_min"))
+            floored = risk > abs(price - stop) + 1e-9
+            stop = price - sign * risk
+            if sign * (last - stop) > 0:
+                how = f"the ({s.get('kind')}) signal's stop"
+                return price, stop, (f"{how}, held to the retest buffer" if floored else how)
         break
     entry = (row.get("setup") or {}).get("entry")
     if isinstance(entry, dict) and atr_b:

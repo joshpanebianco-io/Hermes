@@ -2,6 +2,7 @@
 
 import type { ExpiryState, SessionRange, BriefLadder } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { AssetIcon } from "@/components/ui/AssetIcon";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { num, pct } from "@/lib/format";
@@ -42,7 +43,7 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
  * silently; `prior_day` is worked out by the collector, where the clock is.
  */
 
-const ASSETS = ["NQ", "ES", "GC"];
+const ASSETS = ["NQ", "ES", "GC", "SIL", "CL"];
 
 const HEAD = "fig shrink-0 text-right text-[8.5px] tracking-wide text-ink-3";
 
@@ -75,9 +76,12 @@ export function SessionRanges({
   assets,
   ladders,
   expiry,
+  only,
   ageMin,
   error,
 }: {
+  /** One book, fixed, with no picker: a book's own view on the Futures page. */
+  only?: string;
   assets: Record<string, { last: number | null; sessions: SessionRange[] }>;
   /** The live ladders, for the fuel line under this book's rows (structure.fuel). */
   ladders?: Record<string, BriefLadder | null>;
@@ -86,8 +90,9 @@ export function SessionRanges({
   error?: string | null;
 }) {
   const keys = ASSETS.filter((k) => assets[k]);
-  const [sel, setSel] = usePersisted<string>("ranges.asset", "NQ", oneOf("NQ", "ES", "GC"));
-  const active = assets[sel] ?? assets[keys[0]];
+  const [chosen, setSel] = usePersisted<string>("ranges.asset", "NQ", oneOf(...ASSETS));
+  const sel = only ?? chosen;
+  const active = only ? assets[only] : (assets[sel] ?? assets[keys[0]]);
   const fuel = ladders?.[assets[sel] ? sel : keys[0]]?.fuel ?? null;
   // The four boxes (owner, 2026-10-30). The overnight row is the brief's
   // ladder's and spans the night's boxes, so it is not drawn and does not
@@ -104,7 +109,7 @@ export function SessionRanges({
       error={error}
       bodyClassName="px-0 py-0"
       right={
-        keys.length > 1 && (
+        !only && keys.length > 1 && (
           <div className="seg">
             {keys.map((k) => (
               <button
@@ -113,6 +118,7 @@ export function SessionRanges({
                 onClick={() => setSel(k)}
                 {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
               >
+                <AssetIcon id={k} size={13} className="block shrink-0" />
                 {k}
               </button>
             ))}
@@ -245,7 +251,7 @@ ${where}`}
         )}
       </span>
       <Tick
-        value={num(s.low, 0)}
+        value={num(s.low, s.high < 200 ? 2 : 0)}
         className={cn(
           "fig w-[44px] shrink-0 text-right text-[10px]",
           beyond === "below" ? "text-flip" : "text-ink-3",
@@ -253,7 +259,7 @@ ${where}`}
         )}
       />
       <Tick
-        value={num(s.high, 0)}
+        value={num(s.high, s.high < 200 ? 2 : 0)}
         className={cn(
           "fig w-[44px] shrink-0 text-right text-[10px]",
           beyond === "above" ? "text-flip" : "text-ink-3",
@@ -269,7 +275,7 @@ ${where}`}
         )}
       />
       <span className={cn("fig hidden w-[28px] shrink-0 text-right text-[10px] text-ink-3 sm:block", dim)}>
-        {num(s.range, 0)}
+        {num(s.range, s.high < 200 ? 2 : 0)}
       </span>
     </li>
   );

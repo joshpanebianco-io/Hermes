@@ -35,8 +35,8 @@ def test_headline_direction(title: str, want: str | None) -> None:
 
 def test_catalyst_with_the_side_earns_and_against_it_costs_and_flags() -> None:
     hit = scanscore.catalyst_read("short", None, [_h("Jefferies downgrades X to Hold")], None)
-    # A rating change is notable, not major: 8 of the 12 (catalysts.py).
-    assert hit["pts"] == 8 and hit["against"] is None
+    # A rating change is notable, not major: 12 of the 20 (catalysts.py).
+    assert hit["pts"] == 12 and hit["against"] is None
     assert hit["note"] == ('with the short · Reuters: "Jefferies downgrades X to Hold" '
                            "(2h)")
     miss = scanscore.catalyst_read("long", None, [_h("Jefferies downgrades X to Hold")], None)
@@ -52,10 +52,10 @@ def test_catalyst_with_the_side_earns_and_against_it_costs_and_flags() -> None:
 def test_catalyst_reads_the_report_surprise_and_filings() -> None:
     beat = {"days": -1, "when": "after", "surprise_pct": 3.2}
     r = scanscore.catalyst_read("long", beat, [], None)
-    assert r["pts"] == 12
+    assert r["pts"] == 20
     assert r["note"] == "with the long · reported after the close, EPS +3.2% vs estimate"
     r = scanscore.catalyst_read("short", beat, [], None)
-    assert r["pts"] == -6
+    assert r["pts"] == -10
     # No surprise figure: the report alone carries no direction.
     unknown = {"days": -1, "when": "after", "surprise_pct": None}
     assert scanscore.catalyst_read("long", unknown, [], None)["pts"] == 0

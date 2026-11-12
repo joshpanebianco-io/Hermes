@@ -3,6 +3,7 @@
 import type { Drivers } from "@/types/terminal";
 import { DriverPopover, biasWord, gradeTone, voteTone } from "@/components/vol/DriverBoard";
 import { HelmLoader } from "@/components/ui/HelmLoader";
+import { AssetIcon } from "@/components/ui/AssetIcon";
 import { familiesLine, liveLine, scoreText } from "@/lib/bias";
 import { cn } from "@/lib/cn";
 
@@ -51,6 +52,7 @@ export function DriverStrip({ drivers }: { drivers: Drivers | undefined }) {
                 className="flex min-w-0 flex-col items-start rounded-none px-3 py-2 text-left qt:px-4 qt:py-2.5"
               >
                 <span className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 whitespace-nowrap">
+                  <AssetIcon id={k} size={15} className="block shrink-0 self-center text-ink-2" />
                   <span className="qt-cap text-[10px] text-ink-3">{k}</span>
                   <span className={cn("text-[14px] leading-none font-semibold", voteTone(b.bias))}>
                     {biasWord(b.bias)}
@@ -61,7 +63,7 @@ export function DriverStrip({ drivers }: { drivers: Drivers | undefined }) {
                   <span className={cn("qt-cap text-[10px]", gradeTone(b))}>{b.grade}</span>
                   {b.conflict && <span className="qt-cap text-[10px] text-flip-fig">conflict</span>}
                   {b.regime && (
-                    <span className={cn("qt-cap ml-auto text-[9.5px]", b.regime === "POS" ? "text-call-fig" : "text-put-fig")}>
+                    <span className="qt-cap ml-auto text-[9.5px] text-ink-2" title="The regime says how far a move runs, not which way">
                       {b.regime === "POS" ? "positive γ" : "negative γ"}
                     </span>
                   )}

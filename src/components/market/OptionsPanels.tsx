@@ -53,10 +53,11 @@ function GammaEtfRow({ g }: { g: GammaEtf }) {
         <span className="fig text-[9.5px] text-ink-3">from {g.book}</span>
         {g.regime && (
           <span
-            className={cn("qt-cap ml-auto inline-flex items-center gap-1.5 text-[9.5px]", pos ? "text-call-fig" : "text-put-fig")}
+            // In ink: the regime is not a side (lib/gammaRegime).
+            className="qt-cap ml-auto inline-flex items-center gap-1.5 text-[9.5px] text-ink-2"
             title={REGIME_TIP[g.regime]}
           >
-            <span aria-hidden className={cn("h-[6px] w-[6px]", pos ? "bg-call-fig" : "bg-put-fig")} />
+            <span aria-hidden className="h-[6px] w-[6px] bg-ink-3" />
             {pos ? "Positive" : "Negative"} <span className="normal-case">γ</span>
           </span>
         )}

@@ -2,6 +2,7 @@
 
 import type { VPAssets, BriefLadder } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { AssetIcon } from "@/components/ui/AssetIcon";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tick } from "@/components/ui/Tick";
 import { num } from "@/lib/format";
@@ -32,12 +33,18 @@ import { ProfilePopover } from "@/components/vol/ProfileRead";
  * bars with volume spread across each bar's range. Zones, not ticks.
  */
 
+/** The rows' order on the card: the developing session, the last regular session, the overnight before it. */
+const ROW_ORDER: Record<string, number> = { dev: 0, prev_rth: 1, overnight: 2 };
+
 export function VolumeProfile({
   data,
   ladders,
+  only,
   ageMin,
   error,
 }: {
+  /** One book, fixed, with no picker: a book's own view on the Futures page. */
+  only?: string;
   data: VPAssets;
   /** The live ladders, for yesterday's shape under this book's rows (structure.yesterday). */
   ladders?: Record<string, BriefLadder | null>;
@@ -46,8 +53,9 @@ export function VolumeProfile({
 }) {
   const assets = data?.assets ?? {};
   const keys = Object.keys(assets);
-  const [sel, setSel] = usePersisted<string>("vp.asset", "NQ", oneOf("NQ", "ES", "GC"));
-  const active = assets[sel] ?? assets[keys[0]];
+  const [chosen, setSel] = usePersisted<string>("vp.asset", "NQ", oneOf("NQ", "ES", "GC", "SIL", "CL"));
+  const sel = only ?? chosen;
+  const active = only ? assets[only] : (assets[sel] ?? assets[keys[0]]);
   const yesterday = ladders?.[assets[sel] ? sel : keys[0]]?.yesterday ?? null;
 
   return (
@@ -58,7 +66,7 @@ export function VolumeProfile({
       error={error}
       bodyClassName="px-0 py-0"
       right={
-        keys.length > 1 && (
+        !only && keys.length > 1 && (
           <div className="seg">
             {keys.map((k) => (
               <button
@@ -67,6 +75,7 @@ export function VolumeProfile({
                 onClick={() => setSel(k)}
                 {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
               >
+                <AssetIcon id={k} size={13} className="block shrink-0" />
                 {k}
               </button>
             ))}
@@ -110,9 +119,15 @@ export function VolumeProfile({
             </span>
           </div>
           <ul className="py-0.5">
-            {active.rows.map((r) => (
-              <Row key={r.key} r={r} last={active.last ?? null} />
-            ))}
+            {/* The developing session first, then the last regular session, then the
+                overnight before it (owner, 2026-11-10: "make live at the top, followed by
+                recent rth and then prev overnight"). The collector orders them by which
+                is freshest; the eye wants the one that is still printing on top. */}
+            {[...active.rows]
+              .sort((a, b) => (ROW_ORDER[a.key] ?? 9) - (ROW_ORDER[b.key] ?? 9))
+              .map((r) => (
+                <Row key={r.key} r={r} last={active.last ?? null} />
+              ))}
           </ul>
           {/* YESTERDAY'S SHAPE (structure.yesterday, 2026-10-30): a trend day
               that closed on its low and a range day leave the same value area
@@ -196,15 +211,15 @@ ${r.bars} bars · bin ${r.bin}`}
         )}
       </span>
       <Tick
-        value={num(r.val, 0)}
+        value={num(r.val, (r.poc ?? 1e9) < 200 ? 2 : 0)}
         className="fig w-[56px] shrink-0 text-right text-[10.5px] text-ink-3"
       />
       <Tick
-        value={num(r.poc, 0)}
+        value={num(r.poc, (r.poc ?? 1e9) < 200 ? 2 : 0)}
         className="fig w-[60px] shrink-0 text-right text-[11px] text-ink"
       />
       <Tick
-        value={num(r.vah, 0)}
+        value={num(r.vah, (r.poc ?? 1e9) < 200 ? 2 : 0)}
         className="fig w-[56px] shrink-0 text-right text-[10.5px] text-ink-3"
       />
     </li>

@@ -66,6 +66,61 @@ def test_next_and_previous_skip_holidays_and_weekends() -> None:
     assert holidays.next_trading_day(date(2026, 12, 24)) == date(2026, 12, 28)
 
 
+# --- the bond market, London and Tokyo ---------------------------------------------
+
+
+def test_the_other_tables_still_cover_today() -> None:
+    """Fails the day one of them runs out: SIFMA publishes the next year each December."""
+    today = datetime.now(ET).date()
+    for name, last in holidays.coverage().items():
+        assert today <= date.fromisoformat(last), f"{name} runs out on {last}: read the page again"
+
+
+def test_veterans_day_shuts_the_bonds_and_not_the_stocks() -> None:
+    # Wed 11 Nov 2026: the day the brief quoted Tuesday's +10bp as the day's move.
+    d = date(2026, 11, 11)
+    assert holidays.is_trading_day(d) is True
+    assert holidays.bond_closed(d) == "Veterans Day"
+    (row_,) = holidays.notices(d, d)
+    assert (row_["label"], row_["kind"], row_["score"]) == ("US bond market closed", "closed", 4)
+    assert "Stocks and futures trade as usual" in str(row_["note"])
+    # The day before and the day after, bonds trade: no row at all.
+    assert holidays.notices(date(2026, 11, 10), date(2026, 11, 10)) == []
+    assert holidays.bond_closed(date(2026, 11, 12)) is None
+
+
+def test_one_row_a_market_a_day_and_what_each_says() -> None:
+    by = {(r["date"], r["market"]): r for r in holidays.notices(date(2026, 1, 1), date(2027, 1, 1))}
+    # Thanksgiving: stocks and bonds both, futures to their halt; the half day after it.
+    assert by[("2026-11-26", "us")]["label"] == "US markets closed"
+    assert "13:00 ET halt" in str(by[("2026-11-26", "us")]["note"])
+    assert by[("2026-11-27", "us")]["label"] == "Early close · stocks 13:00, bonds 14:00 ET"
+    # Christmas: Globex is shut too.
+    assert "Globex is shut too" in str(by[("2026-12-25", "us")]["note"])
+    # Good Friday 2026: the NYSE shut, the bond market to noon (SIFMA), London shut.
+    assert by[("2026-04-03", "us")]["label"] == "NYSE closed · bonds to 12:00 ET"
+    assert by[("2026-04-03", "uk")]["label"] == "UK bank holiday"
+    # A bond-only early close, and Columbus Day, which the NYSE trades through.
+    assert by[("2026-05-22", "us")]["label"] == "Bond market closes early, 14:00 ET"
+    assert by[("2026-10-12", "us")]["label"] == "US bond market closed"
+    assert by[("2026-10-12", "japan")]["name"] == "Health and Sports Day"
+    # London's summer bank holiday is London's alone.
+    assert ("2026-08-31", "us") not in by and by[("2026-08-31", "uk")]["region"] == "uk"
+    # In date order, the United States first on a shared day.
+    rows = holidays.notices(date(2026, 12, 24), date(2026, 12, 31))
+    assert [(r["date"], r["market"]) for r in rows] == [
+        ("2026-12-24", "us"), ("2026-12-25", "us"), ("2026-12-25", "uk"), ("2026-12-28", "uk"),
+        ("2026-12-31", "us"), ("2026-12-31", "japan")]
+
+
+def test_past_a_tables_end_it_says_nothing() -> None:
+    # Columbus Day 2027 is a bond holiday in fact; the table stops at 1 Jan 2027, so no row.
+    assert holidays.bond_closed(date(2027, 10, 11)) is None
+    assert [r for r in holidays.notices(date(2027, 10, 11), date(2027, 10, 11))] == []
+    # The NYSE's own table still answers for 2027.
+    assert holidays.notices(date(2027, 11, 25), date(2027, 11, 25))[0]["label"] == "NYSE closed"
+
+
 # --- the session clock -------------------------------------------------------------
 
 

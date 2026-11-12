@@ -1495,16 +1495,16 @@
 @custom-variant qt (&:where(.ui-qt, .ui-qt *));
 
 /*
- * `roomy:` — Quiet, on a window wide enough for the header's full form: all eleven
- * instruments as a label over a price with the move beside it, the clock on one
- * line, "Live" and "Refresh" in words (owner, 2026-11-06: "in our full screen on our
- * pc, the header should be the way it was before", on a 2560 monitor). All eleven
- * need about 1,233px in that form, which the band has from about 2,546px wide with
- * the Dashboard's tab on the bar, and below this the header goes compact rather than
- * start losing figures. After `qt`, because a later variant wins over an earlier one.
+ * `roomy:` — Quiet, on a window wide enough for the header's full form: the clock
+ * and the New York countdown on one line, "Live" and "Refresh" in words (owner,
+ * 2026-11-06: "in our full screen on our pc, the header should be the way it was
+ * before"). It was 2,550px while eleven prices shared the band; with them gone
+ * (2026-11-10) the lockup, the centred tabs and the one-line clock need about 1,700,
+ * so the owner's 1920 screens get the full form too. After `qt`, because a later
+ * variant wins over an earlier one.
  */
 @custom-variant roomy {
-  @media (min-width: 2550px) {
+  @media (min-width: 1700px) {
     &:where(.ui-qt, .ui-qt *) {
       @slot;
     }
@@ -1512,23 +1512,32 @@
 }
 
 .ui-qt {
-  --void: #0b0c0e;
-  --bg: #0b0c0e;
-  --surface: #0e0f12;
-  --surface-2: #16181c;
-  --surface-3: #1e2127;
-  --ring: #1c1f24;
-  --ring-2: #2a2e35;
-  --grid: #262a31;
-  --ink: #eceef1; /* 16.8:1 on --bg */
-  --ink-2: #aab0b9; /*  9.0:1 */
-  --ink-3: #7d848f; /*  5.2:1 — body copy clears AA */
-  --ink-4: #656b75; /*  3.6:1 — decoration only, as everywhere */
+  /*
+   * THE GROUND, A SHADE LIGHTER (owner, 2026-11-11: "for the quiet terminal theme can
+   * we make the background throughout the entire app very slightly lighter than it's
+   * current shade"). It was #0b0c0e, L* 3.3; it is #101114, L* 5.1. The whole ramp
+   * moved with it by about the same step (the surfaces, the hairlines, the grid, the
+   * bar track), so a hovered row and a rule stand off the ground exactly as they
+   * did, and the inks did not move: every figure below still clears what it cleared,
+   * --ink-3 on a hovered row (--surface-2) included, at 4.6:1.
+   */
+  --void: #101114;
+  --bg: #101114;
+  --surface: #131418;
+  --surface-2: #191b20;
+  --surface-3: #21242b;
+  --ring: #202328;
+  --ring-2: #2e3239;
+  --grid: #2a2e35;
+  --ink: #eceef1; /* 16.2:1 on --bg */
+  --ink-2: #aab0b9; /*  8.6:1 */
+  --ink-3: #7d848f; /*  5.0:1 — body copy clears AA */
+  --ink-4: #656b75; /*  3.5:1 — decoration only, as everywhere */
   --font-sans: var(--font-plex), "Segoe UI", system-ui, sans-serif;
   --font-cond: var(--font-plex-cond), "Arial Narrow", "Segoe UI", sans-serif;
   --font-mono: var(--font-plex-mono), "Cascadia Mono", Consolas, monospace;
   /* The terminal's own greys: bar tracks and faint markers. */
-  --qt-track: #17191d;
+  --qt-track: #1b1d21;
   --qt-faint: #50565f;
   /*
    * The wire's six desks, DULLED — GEXYGEN's `--qt-desk-*` values. A desk rail
@@ -1905,4 +1914,1121 @@
   .ui-qt .generate[data-busy] .generate-spark {
     animation: none;
   }
+}
+
+/*
+ * ===========================================================================
+ * LUMINOUS GLASS — the second interface (owner, 2026-11-10: "can we add a theme
+ * similar to the other gexygen one that has the glass looking cards").
+ *
+ * GEXYGEN's Luminous, carried across the way Quiet was: by copying its tokens
+ * (the blue-black chrome, its ink ramp, Saira + Saira Condensed + JetBrains
+ * Mono, the lit glass fill) into a class of its own, never by linkage. (The
+ * text left Saira for the system's sans on 2026-11-11: the banner block at the
+ * end of this file.)
+ *
+ * IT RIDES ON QUIET. `<html>` wears `ui-qt ui-lum` (lib/ui.ts), so every page
+ * keeps Quiet's layout, strips and type scale, and this block only
+ * repaints the chassis: the ground gets a deep blue-black with a faint wash of
+ * the two chrome hues; a module becomes a card of lit glass — GEXYGEN's
+ * `--lum-glass`, a top edge fading into the surface — with air between cards
+ * where Quiet draws hairlines; controls round off. THE DATA PALETTE IS
+ * UNTOUCHED: calls, puts, flip and spot keep their hexes, and the presets still
+ * retint them. Unlayered where Quiet's rules are, so it beats them.
+ * ===========================================================================
+ */
+
+/* `lum:` — a Tailwind variant that applies only inside Luminous Glass. */
+@custom-variant lum (&:where(.ui-lum, .ui-lum *));
+
+.ui-lum {
+  --void: #04060a;
+  --bg: #06090e;
+  --surface: #0a0e15;
+  --surface-2: #0f141d;
+  --surface-3: #1a2231;
+  --ring: #161d29;
+  --ring-2: #243044;
+  --grid: #222a39;
+  --ink: #eef2f8; /* 17.1:1 on --surface */
+  --ink-2: #b0b8c6; /*  9.6:1 */
+  --ink-3: #7d879a; /*  5.3:1 — body copy clears AA */
+  --ink-4: #66718a; /*  3.9:1 — decoration only, as everywhere */
+  /* A plain modern sans, the system's own (Segoe UI Variable on Windows 11), where
+     GEXYGEN's Saira was until 2026-11-11: the owner chose it from a picture of the
+     page in each (the banner at the end of this file). The figures keep JetBrains Mono. */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "Inter", system-ui, sans-serif;
+  --font-cond: "Segoe UI Variable Small", "Segoe UI Variable", "Segoe UI", "Inter", system-ui, sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --qt-track: #151c28;
+  --qt-faint: #56627a;
+  /* The desks a step brighter than Quiet's on the darker ground; still off the data hues. */
+  --desk-markets: #6f9fd0;
+  --desk-corp: #8a93a5;
+  --desk-macro: #9d8fe0;
+  --desk-policy: #b3a27c;
+  --desk-geo: #c07a6f;
+  --desk-energy: #6a9f96;
+  /*
+   * THE GLASS. GEXYGEN's own card fill is #0e131c fading to #0a0e15, which on its
+   * pages reads as glass because they are a few cards floating on the ground. Here
+   * the pages are dense, and at that strength the cards read as the terminal's
+   * panels (owner, 2026-11-10: "still looks like it has terminal bits throughout it,
+   * instead of separate glass cards"), so the fill is a step lighter — a white wash
+   * over the surface, blurred — with a brighter ring and more air around each card.
+   */
+  /*
+   * ONE FLAT TONE, NOT A GRADIENT (owner, 2026-11-10: "theres still black/dark sticking
+   * out on dashboard etc"). Sticky headers, frozen columns, bands and inputs paint
+   * themselves opaque so rows scroll under them; on a gradient card no opaque colour
+   * matches, so every one of them showed as a patch. Flat, they take the card's own
+   * tone and vanish into it. The lit top edge is the inset highlight below.
+   */
+  --lum-glass: #121822;
+  --lum-tile: rgba(255, 255, 255, 0.03);
+  --lum-ring: rgba(255, 255, 255, 0.09);
+  --lum-ring-2: rgba(255, 255, 255, 0.16);
+  --lum-edge: rgba(255, 255, 255, 0.08);
+  --lum-shadow: 0 18px 40px -26px rgba(0, 0, 0, 0.9);
+  /* The short rule that parts two figures sharing a card (a stat row's cells): an image,
+     drawn at a cell's right edge, so it can stop short of the card's top and bottom. */
+  --lum-part: linear-gradient(rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.11));
+  /*
+   * THE ONE GAP: between every card, and from the cards to the window's edge. 12px
+   * until 2026-11-11 (owner: "do you think there is slightly too much space between
+   * the cards etc?", then yes to 8 from a full-size flip of the two). A page that sets
+   * its own gap follows this token under Luminous (`lum:gap-[var(--lum-gap)]`), never
+   * a number of its own, or it is the one page that did not move.
+   */
+  --lum-gap: 8px;
+}
+
+/* The ground: deep, a faint dot field (GEXYGEN's lum-field) and the two chrome hues
+   washed into the top corners, so the glass has something to sit over. (Repainted by
+   the banner block at the end of this file since 2026-11-11: light, no dots.) */
+.ui-lum .app-frame {
+  background:
+    radial-gradient(rgba(170, 190, 220, 0.05) 1px, transparent 1.3px) 0 0 / 24px 24px,
+    radial-gradient(1100px 540px at 14% -12%, color-mix(in oklab, var(--frame-a) 9%, transparent), transparent 62%),
+    radial-gradient(900px 480px at 90% -6%, color-mix(in oklab, var(--frame-b) 8%, transparent), transparent 62%),
+    var(--bg);
+}
+
+/*
+ * EVERYTHING IS A CARD, AND NOTHING TOUCHES. The band, the crawl, every module, the
+ * stat tiles, the chip bars, the tables and the status rail each float on the ground
+ * with --lum-gap between them: the same glass recipe on all of them, so the page
+ * reads as instruments laid on a desk rather than one terminal screen ruled into
+ * panels. The hooks (qt-mast, qt-stats, qt-stat, qt-bar, qt-sheet, qt-tiles,
+ * qt-card, qt-frame, qt-crawl) are class names only; Quiet gives them no paint.
+ */
+.ui-lum .app-frame > header {
+  margin: var(--lum-gap) var(--lum-gap) 0;
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 var(--lum-edge), 0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.ui-lum .app-frame > footer {
+  margin: 0 var(--lum-gap) var(--lum-gap);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+}
+.ui-lum .qt-crawl {
+  margin: var(--lum-gap) var(--lum-gap) 0;
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+  overflow: hidden;
+}
+
+/* A module is a card again: lit glass, a bright hairline, a soft drop, rounded.
+   `qt-wait` is a page that has not answered yet (ui/HelmLoader PageLoader, PageNote):
+   a card in the room the page will fill, so a load is never the header and the status
+   rail with bare ground between them (owner, 2026-11-11: "it should have have card in
+   the middle, right now it's empty … and looks weird"). */
+.ui-lum .module,
+.ui-lum .qt-card,
+.ui-lum .qt-sheet,
+.ui-lum .qt-mast,
+.ui-lum .qt-bar,
+.ui-lum .qt-wait {
+  background: var(--lum-glass);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+  backdrop-filter: blur(10px);
+}
+.ui-lum .module {
+  padding: 0 14px 12px;
+}
+.ui-lum .module-head {
+  padding: 12px 14px 6px;
+}
+/* Card titles at GEXYGEN's LumCard size. */
+.ui-lum .module-title {
+  font-size: 14.5px;
+  letter-spacing: 0.01em;
+}
+
+/* The framed page body goes transparent; what it holds becomes the cards. */
+.ui-lum .qt-frame {
+  margin: var(--lum-gap);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+/*
+ * INSIDE A FRAME THE FRAME'S MARGIN IS THE ONLY INSET (the 2026-11-10 sweep: a board's
+ * own 12px padding on top of it put the Futures and Index cards 25px in from the edge
+ * the band above them sits 13px from, and 24px below the stat tiles). Boards, stacks
+ * and tile grids lose their padding; the tile grid keeps its gap to what follows.
+ */
+.ui-lum .qt-frame .qt-board,
+.ui-lum .qt-frame .qt-stack {
+  padding: 0;
+}
+.ui-lum .qt-frame .qt-tiles {
+  padding: 0 0 var(--lum-gap);
+}
+/* The band over a page, and a bar of chips or filters: a card each. */
+.ui-lum .qt-mast {
+  margin: var(--lum-gap) var(--lum-gap) 0;
+}
+.ui-lum .qt-bar {
+  margin: 0 0 var(--lum-gap);
+  /*
+   * A BAR'S MENUS OPEN OVER THE TABLE UNDER IT (owner, 2026-11-11: "column overview in
+   * scanner setups gets clipped"). The bar and the table are each a stacking context
+   * here (the glass's backdrop-filter), and two of those side by side paint in
+   * document order: a menu's panel lives inside the bar's, so the table painted over
+   * it however high the panel's own z-index. The Columns and Filters menus on Setups,
+   * Breakouts, Extended hours and Day 2/3 opened and could not be seen; under Quiet,
+   * with no such contexts, they always could. So the bar is lifted, and its menus with
+   * it: over a table's frozen cells (z 30 at most) and under the slide-out (z 40).
+   */
+  position: relative;
+  z-index: 35;
+}
+/*
+ * A table or scroll area: a card that keeps its own scroll. ONE FLAT GLASS TONE, not
+ * the gradient: a sticky header row and the frozen ticker column paint themselves in
+ * --bg so the rows scroll under them, and on a gradient card that is a dark slab
+ * (owner, 2026-11-10: "the darker parts on the scanner where the list of stocks are
+ * looks a bit out of place"). The sheet is the one tone, and they take it, so the
+ * frozen cells are invisible until a row scrolls beneath them.
+ */
+.ui-lum {
+  --lum-sheet: #121822;
+  --lum-sheet-hover: #182030;
+  --lum-sheet-on: #1c2535;
+}
+.ui-lum .qt-sheet {
+  overflow: auto;
+}
+/*
+ * THE SWEEP. Everywhere a pane paints the ground or a surface token — a sticky
+ * header row (TH), a frozen ticker cell, the Wire's chip row, the Calendar's day
+ * bands, the Board's bands, an input, the slide-out — it takes the
+ * card's tone instead, so nothing inside a card is darker than the card. Selected
+ * and hovered rows step UP from it, where Quiet's surfaces stepped down. Unlayered,
+ * so the utilities lose; the Tailwind variant classes are matched by their escaped
+ * names and the alpha variants by their class text.
+ */
+.ui-lum .bg-bg,
+.ui-lum .bg-surface,
+.ui-lum .qt\:bg-bg,
+.ui-lum .qt-band.qt-sticky {
+  background-color: var(--lum-sheet);
+}
+.ui-lum .hit:hover,
+.ui-lum .hover\:bg-surface:hover,
+.ui-lum .group:hover > .group-hover\:bg-surface {
+  background-color: var(--lum-sheet-hover);
+}
+.ui-lum .bg-surface-2,
+.ui-lum .hover\:bg-surface-2:hover,
+.ui-lum .focus-visible\:bg-surface-2:focus-visible,
+.ui-lum .group:hover > .bg-surface-2 {
+  background-color: var(--lum-sheet-on);
+}
+/*
+ * A WHOLE CLASS, NOT A PIECE OF ONE. Matched anywhere in the class text these also
+ * caught "hover:bg-surface-2/70", so a figure that only tints under the pointer wore
+ * the tint all the time: the VIX tile sat in a box beside its bare neighbours on
+ * every masthead and on the Dashboard's price row (design review, 2026-11-11). The
+ * utility itself starts the attribute or follows a space; a variant's follows its
+ * colon, and `.hit:hover` above already lights those under the pointer.
+ */
+.ui-lum [class^="bg-surface-2/"],
+.ui-lum [class*=" bg-surface-2/"],
+.ui-lum [class^="bg-surface-3/"],
+.ui-lum [class*=" bg-surface-3/"] {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+.ui-lum [class^="bg-void/"],
+.ui-lum [class*=" bg-void/"] {
+  background-color: rgba(0, 0, 0, 0.22);
+}
+/*
+ * A block that opens between a page's band and its body — the Watchlist editor, the
+ * "Scanner unavailable" line — is a card in the same column, not a tinted strip lying
+ * on the ground (2026-11-11). `qt-slab` is the shape; the editor takes the cards' tone,
+ * the warning keeps its own tint. Here, after the alpha remaps above, whose wash the
+ * editor's `bg-surface-2/40` would otherwise take.
+ */
+.ui-lum .qt-slab {
+  margin: var(--lum-gap) var(--lum-gap) 0;
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+}
+.ui-lum .qt-editor {
+  background: var(--lum-glass);
+}
+/* A label that cuts a tile's top border (Day 2/3's "Day stage") takes the tile's tone. */
+.ui-lum .qt-stats .bg-bg {
+  background-color: #0d121a;
+}
+/*
+ * A STAT ROW IS ONE CARD, ITS FIGURES PARTED BY A SHORT RULE (owner, 2026-11-11, on the
+ * Setups row of six tiles: "those cards, with all those gaps, dont you think it looks a
+ * bit odd and off? maybe it should be one whole card along there", then "make ssure its
+ * consistent throughout the whole app"). Each figure was a tile of its own with air
+ * between: the one row on the page cut into pieces, while the header, the band and the
+ * table were a card each, and its gaps lined up with nothing in the table below. Day
+ * 2/3 and Extended hours already drew the row as one bar. So every `qt-stats` is the
+ * card, a `qt-stat` in it is a flat cell, and two cells are parted by `--lum-part`, the
+ * short rule a strip of quotes uses between its groups. The Index view's band
+ * (`qt-strip`) and the Sectors tally (`qt-tally`) are drawn the same way, below. The
+ * Futures overview's five books stay cards: each is a page's worth of one contract and
+ * opens it, where a stat row is one summary.
+ */
+.ui-lum .qt-stats {
+  margin: 0 0 var(--lum-gap);
+  padding: 0;
+  background: var(--lum-glass);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+  backdrop-filter: blur(10px);
+}
+/* Cells: flush, and clipped to the card's corners (a cell that is a button lights on hover). */
+.ui-lum .qt-stats:has(.qt-stat) {
+  gap: 0;
+  overflow: hidden;
+}
+.ui-lum .qt-stats-row {
+  gap: 0;
+}
+/* A stat row that is words, not cells (Extended hours' session line, Day 2/3's counts)
+   keeps its own air inside the card. */
+.ui-lum .qt-stats:not(:has(.qt-stat)) {
+  gap: var(--lum-gap);
+  padding: 7px 16px;
+}
+.ui-lum .qt-stat {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+/* Longhands, so a cell that lights on hover keeps its own background colour. */
+.ui-lum .qt-stat:not(:last-child),
+.ui-lum .qt-part {
+  background-image: var(--lum-part);
+  background-position: right center;
+  background-size: 1px 56%;
+  background-repeat: no-repeat;
+}
+/* Inside a clipped card a focus ring drawn outside its cell would be cut: draw it inside. */
+.ui-lum .qt-stats .qt-stat:focus-visible {
+  outline-offset: -3px;
+  border-radius: 10px;
+}
+/* A grid of tiles that Quiet rules with 1px gaps: cards with air. */
+.ui-lum .qt-tiles {
+  gap: var(--lum-gap);
+  padding: var(--lum-gap) var(--lum-gap) 0;
+  background: transparent;
+  border-bottom: 0;
+}
+.ui-lum .qt-tiles > * {
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+}
+/*
+ * The Index view's band (market/MarketStrip) is one card like every other page's stat
+ * row, loaded or not (it was five tiles for a day, 2026-11-11, when the stat rows were
+ * tiles). The cells are a `qt-tiles` grid inside it: flat, parted by the short rule.
+ */
+.ui-lum .qt-strip {
+  margin: 0 0 var(--lum-gap);
+  background: var(--lum-glass);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+  overflow: hidden;
+}
+.ui-lum .qt-frame .qt-strip .qt-tiles {
+  gap: 0;
+  padding: 0;
+}
+.ui-lum .qt-strip .qt-tiles > * {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.ui-lum .qt-strip .qt-tiles > *:not(:last-child) {
+  background-image: var(--lum-part);
+  background-position: right center;
+  background-size: 1px 56%;
+  background-repeat: no-repeat;
+}
+/*
+ * A tally strip inside a page card (Sectors' advancing / declining) is one strip in the
+ * tile tone, its two counts parted by the short rule, as the stat rows are. It was a
+ * hairline box split by a full rule (owner, 2026-11-10: "looks like it's leftover from
+ * the other theme"), then two tiles with air between until the stat rows became one
+ * card and it was the last pair left.
+ */
+.ui-lum .qt-tally {
+  gap: 0;
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-tile);
+  overflow: hidden;
+}
+.ui-lum .qt-tally > * {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.ui-lum .qt-tally > *:not(:last-child) {
+  background-image: var(--lum-part);
+  background-position: right center;
+  background-size: 1px 56%;
+  background-repeat: no-repeat;
+}
+/* The slide-out's detail column keeps the one gap the rest of the page uses. */
+.ui-lum .qt-detail {
+  gap: var(--lum-gap);
+  padding: var(--lum-gap);
+}
+/* The slide-out floats as a card too, instead of a sheet welded to the frame's edge. */
+.ui-lum .qt-drawer {
+  margin: var(--lum-gap);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 var(--lum-edge), -18px 0 60px rgba(0, 0, 0, 0.5);
+}
+/* Hermes AI: the chats rail and the conversation are two cards with air between
+   (owner, 2026-11-10: "similar work needed on hermes ai tab too"). The rail's
+   hairline and the conversation's bare ground were Quiet's. */
+.ui-lum .qt-hermes {
+  padding: var(--lum-gap);
+  gap: var(--lum-gap);
+}
+.ui-lum .qt-hermes > .qt-card {
+  overflow: hidden;
+}
+
+/* Air between cards, where Quiet draws hairlines. */
+.ui-lum .qt-board {
+  gap: var(--lum-gap);
+  padding: var(--lum-gap);
+  /* A board takes the room its page has left, so no ground shows under it. */
+  flex-grow: 1;
+}
+.ui-lum .qt-col {
+  gap: var(--lum-gap);
+}
+/*
+ * CARDS REACH THE BOTTOM (owner, 2026-11-10: "make sure the cards extend all the way
+ * to the bottom … look at futures nq"). Quiet's columns end where their content ends,
+ * which on hairlines is invisible and on glass is a strip of bare ground under the
+ * last card — on a 1440-tall screen the NQ news card stopped a third of the way up its
+ * column. The last card in a column takes whatever room the column has left; a
+ * column whose cards overrun it still scrolls as before.
+ */
+.ui-lum .qt-col > :last-child {
+  flex-grow: 1;
+}
+.ui-lum .qt-col > * + * {
+  border-top: 0;
+}
+@media (min-width: 80rem) {
+  .ui-lum .qt-board > * + * {
+    border-left: 0;
+  }
+}
+.ui-lum .qt-stack {
+  gap: var(--lum-gap);
+  padding: var(--lum-gap);
+}
+.ui-lum .qt-stack > * + * {
+  border-top: 0;
+}
+
+/* Rounded controls: chips and pills come back, the way Luminous draws them. */
+.ui-lum .module :is(.rounded, .rounded-sm, .rounded-md, .rounded-lg) {
+  border-radius: 6px;
+}
+.ui-lum .module .rounded-full:not(.qt-keep-round),
+.ui-lum .app-frame > header .rounded-full:not(.qt-keep-round),
+.ui-lum footer .rounded-full:not(.qt-keep-round) {
+  border-radius: 999px;
+}
+.ui-lum .seg {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--lum-ring-2);
+  border-radius: 8px;
+  padding: 2px;
+}
+.ui-lum .seg-item {
+  border-radius: 6px;
+}
+.ui-lum .seg-item[data-on] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.06));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+.ui-lum .tip {
+  background: rgba(15, 20, 29, 0.92);
+  backdrop-filter: blur(8px);
+  border-radius: 8px;
+}
+
+/* GEXYGEN's Luminous caps metrics, set for Saira (a touch smaller than Plex at a size).
+   The size holds for the system sans that replaced it on 2026-11-11; the banner block
+   below narrows the tracking for it. */
+.ui-lum .qt-cap,
+.ui-lum .eyebrow {
+  font-size: 11.5px;
+  letter-spacing: 0.09em;
+}
+
+/*
+ * ====================== LUMINOUS, TURNED UP (2026-11-11) ==============================
+ * Owner: "i want it to look as modern and sleek and intuitive as possible to use and
+ * view", and of a first pass of small polish: "the before and after barely look
+ * different lol? what did you even do?". So this changes what the eye meets first, and
+ * nothing about where anything is:
+ *
+ *   - a plain modern sans (the system's Segoe UI Variable) where Saira was, the figures
+ *     still in JetBrains Mono (the two font lines are in the .ui-lum token block above);
+ *   - everything 10% larger on a wide window (the 2560 screen), by `zoom` on the frame,
+ *     with the charts set back to 1:1 so their canvases stay sharp and a crosshair sits
+ *     under the pointer;
+ *   - the two chrome hues as a soft light on the ground, around the cards and between
+ *     them, and rounder cards with a quieter ring (the header, the band under it, the
+ *     status rail and the stat tiles were see-through at first; the owner did not like
+ *     the gradient that made of the header, so every card is the one flat tone);
+ *   - tabs, view switches and chips as pills, the chosen one lit in the first chrome hue;
+ *   - fewer lines: a chip bar sits on the table it filters as one card, row tags lose
+ *     their outlines, the pinned star rests grey, the rules between rows are fainter,
+ *     and a list that runs on fades out instead of cutting a row in half.
+ *
+ * Every rule is under .ui-lum, and Quiet is untouched. TO GO BACK: delete
+ * from this banner to the end of the file, put Saira back on the two font lines of
+ * the .ui-lum token block, and put its two loaders back in app/layout.tsx (both files
+ * as they stood are in .git\bolder-look-2026-11-11\). The hooks in the components
+ * (`qt-chart`, `qt-pop`, the chart's font size) read a scale of 1 when this block is
+ * gone, so they can stay.
+ */
+
+/* ---- size --------------------------------------------------------------------------
+ * `zoom`, NOT A BIGGER FONT SIZE: the type here is set in pixels in a thousand places,
+ * and zoom scales text, spacing and hairlines together exactly as the browser's own
+ * Ctrl-plus does. ON THE FRAME, so everything inside it is in one scale (a popover
+ * placed from a figure's rect, a menu, the slide-out). ONLY ON A WIDE WINDOW: at 1920
+ * the pages are already sized to fit, and ten per cent more would be the cramped form
+ * the owner does not want there. Three things are outside the frame's scale on purpose:
+ *   .qt-chart   the chart's own area, set back to 1:1 (a canvas drawn at 1.1 is soft,
+ *               and Lightweight Charts reads the pointer in real pixels);
+ *   .qt-pop     a Popover's panel, which React puts on <body>: scaled here, and placed
+ *               by ui/Popover.tsx in its own zoomed pixels;
+ *   .tip        the tooltip, also on <body>: a larger font, no zoom, so its placement
+ *               from the pointer needs no correction.
+ */
+.ui-lum {
+  --ui-zoom: 1;
+  --ui-unzoom: 1;
+}
+@media (min-width: 2200px) {
+  .ui-lum {
+    --ui-zoom: 1.1;
+    --ui-unzoom: 0.909091;
+  }
+}
+.ui-lum .app-frame,
+.ui-lum .qt-pop {
+  zoom: var(--ui-zoom);
+}
+.ui-lum .qt-chart {
+  zoom: var(--ui-unzoom);
+}
+.ui-lum .tip {
+  font-size: calc(11px * var(--ui-zoom));
+}
+.ui-lum .qt-cap {
+  letter-spacing: 0.06em;
+}
+
+/* ---- the light behind the glass ------------------------------------------------------
+ * The two chrome hues (Settings → Chrome), stronger than the faint washes they were,
+ * and a cool one rising from the foot of the page. The dot field goes: with light
+ * behind it the glass needs no texture. */
+.ui-lum {
+  --lum-ring: rgba(255, 255, 255, 0.07);
+  --lum-edge: rgba(255, 255, 255, 0.1);
+  --lum-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.95);
+  /* The lit state of a tab, a view or a chip: the first chrome hue, as a tint. */
+  --lum-on-bg: color-mix(in oklab, var(--frame-a) 14%, transparent);
+  --lum-on-ring: color-mix(in oklab, var(--frame-a) 38%, transparent);
+  --lum-on-ink: color-mix(in oklab, var(--frame-a) 14%, #ffffff);
+}
+.ui-lum .app-frame {
+  background:
+    radial-gradient(1200px 700px at 8% -10%, color-mix(in oklab, var(--frame-a) 13%, transparent), transparent 60%),
+    radial-gradient(1000px 640px at 96% -8%, color-mix(in oklab, var(--frame-b) 12%, transparent), transparent 62%),
+    radial-gradient(1400px 900px at 50% 118%, rgba(64, 110, 255, 0.12), transparent 60%),
+    #05070c;
+}
+
+/* ---- the cards: rounder, a quieter ring, lit from above ------------------------------ */
+.ui-lum .app-frame > header,
+.ui-lum .app-frame > footer,
+.ui-lum .qt-mast,
+.ui-lum .qt-bar,
+.ui-lum .qt-sheet,
+.ui-lum .qt-card,
+.ui-lum .qt-wait,
+.ui-lum .qt-slab,
+.ui-lum .module,
+.ui-lum .qt-tiles > *,
+.ui-lum .qt-crawl,
+.ui-lum .qt-stats,
+.ui-lum .qt-strip {
+  border-radius: 16px;
+  border-color: var(--lum-ring);
+  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+}
+/*
+ * THE BANDS ARE THE CARDS' ONE FLAT TONE, NOT SEE-THROUGH (owner, 2026-11-11, a few hours
+ * after this block made the header, the band under it and the status rail see-through:
+ * "not a fan on the kind of gradient on the top header card"). See-through, a band the
+ * width of the window showed the light behind it end to end: the first chrome hue at its
+ * left, the second at its right, a two-colour gradient across one card. So they keep
+ * the fill the rules above give them (--lum-glass, as the tables and the modules), and
+ * the light stays where it is the ground: around the cards and between them.
+ *
+ * THE STAT ROWS WITH THEM. See-through too, a row of figures under the band was the
+ * same gradient end to end. A stat row is one card in the cards' tone (the rules for
+ * `qt-stats`, above), and its figures are flat cells on it with no paint of their own.
+ */
+
+/* ---- filters and their table are one card --------------------------------------------
+ * The chip bar and the table under it were two cards 12px apart; the bar belongs to
+ * the table it filters, so they join, round at the outside corners only. */
+.ui-lum .qt-bar:has(+ .qt-sheet) {
+  margin-bottom: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: inset 0 1px 0 var(--lum-edge);
+}
+.ui-lum .qt-bar + .qt-sheet {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* ---- the band under the header is the top of the card below it -------------------------
+ * (owner, 2026-11-11: "we shou;ld geet rid of the seperate card that is under the header
+ * one and just marge it with the card below it on most pages and have it like a divider
+ * line underneath. eg - on futures tab we have a seperate card right under the header
+ * with overview nq es gc etc ... and i thinkwe shou;ld do tha tin scanner as well. I
+ * dont think it needs ot be done in dashboard and amcro".) The band (`qt-mast`: a
+ * page's views, its quotes, its search) was a card of its own, a gap above the card
+ * that sums the page up. Where the first thing under it is a card of the band's own
+ * width (a stat row, the Index view's band, a chip bar, a table, the Futures overview's
+ * books) the two are ONE CARD: the band squares its bottom corners and keeps its
+ * bottom border as the rule between them, the frame under it gives up its top margin,
+ * and that card squares its top and drops its own top border and lit edge. Where it is
+ * not (a written plan or brief beside its side column, the Watchlist editor while it is
+ * open, Settings' narrow column) the band stays a card. Each rule has three forms: the
+ * three depths the pages put that first card at.
+ *
+ * A PAGE STILL LOADING IS JOINED TOO (owner, 2026-11-12: "when sectors loads it has the
+ * old card seperate by itself instea dof how it is when its loaded and attached"). The
+ * wait (`qt-wait`) was left a card of its own, so the band stood apart for the second
+ * the page took and then snapped onto the card that arrived. It is in the list now: the
+ * page is one card from its first frame.
+ */
+.ui-lum .qt-mast:has(+ .qt-frame > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast:has(+ .qt-frame > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast:has(+ .qt-frame > :first-child > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: inset 0 1px 0 var(--lum-edge);
+}
+.ui-lum .qt-mast + .qt-frame:has(> :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast + .qt-frame:has(> :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast + .qt-frame:has(> :first-child > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child) {
+  margin-top: 0;
+}
+.ui-lum .qt-mast + .qt-frame > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child,
+.ui-lum .qt-mast + .qt-frame > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child,
+.ui-lum .qt-mast + .qt-frame > :first-child > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: var(--lum-shadow);
+}
+/* A chip bar is lifted over its table so its menus open on top (above): with a band over
+   it and a table under it, it is the middle of the card and casts nothing on either. */
+.ui-lum .qt-mast + .qt-frame > .qt-bar:first-child:has(+ .qt-sheet),
+.ui-lum .qt-mast + .qt-frame > :first-child > .qt-bar:first-child:has(+ .qt-sheet),
+.ui-lum .qt-mast + .qt-frame > :first-child > :first-child > .qt-bar:first-child:has(+ .qt-sheet) {
+  box-shadow: none;
+}
+/*
+ * THE FUTURES OVERVIEW'S BOOKS ARE COLUMNS OF ONE CARD, so the band has a card to be the
+ * top of. They were five cards with air between, each a book's whole read; side by side
+ * under one band they are that read in five columns, parted by the short rule a stat
+ * row's figures are, and a column still lights and opens its book. Only where the five
+ * sit in one row (Tailwind's 2xl, the grid's own breakpoint): narrower, the grid wraps,
+ * and they stay cards under a band that stays a card.
+ */
+@media (min-width: 96rem) {
+  .ui-lum .qt-frame .qt-books {
+    gap: 0;
+    padding: 0;
+    margin: 0 0 var(--lum-gap);
+    background: var(--lum-glass);
+    border: 1px solid var(--lum-ring);
+    border-radius: 16px;
+    box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+  }
+  .ui-lum .qt-frame .qt-books > * {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .ui-lum .qt-frame .qt-books > *:not(:last-child) {
+    background-image: var(--lum-part);
+    background-position: right center;
+    background-size: 1px 56%;
+    background-repeat: no-repeat;
+  }
+  /* A column is a button that opens its book: with no card of its own to say so, it lights. */
+  .ui-lum .qt-frame .qt-books > *:hover,
+  .ui-lum .qt-frame .qt-books > *:focus-visible {
+    background-color: var(--lum-sheet-hover);
+  }
+  .ui-lum .qt-frame .qt-books > *:focus-visible {
+    outline-offset: -3px;
+    border-radius: 10px;
+  }
+  .ui-lum .qt-mast:has(+ .qt-frame > :first-child > .qt-books:first-child) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    box-shadow: inset 0 1px 0 var(--lum-edge);
+  }
+  .ui-lum .qt-mast + .qt-frame:has(> :first-child > .qt-books:first-child) {
+    margin-top: 0;
+  }
+  .ui-lum .qt-mast + .qt-frame > :first-child > .qt-books:first-child {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    box-shadow: var(--lum-shadow);
+  }
+}
+
+/* ---- fewer lines ---------------------------------------------------------------------- */
+.ui-lum .qt-sheet tbody tr > td {
+  border-bottom-color: rgba(255, 255, 255, 0.028);
+}
+.ui-lum .qt-sheet thead th {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+/* A row tag (panels/ScanWide Tag): its tint and its word, no outline. Three or four
+   outlined boxes a row made a grid of boxes down the ticker column. The news chips in
+   the story column keep theirs: there the outline is the grade. */
+.ui-lum .qt-cap.inline-block.border.px-\[5px\] {
+  border-color: transparent;
+  border-radius: 5px;
+  padding-inline: 6px;
+}
+.ui-lum .qt-cap.inline-block.border.px-\[5px\].text-ink-3 {
+  background: rgba(255, 255, 255, 0.055);
+}
+/* The pinned star is a control, not a figure: quiet at rest, amber under the pointer.
+   With every row pinned, a column of amber stars said nothing. */
+.ui-lum tbody button.text-flip-fig {
+  color: var(--ink-4);
+  transition: color 0.12s;
+}
+.ui-lum tbody tr:hover button.text-flip-fig,
+.ui-lum tbody button.text-flip-fig:hover,
+.ui-lum tbody button.text-flip-fig:focus-visible {
+  color: var(--flip-fig);
+}
+
+/* ---- pills, and the one you are on is lit --------------------------------------------- */
+.ui-lum .seg:not(.flex-col) {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 3px;
+}
+.ui-lum .seg:not(.flex-col) > .seg-item {
+  border-radius: 999px;
+  padding-inline: 11px;
+}
+.ui-lum .seg-item[data-on] {
+  background: var(--lum-on-bg);
+  color: var(--lum-on-ink);
+  box-shadow: inset 0 0 0 1px var(--lum-on-ring);
+}
+.ui-lum header nav[aria-label="Tabs"] {
+  gap: 2px;
+}
+.ui-lum header nav[aria-label="Tabs"] button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  color: var(--ink-3);
+  transition: color 0.12s, background-color 0.12s;
+}
+.ui-lum header nav[aria-label="Tabs"] button:hover {
+  color: var(--ink);
+}
+.ui-lum header nav[aria-label="Tabs"] button[aria-current="page"] {
+  background: var(--lum-on-bg);
+  color: var(--lum-on-ink);
+  box-shadow: inset 0 0 0 1px var(--lum-on-ring);
+}
+
+/* ---- the floating panels take the cards' corners --------------------------------------
+ * A Popover's panel (ui/Popover) and a menu's (panels/ScanWide Menu: the panel under
+ * its button) were the last square-cornered boxes on a page of round ones. */
+.ui-lum .qt-pop,
+.ui-lum span.relative > div.absolute.top-full {
+  border-radius: 14px;
+  border-color: var(--lum-ring-2);
+  background: #121a26;
+}
+
+/* ---- a list that runs on fades out, not off --------------------------------------------
+ * The Dashboard's Top setups, In play and Stock news scroll inside their cards, and
+ * the last row in view was cut in half. Its foot fades, and the fade goes as the list
+ * reaches its end (a scroll-driven animation; a browser without one shows no fade). */
+@property --fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 36px;
+}
+@supports (animation-timeline: scroll()) {
+  .ui-lum .qt-card .overflow-auto,
+  .ui-lum .qt-card .overflow-y-auto {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-end)), transparent);
+    animation: lum-fade-end linear both;
+    animation-timeline: scroll(self);
+  }
+  @keyframes lum-fade-end {
+    0%,
+    92% {
+      --fade-end: 36px;
+    }
+    100% {
+      --fade-end: 0px;
+    }
+  }
+}
+
+/* ---- the chart's own colours -----------------------------------------------------------
+ * "Josh" (owner, 2026-11-11, from a screenshot of the charts they trade from: "a chart
+ * color theme option for default or Josh ... just for the chart colors"): blue candles
+ * up and black down on light grey, a red dotted line at the last price, no grid.
+ *
+ * ON THE CHART'S AREA ALONE, AS THE VARIABLES THE CHART ALREADY READS. ScanChart reads its
+ * palette off this element (readPalette), so the candles, the wave, the averages, the
+ * levels and the axis take these; the words laid over the chart are inside it and take
+ * them by inheritance; nothing outside the area does. `chart-hue` is a swatch in the
+ * chart's menu that stands for one of its lines. In either interface: a variable set on
+ * the element itself outranks the one it would inherit.
+ *
+ * Six-digit hex only: the chart mixes these with an alpha of its own.
+ *
+ * THE GROUND, THE BLUE AND THE TWO SHADES ARE MEASURED (owner, 2026-11-12, a second
+ * screenshot, this one read pixel by pixel: "make the extended hours and pre market
+ * shaded colors the same as this ... and make sure that they dont shade over the actual
+ * candles"). The after-hours is #ccd1dd and the pre-market #ddd5c9 on a ground of
+ * #dbdbdb, and a candle in either is the same #3179f5 or black it is at midday. So the
+ * shades are solid, each its own, and `--chart-ext-candle` is how strongly a candle in
+ * extended hours is drawn: 1 here, where a chart without the variable draws it at half.
+ */
+.qt-chart[data-colors="josh"],
+.chart-hue[data-colors="josh"] {
+  --chart-bg: #dbdbdb;
+  --chart-grid: transparent;
+  --chart-price: #e5173f;
+  --chart-shade-pre: #ddd5c9;
+  --chart-shade-post: #ccd1dd;
+  --chart-ext-candle: 1;
+  --call-fig: #3179f5;
+  --put-fig: #000000;
+  --ink: #0e1116;
+  --ink-2: #2b3038;
+  --ink-3: #4d535d;
+  --ink-4: #7b808a;
+  --ring: #b9bcc2;
+  --ring-2: #9da1a9;
+  --surface-2: #c3c6cc;
+  --desk-markets: #b45309;
+  --desk-macro: #7c3aed;
+  --flip-fig: #b45309;
+}
+.qt-chart[data-colors="josh"] {
+  background: var(--chart-bg);
+  color: var(--ink-3);
+}
+
+/* ---- a page's views are tabs, not pills -------------------------------------------------
+ * (owner, 2026-11-12: on the Stocks tab "the setsup breakouts extended hours etc pill bar
+ * and then the pill bar below it will all, top 10, pinned etc just looks weird and stacked
+ * and awkard so does tthose whole rows tbh".) A page's views (Setups, Breakouts ...; a
+ * futures book; a Settings section) were the same lit pill in a capsule as the filter
+ * chips under them and as the header's own tabs: three rows of the same control, one over
+ * another, and with Multicharts on the views sat directly on the chips.
+ *
+ * THREE LEVELS, THREE SHAPES. The header's pages are lit pills. A page's views are plain
+ * words with a rule under the one that is open, running the band's full height so the rule
+ * lies on the band's own bottom line: where you are on the page. The chips stay pills in a
+ * capsule: what you are filtering to. `seg-tabs` on a `.seg` asks for the middle one, in
+ * either interface; Quiet's rule is ink, Luminous's the frame's own light.
+ */
+.ui-qt .seg.seg-tabs {
+  align-self: stretch;
+  flex-wrap: nowrap;
+  gap: 2px;
+  /* The band's own 6px of padding, top and bottom: a tab is as tall as the band. */
+  margin-block: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  --tab-rule: var(--ink-2);
+}
+.ui-lum .seg.seg-tabs {
+  --tab-rule: color-mix(in oklab, var(--frame-a) 72%, #ffffff);
+}
+.ui-qt .seg.seg-tabs > .seg-item {
+  align-self: stretch;
+  height: auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+  transition: color 0.12s, box-shadow 0.12s;
+}
+.ui-qt .seg.seg-tabs > .seg-item:hover {
+  color: var(--ink);
+}
+.ui-qt .seg.seg-tabs > .seg-item[data-on] {
+  background: none;
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: inset 0 -2px 0 var(--tab-rule);
+}
+.ui-qt .seg.seg-tabs > .seg-item:focus-visible {
+  outline-offset: -3px;
+  border-radius: 6px;
+}
+
+/*
+ * ============================ THE SIDEBAR INTERFACE (2026-11-12) =======================
+ * Owner, of the reference screenshots in Desktop\Scanner: "can we create a new interface
+ * in the settings ... and follow this layout closely - keeping our stuff we have but
+ * following that layout". The third choice in Settings → Interface.
+ *
+ * WHAT THE LAYOUT IS. The pages, and every view of a page, down the left in a card of
+ * their own, under small group names. Across the top one card: the page's name, the
+ * index prices as capsules, the search, the session and the clock. Under it the page,
+ * straight onto its cards with no band of tabs. Plain dark cards on a near-black
+ * ground: no glass, no light behind them, no lit edge.
+ *
+ * HOW IT IS BUILT. `<html>` wears `ui-side` WITH `ui-lum` and `ui-qt` (lib/ui.ts), so
+ * every page is the cards Luminous draws, with its gaps, pills, joins and wide-window
+ * zoom, and this block only (1) re-tones Luminous's own tokens to neutral greys, (2)
+ * lays out the shell the Terminal draws for this interface (shell/Sidebar,
+ * shell/SideHeader, the column beside them), and (3) repaints the few things Luminous
+ * wrote as a literal colour. The pages' bands are not drawn at all here: the components
+ * ask `useSide` (state/UiMode). Nothing above this banner changed, so Quiet and
+ * Luminous are as they were.
+ *
+ * WHAT IS NOT THEIRS. The names, the mark, the data hues and the accent (the frame's own
+ * first hue, as Luminous lights its pills) are Hermes's. TO REMOVE IT: delete from this
+ * banner to the end of the file, the "side" member of UiMode and its Settings row, the
+ * two shell components, and the `side` branches in Terminal, Scanner, FuturesBoard and
+ * SectorsBoard.
+ */
+@custom-variant side (&:where(.ui-side, .ui-side *));
+
+.ui-side {
+  --void: #09090a;
+  --bg: #0c0c0e;
+  --surface: #131315;
+  --surface-2: #19191c;
+  --surface-3: #242428;
+  --ring: #222226;
+  --ring-2: #313137;
+  --grid: #27272c;
+  --ink: #f1f1f3; /* 16.3:1 on the card */
+  --ink-2: #b6b7be; /*  9.0:1 */
+  --ink-3: #85878f; /*  5.0:1: body copy clears AA */
+  --ink-4: #686a73; /*  3.3:1: decoration only, as everywhere */
+  --qt-track: #1c1c20;
+  --qt-faint: #5a5c65;
+  /* The card: one flat grey, a hairline, nothing lit and nothing cast. The shadow is a
+     real (empty) shadow, not `none`: Luminous lists it after its inset edge, and `none`
+     inside a list voids the whole declaration. */
+  --lum-glass: #151517;
+  --lum-sheet: #151517;
+  --lum-sheet-hover: #1c1c1f;
+  --lum-sheet-on: #232327;
+  --lum-ring: rgba(255, 255, 255, 0.075);
+  --lum-ring-2: rgba(255, 255, 255, 0.15);
+  --lum-edge: rgba(255, 255, 255, 0);
+  --lum-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+  --lum-gap: 10px;
+  /* The mark on the open page in the sidebar: the frame's first hue, as a tab's rule. */
+  --side-on: color-mix(in oklab, var(--frame-a) 72%, #ffffff);
+}
+
+/* The ground is flat: Luminous's light behind the glass has no glass to sit behind. */
+.ui-side .app-frame {
+  background: var(--bg);
+}
+
+/* ---- the cards: a step less round, as the screenshots' are ----------------------------- */
+.ui-side :is(.qt-mast, .qt-bar, .qt-sheet, .qt-card, .qt-wait, .qt-slab, .module, .qt-crawl, .qt-stats, .qt-strip, .qt-tally, .qt-drawer),
+.ui-side .qt-tiles > *,
+.ui-side .qt-frame .qt-books {
+  border-radius: 12px;
+}
+/* The Futures overview's five books are columns of one card (Luminous, above): the
+   card is round, its columns are not. */
+.ui-side .qt-frame .qt-books > * {
+  border-radius: 0;
+}
+
+/* ---- the shell: the sidebar, and beside it the header, the page and the status rail ---- */
+.ui-side .qt-side {
+  margin: var(--lum-gap) 0 var(--lum-gap) var(--lum-gap);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+  overflow: hidden;
+  transition: width 0.16s ease;
+}
+.ui-side .qt-sidehead {
+  margin: var(--lum-gap) var(--lum-gap) 0;
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+}
+/* The status rail is not the frame's own child here, so Luminous's card rule misses it. */
+.ui-side .qt-side-main > footer {
+  margin: 0 var(--lum-gap) var(--lum-gap);
+  border: 1px solid var(--lum-ring);
+  border-radius: 12px;
+  background: var(--lum-glass);
+}
+
+/* A page in the sidebar: an icon and its name; the open one lifted, with the mark at its
+   left edge.
+ *
+ * ROOMIER (owner, 2026-11-12, an hour after it was built: "can we give the side nav bar
+ * a bit better spacing?"). The rows were 32px with nothing between them and the group
+ * names sat 12px under the group before: a list packed to the top third of a tall
+ * column. A row is 36px with 2px between rows, 12px from the edge to the icon and 12px
+ * from the icon to the name, and a group name has 20px over it. The nineteen rows, the
+ * five names, the mark and Settings come to 995px, so a 1080 screen (1058px of sidebar)
+ * still shows all of it without a scroll; a shorter window scrolls the list. */
+.ui-side .side-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 36px;
+  margin-bottom: 2px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  line-height: 1;
+  color: var(--ink-3);
+  text-align: left;
+  white-space: nowrap;
+  transition: color 0.12s, background-color 0.12s;
+}
+.ui-side .side-item:hover {
+  color: var(--ink);
+  background-color: rgba(255, 255, 255, 0.04);
+}
+.ui-side .side-item[data-on] {
+  color: var(--ink);
+  font-weight: 600;
+  background-color: rgba(255, 255, 255, 0.07);
+}
+.ui-side .side-item[data-on]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--side-on);
+}
+.ui-side .side-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* A price in the header: a capsule, lighter under the pointer where it opens something. */
+.ui-side .qt-quote-pill {
+  border-color: var(--lum-ring-2);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ---- what Luminous wrote as a literal colour ------------------------------------------- */
+.ui-side .qt-stats .bg-bg {
+  background-color: var(--lum-glass);
+}
+.ui-side .qt-pop,
+.ui-side span.relative > div.absolute.top-full {
+  background: #1a1a1d;
+}
+.ui-side .tip {
+  background: rgba(24, 24, 27, 0.95);
 }

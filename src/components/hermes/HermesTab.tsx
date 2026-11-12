@@ -99,7 +99,7 @@ export function HermesTab({ hermes, desk }: { hermes: HermesController; desk: De
       : "no OPENROUTER_API_KEY — add one to .env.local";
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden">
+    <div className="qt-hermes relative flex min-h-0 flex-1 overflow-hidden">
       <Rail
         chats={chats}
         currentId={currentId}
@@ -115,7 +115,7 @@ export function HermesTab({ hermes, desk }: { hermes: HermesController; desk: De
       />
       {railOpen && <button type="button" aria-label="Close chats" onClick={() => setRailOpen(false)} className="absolute inset-0 z-10 bg-black/30 xl:hidden" />}
 
-      <section className="flex min-w-0 flex-1 flex-col" aria-label="Hermes">
+      <section className="qt-card flex min-w-0 flex-1 flex-col" aria-label="Hermes">
         {/* The narrow window's bar: the rail behind a key, New chat beside it. */}
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-ring px-3 xl:hidden">
           <button type="button" onClick={() => setRailOpen((o) => !o)} className="hit rounded-[4px] px-2 py-0.5 text-[11px] text-ink-2 hover:bg-surface-2 hover:text-ink">
@@ -359,7 +359,7 @@ function Rail({
     else groups.push({ label, items: [c] });
   }
   return (
-    <aside className={cn("w-[240px] shrink-0 flex-col border-r border-ring bg-surface", className)} aria-label="Chats">
+    <aside className={cn("qt-card w-[240px] shrink-0 flex-col border-r border-ring bg-surface", className)} aria-label="Chats">
       <div className="shrink-0 p-2.5">
         <button
           type="button"

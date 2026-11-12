@@ -16,6 +16,7 @@ Pure, so the words can be tested: give it the blocks, get the page.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from typing import Any
 
@@ -27,6 +28,9 @@ BREADTH_RATIO = 1.5
 FOCUS = 3
 TOP_ROWS = 15
 REPORTS = 12
+#: The In play card: the pool's top names, the index ETFs never (they are the market).
+IN_PLAY_ROWS = 10
+IN_PLAY_SKIP = frozenset({"SPY", "QQQ", "IWM"})
 
 _TITLE = {"pre": "Pre-market", "rth": "Regular session", "post": "After hours",
           "closed": "Market closed"}
@@ -146,12 +150,45 @@ def _rotation(sectors: list[dict[str, Any]], leaders: dict[str, Any]) -> list[di
             for s in rows]
 
 
+def in_play(ranked: list[dict[str, Any]], view: dict[str, Any], *,
+            verdict: Callable[[str], dict[str, Any] | None],
+            price: Callable[[str], float | None],
+            limit: int = IN_PLAY_ROWS) -> dict[str, Any]:
+    """The In play card (owner, 2026-11-10: "remove 'my list' and replace it with
+    something else that's useful"): the pool's rank across every stock it screens
+    (sources/pool.rank), each with its reason and what the engine has done about it
+    (sources/pool.verdict: taken at a mark, pinned, on the list, or one Track away),
+    and the pool's own counts for the card's header. `ranked` is PoolStore.ranked,
+    `view` PoolStore.view. Pure."""
+    rows: list[dict[str, Any]] = []
+    for r in ranked:
+        sym = str(r.get("symbol") or "")
+        if not sym or sym in IN_PLAY_SKIP:
+            continue
+        rows.append({"sym": sym, "name": r.get("name"), "score": r.get("score"),
+                     "reason": r.get("reason"), "gap_atr": r.get("gap_atr"),
+                     "vol_pct": r.get("vol_pct"), "through": r.get("through"),
+                     "day": r.get("day"), "reports": r.get("reports"), "last": price(sym),
+                     "verdict": verdict(sym)})
+        if len(rows) >= limit:
+            break
+    return {"rows": rows, "qualified": view.get("qualified"), "screened": view.get("screened"),
+            "basis": view.get("basis"), "promoted": len(_list(view.get("promoted"))),
+            "marks_done": [str(m) for m in view.get("marks_done") or []],
+            "next_mark": view.get("next_mark"), "slots": view.get("slots"),
+            # The most a name can score, so the card's bar is drawn to the pool's own
+            # scale and not to a number the page remembers.
+            "score_max": view.get("score_max"),
+            "on": bool(view.get("on"))}
+
+
 def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: dict[str, Any],
-          stories: list[dict[str, Any]], *, session_day: date) -> dict[str, Any]:
+          stories: list[dict[str, Any]], *, session_day: date,
+          inplay: dict[str, Any] | None = None) -> dict[str, Any]:
     """The page. `session_day` is the session the cards' moves are about
-    (universe.cards_day), which before the open is the last one."""
+    (universe.cards_day), which before the open is the last one; `inplay` is
+    `in_play`'s card, None when the pool has not been read."""
     rows = [r for r in _list(scan.get("rows")) if r.get("ok")]
-    by_sym = {r["sym"]: r for r in rows}
     regime = _d(scan.get("regime"))
     session = str(scan.get("session") or "closed")
     trading_day = str(scan.get("trading_day") or "")
@@ -181,9 +218,12 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
             "bias": {"side": conv.get("bias") if conv else regime.get("bias"),
                      "score": conv.get("score"), "grade": conv.get("grade"),
                      "live": conv.get("live"), "total": conv.get("total"),
-                     "cap": conv.get("max_conviction")},
+                     "cap": conv.get("max_conviction"), "thin": conv.get("thin")},
             "focus": focus,
             "themes": hot,
+            # No session type (owner, 2026-11-12: "get the NQ specific stuff out of
+            # dashboard since we have a specific futures tab"): will New York trend or
+            # range is read on NQ and ES, and the Futures overview carries it.
             "setups": [
                 {"key": "day23", "word": "Day 2/3 continuation", "view": "day23", "chip": None,
                  "n": int(chips.get("day2") or 0) + int(chips.get("day3") or 0)},
@@ -193,12 +233,16 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
                  "chip": "through", "n": stats.get("pdl")},
             ],
             "event": regime.get("event"),
+            # False when the calendar is not loading: no event then is a gap, and the
+            # card says so instead of "None scheduled".
+            "calendar_ok": regime.get("calendar_ok"),
         },
         "breadth": {k: wide.get(k) for k in ("basis", "floor", "names", "advancers", "decliners",
                                              "buckets")} if wide else None,
         "top": [_slim(r) for r in scored[:TOP_ROWS]],
-        "list": [_slim(by_sym[s]) for s in scan.get("pinned") or [] if s in by_sym],
-        "adds": [_slim(r) for r in rows if r.get("promoted")],
+        # In play took My list's place (2026-11-10): the pinned names were the same
+        # list every day, and the pool's rank is who is moving across the market.
+        "inplay": inplay,
         "stories": stories,
         "news_live": bool(status.get("ok")),
         "rotation": _rotation(sectors, leaders),

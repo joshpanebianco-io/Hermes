@@ -2,6 +2,7 @@
 
 import type { ExpiryState, GexAsset, ImpliedBook } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
+import { AssetIcon } from "@/components/ui/AssetIcon";
 import { GammaPopover, gammaLine } from "@/components/vol/GammaRead";
 import { Tick } from "@/components/ui/Tick";
 import { num, pct, signed } from "@/lib/format";
@@ -40,6 +41,7 @@ import { oneOf, usePersisted } from "@/lib/usePersisted";
 export function Gamma({
   assets,
   enabled,
+  only,
   ageMin,
   error,
   implied,
@@ -47,6 +49,8 @@ export function Gamma({
 }: {
   assets: Record<string, GexAsset>;
   enabled: boolean;
+  /** One book, fixed, with no picker: a book's own view on the Futures page. */
+  only?: string;
   ageMin?: number | null;
   error?: string | null;
   /** Each book's one-sigma day (the Volatility panel's rows), so the flip's distance reads in sigma. */
@@ -55,9 +59,10 @@ export function Gamma({
   expiry?: ExpiryState | null;
 }) {
   const keys = Object.keys(assets);
-  const [sel, setSel] = usePersisted<string>("gex.asset", "NQ", oneOf("NQ", "ES", "GC"));
-  const active = assets[sel] ?? assets[keys[0]];
-  const book = assets[sel] ? sel : keys[0];
+  const [chosen, setSel] = usePersisted<string>("gex.asset", "NQ", oneOf("NQ", "ES", "GC", "SIL", "CL"));
+  const sel = only ?? chosen;
+  const active = only ? assets[only] : (assets[sel] ?? assets[keys[0]]);
+  const book = only ?? (assets[sel] ? sel : keys[0]);
   const sigma = implied?.find((b) => b.key === book)?.sigma ?? null;
 
   return (
@@ -72,7 +77,7 @@ export function Gamma({
       error={error}
       bodyClassName="px-0 py-0"
       right={
-        keys.length > 1 && (
+        !only && keys.length > 1 && (
           <div className="seg">
             {keys.map((k) => (
               <button
@@ -81,6 +86,7 @@ export function Gamma({
                 onClick={() => setSel(k)}
                 {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
               >
+                <AssetIcon id={k} size={13} className="block shrink-0" />
                 {k}
               </button>
             ))}
@@ -169,14 +175,12 @@ function Ladder({
         {a.regime && (
           <span
             className="fig qt-pill rounded px-1.5 py-px text-[9.5px]"
+            // In ink, not green or pink: the regime is not a side (lib/gammaRegime).
             style={
               {
-                background:
-                  a.regime === "POS"
-                    ? "color-mix(in oklab, var(--call) 20%, transparent)"
-                    : "color-mix(in oklab, var(--put) 20%, transparent)",
-                color: a.regime === "POS" ? "var(--call)" : "var(--put)",
-                "--pill-hue": a.regime === "POS" ? "var(--call-fig)" : "var(--put-fig)",
+                background: "color-mix(in oklab, var(--ink) 10%, transparent)",
+                color: "var(--ink-2)",
+                "--pill-hue": "var(--ink-2)",
               } as React.CSSProperties
             }
             title={

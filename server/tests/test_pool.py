@@ -83,10 +83,14 @@ def test_in_play_worked_examples() -> None:
     rows = {r["symbol"]: r for r in pool.parse(fixture())[0]}
     td = date(2026, 10, 23)
     ko = pool.in_play(rows["KO"], "day", td)
-    assert (ko["score"], ko["gap_atr"], ko["vol_pct"]) == (16.0, 1.67, 114.88)
+    # Both parts full at 8, and past full each earns a little more (2026-11-11):
+    # 1.67 ATR is 4 x ln(1.67 / 0.75) / ln(4) = 2.3 over, 115% of a day 4 x ln(114.88 / 40)
+    # / ln(10) = 1.8 over. It read 16.0 when both parts stopped at their full mark.
+    assert (ko["score"], ko["gap_atr"], ko["vol_pct"]) == (20.1, 1.67, 114.88)
     assert ko["reason"] == "moved 1.67 ATR · today 114.9% of ADV"
     nvda = pool.in_play(rows["NVDA"], "day", td)
-    assert (nvda["score"], nvda["gap_atr"]) == (9.3, 0.21)
+    # 0.21 ATR is 1.3; 76% of a day is the full 8 and 4 x ln(76 / 40) / ln(10) = 1.1 over.
+    assert (nvda["score"], nvda["gap_atr"]) == (10.4, 0.21)
     sndk = pool.in_play(rows["SNDK"], "pre", td)
     assert (sndk["score"], sndk["gap_atr"], sndk["vol_pct"]) == (9.3, 0.34, 2.25)
     assert sndk["reason"] == "gap 0.34 ATR · pre-market 2.3% of ADV"
@@ -95,6 +99,43 @@ def test_in_play_worked_examples() -> None:
     # no figures, no points — and the reason says which is missing
     bare = pool.in_play({"symbol": "X"}, "pre", td)
     assert bare["score"] == 0.0 and bare["reason"] == "no gap read · no pre-market volume"
+
+
+@pytest.mark.parametrize(
+    ("x", "full", "far", "want"),
+    [(0.5, 0.75, 3.0, 0.0),      # under the full mark: nothing more
+     (0.75, 0.75, 3.0, 0.0),
+     (1.5, 0.75, 3.0, 2.0),      # halfway on the log scale
+     (3.0, 0.75, 3.0, 4.0),
+     (9.0, 0.75, 3.0, 4.0),      # and no further than the far mark
+     (40.0, 40.0, 400.0, 0.0),
+     (400.0, 40.0, 400.0, 4.0)],
+)
+def test_past_its_full_mark_a_part_earns_up_to_four_more(x: float, full: float, far: float,
+                                                         want: float) -> None:
+    assert pool.beyond(x, full, far) == pytest.approx(want)
+
+
+def test_the_top_of_the_rank_separates_and_the_bar_does_not_move() -> None:
+    td = date(2026, 11, 10)
+
+    def name(sym: str, move_atr: float, vol_pct: float) -> dict[str, Any]:
+        # A 2.0 ATR on a 100.00 close, so the move in ATRs is the change over 2.
+        close = 100.0
+        prev = close - move_atr * 2.0
+        return {"symbol": sym, "close": close, "change": (close / prev - 1.0) * 100.0,
+                "atr": 2.0, "avg_vol": 1e6, "volume": vol_pct * 1e4}
+
+    # The evening of Tue 10 Nov: these three read 16.0 each (20 to 21 with their news
+    # and levels) when both parts stopped at full. Their moves and volumes are theirs.
+    gfl = pool.in_play(name("GFL", 2.21, 416.5), "day", td)["score"]
+    nvda = pool.in_play(name("NVDA", 1.12, 311.7), "day", td)["score"]
+    kkr = pool.in_play(name("KKR", 0.80, 88.5), "day", td)["score"]
+    assert (gfl, nvda, kkr) == (23.1, 20.7, 17.6)
+    # Under both full marks nothing changes, so who clears the bar is who cleared it:
+    # a 0.4-ATR move alone is still 3.7, one short of MIN_SCORE.
+    quiet = pool.in_play(name("Q", 0.40, 1.0), "day", td)["score"]
+    assert quiet == 3.7 < pool.MIN_SCORE
 
 
 def test_rank_reads_the_pre_market_before_the_bell_and_the_day_after() -> None:
@@ -389,3 +430,91 @@ def test_a_tracked_name_survives_the_marks_and_rolls_off_with_the_day(tmp_path: 
     assert pool.PoolStore(path=s._path).manual[0]["symbol"] == "ZZZ"
     assert s._roll(date(2026, 11, 10)) is True
     assert s.for_scan()[1] == []
+
+
+# --- the funnel (2026-11-10) -----------------------------------------------------
+
+
+def _row(sym: str = "X", **kw: Any) -> dict[str, Any]:
+    base = {"symbol": sym, "close": 50.0, "change": 0.0, "volume": 1e6, "avg_vol": 1e6,
+            "atr": 2.0, "cap": 3e9, "pm_change": 0.0, "pm_volume": 0.0, "pm_close": 50.0,
+            "earn_next": None, "earn_last": None, "earn_last_when": None,
+            "high": 51.0, "low": 49.0, "h1": 51.0, "l1": 49.0, "dollar_vol": 5e7,
+            "atr_pct": 4.0, "delayed": True}
+    return {**base, **kw}
+
+
+def test_the_turnover_gate_reads_today_and_lets_a_strong_day_2_3_through() -> None:
+    thin = _row("THIN")  # $50m on an average day: out on its average alone
+    assert pool.qualify([thin], "pre") == []
+    # $50m traded before the bell is in play today whatever the average says.
+    busy = _row("BUSY", pm_volume=1.2e6, pm_close=50.0)
+    assert [r["symbol"] for r in pool.qualify([thin, busy], "pre")] == ["BUSY"]
+    # After the bell the day's turnover has to reach the full gate.
+    assert pool.qualify([_row("DAY", volume=5e6)], "day") == []
+    assert [r["symbol"] for r in pool.qualify([_row("DAY", volume=1.2e7)], "day")] == ["DAY"]
+    # A strong Day 2/3 passes the turnover and ATR gates, never the price one.
+    assert [r["symbol"] for r in pool.qualify([_row("D2", atr_pct=1.0)], "pre", {"D2"})] == ["D2"]
+    assert pool.qualify([_row("CHEAP", close=9.0, pm_close=9.0)], "pre", {"CHEAP"}) == []
+
+
+def test_outside_day_and_day_2_3_earn_their_points_and_say_so() -> None:
+    td = date(2026, 11, 10)
+    inside = pool.in_play(_row(), "pre", td)
+    assert inside["score"] == 0.0 and inside["through"] is None and inside["day"] is None
+    # Before the bell: the pre-market last against the last session's high and low.
+    up = pool.in_play(_row(pm_close=51.5), "pre", td)
+    # A 0.75-ATR gap earns the whole gap part, and the level two more.
+    assert up["through"] == "PDH" and up["score"] == pytest.approx(inside["score"] + 8.0 + 2.0)
+    assert up["reason"].endswith("through PDH")
+    down = pool.in_play(_row(pm_close=48.5), "pre", td)
+    assert down["through"] == "PDL"
+    # After it: the day's last against the prior session's.
+    day = pool.in_play(_row(close=52.0, change=4.0, h1=51.5), "day", td)
+    assert day["through"] == "PDH"
+    assert pool.in_play(_row(close=52.0, change=4.0, h1=52.5), "day", td)["through"] is None
+    # A strong Day 2 earns three, a Day 3+ two, with the move in the reason.
+    d2 = pool.in_play(_row(), "pre", td, stage={"stage": 2, "move": 24.3, "side": "long"})
+    assert d2["score"] == 3.0 and d2["day"] == 2 and d2["reason"].endswith("day 2 of a +24% move")
+    d3 = pool.in_play(_row(), "pre", td, stage={"stage": 4, "move": -31.0, "side": "short"})
+    assert d3["score"] == 2.0 and d3["reason"].endswith("day 4 of a -31% move")
+
+
+def test_rank_reads_the_strong_tracks_and_the_fixture_rows_are_all_inside() -> None:
+    from newsterminal import scan
+
+    q = pool.qualify(pool.parse(fixture())[0], "pre")
+    strong = {"ORCL": {"stage": 2, "move": 22.0, "side": "long"}}
+    ranked = pool.rank(q, scan.clock_at(et(2026, 10, 23, 8, 0)), strong=strong)
+    orcl = next(r for r in ranked if r["symbol"] == "ORCL")
+    # 3.4 on its own (under the bar), 6.4 as a Day 2: promoted.
+    assert orcl["score"] == 6.4 and orcl["day"] == 2 and "day 2 of a +22% move" in orcl["reason"]
+    assert all(r["through"] is None for r in ranked)
+
+
+def test_the_verdict_says_what_the_engine_does_with_a_name_today() -> None:
+    v = pool.verdict
+    assert v(None, True, True)["state"] == "pinned"
+    assert v({"score": 6.1, "reason": "r", "mark": "hand", "at": "08:12"}, False, True) == {
+        "state": "hand", "score": 6.1, "reason": "r", "mark": None, "at": "08:12"}
+    prom = v({"score": 7.0, "reason": "gap 1.2 ATR", "mark": "09:00", "at": "09:00"}, False, True)
+    assert (prom["state"], prom["mark"]) == ("promoted", "09:00")
+    assert v({"score": 7.0, "reason": "r"}, False, True)["state"] == "tracked"
+    assert v({"score": 5.0, "reason": "r"}, False, False)["state"] == "inplay"
+    assert v({"score": 3.9, "reason": "r"}, False, False)["state"] == "quiet"
+    assert v(None, False, False) == {"state": "out", "score": None, "reason": None, "mark": None,
+                                     "at": None}
+
+
+def test_the_store_knows_each_names_place(monkeypatch: Any, tmp_path: Any) -> None:
+    store = pool.PoolStore(path=str(tmp_path / "pool.json"))
+    store.ranked = [{"symbol": "KO", "score": 16.0, "reason": "moved"}]
+    store.by_sym = {r["symbol"]: r for r in store.ranked}
+    store.promoted = [{"symbol": "KO", "score": 16.0, "reason": "moved", "mark": "09:00",
+                       "at": "09:00"}]
+    store.manual = [{"symbol": "GME", "score": 0.0, "reason": "tracked by hand", "mark": "hand",
+                     "at": "08:12"}]
+    assert store.entry("KO") == {"symbol": "KO", "score": 16.0, "reason": "moved",
+                                 "mark": "09:00", "at": "09:00"}
+    assert store.entry("GME")["mark"] == "hand" and store.entry("GME")["score"] == 0.0
+    assert store.entry("NOPE") is None

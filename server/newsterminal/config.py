@@ -55,7 +55,7 @@ RATES_SEC = float(os.environ.get("NT_RATES_SEC", "1800"))
 
 GEXYGEN_API = os.environ.get("NT_GEXYGEN_API", "http://127.0.0.1:8000")
 GEX_ASSETS = [
-    a.strip() for a in os.environ.get("NT_GEX_ASSETS", "NQ,ES,GC").split(",") if a.strip()
+    a.strip() for a in os.environ.get("NT_GEX_ASSETS", "NQ,ES,GC,SIL,CL").split(",") if a.strip()
 ]
 
 # --------------------------------------------------------------------------

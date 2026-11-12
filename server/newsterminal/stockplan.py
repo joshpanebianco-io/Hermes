@@ -420,7 +420,7 @@ def _name(row: dict[str, Any], moves: dict[str, dict[str, Any]] | None = None,
         },
         "options": _options(row),
         "flow": _flow(row),
-        "adv20": _int(row.get("adv20")),
+        "adv": _int(row.get("adv")),
         "premkt": _premkt(row),
         "peers": _peers(row),
         "headlines": [
@@ -1038,7 +1038,7 @@ ranked. THE TAPE COUNT CAPS IT: no plan above `tape_count.max_conviction`, and n
 empty, even on a quiet day — and gives the tape's score and how many of its reads are live, as \
 printed.
 - Write plain trader's English. NEVER print a field name or a JSON key — not rs_spy, dist_atr, \
-iv_rv, ext_pct, em_front_pct, pc_vol, pct_adv, adv20, news_loaded, max_conviction or any other. \
+iv_rv, ext_pct, em_front_pct, pc_vol, pct_adv, adv, news_loaded, max_conviction or any other. \
 Say "relative strength against SPY", "N ten-minute ATRs from the entry", "implied volatility N \
 times realised", "the pre-market gap", "put/call volume N", "pre-market volume N% of a normal \
 day" — with the number as printed in place of N.

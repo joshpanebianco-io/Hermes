@@ -51,7 +51,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -59,6 +59,7 @@ from zoneinfo import ZoneInfo
 
 from . import bias as bias_mod
 from . import events as events_mod
+from . import holidays as holidays_mod
 from . import releases, structure
 from .config import CACHE_DIR, UA
 from .holidays import close_time, cme_closed, is_trading_day
@@ -73,7 +74,7 @@ from .sessions import (
     london_at,
     overlap_end,
 )
-from .volterm import BOOK_DP, EM_VOL
+from .volterm import BOOK_DP, EM_VOL, quote_key
 
 ET = ZoneInfo("America/New_York")
 
@@ -607,7 +608,7 @@ def _vp_reads(asset: dict[str, Any], session: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
-BOOK_LABELS = {"NQ": "NQ", "ES": "ES", "GC": "Gold (GC)"}
+BOOK_LABELS = {"NQ": "NQ", "ES": "ES", "GC": "Gold (GC)", "SIL": "Silver (SIL)", "CL": "Crude (CL)"}
 # BOOK_DP AND EM_VOL ARE VOLTERM'S NOW (imported above): the Terminal's
 # implied-day rows quote the same decimals and read the same index per book, so
 # the two maps are stated once, there. BOOK_DP: NQ in whole points, ES in
@@ -854,7 +855,7 @@ def _ladder(
     from the reopen and from the cash open, the opening range, and today's
     two opens — read from the ranges source, which computes them from the
     same bars as the session boxes."""
-    q = _q(snap.get("quotes") or [], book) or {}
+    q = _q(snap.get("quotes") or [], quote_key(book)) or {}
     rng = ((snap.get("ranges") or {}).get("assets") or {}).get(book) or {}
     last = q.get("last") if q.get("last") is not None else rng.get("last")
     if last is None:
@@ -985,6 +986,14 @@ def _ladder(
     }
 
 
+def live_ladder(snap: dict[str, Any], book: str) -> dict[str, Any] | None:
+    """One book's live ladder, for the futures chart's levels."""
+    try:
+        return _ladder(snap, book, "ny", _now_et(snap), live=True)
+    except (ValueError, TypeError, KeyError, AttributeError, ZeroDivisionError):
+        return None
+
+
 def live_ladders(snap: dict[str, Any]) -> dict[str, Any]:
     """The Structure tab's levels, one ladder per book, off the snapshot's own
     clock — computed per request (api.py /api/terminal), never stored, so the
@@ -996,6 +1005,30 @@ def live_ladders(snap: dict[str, Any]) -> dict[str, Any]:
             out[book] = _ladder(snap, book, "ny", now, live=True)
         except (ValueError, TypeError, KeyError, AttributeError, ZeroDivisionError):
             out[book] = None
+    return out
+
+
+def _session_type(snap: dict[str, Any], books: list[str]) -> dict[str, Any]:
+    """Will New York trend or range, per book (daytype.py, computed on read in the
+    snapshot): the record's counts for a day like today, the call, and the rule for
+    reading it. The model narrates the counts; it never turns them into odds."""
+    held = (snap.get("daytype") or {}).get("books") or {}
+    out: dict[str, Any] = {
+        "how_to_read": "Counts over the record's sessions, never probabilities: the call is "
+                       "the side the holding conditions' counts lean to, 'No lean' means the "
+                       "record does not separate today, and a condition under 50 sessions is "
+                       "shown but does not vote. Quote the counts ('2 trend days in 142'), "
+                       "not a percentage, and say 'so far' while the night is not finished.",
+        "record": (snap.get("daytype") or {}).get("record"),
+    }
+    for b in books:
+        e = held.get(b)
+        if not isinstance(e, dict) or not isinstance(e.get("lean"), dict):
+            continue
+        ln = e["lean"]
+        out[b] = {"call": ln.get("word"), "why": ln.get("why"), "night": ln.get("night"),
+                  "yesterday": ln.get("prev"), "holds": ln.get("holds"), "base": ln.get("base"),
+                  "today_finished_as": e.get("label")}
     return out
 
 
@@ -1035,6 +1068,57 @@ def _cat(kind: str, at: datetime, now: datetime, title: Any, **extra: Any) -> di
     }
     item.update(extra)
     return item
+
+
+#: A central bank's decision, wherever it is made: it reaches every book through rates and FX.
+_DECISION = re.compile(r"rate decision|interest rate|monetary policy|press conference", re.I)
+_SPEAKS = re.compile(r"\b(?:speaks|testifies|speech|testimony)\b", re.I)
+_CHAIR = re.compile(r"(?<!vice )\bchair\b", re.I)
+_NAME_SUFFIX = frozenset({"jr", "sr", "ii", "iii"})
+
+
+def high_for_the_books(rows: Iterable[dict[str, Any]]) -> bool:
+    """Is this release HIGH IMPACT FOR THE BOOKS THE NOTE IS ABOUT? Pure.
+
+    THE CHIP SAID "HIGH IMPACT" FOR WHOEVER PUBLISHED IT (owner, 2026-11-12: "fix
+    catalyst ... weighting"). It was lit by the calendar's score of 4, which a
+    tier-one print earns in its own country: on an NQ brief UK GDP, Euro Zone GDP and a
+    Japanese PPI each wore the chip a US jobless-claims print wears, and so did a
+    governor's speech on another subject. For NQ, ES and gold the tape stops for a US
+    tier-one release (score 5) and for a central bank's decision anywhere; a foreign
+    print is still listed, and a speech is high only when it is the Chair's."""
+    for x in rows:
+        event, sc = str(x.get("event") or ""), int(x.get("score") or 0)
+        if _SPEAKS.search(event):
+            if _CHAIR.search(event):
+                return True
+            continue
+        if sc >= 5 or (sc >= 4 and _DECISION.search(event)):
+            return True
+    return False
+
+
+def _speaker(title: Any) -> str:
+    """A diary speech's last name, lower case: "Speech - Governor Michael S. Barr" → "barr"."""
+    words = [w.strip(",.").lower() for w in str(title or "").split()]
+    while words and words[-1] in _NAME_SUFFIX:
+        words.pop()
+    return words[-1] if words else ""
+
+
+def _holiday_catalysts(now: datetime) -> list[dict[str, Any]]:
+    """Today's and the next three days' market holidays and early closes, as catalysts:
+    a day the bond market, London or Tokyo is shut changes what the other rows mean."""
+    out: list[dict[str, Any]] = []
+    for h in holidays_mod.notices(now.date(), now.date() + timedelta(days=3)):
+        d = date.fromisoformat(str(h["date"]))
+        at = datetime(d.year, d.month, d.day, tzinfo=ET)
+        day = _when_label(at, now).split(" ")[0]
+        out.append(_cat(
+            "holiday", at, now, f"{h['label']} · {h['name']}",
+            when=f"{day} all day" if h["kind"] == "closed" else day,
+            country=h["country"], note=h["note"]))
+    return out
 
 
 def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[dict[str, Any]]:
@@ -1085,7 +1169,7 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
             actual=r.get("actual_raw"),
             consensus=r.get("consensus_raw"), previous=r.get("previous_raw"),
             surprise=round(r["surprise"], 2) if r.get("surprise") is not None else None,
-            high=any((x.get("score") or 0) >= 4 for x in rel.rows),
+            high=high_for_the_books(rel.rows),
             **({"also": [{"title": x.get("event"), "actual": x.get("actual_raw"),
                            "consensus": x.get("consensus_raw"),
                            "previous": x.get("previous_raw")} for x in rel.subs]}
@@ -1104,6 +1188,17 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
         if m and m.get("move_bp") is not None and m.get("implied_after") is not None:
             note = (f"{m['move_bp']:+.0f}bp priced ({m.get('stance')}), "
                     f"{m['implied_after']:.2f}% implied after")
+        # ONE SPEECH, ONE ROW. The calendar lists "FOMC Member Barr Speaks" and the
+        # Board's diary "Speech - Governor Michael S. Barr", the same speech at the same
+        # minute: both were catalysts, both "High impact". The calendar's row stays and
+        # takes the diary's note, which is what the speech is about.
+        if e.get("kind") in ("Speech", "Testimony"):
+            who = _speaker(e.get("title"))
+            twin = next((c for c in items if c["kind"] == "data" and abs(c["ts"] - ts) < 90
+                         and who and who in str(c["title"]).lower()), None)
+            if twin is not None:
+                twin["note"] = twin.get("note") or note
+                continue
         items.append(_cat("fed", datetime.fromtimestamp(ts, ET), now, e.get("title"),
                           country="US", released=ts < now_ts, high=bool(e.get("major")),
                           note=note))
@@ -1143,7 +1238,8 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
     items.sort(key=lambda c: c["ts"])
     ahead = [c for c in items if c["ts"] >= now_ts][:10]
     done = [c for c in items if c["ts"] < now_ts][-6:]
-    kept = sorted(done + ahead, key=lambda c: c["ts"])
+    # A holiday is a day, not a minute: today's stays on the list all day, at the head of its day.
+    kept = sorted(done + ahead + _holiday_catalysts(now), key=lambda c: c["ts"])
     for i, c in enumerate(kept, start=1):
         c["id"] = f"c{i}"
     return kept
@@ -1323,6 +1419,9 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         "snapshot": _snapshot(snap, books, now),
         "ladders": ladders,
         "gamma": [card for b in books if (card := _gamma_card(snap, b, by_book.get(b)))],
+        # Will New York trend or range (daytype.py): the record's counts for a day
+        # like today, per book. The call reads them; it does not re-derive them.
+        "session_type": _session_type(snap, books),
         "catalysts": _catalysts(snap, books, now),
         "rotation": _rotation(snap, books),
         "headlines": _headlines(snap, session, now),
@@ -1371,8 +1470,10 @@ def _drivers(snap: dict[str, Any], books: list[str], session: str = "ny",
             "macro_lean": bd.get("macro_lean"), "structure_lean": bd.get("structure_lean"),
             "conflict": bool(bd.get("conflict")),
             "treatment": bd.get("treatment"),
+            # A read in no family (dealer gamma, event risk) is not a side, and says so.
             "votes": [{"label": v.get("label"), "family": v.get("family"),
-                       "value": v.get("value"), "vote": v.get("vote"),
+                       "value": v.get("value"),
+                       "vote": v.get("vote") if v.get("family") else "not a side",
                        "can_vote_now": v.get("live", True), "note": v.get("note")}
                       for v in bd.get("votes") or [] if isinstance(v, dict)],
             "context": [{"label": c.get("label"), "value": c.get("value"), "note": c.get("note")}
@@ -1513,6 +1614,42 @@ def _positioning(snap: dict[str, Any], want_equity: bool, wanted: Any) -> dict[s
     out: dict[str, Any] = {"cot_weekly": cot}
     if want_equity and pc and pc.get("ratios"):
         out["cboe_put_call"] = {k: pc.get(k) for k in ("date", "ratios", "avg20", "pctile", "read")}
+    return out
+
+
+def curve_date(rates: dict[str, Any], today: date) -> dict[str, str]:
+    """Which day Treasury's curve is for, and whose move its changes are. Pure.
+
+    THE CURVE WENT TO THE MODEL WITH NO DATE ON IT. Treasury publishes one curve a
+    day, after the close, and none on a bond holiday. On the evening of Wed 11 Nov
+    2026 (Veterans Day) the latest was Tuesday's: 4.98%, +10bp on Monday. The brief
+    wrote "10Y closed 4.98%, +10.0bp at the 14:59 ET cash close" as the day's driver
+    and leaned bearish on it, with the 10-year's own row two lines away saying +1.5bp.
+    So the block says which day it is, that its changes are that day's, and when the
+    cash market was shut."""
+    try:
+        d = datetime.strptime(str(rates.get("as_of") or ""), "%m/%d/%Y").date()
+    except ValueError:
+        return {}
+    out = {"curve_as_of": f"{d:%a} {d.day} {d:%b}"}
+    if d < today:
+        out["curve_basis"] = (
+            f"Treasury's daily curve for {d:%a} {d.day} {d:%b}, the latest published: every "
+            "chg_bp below is THAT day's change from the day before it, not today's. Today's "
+            "10-year is the US10Y row of brief_tables.snapshot.")
+    shut = holidays_mod.bond_closed(today)
+    if shut:
+        out["cash_treasuries_today"] = (
+            f"shut all day ({shut}): no curve for today and no live yield, so rates cannot "
+            "make a new call today")
+    else:
+        # Shut on a day since the curve: that is why the curve is older than yesterday's.
+        gap = [x for x in (d + timedelta(days=i) for i in range(1, max(0, (today - d).days)))
+               if holidays_mod.bond_closed(x)]
+        if gap:
+            x = gap[-1]
+            out["cash_treasuries_last_shut"] = (
+                f"{x:%a} {x.day} {x:%b} ({holidays_mod.bond_closed(x)}): there is no curve for it")
     return out
 
 
@@ -1780,7 +1917,14 @@ def build_digest(
             }
             for e in (snap.get("fed") or [])[:8]
         ],
+        # The days a market this note leans on is shut or shuts early (holidays.py).
+        "market_holidays": [
+            {"date": h["date"], "what": h["label"], "holiday": h["name"], "means": h["note"]}
+            for h in holidays_mod.notices(now.date() - timedelta(days=1),
+                                          now.date() + timedelta(days=3))
+        ],
         "rates": {
+            **curve_date(rates, now.date()),
             "effr": (rates.get("policy") or {}).get("EFFR", {}).get("rate"),
             "curve": {r["key"]: {"yield": r["value"], "chg_bp": r.get("chg_bp")}
                       for r in (rates.get("curve") or [])},
@@ -1835,6 +1979,11 @@ def build_digest(
         # already taken out the Asia high" is one number here and an inference
         # from four elsewhere.
         "session_ranges": ranges,
+        # WILL NEW YORK TREND OR RANGE (daytype.py): per book, the conditions that
+        # hold today with their counts over the record, and the call. Counts,
+        # never probabilities — narrate them as counts.
+        "session_type_lean": {k: v for k, v in facts.get("session_type", {}).items()
+                              if k in ("how_to_read", "record") or wanted(k)},
         # THE ENGINE'S OWN SCORE, per book: every driver a vote with its
         # threshold and reason, weighed by family for this session, the grade,
         # the macro-against-structure conflict and the treatment line. The
@@ -2130,7 +2279,7 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
          "HIGH stories since the close first, and only where they reach a book through the "
          "channels above."),
         ("Positioning", "a reference",
-         "gamma walls are geometry tonight, though spot below the flip counts for more in a "
+         "gamma walls are geometry tonight, though below the flip a break runs further in a "
          "thin book. COT and put/call are slow background, never tonight's direction."),
     ],
     "london": [
@@ -2166,7 +2315,8 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
          "acceptance against prior value, the opening range, VWAP, and the levels this session "
          "has already taken or rejected."),
         ("Positioning", "decisive",
-         "the hedging flow is real now: the gamma regime, the flip, the walls and any expiry."),
+         "the hedging flow is real now: the gamma regime, the flip, the walls and any expiry "
+         "decide how far a move runs and whether a break is faded or chased, never which way."),
         ("Macro", "direction, where it is live",
          "prints that have landed, and how the curve and the dollar reacted. A print the tape "
          "has faded does not anchor by reputation."),
@@ -2278,6 +2428,10 @@ def system_prompt(session: str, asset: str = "all", prog: dict[str, Any] | None 
 The most important block for a handover: 0 is that session's low, 1 its high, \
 above 1 means the high has been taken out.
   gamma_levels     where dealer hedging turns on the GC board, and the regime.
+  session_type_lean   will New York trend or range: the conditions that hold \
+today with their counts over the record, and the call. Counts, never odds — say \
+"2 trend days in 142" — and gold's New York box rarely earns a call by this rule, \
+so read its night in ATRs and leave the call alone when it says No lean.
   rates            the policy path and the curve. Real yields are the carrying \
 cost of a zero-coupon asset, so gold trades the front of the curve and what is \
 priced into it.
@@ -2296,6 +2450,12 @@ never as structure."""
 The most important block for a handover: 0 is that session's low, 1 its high, \
 above 1 means the high has been taken out.
   gamma_levels     where dealer hedging turns, and the regime.
+  session_type_lean   will New York trend or range: every condition that holds \
+today (the night so far in ATRs, yesterday's shape, the gap, the VIX band) with its \
+count over two years of sessions, and the call. Counts, never odds — say "2 trend \
+days in 142", never a percentage — and let it shape the call's targets and size \
+(a range day wants the edges faded and less room; a trend day more possible wants \
+room to run), never its side.
   index_movers     WHICH NAMES supplied the move. These indices are \
 cap-weighted and two or three names are usually the day, so "NQ is down" and \
 "NQ is down because AMZN is off 2.5%" are different notes. Use the contribution \
@@ -2404,10 +2564,31 @@ means hedging amplifies them and ranges extend. Spot's position against the \
 gamma flip and the expected move is the single most important structural fact \
 on the page. If `expiry` says it is OpEx week, say what that does to the walls.
 
+GAMMA IS NEVER A DIRECTION. Positive gamma is not bullish and negative gamma is \
+not bearish; spot above the flip is not a reason to be long and spot below it is \
+not a reason to be short. The regime says HOW FAR a move runs and whether a break \
+is faded or chased, in either direction. So gamma is never the reason for \
+`open_bias`, never a link in a `chain` that ends in a direction, and never a \
+`drivers` row with a bull or bear tone: it belongs in `gamma_read`, in the range \
+the call expects, and in `wrong_if`. On the engine board the Dealer gamma row has \
+no family and reads "not a side" for the same reason.
+
+THE CURVE HAS A DATE. `rates.curve` is Treasury's daily curve for \
+`rates.curve_as_of`, published after that day's close, and each `chg_bp` in it is \
+THAT day's change. When `rates.curve_basis` is present the curve is not today's: \
+never write its change as today's move or as "the close". The 10-year's move \
+today is the US10Y row of `brief_tables.snapshot`, and where that row says it \
+last printed at its close, rates cannot make a new call. `market_holidays` lists \
+the days a market this note leans on is shut or shuts early: the cash Treasury \
+market on Columbus Day and Veterans Day while stocks trade, London, Tokyo. When \
+one is today or was the last session, say what it does to the read (no rates \
+read, a thin London, no Japan prints) and do not lean on a figure it left stale.
+
 THE ENGINE HAS ALREADY WEIGHED THE DRIVERS. `engine_driver_board` is, per \
-book, every macro, positioning and structure read as a vote with its threshold \
-and its reason, grouped into `families`, each with its weight for this session \
-and its own score. `score` runs from -100 to +100 across the reads that can vote; \
+book, every macro and structure read as a vote with its threshold and its \
+reason, grouped into `families`, each with its weight for this session and its \
+own score (dealer gamma and event risk are listed with them and are "not a \
+side": neither votes). `score` runs from -100 to +100 across the reads that can vote; \
 `coverage` is how much of this session's weight that is. A vote with \
 `can_vote_now` false has no market or no input behind it at this hour: it neither \
 agrees nor disagrees, so do not count it either way, and say the read is thin \
@@ -2495,7 +2676,13 @@ next and where it targets.
 reverse the view.
     drivers       Four to eight rows: a short `label` ("10Y", "DXY", \
 "Rotation", "Vol", "Megacaps", "Geopolitics"), a few words of `text` with the \
-figure, and a `tone` for THIS book: bear, bull, mixed or neutral.
+figure, and a `tone` for THIS book: bear, bull, mixed or neutral. THE TONE IS \
+WHAT THE ROW DOES TO THE BOOK'S PRICE, NEVER THE SIGN OF ITS FIGURE: a 10-year \
+or a dollar that is UP is bear for NQ, ES and gold and DOWN is bull; a VIX that \
+is up is bear for NQ and ES; a hot inflation print is bear and a cold one bull; \
+megacaps or breadth rising is bull for the index they are in. A row that is not \
+a side is neutral: a gamma regime, a vol level that has not moved, a figure that \
+last printed at its close or on another day, a story with no channel to the book.
   rotation_read   One or two sentences on what the ratio table says about the \
 tape: broadening, concentration, defensive, a rate scare.
   ratio_reads     A few words on each ratio id that matters.

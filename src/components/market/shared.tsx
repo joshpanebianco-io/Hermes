@@ -35,7 +35,9 @@ export function votesTip(c: Conviction): string {
  * before there was one (2026-11-05) — an old note reads as it was written.
  */
 export function readFigure(c: Conviction): string {
-  return c.score != null ? scoreText(c.score) : `${c.agree} of ${c.total} agree`;
+  if (c.score == null) return `${c.agree} of ${c.total} agree`;
+  // A thin read says how thin: "+100" on two reads of eleven is not the tape agreeing.
+  return c.thin ? `${scoreText(c.score)} on ${c.live ?? 0} of ${c.total}` : scoreText(c.score);
 }
 
 /** The grade's ink: strong carries the side's hue, weak and none step back. */

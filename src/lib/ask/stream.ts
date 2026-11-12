@@ -54,6 +54,7 @@ const PANEL_WORDS: Record<string, string> = {
   driver_board: "the driver board",
   the_book: "the book",
   session_ranges: "the session ranges",
+  session_type: "the session type",
   volume_profile: "the volume profile",
   gamma: "dealer gamma",
   volatility: "the vol curve",

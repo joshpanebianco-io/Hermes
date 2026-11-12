@@ -34,11 +34,11 @@ import os
 import threading
 import time
 import urllib.parse
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from ..catalysts import MAJOR, NOISE, grade
+from ..catalysts import MAJOR, NOISE, grade, story
 from ..config import BROWSER_UA, CACHE_DIR
 from ..http import SourceStatus, fetch, json_body
 
@@ -127,12 +127,27 @@ def parse(doc: Any, want: str | None = None) -> list[dict[str, Any]]:
 
 
 def best(stories: Iterable[dict[str, Any]], sym: str, now: float,
-         hours: float = CATALYST_HOURS) -> dict[str, Any] | None:
-    """The most important story about `sym` in the window: tier, then newest. Pure."""
+         hours: float = CATALYST_HOURS, names: Sequence[str] = (),
+         strict: bool = True) -> dict[str, Any] | None:
+    """The most important story about `sym` in the window: tier, then newest, or None
+    when nothing held is one. It has to BE this name's story (catalysts.story; `names`
+    are what a headline calls the company): its lead names the company and it describes
+    an event. A story tagged with this ticker alone used to be taken on trust, so a
+    market wrap the wire tagged CRWV led CoreWeave's row over its own earnings jump, and
+    Mobileye's conference notice led Intel's as a major Earnings story (audit,
+    2026-11-11). A name the table has no words for is still left to the feed's tag, and
+    so is a headline that does not name a company whose words are only a guess (`strict`
+    is False; catalysts.story). The story comes back with the grade it has AS this
+    name's (a list that is the name's own move is a Move). Pure."""
     cut = now - hours * 3600.0
-    mine = [s for s in stories if s["at"] >= cut and sym in s["syms"]
-            and len(s["syms"]) <= MAX_RELATED]
-    return min(mine, key=lambda s: (s["tier"], -s["at"])) if mine else None
+    mine: list[tuple[int, float, dict[str, Any]]] = []
+    for s in stories:
+        if s["at"] < cut or sym not in s["syms"] or len(s["syms"]) > MAX_RELATED:
+            continue
+        g = story(s["title"], sym, names, str(s.get("provider") or ""), strict)
+        if g is not None:
+            mine.append((g.tier, -s["at"], {**s, "tag": g.tag, "tier": g.tier}))
+    return min(mine, key=lambda x: x[:2])[2] if mine else None
 
 
 class NewsStore:
@@ -148,6 +163,13 @@ class NewsStore:
         self.sym_read: dict[str, float] = {}
         self.queue: list[str] = []
         self._saved = 0.0
+        #: What a headline calls each company, set by the collector: the store knows
+        #: tickers only, and the lead test (catalysts.about) needs the name.
+        self.names: Callable[[str], Sequence[str]] | None = None
+        #: Whether those names are the table's, and so can be held to (catalysts.story's
+        #: `strict`); a filer's first word is a guess. Set by the collector; unset, they
+        #: are taken as given.
+        self.sure: Callable[[str], bool] | None = None
         self._load()
 
     # ---- persistence --------------------------------------------------------
@@ -161,6 +183,13 @@ class NewsStore:
         if isinstance(d, dict):
             for s in d.get("stories") or []:
                 if isinstance(s, dict) and s.get("id") and s.get("at"):
+                    # Graded again on the way in: a story keeps the grade it was filed
+                    # with, and a change to the grader (2026-11-11) would otherwise
+                    # reach the tables only as the old stories aged out, days later.
+                    g = grade(str(s.get("title") or ""))
+                    if g.tier == NOISE:
+                        continue
+                    s["tag"], s["tier"] = g.tag, g.tier
                     self.stories[str(s["id"])] = s
             self._reindex(time.time())
 
@@ -262,6 +291,18 @@ class NewsStore:
 
     # ---- what the tables read -----------------------------------------------
 
+    def _called(self, sym: str) -> Sequence[str]:
+        return self.names(sym) if self.names else ()
+
+    def _strict(self, sym: str) -> bool:
+        return self.sure(sym) if self.sure else True
+
+    def _whose(self, s: dict[str, Any]) -> bool:
+        """Is this a story of any name it is tagged with (catalysts.story)? The feeds
+        for every name ask it, so a wrap tagged with one ticker is nobody's news."""
+        return any(story(s["title"], sym, self._called(sym), str(s.get("provider") or ""),
+                         self._strict(sym)) is not None for sym in s["syms"])
+
     def catalyst(self, sym: str, now: float | None = None,
                  ref: float | None = None) -> dict[str, Any] | None:
         """The name's most important story of the last day, for a row.
@@ -274,7 +315,7 @@ class NewsStore:
         anchor = ref if ref is not None else t
         with self._lock:
             stories = list(self.by_sym.get(sym) or [])
-        s = best(stories, sym, anchor)
+        s = best(stories, sym, anchor, names=self._called(sym), strict=self._strict(sym))
         if s is None:
             return None
         return {"title": s["title"], "url": s["url"], "provider": s["provider"], "tag": s["tag"],
@@ -288,20 +329,32 @@ class NewsStore:
 
     def headlines(self, sym: str, now: float | None = None,
                   limit: int = 40) -> list[dict[str, Any]]:
-        """The name's stories, newest first, in the scanner's own headline shape."""
+        """The name's stories, newest first, in the scanner's own headline shape: the
+        ones that are its stories (catalysts.story), not everything tagged with it."""
         t = now if now is not None else time.time()
+        names = self._called(sym)
         with self._lock:
             stories = [s for s in (self.by_sym.get(sym) or []) if len(s["syms"]) <= MAX_RELATED]
+        strict = self._strict(sym)
+        stories = [s for s in stories if story(s["title"], sym, names,
+                                               str(s.get("provider") or ""), strict) is not None]
         stories.sort(key=lambda s: -s["at"])
         return [{"title": s["title"], "url": s["url"], "publisher": s["provider"], "ts": s["at"],
                  "utc": datetime.fromtimestamp(s["at"], UTC).isoformat(),
                  "age_min": round((t - s["at"]) / 60.0, 1)}
                 for s in stories[:limit]]
 
-    def top(self, limit: int = 30, now: float | None = None) -> list[dict[str, Any]]:
+    def top(self, limit: int = 30, now: float | None = None,
+            keep: Callable[[str], bool] | None = None) -> list[dict[str, Any]]:
         """The freshest major stories, whole, for the Dashboard's feed. One event once: a
         bankruptcy filing came in five times from five wires, and that was the whole
-        card (2026-11-09). The newest of each name and kind stands for the rest."""
+        card (2026-11-09). The newest of each name and kind stands for the rest.
+
+        `keep` says which names the reader could act on: a story stays when it is about
+        one of them. The flow is every US listing, and without it the card was a
+        micro-cap newswire ("Onfolio Holdings Sets Third Quarter 2026 Earnings Call
+        …", "EDRY: Revenue and adjusted EBITDA surged …") on a desk that trades names
+        at two billion and over (2026-11-11). None keeps them all."""
         t = now if now is not None else time.time()
         with self._lock:
             rows = [s for s in self.stories.values() if s["tier"] == MAJOR
@@ -313,6 +366,15 @@ class NewsStore:
         for s in rows:
             key = (tuple(s["syms"]), s["tag"])
             if key in seen:
+                continue
+            # A story of a name the reader could act on: both asked of the SAME name. A
+            # wrap tagged with an index and with CoreWeave ("Nasdaq Futures Rally as AI
+            # Optimism Returns", IXIC and CRWV) is not CoreWeave's story, and the index,
+            # which has no name to be held to, is nothing to act on.
+            provider = str(s.get("provider") or "")
+            if not any((keep is None or keep(sym))
+                       and story(s["title"], sym, self._called(sym), provider,
+                                 self._strict(sym)) is not None for sym in s["syms"]):
                 continue
             seen.add(key)
             out.append({"syms": s["syms"], "tag": s["tag"], "title": s["title"], "url": s["url"],
@@ -332,5 +394,6 @@ class NewsStore:
                     and len(s["syms"]) <= MAX_RELATED
                     and (keep is None or keep & set(s["syms"]))]
         rows.sort(key=lambda s: -s["at"])
+        rows = [s for s in rows if self._whose(s)]
         return [f"{','.join(s['syms'])} [{s['tag']}] {s['title']} "
                 f"({s['provider']}, {round((t - s['at']) / 3600.0, 1)}h ago)" for s in rows[:limit]]

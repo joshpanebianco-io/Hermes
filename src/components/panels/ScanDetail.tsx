@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { isBool, usePersisted } from "@/lib/usePersisted";
 import type { Catalyst, ScanRow, Side } from "@/types/scanner";
 import { ScanOptions } from "@/components/panels/ScanOptions";
-import { CARD, capShort, gapOf } from "@/components/panels/ScanWide";
+import { CARD, Glyph, capShort, gapOf } from "@/components/panels/ScanWide";
 import { ago, compact, dir, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -31,14 +32,22 @@ export function emBand(r: ScanRow): { lo: number; hi: number; label: string } | 
   return e ? { lo: e.lo, hi: e.hi, label: `EM ±${e.pct.toFixed(1)}%` } : null;
 }
 
-/** The setup column's words: the state, and the level or reference it is about. */
-export function setupLabel(r: Pick<ScanRow, "setup" | "broken">): string {
+/**
+ * The setup column's words: the state, and the level or reference it is about.
+ * `short` is the narrow form, for a column with a headline beside it.
+ */
+export function setupLabel(r: Pick<ScanRow, "setup" | "broken">, short = false): string {
   const { state, level, entry, side } = r.setup;
   switch (state) {
     case "retest":
       return `Retest ${level ?? entry?.kind ?? ""}`.trim();
-    case "pullback":
-      return `Pulling back to ${level ?? entry?.kind ?? "level"}`;
+    case "pullback": {
+      // THROUGH THE LEVEL AND SHORT OF EXTENDED: THE TRADE IS THE RETEST. It read "Pulling
+      // back to PDH" until 2026-11-11, which says which way price is travelling, and
+      // nothing here measures that: a name running away from the level read the same.
+      const where = `${side === "short" ? "Below" : "Above"} ${level ?? entry?.kind ?? "level"}`;
+      return short ? `${where} · retest` : `${where} · entry is the retest`;
+    }
     case "extended":
       return entry && (entry.kind === "VWAP" || entry.kind === "EMA8")
         ? `Extended → ${entry.kind === "EMA8" ? "8 EMA" : "VWAP"}`
@@ -64,12 +73,15 @@ export function ScanDetail({
   bench,
   now,
   tracked = true,
+  stage = null,
 }: {
   r: ScanRow;
   bench: "SPY" | "QQQ";
   now: number | null;
   /** A name off the list has no chain read; it says so rather than spinning. */
   tracked?: boolean;
+  /** Which day of a multi-day move, for the score card's corner. */
+  stage?: number | null;
 }) {
   if (!r.ok) {
     return (
@@ -81,21 +93,45 @@ export function ScanDetail({
   }
   const side = r.setup.side ?? r.score.side;
   return (
-    <div className="flex flex-col gap-2 p-2.5">
+    <div className="qt-detail flex flex-col gap-2 p-2.5">
       <Figures r={r} bench={bench} />
-      <Setup r={r} side={side} />
-      {tracked ? (
-        <ScanOptions r={r} />
-      ) : (
-        <section className={CARD}>
-          <Cap>Options</Cap>
+      <KeyLevels r={r} />
+      <Score r={r} side={side} stage={stage} />
+      <NewsCard r={r} now={now} />
+      <Fold id="setup" title="The setup, in full">
+        <Setup r={r} side={side} />
+      </Fold>
+      <Fold id="options" title="Options" right={r.options?.iv30 != null ? <span className="fig">IV {r.options.iv30.toFixed(0)}%</span> : undefined}>
+        {tracked ? (
+          <ScanOptions r={r} />
+        ) : (
           <p className="text-[12px] text-ink-3">Chains are read for the names on the list. Track this name to load its options.</p>
-        </section>
-      )}
-      <Score r={r} />
-      <Ladder r={r} />
-      <Catalysts r={r} now={now} />
+        )}
+      </Fold>
+      <Fold id="ladder" title="Every level, with its distance">
+        <Ladder r={r} />
+      </Fold>
+      <Fold id="catalysts" title="Earnings, filings and flags">
+        <Catalysts r={r} />
+      </Fold>
     </div>
+  );
+}
+
+/** A card that opens on a click, remembered, so the rail stays short by default. */
+function Fold({ id, title, right, children }: { id: string; title: string; right?: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = usePersisted<boolean>(`drawer.fold.${id}`, false, isBool);
+  return (
+    <section className={CARD}>
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="hit flex w-full items-baseline gap-2 text-left">
+        <h3 className="qt-cap text-[10.5px] font-semibold text-ink-3">{title}</h3>
+        <span className="ml-auto flex items-baseline gap-2 text-[11px] text-ink-3">
+          {right}
+          {open ? "▴" : "▾"}
+        </span>
+      </button>
+      {open && <div className="mt-2.5">{children}</div>}
+    </section>
   );
 }
 
@@ -104,10 +140,18 @@ export function ScanDetail({
 function Figures({ r, bench }: { r: ScanRow & { float_shares?: number | null; market_cap?: number | null }; bench: "SPY" | "QQQ" }) {
   const rs = r.rs[bench];
   const rs1h = r.rs_1h[bench];
+  const vol = r.volume ?? r.premkt?.volume ?? null;
+  const adv = vol != null && r.adv ? (vol / r.adv) * 100 : null;
+  const pmOnly = r.volume == null && r.premkt?.volume != null;
+  const ema = r.levels.ema8;
+  const float = r.float_shares ?? r.short?.float_shares ?? null;
+  const gap = gapOf(r);
+  const atrPct = r.atr_d != null && r.last ? (r.atr_d / r.last) * 100 : null;
+  const capWord = r.market_cap == null ? "" : r.market_cap >= 2e11 ? "Mega cap" : r.market_cap >= 1e10 ? "Large cap" : r.market_cap >= 2e9 ? "Mid cap" : "Small cap";
   return (
     <div className={CARD}>
-      <p className="qt-cap mb-2.5 flex items-baseline justify-between text-[10.5px] text-ink-3">
-        <span>Session snapshot</span>
+      <p className="qt-cap mb-3 flex items-baseline justify-between text-[10.5px] text-ink-3">
+        <span className="flex items-center gap-1.5"><Glyph name="pulse" size={11} />Session snapshot</span>
         {r.sector && (
           <span className="normal-case" title="The name's sector SPDR against SPY today, in percentage points">
             {r.sector}{" "}
@@ -118,73 +162,103 @@ function Figures({ r, bench }: { r: ScanRow & { float_shares?: number | null; ma
           </span>
         )}
       </p>
-      {/* Six across only where the PANE has room for six — a window breakpoint
-          lied whenever the pane was the narrow one. */}
-      <div className="@container">
-      <div className="grid grid-cols-3 gap-x-4 gap-y-3 @min-[600px]:grid-cols-6">
-        <Fig label={`RS ${bench}`} title={`Today · last hour (six ten-minute bars), each in ATRs, minus ${bench}'s`}>
-          <span className={cn("fig text-[14px]", rs == null ? "text-ink-3" : dir(rs))}>
-            {rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}
-          </span>
-          <span className="fig ml-1.5 text-[11px] text-ink-3">
-            1h {rs1h == null ? "—" : `${rs1h >= 0 ? "+" : ""}${rs1h.toFixed(2)}`}
-          </span>
+      <div className="grid grid-cols-3 gap-x-3 gap-y-3">
+        <Fig label="RVol" sub="vs usual" title="Regular-session volume to now against the same time of day on the prior sessions">
+          <span className={cn("fig text-[14px]", (r.rvol ?? 0) >= 2 ? "text-flip-fig" : "text-ink")}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</span>
         </Fig>
-        {r.volume == null && r.premkt?.volume != null ? (
-          // Before the open: the pre-market's volume, against a normal day.
-          <Fig label="Pre-mkt vol" title="Nasdaq's pre-market tally (about fifteen minutes delayed), as a share of the 20-day average day">
-            <span className="fig text-[14px] text-ink">{compact(r.premkt.volume)}</span>
-            {r.premkt.pct_adv != null && (
-              <span className="fig ml-1.5 text-[11px] text-ink-3">{r.premkt.pct_adv.toFixed(1)}% ADV</span>
-            )}
-          </Fig>
-        ) : (
-          <Fig label="RVol" title={r.volume != null ? `${compact(r.volume)} shares today incl. pre/post` : undefined}>
-            <span className="fig text-[14px] text-ink">{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</span>
-            <span className="fig ml-1.5 text-[11px] text-ink-3">{compact(r.volume)}</span>
-          </Fig>
-        )}
-        <Fig
-          label="Range used"
-          title="Today's regular-session high-to-low as a share of the daily ATR. Past about 1.2 the day's fuel is mostly spent."
-        >
-          <span
-            className={cn(
-              "fig text-[14px]",
-              r.range_used == null ? "text-ink-3" : r.range_used >= 1.2 ? "text-flip-fig" : "text-ink",
-            )}
-          >
-            {r.range_used != null ? `${Math.round(r.range_used * 100)}%` : "—"}
-          </span>
-          <span className="fig ml-1.5 text-[11px] text-ink-3">ATR {num(r.atr_d)}</span>
+        <Fig label={pmOnly ? "PM volume" : "Volume"} sub={adv != null ? `${Math.round(adv)}% ADV` : ""}>
+          <span className="fig text-[14px] text-ink">{vol != null ? compact(vol) : "—"}</span>
         </Fig>
-        <Fig label="Gap" title="The open against the previous close. Before the open, where the extended session stands against that close.">
-          <span className={cn("fig text-[14px]", gapOf(r) == null ? "text-ink-3" : dir(gapOf(r)))}>{gapOf(r) == null ? "—" : `${(gapOf(r) as number) >= 0 ? "+" : ""}${(gapOf(r) as number).toFixed(2)}%`}</span>
+        <Fig label="8 EMA · 10m" sub={ema != null && r.last ? `px ${r.last >= ema ? "+" : ""}${(((r.last - ema) / ema) * 100).toFixed(1)}%` : ""}>
+          <span className={cn("fig text-[14px]", ema != null && r.last != null ? (r.last >= ema ? "up" : "down") : "text-ink")}>{ema != null ? `$${num(ema)}` : "—"}</span>
         </Fig>
-        <Fig label="Day range" title="Today's regular-session low to high">
-          <span className="fig text-[12.5px] text-ink">{r.levels.day_lo != null && r.levels.day_hi != null ? `${num(r.levels.day_lo)} – ${num(r.levels.day_hi)}` : "—"}</span>
+        <Fig label="Float" sub="shares">
+          <span className="fig text-[14px] text-ink">{float != null ? compact(float) : "—"}</span>
         </Fig>
-        <Fig label="8 EMA · 10m">
-          <span className="fig text-[14px] text-ink">{num(r.levels.ema8)}</span>
-        </Fig>
-        <Fig label="Float">
-          <span className="fig text-[14px] text-ink">{r.float_shares != null ? compact(r.float_shares) : (r.short?.float_shares != null ? compact(r.short.float_shares) : "—")}</span>
-        </Fig>
-        <Fig label="Mkt cap">
+        <Fig label="Mkt cap" sub={capWord}>
           <span className="fig text-[14px] text-ink">{capShort(r.market_cap)}</span>
         </Fig>
-      </div>
+        <Fig label="ATR (14d)" sub={r.range_used != null ? `${Math.round(r.range_used * 100)}% used` : atrPct != null ? `${atrPct.toFixed(1)}% of px` : ""} title="The daily ATR, and how much of it today's regular session has used. Past about 120% the day's fuel is mostly spent.">
+          <span className={cn("fig text-[14px]", (r.range_used ?? 0) >= 1.2 ? "text-flip-fig" : "text-ink")}>{r.atr_d != null ? `$${num(r.atr_d)}` : "—"}</span>
+        </Fig>
+        <Fig label="Day range" sub="" title="Today's regular-session low to high">
+          <span className="fig text-[12px] text-ink">{r.levels.day_lo != null && r.levels.day_hi != null ? `${num(r.levels.day_lo)}–${num(r.levels.day_hi)}` : "—"}</span>
+        </Fig>
+        <Fig label="Gap" sub="" title="The open against the previous close. Before the open, where the extended session stands against that close.">
+          <span className={cn("fig text-[14px]", gap == null ? "text-ink-3" : dir(gap))}>{gap == null ? "—" : `${gap >= 0 ? "+" : ""}${gap.toFixed(2)}%`}</span>
+        </Fig>
+        <Fig label={`RS ${bench}`} sub={rs1h == null ? "" : `1h ${rs1h >= 0 ? "+" : ""}${rs1h.toFixed(2)}`} title={`Today · last hour (six ten-minute bars), each in ATRs, minus ${bench}'s`}>
+          <span className={cn("fig text-[14px]", rs == null ? "text-ink-3" : dir(rs))}>{rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}</span>
+        </Fig>
       </div>
     </div>
   );
 }
 
-function Fig({ label, title, children }: { label: string; title?: string; children: React.ReactNode }) {
+function Fig({ label, sub, title, children }: { label: string; sub?: string; title?: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0" title={title}>
-      <p className="qt-cap mb-1 text-[10px] text-ink-3">{label}</p>
+      <p className="qt-cap mb-1 truncate text-[9.5px] text-ink-3">{label}</p>
       <div className="flex items-baseline whitespace-nowrap">{children}</div>
+      {sub ? <p className="fig mt-0.5 truncate text-[10.5px] text-ink-3">{sub}</p> : null}
     </div>
+  );
+}
+
+/** The five levels the strategy trades, each with which side of it price is on. */
+function KeyLevels({ r }: { r: ScanRow }) {
+  const L = r.levels;
+  const last = r.last;
+  // Where the official level sits past the chart's bars, say so (see `offBars`).
+  const official = (what: string, level: number | null, bars: number | null | undefined) =>
+    offBars(level, bars)
+      ? `The official day's ${what}. The 5-minute bars reach ${num(bars)}: they miss the opening prints, so the candles stop short of this line.`
+      : undefined;
+  const pmSrc = pmSource(r);
+  const rows: Array<{ key: string; label: React.ReactNode; v: number | null; forming?: boolean; note?: string; mark?: string }> = [
+    { key: "pdh", label: "PDH", v: L.pdh, note: official("high", L.pdh, L.pdh_bars), mark: "official" },
+    { key: "pmh", label: "PMH", v: L.pmh, forming: !L.pm_done, note: pmPastBars("high", L.pmh, L.pmh_bars, pmSrc), mark: "wider" },
+    { key: "ema", label: <>8 EMA <span className="text-ink-3">10m</span></>, v: L.ema8 },
+    { key: "pml", label: "PML", v: L.pml, forming: !L.pm_done, note: pmPastBars("low", L.pml, L.pml_bars, pmSrc), mark: "wider" },
+    { key: "pdl", label: "PDL", v: L.pdl, note: official("low", L.pdl, L.pdl_bars), mark: "official" },
+  ];
+  const span = L.pdh != null && L.pdl != null ? L.pdh - L.pdl : 0;
+  const pos = span > 0 && last != null && L.pdl != null ? Math.max(0, Math.min(1, (last - L.pdl) / span)) : null;
+  return (
+    <section className={CARD}>
+      <p className="qt-cap mb-2.5 flex items-baseline justify-between text-[10.5px] text-ink-3">
+        <span className="flex items-center gap-1.5"><Glyph name="tape" size={11} />Key levels</span>
+        <span className="normal-case">Live state</span>
+      </p>
+      <ul className="flex flex-col">
+        {rows.map((x) => {
+          const above = x.v != null && last != null && last >= x.v;
+          return (
+            <li key={x.key} title={x.note} className="grid grid-cols-[92px_minmax(0,1fr)_auto] items-baseline gap-2 py-[3px]">
+              <span className="text-[11.5px] text-ink-2">
+                {x.label}
+                {x.note && <span className="qt-cap ml-1.5 text-[9px] text-ink-3">{x.mark ?? "official"}</span>}
+              </span>
+              <span className="fig text-[13px] text-ink">{x.v != null ? `$${num(x.v)}` : "—"}</span>
+              <span className={cn("qt-cap text-[9.5px]", x.v == null ? "text-ink-3" : x.forming ? "text-ink-3" : above ? "text-call-fig" : "text-put-fig")}>
+                {x.v == null ? "" : x.forming ? "Forming" : above ? "Above" : "Below"}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {pos != null && (
+        <>
+          <div className="relative mt-3 h-[3px] rounded-full bg-[var(--qt-track,var(--ring))]">
+            <span className="absolute top-1/2 h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-desk-macro" style={{ left: `${pos * 100}%` }} />
+          </div>
+          <p className="fig mt-1.5 flex justify-between text-[11px] text-ink-3">
+            <span>PDL ${num(L.pdl)}</span>
+            <span>PDH ${num(L.pdh)}</span>
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -201,8 +275,7 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
   const e = r.setup.entry;
   const live = r.setup.state === "retest";
   return (
-    <section className={CARD}>
-      <Cap>The setup</Cap>
+    <div>
       <p
         className={cn(
           "text-[16px] leading-tight font-semibold",
@@ -281,46 +354,57 @@ function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
           </ul>
         )}
       </div>
-    </section>
+    </div>
   );
 }
 
 /* -------------------------------------------------------------------------- */
 
-function Score({ r }: { r: ScanRow }) {
+/**
+ * THE SCORE AS THE SCREENSHOTS HAVE IT: the number, a bar, and a tick or a cross for
+ * each thing that earned it or cost it. The points stay at the end of each line, and
+ * the setup's own words sit under them, because the number on its own says nothing.
+ */
+function Score({ r, side, stage }: { r: ScanRow; side: Side | null; stage: number | null }) {
+  const v = r.score.total;
+  const hue = v >= 65 ? "text-call-fig" : v >= 50 ? "text-flip-fig" : "text-ink-2";
+  const bar = v >= 65 ? "bg-call-fig" : v >= 50 ? "bg-flip-fig" : "bg-ink-3";
   return (
     <section className={CARD}>
-      <Cap right={<span title="Each part is a fixed rule; together they order the list. Not a measured probability.">heuristic rank</span>}>
-        Why it ranks here <span className="fig ml-1.5 text-ink-2">{r.score.total}</span>
-      </Cap>
-      <ul className="flex flex-col gap-2">
+      <p className="qt-cap mb-2 flex items-baseline justify-between text-[10.5px] text-ink-3">
+        <span className="flex items-center gap-1.5"><Glyph name="star" size={11} />Score</span>
+        <span className="normal-case" title="Each part is a fixed rule; together they order the list. Not a measured probability.">
+          {stage != null && stage >= 2 ? `Day ${stage} of run · ` : ""}heuristic rank
+        </span>
+      </p>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className={cn("fig text-[24px] leading-none", hue)}>
+          {v} <span className="text-[12px] text-ink-3">/100</span>
+        </p>
+        <p className={cn("text-right text-[12.5px] font-semibold", r.setup.state === "retest" && side ? sideHue(side) : "text-ink-2")}>
+          {side === "long" ? "Long · " : side === "short" ? "Short · " : ""}
+          {setupLabel(r)}
+        </p>
+      </div>
+      <div className="relative mt-2 h-[3px] bg-[var(--qt-track,var(--ring))]">
+        <span className={cn("absolute inset-y-0 left-0", bar)} style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+      </div>
+      <ul className="mt-2.5 flex flex-col gap-1">
         {r.score.parts.map((p) => {
-          const penalty = p.pts < 0;
+          const good = p.max > 0 && p.pts / p.max >= 0.5;
           return (
-            <li key={p.key} className="grid grid-cols-[96px_minmax(0,1fr)_46px] items-center gap-x-3 gap-y-0.5">
-              <span className="text-[12px] text-ink-2">{p.label}</span>
-              {penalty || p.max <= 0 ? (
-                <span className="text-[11.5px] text-ink-3">{p.note}</span>
-              ) : (
-                <span className="relative h-[4px] bg-[var(--qt-track,var(--ring))]">
-                  <span
-                    className="absolute inset-y-0 left-0 bg-ink-2"
-                    style={{ width: `${Math.max(0, Math.min(1, p.pts / p.max)) * 100}%` }}
-                  />
-                </span>
-              )}
-              <span
-                className={cn("fig text-right text-[12px]", penalty ? "text-flip-fig" : "text-ink")}
-              >
-                {penalty ? Math.round(p.pts) : `${Math.round(p.pts)}/${p.max}`}
+            <li key={p.key} className="flex items-baseline gap-1.5 text-[11.5px] leading-[1.35]" title={p.note}>
+              <span aria-hidden className={cn("shrink-0 text-[11px]", good ? "text-call-fig" : "text-put-fig")}>{good ? "✓" : "✗"}</span>
+              <span className="min-w-0 flex-1 truncate text-ink-2">
+                {p.label}
+                {p.note ? <span className="text-ink-3"> — {p.note}</span> : null}
               </span>
-              {!penalty && p.max > 0 && p.note && (
-                <span className="col-start-2 col-end-4 text-[11px] leading-[1.4] text-ink-3">{p.note}</span>
-              )}
+              <span className={cn("fig shrink-0 text-[11px]", p.pts < 0 ? "text-flip-fig" : "text-ink-3")}>{p.max > 0 ? `${Math.round(p.pts)}/${p.max}` : Math.round(p.pts)}</span>
             </li>
           );
         })}
       </ul>
+      {r.setup.note && <p className="mt-2.5 border-t border-ring/60 pt-2 text-[12px] leading-[1.45] text-ink-2">{r.setup.note}</p>}
       {/* THE RECORD LINE (owner, 2026-10-23: "as high probability as
           possible"): what logged signals of this kind, side and band did —
           the only probability the rank can honestly show, with its sample. */}
@@ -352,18 +436,59 @@ interface Rung {
   price: number;
   tone: "call" | "put" | "neutral" | "spot" | "broken-hi" | "broken-lo";
   hint?: string;
+  /** A word after the label: where the figure comes from, when that needs saying. */
+  mark?: string;
+}
+
+/**
+ * THE OFFICIAL DAY'S LEVEL, WHEN THE CHART'S BARS STOP SHORT OF IT. PDH and PDL are
+ * the daily bar's; the 5-minute bars the candles are drawn from leave out the opening
+ * prints, so on some days the line sits past every candle (AVGO, 6 Nov 2026: 311.52
+ * against bars that reach 306.20). The row says so rather than leave the reader
+ * wondering which is wrong.
+ */
+function offBars(official: number | null, bars: number | null | undefined): bars is number {
+  return official != null && bars != null && Math.abs(official - bars) > Math.max(0.05, official * 0.0005);
+}
+
+/**
+ * THE PRE-MARKET LEVEL, WHEN THE CANDLES STOP SHORT OF IT. PMH and PML take whichever
+ * of the 5-minute bars and a second read reaches further (server scan.technicals). On
+ * 11 Nov 2026 Yahoo had no bar before 05:20 ET for any Nasdaq-listed name, so the
+ * line sat well past every candle (NVDA's low 172.66 against bars that began at
+ * 177.02). The row says which read the level is from, and that the bars are short,
+ * so a line with no candle near it is not taken for a mistake.
+ */
+function pmSource(r: ScanRow): string {
+  return r.premkt?.source === "screener" ? "TradingView's screener (fifteen minutes behind)" : "Nasdaq's pre-market read";
+}
+
+function pmPastBars(what: "high" | "low", level: number | null, bars: number | null | undefined, src: string): string | undefined {
+  // An older collector sends no bars figure: nothing to compare, nothing to say.
+  if (level == null || bars === undefined) return undefined;
+  if (bars === null) return `The pre-market ${what} from ${src}. Yahoo has no pre-market bars for this name yet today, so no candle reaches this line.`;
+  return offBars(level, bars)
+    ? `The pre-market ${what} from ${src}. Yahoo's 5-minute bars reach ${num(bars)}: they are missing part of today's pre-market, so the candles stop short of this line.`
+    : undefined;
 }
 
 function Ladder({ r }: { r: ScanRow }) {
   const L = r.levels;
   const rungs: Rung[] = [];
-  const add = (key: string, label: string, price: number | null, tone: Rung["tone"], hint?: string) => {
-    if (price != null && Number.isFinite(price)) rungs.push({ key, label, price, tone, hint });
+  const add = (key: string, label: string, price: number | null, tone: Rung["tone"], hint?: string, mark?: string) => {
+    if (price != null && Number.isFinite(price)) rungs.push({ key, label, price, tone, hint, mark });
   };
-  add("pdh", "PDH", L.pdh, r.broken.pdh ? "broken-hi" : "call", "previous regular-session high");
-  add("pmh", "PMH", L.pm_done ? L.pmh : null, r.broken.pmh ? "broken-hi" : "call", "pre-market high");
-  add("pml", "PML", L.pm_done ? L.pml : null, r.broken.pml ? "broken-lo" : "put", "pre-market low");
-  add("pdl", "PDL", L.pdl, r.broken.pdl ? "broken-lo" : "put", "previous regular-session low");
+  const official = (what: string, bars: number | null | undefined) =>
+    ` — the official day's ${what}. The 5-minute bars reach ${num(bars)}: they miss the opening prints, so the candles stop short of this line.`;
+  const hiOff = offBars(L.pdh, L.pdh_bars);
+  const loOff = offBars(L.pdl, L.pdl_bars);
+  add("pdh", "PDH", L.pdh, r.broken.pdh ? "broken-hi" : "call", `previous regular-session high${hiOff ? official("high", L.pdh_bars) : ""}`, hiOff ? "official" : undefined);
+  const pmSrc = pmSource(r);
+  const pmhNote = pmPastBars("high", L.pmh, L.pmh_bars, pmSrc);
+  const pmlNote = pmPastBars("low", L.pml, L.pml_bars, pmSrc);
+  add("pmh", "PMH", L.pm_done ? L.pmh : null, r.broken.pmh ? "broken-hi" : "call", `pre-market high${pmhNote ? ` — ${pmhNote}` : ""}`, pmhNote ? "wider" : undefined);
+  add("pml", "PML", L.pm_done ? L.pml : null, r.broken.pml ? "broken-lo" : "put", `pre-market low${pmlNote ? ` — ${pmlNote}` : ""}`, pmlNote ? "wider" : undefined);
+  add("pdl", "PDL", L.pdl, r.broken.pdl ? "broken-lo" : "put", `previous regular-session low${loOff ? official("low", L.pdl_bars) : ""}`, loOff ? "official" : undefined);
   add("vwap", "VWAP", L.vwap, "neutral", "volume-weighted average price for the session");
   add("ema8", "8 EMA", L.ema8, "neutral", "the 8 EMA on ten-minute bars");
   add("ema200", "200 EMA", L.ema200 ?? null, "neutral", "the 200 EMA on ten-minute bars — the side filter");
@@ -423,6 +548,7 @@ function Ladder({ r }: { r: ScanRow }) {
                 {(g.tone === "broken-hi" || g.tone === "broken-lo") && (
                   <span className="qt-cap ml-1.5 text-[9.5px] text-ink-3">broken</span>
                 )}
+                {g.mark && <span className="qt-cap ml-1.5 text-[9.5px] text-ink-3">{g.mark}</span>}
               </span>
               <span className={cn("fig text-right text-[12.5px]", spot ? "text-ink" : "text-ink-2")}>
                 {num(g.price)}
@@ -447,14 +573,25 @@ const KIND_LABEL: Record<ScanRow["news"][number]["kind"], string> = {
   news: "News",
 };
 
-function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
-  const e = r.earnings;
+/** The news card: the most important story first if it is not in the list, then by day. */
+function NewsCard({ r, now }: { r: ScanRow; now: number | null }) {
+  const inList = r.catalyst != null && r.news.some((n) => n.title === r.catalyst?.title);
   return (
     <section className={CARD}>
-      <Cap>Catalysts</Cap>
+      <p className="qt-cap mb-2 flex items-baseline justify-between text-[10.5px] text-ink-3">
+        <span className="flex items-center gap-1.5"><Glyph name="clock" size={11} />News</span>
+        <span className="fig normal-case">{r.news.length} in 3d</span>
+      </p>
+      {r.catalyst && !inList && <TopStory c={r.catalyst} />}
+      {r.news.length === 0 ? <p className="text-[12px] text-ink-3">No headlines found for this name.</p> : <Headlines news={r.news} now={now} top={r.catalyst} />}
+    </section>
+  );
+}
 
-      {r.catalyst && <TopStory c={r.catalyst} />}
-
+function Catalysts({ r }: { r: ScanRow }) {
+  const e = r.earnings;
+  return (
+    <div>
       <div className="flex flex-col gap-1.5">
         <p className="text-[12px] text-ink-2">
           <span className="qt-cap mr-2 text-[10.5px] text-ink-3">Earnings</span>
@@ -555,15 +692,7 @@ function Catalysts({ r, now }: { r: ScanRow; now: number | null }) {
         </div>
       )}
 
-      <div className="mt-3.5">
-        <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">Headlines · last 3 days</p>
-        {r.news.length === 0 ? (
-          <p className="text-[12px] text-ink-3">No headlines found for this name.</p>
-        ) : (
-          <Headlines news={r.news} now={now} />
-        )}
-      </div>
-    </section>
+    </div>
   );
 }
 
@@ -578,12 +707,13 @@ function TopStory({ c }: { c: Catalyst }) {
   );
 }
 
-const HEADLINES_SHOWN = 12;
+const HEADLINES_SHOWN = 6;
+const ET_HM = new Intl.DateTimeFormat("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
 const ET_DATE = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
 const ET_DAY_NAME = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" });
 
 /** Headlines newest first, under their New York day, the rest behind a button. */
-function Headlines({ news, now }: { news: ScanRow["news"]; now: number | null }) {
+function Headlines({ news, now, top }: { news: ScanRow["news"]; now: number | null; top?: Catalyst | null }) {
   const [all, setAll] = useState(false);
   const shown = all ? news : news.slice(0, HEADLINES_SHOWN);
   const today = now === null ? null : ET_DATE.format(new Date(now));
@@ -603,17 +733,17 @@ function Headlines({ news, now }: { news: ScanRow["news"]; now: number | null })
                   {day === today ? "Today" : ET_DAY_NAME.format(when)}
                 </p>
               )}
-              <a href={n.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-0.5 py-1.5">
-                <span className="text-[12.5px] leading-[1.4] text-ink">{n.title}</span>
+              <a href={n.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-0.5 py-1.5" title={n.publisher}>
                 <span className="flex items-baseline gap-2 text-[11px] text-ink-3">
-                  {n.kind !== "news" && (
-                    <span className={cn("qt-cap text-[9.5px]", n.kind === "rating" ? "text-flip-fig" : "text-ink-3")}>
-                      {KIND_LABEL[n.kind]}
-                    </span>
-                  )}
-                  <span className="text-ink-3">{n.publisher}</span>
+                  {when && <span className="fig text-[12px] text-ink">{ET_HM.format(when)}</span>}
                   <span className="fig">{ago(n.utc, now)}</span>
+                  {top?.title === n.title ? (
+                    <span className="qt-cap rounded-[3px] border border-desk-markets/50 bg-desk-markets/10 px-1 text-[9px] leading-[13px] text-desk-markets">{top.tag}</span>
+                  ) : (
+                    n.kind !== "news" && <span className={cn("qt-cap text-[9.5px]", n.kind === "rating" ? "text-flip-fig" : "text-ink-3")}>{KIND_LABEL[n.kind]}</span>
+                  )}
                 </span>
+                <span className="text-[12.5px] leading-[1.4] text-ink">{n.title}</span>
               </a>
             </li>
           );

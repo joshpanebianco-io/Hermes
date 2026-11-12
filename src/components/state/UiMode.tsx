@@ -21,3 +21,21 @@ export const UiProvider = UiCtx.Provider;
 export function useQuiet(): boolean {
   return useContext(UiCtx) === "quiet";
 }
+
+/**
+ * Luminous Glass, and Sidebar, which rides on it (lib/ui.ts): the pages that lay
+ * themselves out as cards there (the brief) ask this, and are the same cards in both.
+ */
+export function useLum(): boolean {
+  const ui = useContext(UiCtx);
+  return ui === "lum" || ui === "side";
+}
+
+/**
+ * The Sidebar interface: the pages are listed down the left and the shell's header
+ * carries the page's name, the prices and the search, so a page asks this before it
+ * draws a band of its own for any of those.
+ */
+export function useSide(): boolean {
+  return useContext(UiCtx) === "side";
+}

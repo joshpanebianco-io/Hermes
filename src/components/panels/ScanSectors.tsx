@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BreakoutChip, BreakoutsPayload } from "@/types/scanner";
 import type { HeatCard, HeatIndustry, HeatSpan, HeatmapPayload } from "@/types/dashboard";
-import { HelmLoader } from "@/components/ui/HelmLoader";
+import { HelmLoader, PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
+import { SectorGlyph } from "@/components/ui/SectorGlyph";
 import {
   CatalystCell,
   Chips,
   Choice,
-  GroupHead,
   Menu,
   RangeCell,
   Spark,
@@ -23,7 +23,6 @@ import {
   isStr,
   pctText,
   rowProps,
-  useWalk,
   volWord,
 } from "@/components/panels/ScanWide";
 import { cn } from "@/lib/cn";
@@ -32,6 +31,7 @@ import { heatMax, heatStyle } from "@/lib/heat";
 import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
+import { usePinsChanged } from "@/lib/usePinsChanged";
 
 /**
  * Sectors: where the money is, and the stocks in it.
@@ -126,6 +126,8 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
       /* the last read stays on screen */
     }
   }, [q]);
+  // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
+  usePinsChanged(loadTable);
 
   const on = heat?.ok ? heat.basis !== "last" : false;
   useEffect(() => {
@@ -138,9 +140,6 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     const id = setInterval(loadTable, on ? 5000 : 60_000);
     return () => clearInterval(id);
   }, [loadTable, on]);
-
-  const syms = useMemo(() => table?.rows.map((r) => r.sym) ?? [], [table]);
-  useWalk(syms);
 
   const pctOf = useCallback((c: HeatCard) => c[`${span}_pct` as const], [span]);
   const rsOf = useCallback((c: HeatCard) => c[`rs_${span}` as const], [span]);
@@ -155,12 +154,13 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     };
   }, [heat, pctOf, rsOf]);
 
-  if (!heat) return <HelmLoader label="Reading the sectors" size={48} minHeight={420} />;
+  // A card where the page will be, not the helm on the ground (ui/HelmLoader PageLoader).
+  if (!heat) return <PageLoader label="Reading the sectors" />;
   if (!heat.ok) {
     return (
-      <p className="px-6 py-10 text-center text-[12px] text-ink-3">
+      <PageNote>
         {heat.offline ? `${heat.offline.reason}.` : (heat.error ?? "The wide read has not landed yet: it is one request, a few seconds after a start.")}
-      </p>
+      </PageNote>
     );
   }
 
@@ -191,19 +191,11 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
       {sort === k ? " ↓" : ""}
     </button>
   );
-  const groups: Array<{ label: string; span: number }> = [{ label: "", span: 1 }];
-  if (has("themes")) groups.push({ label: "Themes", span: 1 });
-  if (has("momentum")) groups.push({ label: "Momentum", span: 4 });
-  if (has("volume")) groups.push({ label: "Volume", span: 2 });
-  if (has("levels")) groups.push({ label: "Levels", span: 2 });
-  if (has("news")) groups.push({ label: "News", span: 1 });
-  if (has("chart")) groups.push({ label: "Chart", span: 1 });
-  groups.push({ label: "", span: 1 });
   const summary = [capWord(cap), vol ? volWord(vol) : null].filter(Boolean).join(" · ");
   const inds = [...heat.industries].sort((a, b) => (b[span].median ?? -Infinity) - (a[span].median ?? -Infinity));
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
+    <div className="qt-sheet min-h-0 flex-1 overflow-auto">
       <div className="flex flex-wrap items-center gap-3 px-4 pt-3 pb-2">
         <span className="seg">
           <button type="button" onClick={() => setMode("cards")} {...segItem(mode === "cards")}>
@@ -250,7 +242,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
       </div>
 
       {table?.ok && (
-        <div className="mx-4 mt-2 grid grid-cols-2 divide-x divide-ring rounded-[6px] border border-ring bg-surface/40 qt:rounded-[4px]">
+        <div className="qt-tally mx-4 mt-2 grid grid-cols-2 divide-x divide-ring rounded-[6px] border border-ring bg-surface/40 qt:rounded-[4px]">
           <Tally value={table.stats.pdh} hue="text-call-fig" glyph="▲" word="Advancing" sub="Above PDH" />
           <Tally value={table.stats.pdl} hue="text-put-fig" glyph="▼" word="Declining" sub="Below PDL" />
         </div>
@@ -336,7 +328,6 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
       ) : (
         <table className="w-full min-w-[1360px] border-separate border-spacing-0 text-left">
           <thead className="sticky top-0 z-20">
-            <GroupHead groups={groups} />
             <tr>
               <th scope="col" className={cn(TH, "sticky left-0 z-30 w-[220px]")}>Ticker</th>
               {has("themes") && <th scope="col" className={TH}>Themes</th>}
@@ -478,7 +469,8 @@ function Card({ c, rank, span, pctOf, rsOf, tint, barMax, on, onPick }: CardBase
   const p = pctOf(c);
   return (
     <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} style={heatStyle(p, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")}>
-      <p className="flex items-baseline gap-2">
+      <p className="flex items-center gap-2">
+        <SectorGlyph fund={c.key} size={15} className="block shrink-0 text-ink-2" />
         <span className="fig text-[13px] font-semibold text-ink">{c.key}</span>
         <span className={cn("fig text-[13px]", dir(p))}>{pct(p)}</span>
         {rank != null && <span className="fig ml-auto text-[10.5px] text-ink-3">#{rank}</span>}
@@ -500,8 +492,11 @@ function TopMover({ c, span, word, pctOf, rsOf, tint, on, onPick }: CardBase & {
     <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} style={heatStyle(p, tint)} className={cn(CARD_BOX, "col-span-2 row-span-2 flex flex-col justify-between px-4 py-3", on ? "border-ink-3" : "border-ring")}>
       <div>
         <p className="qt-cap text-[10px] text-ink-3">Top mover</p>
-        <p className="mt-1 flex items-baseline justify-between gap-3">
-          <span className="fig text-[22px] leading-none font-semibold text-ink">{c.key}</span>
+        <p className="mt-1 flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2.5">
+            <SectorGlyph fund={c.key} size={22} className="block shrink-0 text-ink-2" />
+            <span className="fig text-[22px] leading-none font-semibold text-ink">{c.key}</span>
+          </span>
           <span className={cn("fig text-[22px] leading-none", dir(p))}>{pct(p)}</span>
         </p>
         <p className="mt-1 flex items-baseline justify-between gap-3 text-[12.5px]">

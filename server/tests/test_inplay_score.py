@@ -98,7 +98,7 @@ def test_the_payload_scores_in_play_before_the_bell_from_the_nasdaq_read() -> No
     """build() joins the pre-market read before it scores, so the part sees it."""
     clk = scan.clock_at(datetime(2026, 10, 14, 6, 2, tzinfo=scan.ET))
     row = dict(_row(556.48, 572.47, 26.6644))
-    row.update({"sym": "DELL", "adv20": 1_000_000.0})
+    row.update({"sym": "DELL", "adv": 1_000_000.0})
     p = scanscore.build({"rows": {"DELL": row}, "fetched": {}}, quotes=[], sectors=[],
                         calendar=[], earnings=[], wire=[], news={}, filings={}, aliases={},
                         status=None, watchlist=["DELL"], clock=clk,

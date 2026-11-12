@@ -180,9 +180,15 @@ CONTEXT: list[tuple[str, str, str]] = [
     ("GLD", "GLD", "GLD"),
     ("GDX", "GDX", "Gold miners ETF"),
     ("GVZ", "^GVZ", "Gold vol (GVZ)"),
+    # Silver's and crude's own implied vols, for their implied day (volterm.EM_VOL).
+    ("VXSLV", "^VXSLV", "Silver vol (VXSLV)"),
+    ("OVX", "^OVX", "Crude vol (OVX)"),
     # The VIX's own month (volterm.vix_month): twenty closes, both desks.
     ("VIX", "^VIX", "VIX"),
 ]
+
+#: Context rows read for their level alone, kept when Yahoo has too few closes for a change.
+LEVEL_ONLY: frozenset[str] = frozenset({"VXSLV", "OVX", "GVZ"})
 
 # Yahoo starts truncating the response somewhere above ~20 symbols; 12 keeps
 # every chunk comfortably inside that and still costs only four requests.
@@ -411,8 +417,15 @@ def _daily_row(key: str, label: str, resp: dict[str, Any]) -> dict[str, Any] | N
         ]
     except (TypeError, ValueError, IndexError, AttributeError):
         closes = []
-    if px is None or len(closes) < 2:
+    if px is None:
         return None
+    if len(closes) < 2:
+        # A vol index read only for its level (silver's VXSLV, of which Yahoo keeps one
+        # close) still answers with that level; anything else needs a series to be a row.
+        if key not in LEVEL_ONLY:
+            return None
+        return {"key": key, "label": label, "last": px, "day_pct": None, "week_pct": None,
+                "month_pct": None, "week_chg": None, "month_chg": None, "closes": closes}
     # THE PRIOR CLOSE COMES FROM THE SERIES, NOT FROM meta.
     #
     # Over a 1-month range `chartPreviousClose` is the close before the

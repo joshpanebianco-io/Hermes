@@ -136,8 +136,9 @@ function GammaRead({
         <span className="fig text-[19px] leading-none text-ink">{book}</span>
         {spot != null && <span className="fig text-[13px] text-ink-2">{num(spot)}</span>}
         {regime && (
-          <span className={cn("qt-cap text-[10.5px]", regime === "POS" ? "text-call-fig" : "text-put-fig")}>
-            {regime === "POS" ? "positive γ" : "negative γ"}
+          // In ink: the regime is not a side (lib/gammaRegime).
+          <span className="qt-cap text-[10.5px] text-ink-2">
+            {regime === "POS" ? "positive γ · moves damped" : "negative γ · moves amplified"}
           </span>
         )}
         <span className="fig ml-auto text-[11px] text-ink-3">0DTE book · GEXYGEN</span>

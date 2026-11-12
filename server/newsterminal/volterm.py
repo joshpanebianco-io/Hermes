@@ -142,12 +142,20 @@ def state(quotes: list[dict[str, Any]]) -> dict[str, Any]:
 # the panel says which is which. Computed on read, like the curve above.
 # ---------------------------------------------------------------------------
 
-BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
+BOOKS: tuple[str, ...] = ("NQ", "ES", "GC", "SIL", "CL")
 #: The index that prices each book's day. The Report's ladder reads the same map.
-EM_VOL: dict[str, str] = {"NQ": "VXN", "ES": "VIX", "GC": "GVZ"}
+EM_VOL: dict[str, str] = {"NQ": "VXN", "ES": "VIX", "GC": "GVZ", "SIL": "VXSLV", "CL": "OVX"}
 #: Decimals a book is quoted to: NQ in whole points, ES in quarters, gold in
-#: tenths. A ladder printing 29,408.00 carries three characters of noise a row.
-BOOK_DP: dict[str, int] = {"NQ": 0, "ES": 2, "GC": 1}
+#: tenths, silver in half-cents, crude in cents. A ladder printing 29,408.00
+#: carries three characters of noise a row.
+BOOK_DP: dict[str, int] = {"NQ": 0, "ES": 2, "GC": 1, "SIL": 3, "CL": 2}
+#: The board's key for a book where it differs: silver and crude ride the board,
+#: and the daily context, as SILVER and WTI, which the header and the brief read.
+QUOTE_KEY: dict[str, str] = {"SIL": "SILVER", "CL": "WTI"}
+
+
+def quote_key(book: str) -> str:
+    return QUOTE_KEY.get(book, book)
 #: Range used ÷ implied day: under ROOM there is room left to travel; past
 #: STRETCHED the day has already done what the options priced.
 FUEL_ROOM = 0.6
@@ -181,7 +189,7 @@ def implied_day(
     assets = (gex or {}).get("assets") or {}
     rows: list[dict[str, Any]] = []
     for book in BOOKS:
-        q = _q(quotes, book)
+        q = _q(quotes, quote_key(book))
         last = _num(q.get("last")) if q else None
         if q is None or last is None:
             continue
@@ -206,7 +214,8 @@ def implied_day(
         range_pct = rng / base * 100.0 if rng is not None and base else None
         used = range_pct / sigma_pct if range_pct is not None and sigma_pct else None
 
-        closes = [c for c in ((_q(ctx, book) or {}).get("closes") or []) if _num(c) is not None]
+        daily = (_q(ctx, quote_key(book)) or {}).get("closes") or []
+        closes = [c for c in daily if _num(c) is not None]
         rv = realised_vol([float(c) for c in closes])
         iv_rv = round(iv / rv, 3) if iv and rv else None
 

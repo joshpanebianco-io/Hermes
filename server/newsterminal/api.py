@@ -394,9 +394,20 @@ def scanner_stats(days: int = Query(20, ge=1, le=30)) -> dict[str, Any]:
     return COLLECTOR.events.stats(days)
 
 
+@app.get("/api/futures/bars/{book}")
+def futures_bars(
+    book: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|30m|60m|D)$"),
+) -> dict[str, Any]:
+    """One futures book's chart (NQ, ES, GC, SIL, CL): bars, the averages, VWAP from
+    each 18:00 reopen, the session spans, and the ladder's levels as lines."""
+    return COLLECTOR.futures_bars(book, tf)
+
+
 @app.get("/api/scanner/bars/{sym}")
-def scanner_bars(sym: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|D)$")) -> dict[str, Any]:
-    """One name's chart on `tf` (1m, 3m, 5m, 10m or D): bars, the EMA wave,
+def scanner_bars(
+    sym: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|30m|60m|D)$"),
+) -> dict[str, Any]:
+    """One name's chart on `tf` (1m, 3m, 5m, 10m, 30m, 60m or D): bars, the EMA wave,
     VWAP, levels and signals. Always 200; `ok: false` with an `error` when the
     name has no bars."""
     return COLLECTOR.scanner_bars(sym[:12], tf)
@@ -458,10 +469,10 @@ def dashboard() -> dict[str, Any]:
 
 @app.get("/api/scanner/extended")
 def scanner_extended(
-    session: str = Query("pre", pattern=r"^(pre|post)$"),
+    session: str = Query("pre", pattern=r"^(pre|post|all)$"),
     cap: float = Query(2e9, ge=0),
     vol: float | None = Query(None, ge=0),
-    chip: str = Query("all", pattern=r"^(all|up|down|news|through|day23|pinned)$"),
+    chip: str = Query("all", pattern=r"^(all|up|down|news|through|inside|day23|pinned)$"),
 ) -> dict[str, Any]:
     """One extended session's gappers: this one while it is on, else the last."""
     return COLLECTOR.extended(session=session, cap=cap, vol=vol, chip=chip)

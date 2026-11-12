@@ -36,13 +36,13 @@ like volterm and expiry.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from . import bias as bias_mod
 from . import events as events_mod
 from . import frame as frame_mod
-from . import marketctx, releases, report, structure, volterm
+from . import holidays, marketctx, releases, report, structure, volterm
 from .profile import value_position
 from .sources import cot as cot_mod
 
@@ -109,7 +109,7 @@ def _stopped(q: dict[str, Any]) -> bool:
 # ---- macro -------------------------------------------------------------------
 
 
-def _yields(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
+def _yields(quotes: list[dict[str, Any]], book: str, day: date | None = None) -> dict[str, Any]:
     q = _q(quotes, "US10Y")
     chg = _num(q.get("chg")) if q else None
     if q is None or chg is None:
@@ -118,6 +118,13 @@ def _yields(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     bp = chg * 100.0
     last = _num(q.get("last"))
     value = f"{last:.2f}% {_signed(bp, 1, 'bp')}" if last is not None else _signed(bp, 1, "bp")
+    # A bond holiday (Columbus Day, Veterans Day: stocks trade, Treasuries do not). The
+    # index still publishes a figure, and it is not a market: it cannot vote.
+    shut = holidays.bond_closed(day) if day else None
+    if shut:
+        return _vote("yields", "10Y yield", "macro", value, "neutral",
+                     f"the cash Treasury market is shut today ({shut}) — no live read",
+                     live=False)
     if not _trading(q):
         return _vote("yields", "10Y yield", "macro", value, "neutral",
                      "the cash 10Y last printed at its close — no live read", live=False)
@@ -279,18 +286,24 @@ def _prints(calendar: list[dict[str, Any]], now: datetime, book: str) -> dict[st
 
 def _gamma(gex: dict[str, Any] | None, book: str, last: float | None,
            sigma: float | None) -> dict[str, Any]:
+    """Dealer gamma: the regime and where spot sits against the flip. NEVER A SIDE
+    (bias.BOARD_FAMILY): it voted long above the flip and short below it until
+    2026-11-12, which read positive gamma as bullish. It says how far a move runs."""
+    def row(value: str, note: str, live: bool = True) -> dict[str, Any]:
+        v = _vote("gamma", "Dealer gamma", "positioning", value, "neutral", note, live=live)
+        v["aside"] = "never a side: the regime says how far a move runs, not which way"
+        return v
+
     a = ((gex or {}).get("assets") or {}).get(book) if isinstance(gex, dict) else None
     if not isinstance(a, dict) or not a.get("ok"):
-        return _vote("gamma", "Dealer gamma", "positioning", "—", "neutral",
-                     "GEXYGEN is not answering — no gamma read", live=False)
+        return row("—", "GEXYGEN is not answering — no gamma read", live=False)
     regime = a.get("regime") if a.get("regime") in ("POS", "NEG") else None
     flip = next((_num(lv.get("price")) for lv in a.get("levels") or []
                  if lv.get("key") == "flip"), None)
     spot = last if last is not None else _num(a.get("spot"))
     word = {"POS": "positive γ", "NEG": "negative γ", None: "no regime"}[regime]
     if flip is None or spot is None:
-        return _vote("gamma", "Dealer gamma", "positioning", word, "neutral",
-                     "no gamma flip to read spot against", live=False)
+        return row(word, "no gamma flip to read spot against", live=False)
     above = spot >= flip
     dist = spot - flip
     in_sig = f" ({abs(dist) / sigma:.1f}σ)" if sigma else ""
@@ -298,8 +311,8 @@ def _gamma(gex: dict[str, Any] | None, book: str, last: float | None,
     how = ("dealers damp moves — fade into the walls, ranges hold" if regime == "POS"
            else "dealers chase moves — breaks run, trade the break not the fade"
            if regime == "NEG" else "regime unknown")
-    return _vote("gamma", "Dealer gamma", "positioning", value, "long" if above else "short",
-                 f"spot {abs(dist):,.0f} {'above' if above else 'below'} the flip{in_sig}; {how}")
+    return row(value, f"spot {abs(dist):,.0f} {'above' if above else 'below'} the flip{in_sig}; "
+                      f"{how}. Not a direction: positive is not bullish, negative is not bearish")
 
 
 # ---- structure ---------------------------------------------------------------
@@ -539,7 +552,7 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
     last = _num(q.get("last")) if q else None
     cash_open = scan_session == "rth"
     votes: list[dict[str, Any]] = [
-        _yields(quotes, book), _dollar(quotes, book),
+        _yields(quotes, book, now.astimezone(report.ET).date()), _dollar(quotes, book),
     ]
     if book == "GC":
         votes.append(_silver(quotes))
@@ -557,6 +570,8 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
         votes.append(_leaders(constituents, book, cash_open))
         votes.append(_heavyweight_prints(heavy or [], book))
     risk = _event_risk(events or [])
+    # What the board prints beside a read that is in no family: each says why it is not a side.
+    risk["aside"] = "never a side: on the tape, it lowers the ceiling a notch"
     votes.append(risk)
     a = ((gex or {}).get("assets") or {}).get(book) if isinstance(gex, dict) else None
     regime = a.get("regime") if isinstance(a, dict) and a.get("ok") and a.get("regime") in (

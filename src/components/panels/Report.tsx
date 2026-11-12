@@ -13,9 +13,10 @@ import { Brief } from "@/components/panels/Brief";
 import { Module } from "@/components/ui/Module";
 import { PastList } from "@/components/panels/PastList";
 import { biasHue, biasLabel } from "@/lib/bias";
+import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { HelmMark, HelmSweep, useHelmId } from "@/components/ui/HelmLoader";
-import { useQuiet } from "@/components/state/UiMode";
+import { useLum, useQuiet } from "@/components/state/UiMode";
 import { NoteAge } from "@/components/ui/NoteAge";
 
 /**
@@ -105,13 +106,34 @@ export function Report({
   const [showDigest, setShowDigest] = useState(false);
   const rep = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
+  /** The loader is what the card holds: the one state that is stood in the middle of it. */
+  const waiting = enabled && busy;
+  /*
+   * LUMINOUS DRAWS A BRIEF AS A BOARD OF CARDS (panels/Brief, LUM): the report's card is
+   * then only its bar (the title, which book, which session, Generate), which stays put,
+   * and the brief's own cards scroll under it. Every other state (the loader, a failure,
+   * no key, an old note) is still one card that fills the column.
+   */
+  const lum = useLum();
+  const board = lum && enabled && !busy && Boolean(rep && !rep.error && rep.report && rep.format === "brief" && rep.facts);
 
   return (
     <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+      {/* Shrinkable only side by side: stacked, a column that shrinks spills into the next
+          one (the report was drawn under Past calls on a window narrower than xl). */}
+      <div className={cn("flex min-w-0 flex-col gap-2 lum:gap-[var(--lum-gap)] xl:min-h-0", board ? "xl:overflow-hidden" : "xl:overflow-y-auto")}>
         <Module
           title="Session report"
           large
+          /*
+           * THE CARD RUNS TO THE FOOT OF ITS COLUMN WHATEVER IT HOLDS (owner, 2026-11-12:
+           * "when we generate brief on the futures tab, the card doesnt go all the way to
+           * the bottom"). It was as tall as its contents, so the loader, a failure or "no
+           * report yet" left a 430px card beside Past calls, which runs the full height.
+           * `grow` and not `flex-1`: a brief longer than the column must keep its height
+           * and scroll the column, not be cut to it.
+           */
+          className={board ? "shrink-0" : "xl:grow"}
           sub={
             rep
               ? [rep.asset_label, rep.session_label, rep.et_label]
@@ -119,7 +141,7 @@ export function Report({
                   .join(" · ")
               : undefined
           }
-          bodyClassName="px-0 py-0"
+          bodyClassName={board ? "hidden" : cn("px-0 py-0", waiting && "flex flex-col justify-center")}
           /*
            * A FAILED TRIP IS STATED, NOT DRESSED AS SOMETHING ELSE. It used to
            * fall through to the no-key screen. With a report already on the
@@ -179,7 +201,7 @@ export function Report({
             </div>
           }
         >
-          {feed?.offline && !enabled ? (
+          {board ? null : feed?.offline && !enabled ? (
             <Offline reason={feed.offline.reason} api={feed.offline.api} onRetry={retry} />
           ) : !enabled ? (
             <NoKey model={feed?.config?.model} />
@@ -203,9 +225,21 @@ export function Report({
             <Empty />
           )}
         </Module>
+        {board && rep && (
+          <div className="flex min-w-0 flex-col gap-2 lum:gap-[var(--lum-gap)] xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+            {/* The age banner keeps its tint and takes the cards' corners. */}
+            <div className="shrink-0 overflow-hidden rounded-[12px] empty:hidden">
+              <NoteAge createdUtc={rep.created_utc} what="brief" />
+            </div>
+            <Brief rep={rep} />
+            <div className="qt-card shrink-0 px-2 py-1 [&>div:first-child]:border-t-0 [&>div:first-child]:bg-transparent [&>div:first-child]:pt-2 [&>div:first-child]:text-[11px]">
+              <Provenance rep={rep} showDigest={showDigest} onDigest={() => setShowDigest((v) => !v)} />
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
+      <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
         {/* Runs to the foot of the column so it ends level with the report
             beside it, and the list scrolls INSIDE it — the wire's arrangement.
             Only at xl, where the two sit side by side; stacked, it is as tall

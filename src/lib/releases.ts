@@ -164,6 +164,45 @@ function escape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 
+/** Two letters are enough to place a release and cost a third of the width. */
+const COUNTRY_CODE: Record<string, string> = {
+  "United States": "US",
+  "Euro Zone": "EZ",
+  "United Kingdom": "UK",
+  Germany: "DE",
+  Japan: "JP",
+  China: "CN",
+  Canada: "CA",
+  Australia: "AU",
+  "New Zealand": "NZ",
+  France: "FR",
+  Italy: "IT",
+  Spain: "ES",
+  Switzerland: "CH",
+  "South Korea": "KR",
+  "Hong Kong": "HK",
+  India: "IN",
+  Brazil: "BR",
+};
+
+export function countryCode(c: string): string {
+  return COUNTRY_CODE[c] ?? c.slice(0, 2).toUpperCase();
+}
+
+/**
+ * A release's name where no country column sits beside it (the Futures cards'
+ * Next, "What moves them"): a US release as it is, any other with its country in
+ * front, unless the name already says ("German CPI m/m").
+ *
+ * "CPI m/m" at 02:00 ET is Germany's final reading and reads as America's without
+ * it (2026-11-11, on TradingView's names, which carry no adjective). Japan's PPI
+ * read that way on Nasdaq's names too.
+ */
+export function placedName(event: string, country: string | null | undefined): string {
+  if (!country || country === "United States" || ADJECTIVE.test(event)) return event;
+  return `${countryCode(country)} ${event}`;
+}
+
 /**
  * A sub-series' name beside its lead: "CPI y/y" under "Core CPI m/m" is "y/y",
  * "Continuing Jobless Claims" under initial claims is "Continuing". A series

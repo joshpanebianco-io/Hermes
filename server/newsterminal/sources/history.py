@@ -28,7 +28,8 @@ from ..sessions import globex_trade_date
 
 CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d"
 
-BOOKS: list[tuple[str, str]] = [("NQ", "NQ=F"), ("ES", "ES=F"), ("GC", "GC=F")]
+BOOKS: list[tuple[str, str]] = [("NQ", "NQ=F"), ("ES", "ES=F"), ("GC", "GC=F"),
+                                ("SIL", "SI=F"), ("CL", "CL=F")]
 
 #: How long a copy is served before going upstream, and how old a stale copy
 #: may be served when upstream fails. Daily levels: an hour, and three days.

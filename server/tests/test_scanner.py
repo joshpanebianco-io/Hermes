@@ -463,11 +463,16 @@ def test_next_event_window() -> None:
 def test_wire_match_is_strict() -> None:
     now = et(2026, 10, 13, 11, 0)
     ts = now.timestamp() - 600
+    # The cashtag's line was "Why $INTC is moving" until 2026-11-11: an explainer with no
+    # event in it, which the list no longer holds (catalysts.story). The match it was
+    # here to prove is unchanged.
     wire = [{"title": "Intel cuts guidance", "ts": ts},
             {"title": "Artificial intelligence spend rises", "ts": ts},
+            {"title": "$INTC slides after Dell warns on PC demand", "ts": ts},
             {"title": "Why $INTC is moving", "ts": ts}]
     got = scanscore.news_for("INTC", [], wire, ["Intel"], now)
-    assert [g["title"] for g in got] == ["Intel cuts guidance", "Why $INTC is moving"]
+    assert [g["title"] for g in got] == ["Intel cuts guidance",
+                                         "$INTC slides after Dell warns on PC demand"]
 
 
 def test_own_feed_must_name_the_company() -> None:
@@ -589,8 +594,174 @@ def test_previous_close_prefers_the_official_print() -> None:
     t = scan.technicals(mon + pm, daily, clk, official=(date(2026, 10, 12), 104.3))
     assert t.pdc == pytest.approx(104.3)
     assert t.ext_pct == pytest.approx((104.5 / 104.3 - 1) * 100)
-    # PDH/PDL stay on the bars.
+    # PDH/PDL: the bars and the daily bar agree here.
     assert (t.pdh, t.pdl) == (105, 99)
+
+
+# --- the previous day's range and the open are the official day's (audit, 2026-11-11) ----
+
+
+def _avgo() -> tuple[list[Bar], list[scan.DayBar]]:
+    """AVGO, Fri 6 Nov 2026, as it was: the day's high was 311.52, made in the first
+    prints after the bell, and Yahoo's 5-minute bars opened at 305.00 and never saw it."""
+    fri = day_bars(date(2026, 11, 6), [(305.0, 306.2, 302.88, 304.33),
+                                       (304.28, 305.46, 289.77, 293.32)])
+    mon = day_bars(date(2026, 11, 9), [(300.0, 307.0, 299.0, 306.5)])
+    daily = [scan.DayBar(date(2026, 11, 6), 311.13, 311.52, 289.77, 293.69, 0.0)]
+    return fri + mon, daily
+
+
+def test_previous_day_range_is_the_official_days_where_it_reaches_further() -> None:
+    bars, daily = _avgo()
+    clk = scan.clock_at(et(2026, 11, 9, 9, 40))
+    t = scan.technicals(bars, daily, clk)
+    assert (t.pdh, t.pdl) == (311.52, 289.77)
+    assert (t.pdh_bars, t.pdl_bars) == (306.2, 289.77)
+    # 306.50 is over the bars' high and under the day's: not through PDH.
+    assert not t.broken["pdh"] and t.lvl_state == 0
+    # The 5-minute bars alone called that a break.
+    alone = scan.technicals(bars, [], clk)
+    assert alone.pdh == 306.2 and alone.broken["pdh"] and alone.lvl_state == 1
+    # The row carries both, so the page can say when they disagree.
+    lv = scan.row_of("AVGO", t, None, None, clk)["levels"]
+    assert (lv["pdh"], lv["pdh_bars"]) == (311.52, 306.2)
+    # A daily copy caught mid-session is not the day's bar: the 5-minute bars stand.
+    short = [scan.DayBar(date(2026, 11, 6), 305.0, 305.5, 300.0, 304.0, 0.0)]
+    noon = et(2026, 11, 6, 12, 0).timestamp()
+    mid = scan.technicals(bars, short, clk, daily_asof=noon)
+    assert (mid.pdh, mid.pdl) == (306.2, 289.77)
+
+
+def _msft_doc(quote_at: datetime, with_range: bool = True) -> dict[str, Any]:
+    """MSFT, Tue 10 Nov 2026, as Yahoo served it that evening: the 13:00 bar's high was
+    545.18, exactly Monday's close, on a day whose high was 544.15 with the stock at 530."""
+    rows = [
+        (et(2026, 11, 10, 8, 0), 546.5, 547.0, 545.9, 546.2),      # pre-market, over the day's high
+        (et(2026, 11, 10, 9, 30), 541.85, 542.46, 538.84, 541.48),
+        (et(2026, 11, 10, 13, 0), 530.79, 545.18, 530.32, 530.57),  # the stray
+        (et(2026, 11, 10, 13, 5), 530.57, 545.18, 530.40, 530.90),  # and one in the bar after
+    ]
+    q: dict[str, list[float]] = {"open": [], "high": [], "low": [], "close": [], "volume": []}
+    for _dt, o, h, lo, c in rows:
+        q["open"].append(o)
+        q["high"].append(h)
+        q["low"].append(lo)
+        q["close"].append(c)
+        q["volume"].append(1000)
+    meta: dict[str, Any] = {"regularMarketTime": int(quote_at.timestamp()),
+                            "regularMarketPrice": 530.9}
+    if with_range:
+        meta.update({"regularMarketDayHigh": 544.15, "regularMarketDayLow": 526.365})
+    return {"chart": {"result": [{"timestamp": [int(r[0].timestamp()) for r in rows],
+                                  "meta": meta, "indicators": {"quote": [q]}}]}}
+
+
+def test_a_stray_print_is_not_the_days_high() -> None:
+    def highs(quote_at: datetime, with_range: bool = True) -> list[tuple[str, float]]:
+        bars, _ = scan.parse_chart(_msft_doc(quote_at, with_range))
+        return [(datetime.fromtimestamp(b.t, ET).strftime("%H:%M"), b.high) for b in bars]
+
+    # After the bell every regular-session bar is inside the day's official range; the
+    # pre-market's is its own.
+    assert highs(et(2026, 11, 10, 16, 0)) == [("08:00", 547.0), ("09:30", 542.46),
+                                              ("13:00", 544.15), ("13:05", 544.15)]
+    # With the session on, a bar the quote may not have caught up with is left alone:
+    # at 13:09 the 13:05 bar is still forming, at 13:11 it ended a minute ago.
+    assert highs(et(2026, 11, 10, 13, 9))[2:] == [("13:00", 544.15), ("13:05", 545.18)]
+    assert highs(et(2026, 11, 10, 13, 11))[2:] == [("13:00", 544.15), ("13:05", 544.15)]
+    # A wick is never brought inside the bar's own open and close, and a chart with no
+    # day range is read as it comes.
+    bars, _ = scan.parse_chart(_msft_doc(et(2026, 11, 10, 16, 0)))
+    assert all(b.high >= max(b.open, b.close) and b.low <= min(b.open, b.close) for b in bars)
+    assert highs(et(2026, 11, 10, 16, 0), with_range=False)[2] == ("13:00", 545.18)
+
+
+def test_a_finished_days_range_is_its_daily_bar_outright() -> None:
+    # The same stray in bars read before the fix, or from a feed that still carries it:
+    # Wednesday's PDH is the day's 544.15, not the bars' 545.18.
+    tue = day_bars(date(2026, 11, 10), [(541.85, 542.46, 538.84, 541.48),
+                                        (530.79, 545.18, 526.365, 530.57)])
+    wed = day_bars(date(2026, 11, 11), [], pm=[(531.0, 532.0, 530.0, 531.5)])
+    daily = [scan.DayBar(date(2026, 11, 10), 543.41, 544.15, 526.365, 533.16, 0.0)]
+    clk = scan.clock_at(et(2026, 11, 11, 8, 0))
+    close = et(2026, 11, 10, 16, 0).timestamp()
+    t = scan.technicals(tue + wed, daily, clk, daily_asof=close + 20 * 60)
+    assert (t.pdh, t.pdh_bars) == (544.15, 545.18)
+
+
+def test_a_daily_copy_made_before_the_close_is_not_read_for_the_range() -> None:
+    bars, daily = _avgo()
+    clk = scan.clock_at(et(2026, 11, 9, 9, 40))
+    close = et(2026, 11, 6, 16, 0).timestamp()
+    rows = [(m, scan.technicals(bars, daily, clk, daily_asof=close + m * 60).pdh)
+            for m in (-120, 14, 15, 60)]
+    # minutes after Friday's bell the daily copy was made → the PDH Monday reads
+    assert rows == [(-120, 306.2), (14, 306.2), (15, 311.52), (60, 311.52)]
+
+
+def test_the_open_is_the_daily_bars_once_it_was_read_after_the_bell() -> None:
+    # MU, Tue 10 Nov 2026: the first 5-minute bar opened at 710.82, the stock at 717.37.
+    mon = day_bars(date(2026, 11, 9), [(730.0, 740.0, 725.0, 733.15)])
+    tue = day_bars(date(2026, 11, 10), [(710.82, 713.17, 702.36, 713.17)])
+    daily = [scan.DayBar(date(2026, 11, 9), 730.0, 740.0, 725.0, 733.15, 0.0),
+             scan.DayBar(date(2026, 11, 10), 717.37, 718.0, 702.36, 713.0, 0.0)]
+    clk = scan.clock_at(et(2026, 11, 10, 9, 40))
+    bell = et(2026, 11, 10, 9, 30).timestamp()
+    rows = []
+    for secs in (-3600, 59, 60, 600):
+        t = scan.technicals(mon + tue, daily, clk, daily_asof=bell + secs)
+        rows.append((secs, t.open, t.open_official, t.day_hi))
+    # seconds after the bell the daily copy was made → open, official?, the day's high
+    assert rows == [(-3600, 710.82, False, 713.17), (59, 710.82, False, 713.17),
+                    (60, 717.37, True, 718.0), (600, 717.37, True, 718.0)]
+    # With no download time known, today's row is never trusted (the close's own rule).
+    t = scan.technicals(mon + tue, daily, clk)
+    assert (t.open, t.open_official) == (710.82, False)
+
+
+@pytest.mark.parametrize(
+    ("now", "mark"),
+    [
+        (et(2026, 11, 10, 9, 32), None),
+        (et(2026, 11, 10, 9, 33), et(2026, 11, 10, 9, 33)),
+        (et(2026, 11, 10, 10, 4), et(2026, 11, 10, 9, 33)),
+        (et(2026, 11, 10, 10, 5), et(2026, 11, 10, 10, 5)),
+        (et(2026, 11, 10, 19, 0), et(2026, 11, 10, 10, 5)),
+        (et(2026, 11, 14, 12, 0), None),   # Saturday
+        (et(2026, 11, 26, 12, 0), None),   # Thanksgiving
+        (et(2026, 11, 27, 9, 33), et(2026, 11, 27, 9, 33)),  # the half day opens as usual
+    ],
+)
+def test_daily_bars_are_read_again_just_after_the_open(now: datetime,
+                                                       mark: datetime | None) -> None:
+    got = scan_src._last_open_mark(now)
+    assert (datetime.fromtimestamp(got, ET) if got else None) == mark
+
+
+def test_a_daily_copy_older_than_its_mark_is_read_from_yahoo_not_the_cache(
+        monkeypatch: Any, tmp_path: Any) -> None:
+    now = ets(9, 34, 0)                                   # Tue 13 Oct, a minute past the mark
+    monkeypatch.setattr(scan_src.time, "time", lambda: now.timestamp())
+    ttls: dict[str, float] = {}
+
+    def fake(url: str, **kw: Any) -> FetchResult:
+        if "interval=1d" in url:
+            ttls[url.split("/chart/")[1].split("?")[0]] = kw["ttl_sec"]
+        return FetchResult(True, _chart_doc(), "live", 0.0, None, 200)
+
+    monkeypatch.setattr(scan_src, "fetch", fake)
+    s = _store(tmp_path, ["A1"])
+    for sym in s.symbols():
+        s.fetched[sym] = now.timestamp()                   # the 5-minute bars are fresh
+    s.daily_at["A1"] = ets(9, 0, 0).timestamp()            # read before the bell: stale now
+    s.daily_at["SPY"] = ets(9, 33, 30).timestamp()         # read after the mark: fine
+    s.daily_at["QQQ"] = ets(9, 33, 30).timestamp()
+    s.daily_at["IWM"] = ets(9, 33, 30).timestamp()
+    s.tick_bars(now)
+    assert ttls == {"A1": 0.0}
+    assert s.daily_at["A1"] == now.timestamp()
+    s.tick_bars(now)
+    assert ttls == {"A1": 0.0}                             # and not asked for again
 
 
 def test_todays_daily_bar_is_never_a_close_during_the_session() -> None:
@@ -880,6 +1051,82 @@ def test_store_confirms_each_name_by_its_own_download(tmp_path: Any) -> None:
     store.fetched["AAPL"] = et(2026, 10, 13, 9, 40).timestamp() + 12
     rows = store.compute(now)["rows"]
     assert any(s["kind"] == "BO" for s in rows["AAPL"]["signals"])
+
+
+def _owed_store(monkeypatch: Any, tmp_path: Any, now: float,
+                daily_ok: list[bool]) -> tuple[scan_src.ScanStore, list[tuple[str, str]]]:
+    """A store whose two reads are recorded instead of made. `daily_ok[0]` says
+    whether the daily read lands."""
+    store = _store(tmp_path, ["AAPL"])
+    calls: list[tuple[str, str]] = []
+
+    def bars(sym: str, fresh: bool = False) -> str | None:
+        assert fresh, "a copy from the cache is not a read after the bell"
+        calls.append(("5m", sym))
+        store.bars[sym], store.fetched[sym] = _breakout_day(), now
+        return None
+
+    def daily(sym: str, fresh: bool = False) -> str | None:
+        assert fresh
+        calls.append(("1d", sym))
+        if not daily_ok[0]:
+            return "unavailable"
+        store.daily_at[sym] = now
+        return None
+
+    monkeypatch.setattr(store, "_fetch_bars", bars)
+    monkeypatch.setattr(store, "_fetch_daily", daily)
+    return store, calls
+
+
+def test_a_name_that_left_the_list_is_read_once_after_its_bell(monkeypatch: Any,
+                                                               tmp_path: Any) -> None:
+    # Tue 27 Oct 2026: RCL, CLS and VZ were promoted and swapped out before the
+    # bell, SOFI the day before. Their bars stopped the minute they left, so the
+    # day could never be settled for them.
+    now = et(2026, 10, 28, 9, 0).timestamp()
+    store, calls = _owed_store(monkeypatch, tmp_path, now, [True])
+    owed = {"2026-10-27": {"RCL", "AAPL", "VZ", "CLS"}, "2026-10-26": {"SOFI"}}
+    # AAPL is on the list, so the rotation reads it. The oldest day first (it leaves
+    # the bars' reach first), two names a tick, the daily copy before the bars.
+    assert store.read_owed(owed, now) == ["SOFI", "CLS"]
+    assert calls == [("1d", "SOFI"), ("5m", "SOFI"), ("1d", "CLS"), ("5m", "CLS")]
+    assert store.read_owed(owed, now + 15) == ["RCL", "VZ"]
+    # Read after the bell: never asked for again.
+    del calls[:]
+    assert store.read_owed(owed, now + 30) == [] and calls == []
+    assert store.read_owed(owed, now + scan_src.OWED_RETRY_SEC + 1) == [] and calls == []
+    # And a day settled on them checks what was logged and adds nothing.
+    assert store.unwatched() == {"SOFI", "CLS", "RCL", "VZ"}
+    # A name read before that bell (it left at 11:00) is not one read after it.
+    store.fetched["RCL"] = et(2026, 10, 27, 11, 0).timestamp()
+    store.owed_tried.clear()
+    assert store.read_owed(owed, now + 45) == ["RCL"]
+
+
+def test_without_a_settled_daily_copy_the_bars_are_not_read(monkeypatch: Any,
+                                                            tmp_path: Any) -> None:
+    now = et(2026, 10, 28, 9, 0).timestamp()
+    ok = [False]
+    store, calls = _owed_store(monkeypatch, tmp_path, now, ok)
+    owed = {"2026-10-27": {"RCL"}}
+    # The replay reads its levels off the daily bar: without it nothing is read, so
+    # nothing can be settled on bars alone.
+    assert store.read_owed(owed, now) == [] and calls == [("1d", "RCL")]
+    assert "RCL" not in store.bars
+    # Not every tick: six hours on.
+    assert store.read_owed(owed, now + 15) == [] and len(calls) == 1
+    ok[0] = True
+    assert store.read_owed(owed, now + scan_src.OWED_RETRY_SEC + 1) == ["RCL"]
+    assert calls[1:] == [("1d", "RCL"), ("5m", "RCL")]
+    # Yahoo's pause holds here as it does for the rotation, and so does a backoff.
+    store2, calls2 = _owed_store(monkeypatch, tmp_path, now, [True])
+    store2.pause_until = now + 60
+    assert store2.read_owed(owed, now) == [] and calls2 == []
+    store2.pause_until = 0.0
+    store2.fails["RCL"] = (2, now + 60)
+    assert store2.read_owed(owed, now) == [] and calls2 == []
+    assert store2.read_owed(owed, now + 61) == ["RCL"]
 
 
 def test_day_signals_replays_a_finished_day_from_bars_read_after_its_bell(tmp_path: Any) -> None:

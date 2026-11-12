@@ -210,7 +210,17 @@ function Outcome({ o }: { o: ScanOutcome | null }) {
     );
   return (
     <>
-      <td className="fig px-2.5 py-1.5 text-right text-ink-3">{o.r != null ? num(o.r) : "—"}</td>
+      <td
+        className="fig px-2.5 py-1.5 text-right whitespace-nowrap text-ink-3"
+        title={
+          o.floored
+            ? "The script's stop idea was nearer than a quarter of the ten-minute ATR (its own retest buffer), so 1R here is that buffer: the stop is counted hit this far from the entry, and +1R this far the other way."
+            : undefined
+        }
+      >
+        {o.floored && <span className="qt-cap mr-1 text-[9px] text-ink-3">floor</span>}
+        {o.r != null ? num(o.r) : "—"}
+      </td>
       <td className="fig px-2.5 py-1.5 text-right up">{rTxt(o.mfe_r)}</td>
       <td className="fig px-2.5 py-1.5 text-right down">{o.mae_r == null ? "—" : `−${o.mae_r.toFixed(1)}R`}</td>
       <td className="px-2.5 py-1.5 text-right text-[11.5px]">{verdict}</td>
@@ -229,7 +239,7 @@ function Stats({ stats }: { stats: ScanStats | null }) {
         <p className="qt-cap text-[10.5px] text-ink-3">Record · last {stats.days} sessions</p>
         <p className="text-[11.5px] text-ink-3">
           {stats.total} settled (L)/(E) signals{stats.from && stats.to ? ` · ${stats.from} to ${stats.to}` : ""} · +1R
-          before the Pine&apos;s stop idea, conservative on a bar that touched both
+          before the stop, conservative on a bar that touched both
         </p>
       </div>
       {stats.total === 0 || stats.groups.length === 0 ? (
@@ -273,6 +283,16 @@ function Stats({ stats }: { stats: ScanStats | null }) {
         <p className="mt-1.5 max-w-[760px] text-[11.5px] text-ink-3">
           Held, stop kept: holding to the close, −1R if the stop went first, a gain capped at +5R. Score groups read the
           score each signal had when it fired, and the weights changed on 5 November.
+          {stats.floor && (
+            <>
+              {" "}
+              The stop is the Pine&apos;s stop idea, never counted as nearer than a quarter of the ten-minute ATR, its
+              own retest buffer: {stats.floor.ruled} of {stats.total} signals are read that way, and on{" "}
+              {stats.floor.floored} of them it is the buffer that sets 1R.
+              {stats.floor.unruled > 0 &&
+                ` The other ${stats.floor.unruled} settled before 11 November and their bars are gone, so they stand as first read.`}
+            </>
+          )}
         </p>
       )}
     </section>

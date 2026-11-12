@@ -136,7 +136,7 @@ export function Rotation({
               const abs = r[`${span}_pct` as const];
               return (
                 <li key={r.key} title={isThemes ? undefined : leaderLine(leaders?.[r.key])} className="hit flex items-center gap-2 px-3 py-[3px]">
-                  {!isThemes && <SectorGlyph fund={r.key} className="block shrink-0 text-ink-3" />}
+                  <SectorGlyph fund={r.key} className="block shrink-0 text-ink-3" />
                   <span className="fig w-[38px] shrink-0 text-[10.5px] text-ink-2">{r.key}</span>
                   <span className="hidden w-[104px] shrink-0 truncate text-[10px] text-ink-3 sm:block">
                     {r.label}

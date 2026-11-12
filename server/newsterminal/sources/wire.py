@@ -179,7 +179,10 @@ NOISE = re.compile(
     # investor needs to know today", "AP top stories October 14" and "Xiaomi
     # Corporation (1810.HK) stock price, news, quote and history" all reached
     # the tape on 2026-10-14 — a table of contents and a ticker page, not news.
-    r"needs? to know|\bbefore the bell:|\btop stories\b|stock price, news, quote",
+    r"needs? to know|\bbefore the bell:|\btop stories\b|stock price, news, quote|"
+    # The advice column behind an "if": "If I Were in My 20s, I'd Buy This AI ETF After
+    # Its Recent Crash and Hold It Forever" (2026-11-11) starts on neither I nor a quote.
+    r"^if i (?:were|had)\b|\bhold (?:it |them )?forever\b",
     re.I,
 )
 
@@ -374,15 +377,159 @@ DECIDED = re.compile(
 )
 
 
+# ---------------------------------------------------------------- high, again
+#
+# HIGH WAS STILL MOSTLY NOT HIGH (audit, 2026-11-11; owner: "make sure it's only getting
+# news that can actually impact the market and stocks"). Of the fifteen stories on the
+# top tier that morning two were events. Four were not market news at all, there by one
+# word: "Haitian PM praises El Salvador after joint strike on alleged home of gang
+# leader" (`strikes? on`), "Rights group raises concerns about jailed Dr Abu Safia amid
+# strikes on Gaza", ZeroHedge's "'Another Invasion': More Illegals Have Landed On
+# Spain's Canary Islands" (`invasion`) and "Schrödinger's Escalation: War Trump, Peace
+# Trump" (`escalat`). Nine were a central banker talking or a paper analysing: "The Fed
+# Has to Raise Rates. How Fast To Go Has Officials Divided.", "Fed to raise rates once
+# more in December …: Reuters poll" (the verb in front of "rates" read as decided),
+# "BOE's Lombardelli does not rule out December rate hike". And the print itself,
+# "Consumer prices rose 0.4% in October, more than expected", was medium for want of
+# the letters CPI, with "Iran denies talks with US, says Hormuz will stay shut" low.
+#
+# So the tier is asked what it always meant, in three questions and no keyword list:
+#   a DECISION: a central bank, a verb doing something to a rate, nobody merely saying so;
+#   a PRINT:    a US number and the verb of its release, not an official's view of it;
+#   SHOOTING:   named powers in the headline's own clause and an attack that happened,
+#               or a shipping chokepoint shut.
+# What used to make HIGH by its words alone and answers none of them is medium.
+
+#: A central bank, named.
+_CB = re.compile(
+    r"\bFed\b|\bFOMC\b|Federal Reserve|\bECB\b|\bBOJ\b|\bBoJ\b|\bBOE\b|\bBoE\b|"
+    r"Bank of (?:Japan|England|Canada|Korea)|\bPBOC\b|\bRBA\b|\bSNB\b|central bank", re.I)
+#: A verb doing something to a rate.
+_RATE_MOVE = re.compile(
+    r"\b(?:cuts?|hikes?|hiked|raises?|raised|slashed|slashes|lifts?|lifted|lowers?|lowered|"
+    r"holds?|held|keeps?|kept|leaves?|left)\s+(?:its\s+|the\s+|key\s+|benchmark\s+|interest\s+|"
+    r"policy\s+)*rates?\b|\b(?:cut|hike|raise|lift|lower)\w*\s+(?:rates?\s+)?by\s+\d+|"
+    r"\brate decision\b|\bemergency (?:meeting|cut|hike|rate)", re.I)
+#: Somebody saying what a central bank will, should or might do.
+_TALK = re.compile(
+    r"\bsays?\b|\bsaid\b|\bcalls? for\b|\bsees?\b|\bhas to\b|\bhave to\b|\bshould\b|\bmust\b|"
+    r"\bneeds? to\b|\bto (?:raise|cut|hike|lift|lower|hold|keep)\b|\bpoll\b|\bpressure\b|"
+    r"\bdebate\b|\bthink tank\b|\burges?\b|\bwants?\b|\bplans? to\b|\bready to\b|\brule out\b",
+    re.I)
+#: A number and the verb of its release, close together: "Consumer prices rose", "CPI
+#: Comes in Hot", "Inflation runs hotter", "Nonfarm payrolls come in at".
+_PRINT = re.compile(
+    r"(?:\bCPI\b|\bPCE\b|consumer prices|\binflation\b|\bpayrolls?\b|unemployment rate|"
+    r"\bGDP\b|retail sales|jobless claims|jobs report)[^.;:?]{0,30}?"
+    r"\b(?:rose|fell|jumped|cooled|climbed|slowed|eased|accelerat\w+|came in|comes? in|"
+    r"runs?|ran|grew|shrank|contracted|surged|dropped|unexpectedly|tops?|topped)\b", re.I)
+#: Somebody else's number: a print abroad is read, and is not this desk's event.
+_ABROAD = re.compile(
+    r"\b(?:German\w*|UK|U\.K\.|Brit\w+|Japan\w*|Chin(?:a|ese)|euro ?zone|Eurozone|French|"
+    r"France|Ital(?:y|ian)|Canad\w+|Australia\w*|India\w*|Korea\w*|Brazil\w*|Mexic\w+|Swiss|"
+    r"Spain|Spanish|Turk\w+|Tokyo)\b")
+#: An official's view of a number is talk about it.
+_REMARK = re.compile(r"['’]s\s+\w+\s+(?:says|said|calls|warns)\b|\bsays?\b|\bsaid\b", re.I)
+#: The powers whose quarrels reprice oil and risk. Case matters: "US", not "us".
+_ACTOR_WORDS: tuple[tuple[str, str], ...] = (
+    ("iran", r"Iran(?:ian)?s?|Tehran|IRGC"),
+    ("israel", r"Israel(?:i|is)?"),
+    ("hamas", r"Hamas"), ("hezbollah", r"Hezbollah"), ("houthi", r"Houthis?"),
+    ("russia", r"Russia(?:n|ns)?|Kremlin|Putin|Moscow"),
+    ("ukraine", r"Ukrain(?:e|ian|ians)|Zelensk\w+|Kyiv"),
+    ("china", r"China|Chinese|Beijing|Xi"),
+    ("taiwan", r"Taiwan(?:ese)?|Taipei"),
+    ("saudi", r"Saudi(?:s| Arabia)?|Riyadh"),
+    ("nkorea", r"North Korea(?:n)?|Pyongyang"),
+    ("venezuela", r"Venezuela(?:n)?|Caracas"),
+    ("nato", r"NATO"),
+    ("us", r"U\.S\.(?!\w)|US|America(?:n)?|Washington|White House|Pentagon|Trump"),
+)
+_ACTORS = [(k, re.compile(rf"(?<![\w.])(?:{p})(?![a-z])")) for k, p in _ACTOR_WORDS]
+#: An attack that is in the headline as a fact.
+_ATTACK = re.compile(
+    r"\bstrikes? (?:on|in|at|against)\b|\bairstrikes?\b|\bdrone strikes?\b|"
+    # The verb and a NAMED object ("Israel strikes Iranian …"): the capital is the test,
+    # so it is read with case on. Without that "Citigroup CEO Jane Fraser strikes
+    # bullish tone on China expansion" was an attack on something beginning with b.
+    r"\b(?:strikes|struck|bombs|bombed|attacks|attacked|shells|shelled|invades|invaded)\s+"
+    r"(?:the\s+)?(?-i:[A-Z])|\bexchange[sd]? (?:of )?(?:strikes|fire)\b|\battacks? on\b|"
+    r"\bmissiles? (?:hit|hits|struck|launched|fired)\b|(?<!home )\binvasion\b|\bfighting\b|"
+    r"\bseiz(?:es|ed) (?:a |an |the )?(?:tanker|ship|vessel|cargo)\b", re.I)
+#: The places a fifth of the world's oil and most of its boxes pass through.
+_CHOKE = re.compile(
+    r"\bHormuz\b|\bRed Sea\b|\bSuez\b|\bBab el-Mandeb\b|\bTaiwan Strait\b|\bPanama Canal\b|"
+    r"\bshipping (?:lanes?|routes?)\b", re.I)
+_SHUT = re.compile(r"\b(?:shut|shuts|closed|closes|blocked|blocks|blockade\w*|mined|seiz\w+)\b",
+                   re.I)
+#: The market itself breaking, and Washington's two standing cliffs.
+_STRUCTURE = re.compile(
+    r"halt(?:ed|s)? trading|trading (?:halted|suspended)|circuit breaker|"
+    r"\bdefault(?:s|ed)? on\b|downgrade[sd]? (?:the |its )?(?:US|U\.S\.|sovereign|credit)|"
+    r"government shutdown|debt ceiling|"
+    r"\bOPEC\+?\b.{0,24}(?:cut|raise|boost|output|quota)", re.I)
+#: The past, and features about it. The "war" search on 11 November is Veterans Day:
+#: "'In Flanders Fields': How a patriotic poem became an anti-war anthem", "Five Books
+#: About World War II for Young Readers", "Veterans lose friends long after the war".
+FEATURE = re.compile(
+    r"world war\b|\bwwii?\b|\bveterans?\b|remembrance|armistice|\banniversary\b|\bmemorial\b|"
+    r"\bpoem\b|\banthem\b|\bbooks? (?:about|on)\b|\bmuseum\b|forgotten war|"
+    r"\blessons (?:for|from)\b|^letters?:|\bit happened here\b|\bturns \d+\b|"
+    r"\bjoins (?:a|an|the)\b.{0,30}\bunit\b", re.I)
+#: Where a headline's own clause ends: at the word that hangs a second one on it. Not
+#: at "on", which is inside "a strike on Iran".
+_CLAUSE = re.compile(
+    r"\s(?:as|after|amid|while|despite|following|ahead of|but|before|because)\s|\s[-–—]\s|;\s",
+    re.I)
+_TAG = re.compile(r"^[A-Z][A-Za-z'’ ]{0,22}:\s+")
+
+
+def main_clause(title: str) -> str:
+    """The headline's own clause: past a short label ("EXCLUSIVE:"), up to the word that
+    hangs another clause on it. "Rights group raises concerns about jailed Dr Abu Safia
+    amid strikes on Gaza" is about a rights group. Pure."""
+    t = _TAG.sub("", title or "", count=1)
+    m = _CLAUSE.search(t)
+    return t[: m.start()] if m else t
+
+
+def actors(text: str) -> set[str]:
+    """The powers a text names, each once whatever it is called. Pure."""
+    return {k for k, p in _ACTORS if p.search(text or "")}
+
+
+def _happened(title: str) -> bool:
+    """A fact, not a might: the old pair of guards, read in their old order."""
+    return bool(DECIDED.search(title)) or not SPECULATIVE.search(title)
+
+
+def is_high(title: str) -> bool:
+    """A decision, a print or shooting: a thing that reprices on the spot. Pure."""
+    t = title or ""
+    if _RATE_MOVE.search(t) and _CB.search(t) and not _TALK.search(t) and _happened(t):
+        return True
+    if _PRINT.search(t) and not _ABROAD.search(t) and not _REMARK.search(t):
+        return True
+    if _STRUCTURE.search(t) and _happened(t):
+        return True
+    if FEATURE.search(t):
+        return False
+    if _CHOKE.search(t) and _SHUT.search(t) and _happened(t):
+        return True
+    main = main_clause(t)
+    return bool(actors(main) and _ATTACK.search(main) and _happened(t))
+
+
 def impact_of(title: str) -> str:
     """"high" | "medium" | "low" for one headline. Pure."""
-    if IMPACT_HIGH.search(title):
-        if DECIDED.search(title) or not SPECULATIVE.search(title):
-            return "high"
+    if is_high(title):
+        return "high"
+    # The words that used to make HIGH by themselves are worth reading, and so is a
+    # chokepoint, a quarrel between powers, an unreleased number.
+    if (IMPACT_HIGH.search(title) or IMPACT_MEDIUM.search(title) or _CHOKE.search(title)
+            or MEDIUM_MORE.search(title)):
         return "medium"
-    if IMPACT_MEDIUM.search(title):
-        return "medium"
-    return "low"
+    return "medium" if "geo" in market_hooks(title) else "low"
 
 # Publisher name as it appears in a Google News title suffix — " - Reuters".
 _GN_SUFFIX = re.compile(r"\s+-\s+[A-Z][A-Za-z0-9.& ]{2,30}$")
@@ -578,6 +725,233 @@ def is_off_market(title: str, publisher: str, section: str) -> bool:
     return not (ECONOMIC.search(title) or GEO_RELEVANT.search(title))
 
 
+# ---------------------------------------------------------------- the market test
+#
+# A STORY STAYS ONLY IF IT NAMES SOMETHING A MARKET TRADES ON (owner, 2026-11-11: "can we
+# go through the wire and all the news we pull for stocks and make sure it's only getting
+# news that can actually impact the market and stocks?").
+#
+# Every filter above DROPS A KNOWN KIND OF JUNK, and only the world feeds and five
+# "general" ones had to name anything. So a story on CNBC Top, NYT Business, BBC
+# Business or MarketWatch stayed unless a pattern happened to catch it, and the tape
+# read line by line that morning (400 stories) carried "Measles is surging in the
+# U.S.", "$150 for a Thanksgiving Pie? A Humble Dessert Staple Gets Pricey.",
+# "Hundreds of schools in Italy, UK evacuated over 'hoax' bomb threats", "A Fan-Favorite
+# Aquarium Screen Saver Is Leaving Roku", "Canadian Authorities Kill 4 Bears Involved in
+# Deadly Attack on Hikers" (through the world gate, by `attack`). 162 of the 400 were
+# not market news. The junk lists stay, as the first pass; this is the test that does
+# not need to have seen the junk before.
+#
+# WHAT A MARKET TRADES ON, each a "hook": a central bank or its words (policy), a
+# print (macro), rates and currencies, an index or an asset or the people who trade
+# them (assets), energy, trade policy, the public purse (fiscal), a company that
+# moves an index or an event the size of one (company), and a quarrel between powers
+# with a way into prices (geo). No hook, no story.
+#
+# IT IS STRICTER THAN "ECONOMIC", ON PURPOSE. `is_off_market` keeps a Japanese rice
+# harvest, a regional airline's routes and a steelworks' redundancies on the general
+# feeds because each names something economic; none of them moves what this desk
+# trades, and they go here.
+
+#: A search of Google News returns whoever used the words. These are newsrooms; the 45
+#: stories that morning from the rest were EnergyNow re-dating months-old EIA releases
+#: ("US Crude Oil Output Fell in May …" filed as today's), forecast pages, a Yakima
+#: paper's Veterans Day feature. Lower case.
+NEWSROOMS: frozenset[str] = frozenset({
+    "reuters", "ap news", "ap", "associated press", "bloomberg", "bloomberg.com", "cnbc", "wsj",
+    "the wall street journal", "financial times", "ft", "marketwatch", "barron's", "barrons",
+    "yahoo finance", "nikkei asia", "scmp", "south china morning post", "the new york times",
+    "nyt", "the washington post", "bbc", "the guardian", "guardian", "axios", "politico",
+    "the economist", "morningstar", "investing.com", "cnn", "npr", "al jazeera", "the telegraph",
+    "japan times", "the japan times", "kyodo news", "fortune", "forbes", "semafor", "abc news",
+    "business insider", "the times", "sky news", "nbc news", "cbs news", "the hill",
+    # The market's own trade press, and the agencies that assess what oil costs.
+    "benzinga", "tradingview", "thestreet", "s&p global", "argus media", "rigzone",
+})
+#: The institutions' own feeds: policy by construction, whatever the title says ("Waller,
+#: The Economic Outlook and Some Thoughts on Labor Market Dynamism" names no bank).
+INSTITUTIONS: frozenset[str] = frozenset({"Federal Reserve", "ECB", "Bank of England", "RBA"})
+
+
+def is_newsroom(outlet: str) -> bool:
+    """Is the outlet a Google News suffix names one of the newsrooms? Pure."""
+    o = (outlet or "").strip().lower()
+    return o in NEWSROOMS or o.startswith("yahoo finance")
+
+
+#: A page or a template that arrives looking like a story.
+NOT_A_STORY = re.compile(
+    r"price forecast|forecast for today|current price of|charts?, data|news and statistics|"
+    r"stock price, chart|\bmarket update:|trade setup for|price prediction|as it happened|"
+    r"earnings call transcript|\bslides:|\benergy snapshot\b|\b\d+ (?:EV )?reads\b|^insight:|"
+    r"^commentary:|^analysis:|\bmorning bid\b|mapping the market|\bmarket talk\b|"
+    r"\beurope live\b|\blive blog\b|"
+    # A press release names its own listing, which no newsroom's headline does: "Rantizo
+    # (Nasdaq: RNTZ) Advances U.S. Production of Heavy-Lift Autonomous Drones After
+    # $258.8 Million Acquisition, Targets California's $61.2 Billion Agricultural Market"
+    # was medium, by the billions in the market it hopes to sell to.
+    r"\((?:Nasdaq|NYSE|NYSE American|NYSE Arca|OTC\w*|TSX\w*|CSE|ASX|LSE|AIM):\s?[A-Z.]{1,6}\)",
+    re.I)
+#: A court's verdict on a person is not a market event, whatever the crime was about
+#: ("UK fraudster who invented 'too good to be true' takeover bid given suspended
+#: sentence" was medium, by `takeover`). A company that moves an index speaks for itself.
+COURT = re.compile(
+    r"\bfraudster\b|\bsentenced\b|suspended sentence|\bjailed\b|\bpleads? guilty\b|"
+    r"\bconvicted\b|found guilty", re.I)
+SPORT = re.compile(
+    r"\b(?:WR|QB|RB|quarterback|wide receiver|linebacker|pitcher|striker|midfielder|goalkeeper|"
+    r"head coach|49ers|Colts|Cowboys|Lakers|Yankees|Dodgers|Tiger Woods)\b|\bgolf\b")
+
+_H_RATES = re.compile(
+    r"\binterest rates?\b|\brates? (?:rise|rises|hike|hikes|cut|cuts|path|peak|outlook)\b|"
+    r"\bTreasur(?:y|ies)\b|\byields?\b|\bbonds?\b|\bgilts?\b|\bbunds?\b|central banks?|"
+    # The yuan, not Dr Yuan: a capitalised word after it is a surname's given name
+    # ("top biologist Yuan Junying caught in debate over returnees" stayed, as rates).
+    # And the dollar, not "multi-million-dollar" (a liquidator's sale stayed, as rates).
+    r"(?<![-\w])dollar\b|\byen\b|\byuan\b(?!\s+(?-i:[A-Z][a-z]))|\brenminbi\b|\beuro\b|"
+    r"\bsterling\b|"
+    r"\bcurrenc(?:y|ies)\b|\bcredit (?:market|spread)s?\b|\bmoney markets?\b", re.I)
+_H_ASSETS = re.compile(
+    r"\b(?:S&P|Nasdaq|Dow|Russell|Nikkei|Hang Seng|Sensex|Nifty|FTSE|DAX|Stoxx|Kospi|"
+    r"Wall Street|stocks?|shares|equit(?:y|ies)|futures|stock index|copper|iron ore|lithium|"
+    r"bitcoin|crypto\w*|ETFs?|selloff|sell-off|bull market|bear market|investors?|traders?|"
+    r"hedge funds?|IPOs?|AI trade|bullish|bearish|valuations?|market cap|"
+    r"market (?:rout|rally|meltdown|jitters|angst|turmoil))\b|(?<!non-)\bprofits?\b|"
+    r"\bgold\b(?! (?:coast|medal|standard|cup|rush))|\bsilver\b(?! (?:medal|lining|screen))|"
+    r"\bmarkets (?:rise|rises|fall|falls|slide|rally|tumble|wrap|open|close|diverge|swept)\b",
+    re.I)
+#: The consumer and the household, where the headline is about their money.
+_H_CONSUMER = re.compile(
+    r"\bconsumer (?:spending|confidence|sentiment|strain|credit|prices|demand)\b|"
+    r"\bconsumers are\b|\bhouseholds?\b|\bdelinquenc\w+|\bhome loans?\b", re.I)
+_H_ENERGY = re.compile(
+    r"\bOPEC\+?\b|\bcrude\b|\bWTI\b|\bBrent\b|refiner|\boil\b|natural gas|\bLNG\b|\bTTF\b|"
+    r"\bbarrels?\b|gasoline|\bdiesel\b|drilling|\bEIA\b|strategic petroleum|"
+    r"\bgas (?:prices?|shortages?|suppl\w+|storage|exports?|field|platform|power)\b|"
+    # A pipeline carries oil or gas, or it is somebody's order book ("Half of
+    # Australia's windfarm pipeline is in slowest-building state" was medium energy).
+    r"(?:oil|gas|crude) pipeline|pipeline (?:attack|leak|shut|flows?|blast)|"
+    r"\bgrid operator\b|\benergy (?:prices|crisis|market|stocks|supply)\b", re.I)
+_H_TRADE = re.compile(
+    r"\btariffs?\b|\bsanction(?:s|ed)?\b|export (?:controls?|curbs?|ban)|\bembargo\b|"
+    r"trade (?:deal|talks|war|truce|ties|surplus|deficit|pact|agreement)|"
+    r"\b(?:goods|trade) surplus\b|\bexports?\b|\bimports?\b|"
+    r"chip (?:rules|ban|curbs|controls|exports?)|\bblacklist\b|rare earths?|critical minerals",
+    re.I)
+_H_FISCAL = re.compile(
+    r"government shutdown|debt (?:ceiling|limit)|\bbudget\b|\bfiscal\b|"
+    r"spending (?:bill|cuts|plan)|tax (?:bill|cuts?|hikes?|plan|increase)s?\b|\bstimulus\b|"
+    r"Treasury (?:chief|secretary)|\bBessent\b|\bbond sale\b|"
+    r"(?:bond|debt|Treasury|note|bill) auction|\bIMF\b|\bWorld Bank\b|credit rating|"
+    r"\bMoody['’]?s\b|\bFitch\b", re.I)
+#: The companies that move an index by themselves (the list MARKET_TERMS keeps), the
+#: ones this desk trades most days, and the drugs that are two of them. Case matters:
+#: "shell company" and "intelligence" are not Shell and Intel.
+BIG = re.compile(
+    r"\b(?:Apple|Microsoft|Nvidia|Amazon|Alphabet|Google|Meta|Tesla|Broadcom|Netflix|Disney|"
+    r"Berkshire|JPMorgan|Goldman|Morgan Stanley|Citigroup|Wells Fargo|Bank of America|"
+    r"BlackRock|Walmart|Costco|Home Depot|Exxon|Chevron|Aramco|Shell|BP|BHP|Rio Tinto|Toyota|"
+    r"Honda|Nissan|Sony|SoftBank|Samsung|TSMC|ASML|Alibaba|Tencent|BYD|Xiaomi|Huawei|Boeing|"
+    r"Airbus|Intel|AMD|Micron|Oracle|Salesforce|IBM|OpenAI|Anthropic|SpaceX|Palantir|Uber|"
+    r"Visa|Mastercard|UnitedHealth|Eli Lilly|Novo Nordisk|Pfizer|Merck|Wegovy|Zepbound|"
+    r"Ozempic|MUFG|Nomura|HSBC|Barclays|UBS|Deutsche Bank|Siemens|SAP|Volkswagen|VW|"
+    r"CoreWeave|Marvell|Dell|Qualcomm|Arm Holdings|Coinbase|Robinhood|PayPal|Adobe|Shopify|"
+    r"GE Vernova|Super Micro|Supermicro|Sandisk|Caterpillar|Lockheed|KKR|Blackstone|"
+    r"McDonald['’]s|Nike|Starbucks|General Motors|GM|Ford)\b")
+#: An event the size of an index, at a company the list does not name: a listing, a
+#: takeover, a failure, or a figure in billions beside a deal.
+_H_EVENT = re.compile(
+    r"\bIPO\b|\bmerger\b|\btakeover\b|\bbuyout\b|\bbankrupt\w*|\bChapter 11\b|"
+    r"\b(?:acqui(?:res?|red|sition)|buyback|repurchase|invests?|investment|deal|stake)\b"
+    r"[^.]{0,70}[$£€]\s?\d[\d.,]*\s?(?:bn|billion|b\b)|"
+    r"[$£€]\s?\d[\d.,]*\s?(?:bn|billion)\b[^.]{0,70}\b(?:acquisition|takeover|merger|buyback|"
+    r"deal|stake|investment|rescue)\b", re.I)
+#: An analyst's housekeeping. On a company that moves no index it is the newswire's
+#: volume and nobody's event: ten of them arrived in two minutes that morning ("Needham
+#: reiterates Thryv stock rating at Buy with $6 target").
+ANALYST_NOTE = re.compile(
+    r"\breiterates?\b|\bmaintains?\b|\bprice target\b|\bstock rating\b|"
+    r"\binitiates?\b.{0,30}\bcoverage\b", re.I)
+_DIPLOMACY = re.compile(
+    r"\bceasefire\b|\btruce\b|\bpeace (?:talks|deal|plan|agreement)\b|\btalks\b|\bsummit\b|"
+    r"\bnegotiat\w+|\benvoys?\b", re.I)
+_WAR_STATE = re.compile(
+    r"\bwar (?:is )?(?:over|ends|ended)\b|\bend(?:s|ing)? (?:the |its |his )?(?:\w+ )?war\b|"
+    r"\bwon\b.{0,14}\bwar\b|\bcombat operations\b|\bescalat\w+|\bretaliat\w+|"
+    r"\btroops (?:to|into|in|near|mass)\b|\bsend(?:s|ing)? troops\b|"
+    r"\bdeploy\w* (?:troops|forces|warships?|carrier)|\bmobili[sz]\w+|"
+    r"\bnuclear (?:test|talks|deal|program\w*|sites?|weapons?|warhead|agenda)\b|"
+    r"\bmilitary (?:action|operation|drills?|exercises?|strike)s?\b|\baircraft carrier\b|"
+    r"\bcarrier group\b|\bwarships?\b|\bnaval (?:drills?|blockade|exercises?)\b|\bdrills\b|"
+    r"\bshoots? down\b", re.I)
+#: What makes a story medium that the older list did not name.
+MEDIUM_MORE = re.compile(
+    r"\binflation\b|consumer prices|\bCPI\b|\bPCE\b|payrolls?|\bGDP\b|unemployment|"
+    r"export (?:controls?|curbs?)|chip (?:rules|ban|curbs|controls)|\bFDA\b|"
+    r"\bTreasur(?:y|ies)\b.{0,30}\b(?:auction|slide|slides|retreat|sell)|\bbond sale\b|"
+    r"credit rating|\bprobe\b|\bantitrust\b|\bsubpoena", re.I)
+
+
+def market_hooks(title: str) -> list[str]:
+    """What in this headline a market trades on, by kind. Empty: it is not market news.
+    Pure."""
+    t = title or ""
+    out: list[str] = []
+    if PROMOTE[0][1].search(t):
+        out.append("policy")
+    if PROMOTE[1][1].search(t):
+        out.append("macro")
+    if _H_RATES.search(t):
+        out.append("rates")
+    if _H_CONSUMER.search(t):
+        out.append("consumer")
+    if _H_ENERGY.search(t):
+        out.append("energy")
+    if _H_TRADE.search(t):
+        out.append("trade")
+    if _H_FISCAL.search(t):
+        out.append("fiscal")
+    if _H_ASSETS.search(t):
+        out.append("assets")
+    if BIG.search(t) or (_H_EVENT.search(t) and not SPORT.search(t)):
+        out.append("company")
+    # A QUARREL BETWEEN POWERS WITH A WAY INTO PRICES. One of them leads the headline,
+    # or two are in it; and there is a negotiation, an attack or a state of war, not
+    # only the name ("Ukraine captures first Indonesian prisoner of war" names two and
+    # is none of those). A chokepoint is a way into prices by itself.
+    if not FEATURE.search(t):
+        who = actors(t)
+        if _CHOKE.search(t) or (
+                (actors(main_clause(t)) or len(who) >= 2)
+                and (_DIPLOMACY.search(t) or _ATTACK.search(t) or _WAR_STATE.search(t))):
+            out.append("geo")
+    return out
+
+
+def off_tape(title: str, publisher: str, section: str, outlet: str | None = None) -> str | None:
+    """Why this headline is not market news, or None when it is. Pure.
+
+    `publisher` and `section` are the feed's as registered in FEEDS; `outlet` is the
+    newsroom a Google News suffix names, or None for a feed that is its own publisher.
+    """
+    if publisher in INSTITUTIONS:
+        return None
+    if outlet is not None and not is_newsroom(outlet):
+        return "not a newsroom"
+    if NOT_A_STORY.search(title):
+        return "a page, not a story"
+    if FEATURE.search(title) or SPORT.search(title):
+        return "a feature"
+    if COURT.search(title) and not BIG.search(title):
+        return "a court report"
+    hooks = market_hooks(title)
+    if not hooks:
+        return "names nothing a market trades on"
+    if ANALYST_NOTE.search(title) and not BIG.search(title):
+        return "an analyst's note on a company that moves no index"
+    return None
+
+
 def classify(default: str, title: str, summary: str = "") -> str:
     """Which desk this headline belongs to. Pure.
 
@@ -633,6 +1007,10 @@ def parse_feed(
                 title = title[: m.start()].strip()
         if (NOISE.search(title) or is_local_crime(title) or is_section_page(title)
                 or is_off_market(title, publisher, section)):
+            continue
+        # The junk lists above, then the test that needs no list: does it name
+        # something a market trades on, and did a newsroom write it?
+        if off_tape(title, publisher, section, pub if via_google else None):
             continue
         cat = classify(default_cat, title)
         # An item that arrived on a world feed and stayed on the geo desk was

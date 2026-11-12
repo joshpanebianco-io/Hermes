@@ -118,7 +118,9 @@ export function DriverBoard({ book: b }: { book: DriverBook }) {
             <Fragment key={v.key}>
               <dt className="col-span-3 mt-1.5 flex items-baseline gap-2 border-t border-ring/40 pt-1.5">
                 <span className="eyebrow text-[9px]">{v.label}</span>
-                <span className="text-[10px] text-ink-3">never a side: on the tape, it lowers the ceiling a notch</span>
+                {/* Each says why it is not a side: event risk lowers the ceiling, dealer gamma
+                    says how far a move runs (it voted long above the flip until 2026-11-12). */}
+                <span className="text-[10px] text-ink-3">{v.aside ?? "never a side: on the tape, it lowers the ceiling a notch"}</span>
               </dt>
               <dd className="text-center text-[10px] text-ink-4">·</dd>
               <dd className="min-w-0">
@@ -156,7 +158,7 @@ export function DriverBoard({ book: b }: { book: DriverBook }) {
         that can vote now. Strong is 50 or more with at least 60% of the weight live, moderate 30, weak 10; a
         conflict between macro and structure takes a notch off. The weights are a judgement, not a fit to
         outcomes. A read marked with a dot cannot vote at this hour, which is not the same as a flat one. The
-        Analysis brief is handed this score and may not be more confident than it.
+        written brief is handed this score and may not be more confident than it.
       </p>
     </div>
   );

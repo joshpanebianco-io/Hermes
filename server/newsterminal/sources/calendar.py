@@ -16,7 +16,10 @@ scored, and the UI shows the top of the list by default.
 
 from __future__ import annotations
 
+import math
 import re
+import time
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -247,59 +250,70 @@ def parse_day(doc: Any, day: date) -> list[dict[str, Any]]:
         # the entire calendar four hours early, which read as plausible right
         # up until an ISM appeared at 06:00.
         raw_time = clean_text(str(r.get("gmt") or ""))
-        et_str, when_utc, when_et = None, None, None
+        when_et = None
         m = re.match(r"(\d{1,2}):(\d{2})", raw_time)
         if m:
             when_et = datetime(
                 day.year, day.month, day.day, int(m.group(1)), int(m.group(2)), tzinfo=ET
             )
-            when_utc = when_et.astimezone(UTC)
-            et_str = when_et.strftime("%H:%M")
 
-        actual = _num(r.get("actual"))
-        cons = _num(r.get("consensus"))
-        prev = _num(r.get("previous"))
-        sc = score(country, event)
-        out.append(
-            {
-                "event": event,
-                "country": country,
-                "region": region_of(country),
-                "session": session_of(when_et),
-                "themes": themes_of(event),
-                "core": is_core(country, event, sc),
-                "date": day.isoformat(),
-                "et": et_str,
-                "utc": when_utc.isoformat() if when_utc else None,
-                "ts": when_utc.timestamp() if when_utc else None,
-                "actual": actual,
-                "actual_raw": clean_text(str(r.get("actual") or "")) or None,
-                "consensus": cons,
-                "consensus_raw": clean_text(str(r.get("consensus") or "")) or None,
-                "previous": prev,
-                "previous_raw": clean_text(str(r.get("previous") or "")) or None,
-                # Signed gap to consensus. None when either side is missing —
-                # never zero, which would read as "came in exactly on target".
-                "surprise": (actual - cons) if (actual is not None and cons is not None) else None,
-                "released": actual is not None,
-                # hot / cold / inline once it has printed (releases.read_of) —
-                # the economy's word, which the futures Calendar shows and
-                # the driver board counts; what it means per book is
-                # releases.implication, composed where it is read.
-                "read": read_of(event, actual - cons, cons)
-                if (actual is not None and cons is not None) else None,
-                # And what that read means for NQ, ES and GC, in the server's
-                # words (releases.implication), so the Calendar's click-through
-                # prints the same sentences the driver board counts.
-                "meaning": implication(read_of(event, actual - cons, cons), themes_of(event))
-                if (actual is not None and cons is not None) else None,
-                "score": sc,
-                # The plain-English gloss Nasdaq ships. Genuinely useful at
-                # 08:29 for a release you do not follow closely.
-                "note": clean_text(str(r.get("description") or ""))[:260] or None,
-            }
-        )
+        out.append(_row(
+            event, country, day, when_et,
+            (_num(r.get("actual")), clean_text(str(r.get("actual") or "")) or None),
+            (_num(r.get("consensus")), clean_text(str(r.get("consensus") or "")) or None),
+            (_num(r.get("previous")), clean_text(str(r.get("previous") or "")) or None),
+            # The plain-English gloss Nasdaq ships. Genuinely useful at
+            # 08:29 for a release you do not follow closely.
+            clean_text(str(r.get("description") or ""))[:260] or None,
+        ))
     return out
+
+
+Fig = tuple[float | None, str | None]
+
+
+def _row(event: str, country: str, day: date, when_et: datetime | None,
+         actual_f: Fig, cons_f: Fig, prev_f: Fig, note: str | None) -> dict[str, Any]:
+    """One calendar row, whichever feed it came from: a figure is (the number, the
+    text it arrived as). Pure."""
+    when_utc = when_et.astimezone(UTC) if when_et else None
+    actual, cons, prev = actual_f[0], cons_f[0], prev_f[0]
+    sc = score(country, event)
+    return {
+        "event": event,
+        "country": country,
+        "region": region_of(country),
+        "session": session_of(when_et),
+        "themes": themes_of(event),
+        "core": is_core(country, event, sc),
+        "date": day.isoformat(),
+        "et": when_et.strftime("%H:%M") if when_et else None,
+        "utc": when_utc.isoformat() if when_utc else None,
+        "ts": when_utc.timestamp() if when_utc else None,
+        "actual": actual,
+        "actual_raw": actual_f[1],
+        "consensus": cons,
+        "consensus_raw": cons_f[1],
+        "previous": prev,
+        "previous_raw": prev_f[1],
+        # Signed gap to consensus. None when either side is missing —
+        # never zero, which would read as "came in exactly on target".
+        "surprise": (actual - cons) if (actual is not None and cons is not None) else None,
+        "released": actual is not None,
+        # hot / cold / inline once it has printed (releases.read_of) —
+        # the economy's word, which the futures Calendar shows and
+        # the driver board counts; what it means per book is
+        # releases.implication, composed where it is read.
+        "read": read_of(event, actual - cons, cons)
+        if (actual is not None and cons is not None) else None,
+        # And what that read means for NQ, ES and GC, in the server's
+        # words (releases.implication), so the Calendar's click-through
+        # prints the same sentences the driver board counts.
+        "meaning": implication(read_of(event, actual - cons, cons), themes_of(event))
+        if (actual is not None and cons is not None) else None,
+        "score": sc,
+        "note": note,
+    }
 
 
 # ----------------------------------------------------------------- the date
@@ -359,6 +373,9 @@ def _pct_val(r: dict[str, Any]) -> float | None:
     return None
 
 
+_SPAN_END = re.compile(r"\b(?:m/m|y/y|q/q)$", re.I)
+
+
 def label_variants(rows: list[dict[str, Any]]) -> None:
     """Name the two halves of a paired release (in place).
 
@@ -374,7 +391,10 @@ def label_variants(rows: list[dict[str, Any]]) -> None:
     for r in rows:
         groups.setdefault((r["country"], r["event"], r["utc"], r["date"]), []).append(r)
     for g in groups.values():
-        if len(g) != 2:
+        # A name that already says which it is has nothing to be told: TradingView's
+        # rows carry "m/m" and "y/y", and the UK's monthly and quarterly GDP both
+        # arrive as "GDP y/y" at 07:00 (they read "GDP y/y m/m" until 2026-11-11).
+        if len(g) != 2 or _SPAN_END.search(g[0]["event"]):
             continue
         a, b = (_pct_val(x) for x in g)
         if a is not None and b is not None and a != b:
@@ -384,15 +404,311 @@ def label_variants(rows: list[dict[str, Any]]) -> None:
         elif (a is None) != (b is None):
             (g[0] if a is not None else g[1])["event"] += " m/m"
 
+# ------------------------------------------------------- the second source
+#
+# TRADINGVIEW'S CALENDAR, FOR WHEN NASDAQ REFUSES (owner, 2026-11-11: "do what you
+# recommend best"). Nasdaq answered HTTP 403 from 05:49 ET on Tue 10 Nov 2026 and
+# was still refusing a day later. The copy held kept the schedule, but it had been
+# read before 08:30, so the desk went through a CPI day with no CPI: the prints
+# panel said nothing scored had printed and the driver board never counted a hot
+# inflation number (0.4% m/m against 0.3%, core 0.3% against 0.2%). A stale
+# schedule is a degraded calendar; a release with no actual is a wrong one.
+#
+# So when Nasdaq is not delivering, the window is read from the calendar
+# TradingView's own site draws: one request, exact UTC instants (no date to vote
+# on), and actual, forecast and previous as numbers with a unit and a scale.
+# NASDAQ STAYS FIRST when it answers, because every name downstream was written
+# against its vocabulary and the owner has read its rows for a month. This is the
+# stand-in, and the status row says when it is the one in use.
+#
+# ITS NAMES ARE TRANSLATED, NOT TRUSTED. TradingView calls CPI "Inflation Rate",
+# the trade balance "Balance of Trade", crude inventories "EIA Crude Oil Stocks
+# Change", and tags a reading "Prel" or "Final". The tiers above, the themes,
+# releases.family and the Fed-speaker rule in tools.py all read the NAME, so each
+# title is put into the words Nasdaq uses (`tv_event`) before anything scores it.
+# The table below is the names that differed when the two feeds were laid side by
+# side for the week of 9 Nov 2026, the same releases at the same minutes.
+#
+# WHAT IT DOES NOT HAVE. No speeches and no holidays: "FOMC Member Daly Speaks"
+# is Nasdaq's row. The Board's own calendar (sources/fedcal.py) is already read
+# here, so its speeches are added to these rows (`fed_speech_rows`, by the
+# collector); the regional presidents are not on the Board's calendar and are
+# missing while this is the source in use.
+#
+# AND IT LISTS FAR MORE THAN ANYONE READS: four rows an auction, twenty for a
+# WASDE report, the MBA's rate tables. Those are dropped by name, and its own
+# importance flag (-1, 0, 1) drops the bottom tier unless the name is one the
+# tiers above know.
 
-def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any]], SourceStatus]:
-    """Yesterday through the next few sessions, ranked."""
+TRADINGVIEW = ("https://economic-calendar.tradingview.com/events"
+               "?from={lo}&to={hi}&countries={cc}")
+#: What the app sends TradingView everywhere (sources/pool.py, sources/tvnews.py).
+TV_HEADERS = {
+    "Accept": "application/json",
+    "Origin": "https://www.tradingview.com",
+    "Referer": "https://www.tradingview.com/",
+}
+#: The code TradingView files each country under: every country REGIONS or MAJOR
+#: knows, so the stand-in is asked for the same world Nasdaq lists.
+ISO2: dict[str, str] = {
+    "United States": "US", "United Kingdom": "GB", "Euro Zone": "EU", "Germany": "DE",
+    "France": "FR", "Italy": "IT", "Spain": "ES", "Netherlands": "NL", "Belgium": "BE",
+    "Austria": "AT", "Portugal": "PT", "Ireland": "IE", "Greece": "GR", "Finland": "FI",
+    "Switzerland": "CH", "Sweden": "SE", "Norway": "NO", "Denmark": "DK", "Poland": "PL",
+    "Czech Republic": "CZ", "Hungary": "HU", "Turkey": "TR", "Japan": "JP", "China": "CN",
+    "Hong Kong": "HK", "South Korea": "KR", "Australia": "AU", "New Zealand": "NZ",
+    "India": "IN", "Singapore": "SG", "Taiwan": "TW", "Indonesia": "ID", "Malaysia": "MY",
+    "Thailand": "TH", "Philippines": "PH", "Vietnam": "VN", "Canada": "CA",
+}
+_COUNTRY_OF = {code: name for name, code in ISO2.items()}
+#: A row can arrive under the feed's raw key, "United States-<set>-<name>".
+_TV_LANDS = frozenset(ISO2) | {"Euro Area"}
+
+#: "Prel", "Final": which reading it is. Taken off the name (releases.family folds
+#: a release by its name, and "cpi final" is not `cpi`) and kept on the note.
+_TV_VINTAGE = re.compile(r"\s+(Final|Prel|Flash|Adv|2nd Est|3rd Est)$", re.I)
+#: TradingView's title → Nasdaq's words, first match of each, in order.
+_TV_RENAME: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^Core Inflation Rate\b", re.I), "Core CPI"),
+    (re.compile(r"^Harmoni[sz]ed Inflation Rate\b", re.I), "HICP"),
+    (re.compile(r"^Inflation Rate\b", re.I), "CPI"),
+    (re.compile(r"^Consumer Price Index\b", re.I), "CPI Index"),
+    (re.compile(r"^Core Consumer Prices\b", re.I), "Core CPI Index"),
+    (re.compile(r"^CPI seasonally adjusted\b", re.I), "CPI Index, s.a"),
+    (re.compile(r"^Non ?Farm Payrolls Private\b", re.I), "Private Nonfarm Payrolls"),
+    (re.compile(r"^Non Farm Payrolls\b", re.I), "Nonfarm Payrolls"),
+    (re.compile(r"^U-6 Unemployment Rate\b", re.I), "U6 Unemployment Rate"),
+    (re.compile(r"^GDP Growth Annualized\b", re.I), "GDP Annualized"),
+    (re.compile(r"^GDP Growth Rate\b", re.I), "GDP"),
+    (re.compile(r"^Balance of Trade\b", re.I), "Trade Balance"),
+    (re.compile(r"^EIA Crude Oil Stocks Change\b", re.I), "Crude Oil Inventories"),
+    (re.compile(r"^EIA Gasoline Stocks Change\b", re.I), "Gasoline Inventories"),
+    (re.compile(r"^EIA Natural Gas Stocks Change\b", re.I), "Natural Gas Storage"),
+    (re.compile(r"^API Crude Oil Stock Change\b", re.I), "API Weekly Crude Oil Stock"),
+    (re.compile(r"^Retail Sales Control Group\b", re.I), "Retail Control"),
+    # Nasdaq's "Thomson Reuters IPSOS PCSI". Spelt out it reads as THE consumer
+    # sentiment print to the tiers, and stood as the session's one print that way.
+    (re.compile(r"^LSEG/Ipsos Primary Consumer Sentiment Index\b", re.I), "LSEG/Ipsos PCSI"),
+    # The BLS's third PPI, under the name releases.ALIASES folds into the PPI row.
+    (re.compile(r"^PPI Ex Food,? Energy and Trade(?: Services)?\b", re.I),
+     "PPI ex. Food/Energy/Transport"),
+    (re.compile(r"\bSpeech$", re.I), "Speaks"),
+]
+_TV_SPAN: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(?:MoM|MM)\b"), "m/m"),
+    (re.compile(r"\b(?:YoY|YY)\b"), "y/y"),
+    (re.compile(r"\bQoQ\b"), "q/q"),
+]
+#: A bare price index is its LEVEL ("CPI 337.511"): named so releases.is_level
+#: folds it away beside the changes anyone prices.
+_TV_LEVEL = re.compile(r"(?:Core )?(?:CPI|PPI|PCE|HICP)")
+#: The detail rows of a release nobody on this desk reads line by line.
+_TV_NOISE = re.compile(
+    r"Auction (?:Allotted at High|Bid-to-Cover|Total Accepted)$|"
+    r"^MBA .*(?:Contract Rate|Effective Rate|Points)$|"
+    r"^(?:WASDE|USDA|NOPA)\b|^CPI-W$|^EIA (?:Ethanol|Crude Oil Exports)\b|^PPI Machinery",
+    re.I,
+)
+#: Bottom-tier by TradingView's flag and still wanted: an auction's own row (its
+#: yield), the claims that print beside the initial ones, and the harmonised CPI,
+#: which rides under its country's CPI (releases.ALIASES).
+_TV_KEEP = re.compile(r"(?:Bill|Note|Bond|TIPS) Auction$|jobless claims|^HICP\b", re.I)
+_TV_MONEY = frozenset({"$", "€", "¥", "£"})
+_TV_ISO = "%Y-%m-%dT%H:%M:%S.000Z"
+
+
+def tv_event(title: str, unit: str | None = None) -> tuple[str, str | None]:
+    """A TradingView title in the words Nasdaq uses, and which reading it is
+    ("Prel", "Final") when the title said. Pure.
+
+    "Core Inflation Rate MoM" → "Core CPI m/m"; "Inflation Rate YoY Final" →
+    ("CPI y/y", "Final"); "Balance of Trade" → "Trade Balance"; "CPI" with a
+    figure that is not a percentage → "CPI Index".
+    """
+    t = clean_text(str(title or "")).rstrip("* ").strip()
+    parts = t.split("-")
+    if len(parts) >= 3 and parts[0].strip() in _TV_LANDS:
+        t = parts[-1].strip()
+    vintage = None
+    m = _TV_VINTAGE.search(t)
+    if m:
+        vintage, t = m.group(1), t[: m.start()]
+    for pat, to in _TV_RENAME:
+        t = pat.sub(to, t, count=1)
+    for pat, to in _TV_SPAN:
+        t = pat.sub(to, t)
+    t = " ".join(t.split())
+    if _TV_LEVEL.fullmatch(t) and unit != "%":
+        t += " Index"
+    return t, vintage
+
+
+def _tv_fig(v: Any, unit: str | None, scale: str | None) -> Fig:
+    """One TradingView figure as (the number, the text a row carries), in the terms
+    `_num` reads Nasdaq's in: thousands and millions multiplied out, a percentage
+    ending in "%" (label_variants and releases.is_level look for it). Pure."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None, None
+    x = float(v)
+    body, sign = f"{abs(x):,.10g}", "-" if x < 0 else ""
+    if unit == "%":
+        raw = f"{sign}{body}%"
+    else:
+        raw = f"{sign}{unit if unit in _TV_MONEY else ''}{body}{scale or ''}"
+    return x * (1_000.0 if scale == "K" else 1_000_000.0 if scale == "M" else 1.0), raw
+
+
+def tv_body(body: bytes) -> str | None:
+    """TradingView's calendar JSON, or why not."""
+    bad = json_body(body)
+    if bad:
+        return bad
+    return None if b'"result"' in body[:400] else "not a calendar reply"
+
+
+def parse_tradingview(doc: Any, lo: date, hi: date) -> list[dict[str, Any]]:
+    """TradingView's calendar payload → the rows for the ET days `lo`..`hi`, in the
+    shape `parse_day` makes and the names Nasdaq uses. Pure."""
+    events = doc.get("result") if isinstance(doc, dict) else None
+    out: list[dict[str, Any]] = []
+    for e in events if isinstance(events, list) else []:
+        if not isinstance(e, dict):
+            continue
+        country = _COUNTRY_OF.get(str(e.get("country") or "").upper())
+        if country is None:
+            continue
+        unit = e.get("unit") if isinstance(e.get("unit"), str) else None
+        scale = e.get("scale") if isinstance(e.get("scale"), str) else None
+        event, vintage = tv_event(str(e.get("title") or ""), unit)
+        if not event or _TV_NOISE.search(event):
+            continue
+        imp = e.get("importance")
+        if (not isinstance(imp, (int, float)) or imp < 0) and not (
+                TIER1.search(event) or TIER2.search(event) or _TV_KEEP.search(event)):
+            continue
+        try:
+            when = datetime.fromisoformat(str(e.get("date") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        when_et = (when if when.tzinfo else when.replace(tzinfo=UTC)).astimezone(ET)
+        if not lo <= when_et.date() <= hi:
+            continue
+        note = clean_text(str(e.get("comment") or ""))
+        if vintage:
+            note = f"{vintage} reading. {note}".strip()
+        out.append(_row(
+            event, country, when_et.date(), when_et,
+            _tv_fig(e.get("actual"), unit, scale),
+            _tv_fig(e.get("forecast"), unit, scale),
+            _tv_fig(e.get("previous"), unit, scale),
+            note[:260] or None,
+        ))
+    return out
+
+
+_FED_SUFFIX = frozenset({"jr", "jr.", "sr", "sr.", "ii", "iii"})
+
+
+def fed_speech_rows(fed: Iterable[dict[str, Any]], lo: date, hi: date,
+                    have: Iterable[dict[str, Any]] = ()) -> list[dict[str, Any]]:
+    """The Board's scheduled speeches and testimony (sources/fedcal.py rows) as
+    calendar rows for `lo`..`hi`, named the way Nasdaq names them. Pure.
+
+    "Speech - Governor Christopher J. Waller" → "FOMC Member Waller Speaks", and
+    the Chair is "FOMC Chair …": the tiers read "FOMC", which is what has always
+    put a Fed speaker at the top of this calendar. A speaker a row in `have`
+    already names at that minute is left out.
+    """
+    taken = {(str(r.get("utc") or "")[:16], str(r.get("event") or "").lower()) for r in have}
+    out: list[dict[str, Any]] = []
+    for r in fed:
+        ts = r.get("ts")
+        if r.get("kind") not in ("Speech", "Testimony") or not isinstance(ts, (int, float)):
+            continue
+        when_et = datetime.fromtimestamp(float(ts), ET)
+        if not lo <= when_et.date() <= hi:
+            continue
+        title = str(r.get("title") or "")
+        who = title.split(" - ", 1)[1] if " - " in title else title
+        words = [w.strip(",.") for w in who.split()]
+        while words and words[-1].lower() in _FED_SUFFIX:
+            words.pop()
+        if not words:
+            continue
+        last = words[-1]
+        chair = bool(re.search(r"(?<!vice )\bchair\b", who, re.I))
+        verb = "Testifies" if r.get("kind") == "Testimony" else "Speaks"
+        event = f"FOMC {'Chair' if chair else 'Member'} {last} {verb}"
+        minute = when_et.astimezone(UTC).isoformat()[:16]
+        if any(at == minute and last.lower() in name for at, name in taken):
+            continue
+        none: Fig = (None, None)
+        out.append(_row(event, "United States", when_et.date(), when_et, none, none, none,
+                        clean_text(str(r.get("note") or ""))[:260] or None))
+    return out
+
+
+# --------------------------------------------------------------- the pass
+
+#: Which calendar the last pass read ("nasdaq" or "tradingview"), and its window.
+_source = "nasdaq"
+_window: tuple[date, date] | None = None
+#: Nasdaq is not asked again before this (epoch), and why: a host that is refusing
+#: is asked twice an hour, not seven times every ten minutes.
+NASDAQ_RETRY_SEC = 1800.0
+_nasdaq_wait = 0.0
+_nasdaq_why = ""
+
+
+def source() -> str:
+    """The feed the last `collect` returned rows from."""
+    return _source
+
+
+def with_fed_speeches(rows: list[dict[str, Any]],
+                      fed: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`rows` with the Board's speeches added, in time order, when the last pass
+    read TradingView (which lists none). Otherwise `rows` as they are."""
+    if _source != "tradingview" or _window is None:
+        return rows
+    extra = fed_speech_rows(fed, _window[0], _window[1], rows)
+    if not extra:
+        return rows
+    return sorted([*rows, *extra], key=lambda x: (x.get("ts") or 0))
+
+
+def _finish(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Exact duplicates out, the paired releases named, in time order."""
+    # EXACT duplicates only. Nasdaq lists the same event name twice in a slot
+    # when it publishes both a month-on-month and a year-on-year figure, and
+    # nothing in the payload distinguishes them — so dropping by (country,
+    # event, time) would silently discard a real release. Keyed on the values
+    # too, which removes only rows that are genuinely the same row twice.
+    seen: set[tuple[Any, ...]] = set()
+    unique: list[dict[str, Any]] = []
+    for row in rows:
+        k = (row["country"], row["event"], row["utc"], row["actual_raw"],
+             row["consensus_raw"], row["previous_raw"])
+        if k in seen:
+            continue
+        seen.add(k)
+        unique.append(row)
+    label_variants(unique)
+    unique.sort(key=lambda x: (x.get("ts") or 0))
+    return unique
+
+
+def _from_nasdaq(today: date, lo: date, hi: date, days_ahead: int,
+                 days_back: int) -> tuple[list[dict[str, Any]], SourceStatus, bool]:
+    """Nasdaq's days for the window → (rows, status, whether it is NOT delivering).
+
+    Not delivering: two or more of the days that can still change (yesterday on)
+    failed or came back as the copy on disk. One slow day is a slow day."""
     global _last_shift
     st = SourceStatus("Economic calendar")
-    today = datetime.now(ET).date()
-    lo, hi = today - timedelta(days=days_back), today + timedelta(days=days_ahead)
     rows: list[dict[str, Any]] = []
     failed = 0
+    behind = 0
     # One day wider each side than the window: whichever way the dates run,
     # every day in it is in some payload.
     span = range(-days_back - 1, days_ahead + 2)
@@ -411,12 +727,20 @@ def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any
             ua=BROWSER_UA,
             timeout=20,
             headers={"Accept": "application/json"},
-            # A settled day may serve a week-old copy; the rest may not lag by
-            # more than six hours — that is where actuals land.
-            stale_max_sec=7 * 86400.0 if offset < -1 else 6 * 3600.0,
+            # A settled day may serve a week-old copy. The rest may serve one two
+            # days old. IT WAS SIX HOURS, "where actuals land", and that threw away
+            # the schedule with the actuals (audit, 2026-11-11): Nasdaq refused the
+            # feed from 05:49 ET on 10 Nov, the copy held was dropped at noon, and
+            # the desk read "None scheduled" on a day CPI printed at 08:30. A
+            # release's time does not go stale the way its figure does, and the
+            # status already says how old the copy is, so the page keeps the
+            # schedule and marks it stale rather than showing nothing.
+            stale_max_sec=7 * 86400.0 if offset < -1 else 48 * 3600.0,
             validate=json_body,
         )
         st.absorb(r)
+        if offset >= -1 and (not r.ok or r.source == "stale"):
+            behind += 1
         if not r.ok:
             failed += 1
             st.error = st.error or r.error
@@ -441,26 +765,71 @@ def collect(days_ahead: int = 3, days_back: int = 1) -> tuple[list[dict[str, Any
             failed += 1
             st.error = st.error or f"parse: {e}"
 
-    # EXACT duplicates only. Nasdaq lists the same event name twice in a slot
-    # when it publishes both a month-on-month and a year-on-year figure, and
-    # nothing in the payload distinguishes them — so dropping by (country,
-    # event, time) would silently discard a real release. Keyed on the values
-    # too, which removes only rows that are genuinely the same row twice.
-    seen: set[tuple[Any, ...]] = set()
-    unique: list[dict[str, Any]] = []
-    for row in rows:
-        k = (row["country"], row["event"], row["utc"], row["actual_raw"],
-             row["consensus_raw"], row["previous_raw"])
-        if k in seen:
-            continue
-        seen.add(k)
-        unique.append(row)
-    rows = unique
-
-    label_variants(rows)
-    rows.sort(key=lambda x: (x.get("ts") or 0))
+    rows = _finish(rows)
     st.items = len(rows)
     if failed:
         st.notes.append(f"{failed} of {len(list(span))} days unavailable")
     st.settle(len(rows) > 0, "day")
+    return rows, st, behind >= 2
+
+
+def _from_tradingview(lo: date, hi: date, why: str) -> tuple[list[dict[str, Any]], SourceStatus]:
+    """The window from TradingView's calendar: one request. `why` is what Nasdaq
+    said, for the status row."""
+    st = SourceStatus("Economic calendar")
+    start = datetime(lo.year, lo.month, lo.day, tzinfo=ET).astimezone(UTC)
+    end = datetime(hi.year, hi.month, hi.day, 23, 59, 59, tzinfo=ET).astimezone(UTC)
+    r = st.absorb(fetch(
+        TRADINGVIEW.format(lo=start.strftime(_TV_ISO), hi=end.strftime(_TV_ISO),
+                           cc=",".join(sorted(_COUNTRY_OF))),
+        key="cal_tradingview",
+        ttl_sec=540.0,
+        ua=BROWSER_UA,
+        timeout=20,
+        headers=dict(TV_HEADERS),
+        stale_max_sec=48 * 3600.0,
+        validate=tv_body,
+    ))
+    rows: list[dict[str, Any]] = []
+    if r.ok:
+        try:
+            rows = _finish(parse_tradingview(r.json(), lo, hi))
+        except (ValueError, TypeError, AttributeError) as e:
+            st.error = f"parse: {e}"
+    else:
+        st.error = r.error
+    st.items = len(rows)
+    st.notes.append(f"TradingView's calendar: Nasdaq is not answering ({why})")
+    st.settle(len(rows) > 0, "read")
     return rows, st
+
+
+def collect(days_ahead: int = 3, days_back: int = 1,
+            today: date | None = None) -> tuple[list[dict[str, Any]], SourceStatus]:
+    """Yesterday through the next few sessions, ranked: Nasdaq's calendar, or
+    TradingView's while Nasdaq is not delivering (the note above). `today` is for
+    the tests; the desk's day is New York's."""
+    global _source, _window, _nasdaq_wait, _nasdaq_why
+    today = today or datetime.now(ET).date()
+    lo, hi = today - timedelta(days=days_back), today + timedelta(days=days_ahead)
+    _window = (lo, hi)
+    now = time.time()
+    held: tuple[list[dict[str, Any]], SourceStatus] | None = None
+    if now >= _nasdaq_wait:
+        rows, st, down = _from_nasdaq(today, lo, hi, days_ahead, days_back)
+        if not down:
+            _source = "nasdaq"
+            return rows, st
+        held = (rows, st)
+        _nasdaq_wait = now + NASDAQ_RETRY_SEC
+        _nasdaq_why = st.stale_error or st.error or "unreachable"
+    tv_rows, tv_st = _from_tradingview(lo, hi, _nasdaq_why or "unreachable")
+    if tv_st.ok:
+        _source = "tradingview"
+        return tv_rows, tv_st
+    # Neither is answering: what Nasdaq's copy on disk still holds, marked stale.
+    if held is None:
+        rows, st, _ = _from_nasdaq(today, lo, hi, days_ahead, days_back)
+        held = (rows, st)
+    _source = "nasdaq"
+    return held

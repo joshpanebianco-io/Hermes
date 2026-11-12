@@ -58,6 +58,8 @@ export interface Regime {
   bias: Side | null;
   confirm: "confirm" | "divergence" | "risk_off" | "chop" | null;
   event: { title: string; et: string; in_min: number; score: number } | null;
+  /** False when the economic calendar is not loading: no `event` then is a gap, not a clear morning. */
+  calendar_ok?: boolean | null;
   notes: string[];
   /** How many independent signals agree with the bias — computed, never the model's. */
   conviction?: Conviction | null;
@@ -103,6 +105,11 @@ export interface Conviction {
   total: number;
   grade: "strong" | "moderate" | "weak" | "none";
   max_conviction: 1 | 2 | 3 | 4 | 5;
+  /**
+   * A lean with under half the session's weight able to vote (overnight: two reads of
+   * eleven). The grade is weak at most, and the page prints the count beside the score.
+   */
+  thin?: boolean;
   votes: ConvictionVote[];
 }
 
@@ -199,6 +206,24 @@ export interface ScanRow {
     open: number | null;
     /** The 200 EMA on ten-minute bars — the side filter (structure.py). Absent from an older collector. */
     ema200?: number | null;
+    /**
+     * The previous session's high and low as the 5-minute bars alone have them. `pdh` and
+     * `pdl` are the official day's, which reach further when the bars missed the opening
+     * prints (scan.technicals); the page says so where the two differ.
+     */
+    pdh_bars?: number | null;
+    pdl_bars?: number | null;
+    /**
+     * Today's pre-market high and low as the 5-minute bars alone have them. `pmh` and
+     * `pml` take whichever of these and a second read (Nasdaq's, or the wide scan's
+     * screener) reaches further, so on a day the bars start late they sit past the
+     * candles (2026-11-11: no Nasdaq-listed name had a bar before 05:20 ET). Null
+     * with no pre-market bars yet; absent from an older collector.
+     */
+    pmh_bars?: number | null;
+    pml_bars?: number | null;
+    /** `open` is the daily bar's official print, not the first 5-minute bar's. */
+    open_official?: boolean;
   };
   progress: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null };
   broken: { pdh: boolean; pdl: boolean; pmh: boolean; pml: boolean };
@@ -233,7 +258,8 @@ export interface ScanRow {
   /** The name's options, from Cboe's delayed chain. Null until the first chain arrives. */
   options?: OptionsCtx | null;
   /** Twenty-session average daily volume. */
-  adv20?: number | null;
+  /** The name's average day: the last thirty completed sessions' volume (scanscore.avg_day). */
+  adv?: number | null;
   /** Today's pre-market from Nasdaq's extended-trading feed (about fifteen minutes delayed). */
   premkt?: {
     volume: number | null;
@@ -242,6 +268,8 @@ export interface ScanRow {
     low: number | null;
     last: number | null;
     asof: string | null;
+    /** "screener" when the wide read stood in because Nasdaq had not answered for the name. */
+    source?: string;
   } | null;
   /** Big caps in the same sector reporting from today through three trading days out. */
   peers?: Array<{ sym: string; date: string; when: string; days: number }>;
@@ -597,6 +625,12 @@ export interface ScanOutcome {
   ret_60m_r: number | null;
   ret_close_r: number | null;
   final: boolean;
+  /**
+   * `r` is the signal's floor, not the script's stop idea: that stop was nearer than a
+   * quarter of the ten-minute ATR, the script's own retest buffer (scanlog). Absent on
+   * an outcome settled before 2026-11-11 whose bars were gone by then.
+   */
+  floored?: boolean | null;
 }
 
 export interface ScanEvent {
@@ -651,6 +685,12 @@ export interface ScanStats {
   to: string;
   total: number;
   groups: ScanStatGroup[];
+  /**
+   * How much of the record is on the floored stop: `ruled` were read with a floor to
+   * hand, `floored` are those it moved the stop on, `unruled` are older signals whose
+   * bars were gone before they could be read again. Absent from an older collector.
+   */
+  floor?: { ruled: number; floored: number; unruled: number };
   offline?: { reason: string; api: string };
 }
 
@@ -664,7 +704,7 @@ export interface ScanBar {
 }
 
 /** The chart's timeframes — 10m is the one the script's signals are read on. */
-export type ChartTf = "1m" | "3m" | "5m" | "10m" | "D";
+export type ChartTf = "1m" | "3m" | "5m" | "10m" | "30m" | "60m" | "D";
 
 export interface ScanBars {
   ok: boolean;
@@ -677,7 +717,12 @@ export interface ScanBars {
   ema10: Array<number | null>;
   /** The 200 EMA on the chart's own bars (structure.py, 2026-10-30); null until 200 bars are held. Absent from an older collector. */
   ema200?: Array<number | null>;
+  /** The 20 and 50 EMAs on the chart's own bars (2026-11-11), drawn when picked; blank until that many bars are held. Absent from an older collector. */
+  ema20?: Array<number | null>;
+  ema50?: Array<number | null>;
   vwap: Array<number | null>;
+  /** A stock's VWAP deviation, volume-weighted from 09:30, for the bands (2026-11-11); a future carries its own in `vwaps`. */
+  vwap_sd?: Array<number | null>;
   levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pm_done: boolean };
   /**
    * Each earlier session's four levels over its own regular hours
@@ -687,6 +732,25 @@ export interface ScanBars {
   history?: Array<{ key: "PDH" | "PDL" | "PMH" | "PML"; v: number; from: number; to: number; day: string }>;
   sessions: Array<{ kind: "pre" | "rth" | "post"; from: number; to: number }>;
   signals: Array<{ t: number; kind: "L" | "E" | "BO" | "E_SETUP"; side: Side; price: number }>;
+  /** A futures book's ladder rows drawn as lines: the flip, the walls, the settle, the opening range. */
+  lines?: Array<{ v: number; label: string; tone: "call" | "put" | "flip" | "ref" }>;
+  /** A futures book's expected move, from the collector rather than an options row. */
+  em?: { lo: number; hi: number; label: string } | null;
+  /** A futures book's VWAP from each anchor with its deviation (futures.anchored); null on the daily view. */
+  vwaps?: Record<VwapAnchor, AnchoredVwap> | null;
+  /** A futures book's 18:00 reopens, marked on the chart in place of a stock's extended-hours shading. */
+  opens?: number[];
+}
+
+/** Where a futures VWAP starts again: each 18:00 reopen, London open, cash open, or Sunday reopen. */
+export type VwapAnchor = "globex" | "london" | "rth" | "week";
+
+export interface AnchoredVwap {
+  vwap: Array<number | null>;
+  /** The volume-weighted standard deviation about it, from the same start. */
+  sd: Array<number | null>;
+  /** The bars a new period starts on, where the line breaks. */
+  starts: number[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -797,7 +861,21 @@ export interface BreakoutRow {
   tracked: boolean;
   pinned: boolean;
   stage: number | null;
+  verdict?: Verdict | null;
   spark: number[] | null;
+}
+
+/**
+ * What the engine does with a name today (sources/pool.verdict): on the list for
+ * good, tracked by hand, taken by the pool at a mark, on the list another way, in
+ * the pool over its bar but not taken, in it under the bar, or not in it at all.
+ */
+export interface Verdict {
+  state: "pinned" | "hand" | "promoted" | "tracked" | "inplay" | "quiet" | "out";
+  score: number | null;
+  reason: string | null;
+  mark: string | null;
+  at: string | null;
 }
 
 export type BreakoutChip = "all" | "both" | "news" | "gaps" | "through" | "inside" | "day23" | "pinned";
@@ -829,25 +907,45 @@ export interface ExtendedRow {
   chg: number;
   vol: number | null;
   adv_pct: number | null;
+  /** This session's volume against its own average; an estimate until five sessions are on file. */
+  rvol?: number | null;
+  rvol_est?: boolean;
+  session?: "pre" | "post";
   hi?: number;
   lo?: number;
   state?: RangeState;
+  /** The pre-market range, on either session's row. */
+  pmh?: number | null;
+  pml?: number | null;
+  /** The base bar sits inside the bar before it. */
+  inside?: boolean;
   live?: boolean;
   catalyst: Catalyst | null;
   tracked?: boolean;
   pinned?: boolean;
   stage?: number | null;
+  verdict?: Verdict | null;
   spark?: number[] | null;
 }
 
-export type ExtendedChip = "all" | "up" | "down" | "news" | "through" | "day23" | "pinned";
+export type ExtendedChip = "all" | "up" | "down" | "news" | "through" | "inside" | "day23" | "pinned";
 
 export interface ExtendedPayload extends WideHead {
-  session: "pre" | "post";
+  session: "pre" | "post" | "all";
   active: boolean;
   volume_floor: number;
+  scanned?: number;
   chips: Record<ExtendedChip, number>;
-  stats: { up: ExtendedRow | null; down: ExtendedRow | null };
+  stats: {
+    up: ExtendedRow | null;
+    down: ExtendedRow | null;
+    through?: number;
+    inside?: number;
+    gap_up?: number;
+    gap_up_news?: number;
+    gap_down?: number;
+    gap_down_news?: number;
+  };
   reference: ExtendedRow[];
   reference_is_last: boolean;
   rows: ExtendedRow[];
@@ -869,7 +967,10 @@ export interface Day23Row {
   pdl: number;
   level: number;
   to_level: number | null;
+  vol?: number | null;
   adv_pct: number | null;
+  /** The table's own rough order (momentum.score_of), not the Scanner's score. */
+  score?: number;
   state: string;
   kind: "confirmed" | "inside" | "watch" | "failed";
   through: boolean;

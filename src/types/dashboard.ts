@@ -1,4 +1,4 @@
-import type { ScanRow, ScanSession, Side, WideBasis } from "@/types/scanner";
+import type { ScanRow, ScanSession, Side, Verdict, WideBasis } from "@/types/scanner";
 import type { BreadthAll } from "@/types/terminal";
 
 /** GET /api/dashboard — the session on one page (server dashboard.py). */
@@ -15,6 +15,35 @@ export interface DashStory {
   url: string;
   provider: string;
   age_min: number;
+}
+
+/** One name on the In play card: the pool's rank entry and the engine's verdict on it. */
+export interface DashInPlayRow {
+  sym: string;
+  name: string | null;
+  score: number;
+  reason: string;
+  gap_atr: number | null;
+  vol_pct: number | null;
+  through: "PDH" | "PDL" | null;
+  day: number | null;
+  reports: string | null;
+  last: number | null;
+  verdict: Verdict | null;
+}
+
+export interface DashInPlay {
+  rows: DashInPlayRow[];
+  qualified: number | null;
+  screened: number | null;
+  basis: string;
+  promoted: number;
+  marks_done: string[];
+  next_mark: string | null;
+  slots: number | null;
+  /** The most a name can score on the pool's rank, for the row's bar. Absent from an older collector. */
+  score_max?: number | null;
+  on: boolean;
 }
 
 export interface DashFocus {
@@ -43,16 +72,27 @@ export interface DashboardPayload {
     reports: Array<{ sym: string; when: "pre" | "after" | "unspecified" }>;
   };
   plan: {
-    bias: { side: Side | null; score: number | null; grade: string | null; live: number | null; total: number | null; cap: number | null };
+    bias: {
+      side: Side | null;
+      score: number | null;
+      grade: string | null;
+      live: number | null;
+      total: number | null;
+      cap: number | null;
+      /** Under half the session's weight could vote: the chip prints the count. Absent from an older collector. */
+      thin?: boolean | null;
+    };
     focus: DashFocus[];
     themes: DashFocus[];
     setups: DashSetup[];
     event: { title: string; et: string; in_min: number; score: number } | null;
+    /** False when the economic calendar is not loading. Absent from an older collector. */
+    calendar_ok?: boolean | null;
   };
   breadth: Pick<BreadthAll, "basis" | "floor" | "names" | "advancers" | "decliners" | "buckets"> | null;
   top: DashRow[];
-  list: DashRow[];
-  adds: DashRow[];
+  /** The pool's rank with the engine's verdict; null until the pool has been read. */
+  inplay: DashInPlay | null;
   stories: DashStory[];
   news_live: boolean;
   rotation: Array<{ key: string; label: string; day_pct: number | null; rs_day: number | null; leaders: string[] }>;

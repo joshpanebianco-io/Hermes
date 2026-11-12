@@ -77,7 +77,7 @@ export function AskGlyph({ className }: { className?: string }) {
   );
 }
 
-/** `tab` is the key the collector knows (lib/tabs.ts askTab): Analysis arrives as its half. */
+/** `tab` is the key the collector knows (lib/tabs.ts askTab): the Brief view arrives as "report", the Game plan view as "plan". */
 export function AskPanel({ tab }: { tab: string }) {
   const focus = useAskFocus();
   const sym = tab === "scanner" ? focus : null;

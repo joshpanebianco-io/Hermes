@@ -13,7 +13,7 @@ import {
 } from "@/lib/theme";
 import { Module } from "@/components/ui/Module";
 import type { FrameFx } from "@/lib/useFrameLight";
-import { UI_COOKIE, type UiMode } from "@/lib/ui";
+import { UI_CLASSES, UI_COOKIE, uiClass, type UiMode } from "@/lib/ui";
 import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
 import { segItem } from "@/lib/seg";
 import { setOptionsPrefs, useOptionsPrefs } from "@/lib/optionsPrefs";
@@ -53,7 +53,6 @@ const SECTIONS = [
   { key: "interface", label: "Interface" },
   { key: "alerts", label: "Alerts" },
   { key: "options", label: "Options" },
-  { key: "keyboard", label: "Keyboard" },
   { key: "presets", label: "Presets" },
   { key: "frame", label: "Frame light" },
   { key: "hues", label: "Data hues" },
@@ -91,13 +90,15 @@ const CHROME_SLOTS: { key: keyof ThemeChoice; label: string; hint: string }[] = 
  * the palette is set to, the frame agrees with it.
  */
 /**
- * The interface — Quiet (GEXYGEN's flat, hairline chassis) or Classic (the
- * carded neon one this terminal shipped with). Quiet is the default; Classic is
- * kept because a redesign you cannot step back from is a bet, not a choice.
+ * The interface — Quiet (GEXYGEN's flat, hairline chassis) or Luminous Glass
+ * (GEXYGEN's other one: the deep ground and the glass cards, on Quiet's layout).
+ * Quiet is the default. Classic, the carded neon one this terminal shipped with, sat
+ * here as a third choice until the owner had it removed on 2026-11-11 (lib/ui.ts).
  */
 const UIS: { key: UiMode; label: string; hint: string }[] = [
   { key: "quiet", label: "Quiet", hint: "Flat chrome on one grey ramp, hairlines instead of cards, IBM Plex" },
-  { key: "classic", label: "Classic", hint: "Carded panes, mono caps headers and the neon chrome" },
+  { key: "lum", label: "Luminous Glass", hint: "Cards of lit glass over a soft light, pill controls, a plain sans with JetBrains Mono figures, 10% larger on a wide screen — the same pages as Quiet" },
+  { key: "side", label: "Sidebar", hint: "Every page and view listed down the left; across the top the page's name, the index prices, the search and the clock; plain dark cards — the same pages as Luminous Glass" },
 ];
 
 const FX: { key: FrameFx; label: string; hint: string }[] = [
@@ -153,15 +154,21 @@ export function Settings({
   const setUi = (m: UiMode) => {
     onUi(m);
     document.cookie = `${UI_COOKIE}=${m}; path=/; max-age=31536000; samesite=lax`;
-    document.documentElement.classList.toggle("ui-qt", m === "quiet");
+    // Luminous rides on Quiet and Sidebar on Luminous (lib/ui.ts): a mode wears its own
+    // class and those it rides on, and Quiet's is never off.
+    const wears = uiClass(m).split(" ");
+    for (const c of UI_CLASSES) document.documentElement.classList.toggle(c, wears.includes(c));
   };
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       {/* The tabs and what they open share one centred column (owner, 2026-11-06), or
-          on a wide screen the tabs sit far to the left of the page they control. */}
-      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-ring px-3 py-1.5 qt:px-6">
-        <span className="seg max-w-full flex-wrap justify-center" role="tablist" aria-label="Settings">
+          on a wide screen the tabs sit far to the left of the page they control.
+          `qt-mast`: under Luminous the strip is a band like the one over the Scanner,
+          Futures and Sectors; it was the one row of tabs lying on the bare ground. */}
+      <div className="qt-mast flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-ring px-3 py-1.5 qt:px-6">
+        {/* `seg-tabs`: the same tabs as the Stocks and Futures views (globals.css). */}
+        <span className="seg seg-tabs max-w-full justify-center" role="tablist" aria-label="Settings">
           {SECTIONS.map((s) => (
             <button
               key={s.key}
@@ -169,7 +176,7 @@ export function Settings({
               role="tab"
               aria-selected={section === s.key}
               onClick={() => setSection(s.key)}
-              {...segItem(section === s.key, { className: "text-[10px] tracking-[0.08em] uppercase qt:text-[12px]" })}
+              {...segItem(section === s.key)}
             >
               {s.label}
             </button>
@@ -179,38 +186,16 @@ export function Settings({
       <div className="min-h-0 flex-1 overflow-y-auto p-2 qt:p-0">
       <div className="qt-stack mx-auto flex w-full max-w-[1040px] min-w-0 flex-col gap-2">
         {section === "interface" && (
-        <Module title="Interface" sub="the chassis the terminal is drawn in" bodyClassName="px-0 py-0">
-          {UIS.map((o) => (
-            <button
-              key={o.key}
-              type="button"
-              onClick={() => setUi(o.key)}
-              className={cn(
-                "hit flex w-full items-center gap-2 border-b border-ring/40 px-3 py-1.5 text-left last:border-b-0",
-                ui === o.key && "bg-ink/[0.06]",
-              )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  "h-[13px] w-[13px] shrink-0 rounded-[3px] border",
-                  ui === o.key ? "border-ink bg-ink/20" : "border-ring-2",
-                )}
-              />
-              <span className={cn("w-[70px] shrink-0 text-[11px] qt:text-[12.5px]", ui === o.key ? "text-ink" : "text-ink-2")}>
-                {o.label}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[9.5px] text-ink-4 qt:text-[11.5px] qt:text-ink-3">{o.hint}</span>
-            </button>
-          ))}
-        </Module>
+          <Module title="Interface" sub="the chassis the terminal is drawn in" bodyClassName="px-0 py-0">
+            {UIS.map((o) => (
+              <Choice key={o.key} label={o.label} hint={o.hint} on={ui === o.key} onPick={() => setUi(o.key)} />
+            ))}
+          </Module>
         )}
 
         {section === "alerts" && <Alerts />}
 
         {section === "options" && <OptionsPrefsModule />}
-
-        {section === "keyboard" && <Keyboard />}
 
         {section === "presets" && (
         <Module
@@ -613,38 +598,57 @@ function OptionsPrefsModule() {
   );
 }
 
-/* ---------------------------------------------------------------- keyboard */
+/*
+ * NO KEYBOARD SECTION (owner, 2026-11-11: "can we remove the key board controls and
+ * from the settings too"). It listed the single-key controls (1 to 7 for the tabs, A
+ * for Hermes, F, V, the arrows), and they went with it. A remembered section of
+ * "keyboard" falls back to Interface.
+ */
 
-const KEYS: { keys: string[]; what: string }[] = [
-  { keys: ["1", "2", "3", "4", "5", "6", "7"], what: "The tabs, in the order the header shows them" },
-  { keys: ["D"], what: "Flip the desk — Futures or Stocks & options — on Structure and Analysis" },
-  { keys: ["A"], what: "Ask Hermes beside the page; press it again to put the panel away" },
-  { keys: ["Ctrl", "K"], what: "Find any ticker or company, from any tab, and open it" },
-  { keys: ["↑", "↓"], what: "Scanner: walk the list; with a name open, the slide-out moves with it" },
-  { keys: ["Enter"], what: "Scanner: open the focused row" },
-  { keys: ["Esc"], what: "Close the slide-out" },
-  { keys: ["F"], what: "Make the slide-out full width, and back" },
-];
-
-/** The shortcuts, written down — the header's hover hints are not where anyone looks for them. */
-function Keyboard() {
+/** One option of a Settings choice: a square marker, its name, and what it does. */
+function Choice({
+  label,
+  hint,
+  on,
+  onPick,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  onPick: () => void;
+  disabled?: boolean;
+}) {
   return (
-    <Module title="Keyboard" sub="ignored while typing in a field" bodyClassName="px-0 py-0">
-      {KEYS.map((k) => (
-        <div key={k.what} className="flex items-center gap-3 border-b border-ring/40 px-3 py-2 last:border-b-0">
-          <span className="flex w-[150px] shrink-0 gap-1">
-            {k.keys.map((x) => (
-              <kbd
-                key={x}
-                className="fig min-w-[22px] rounded-[3px] border border-ring-2 bg-surface-2 px-1.5 py-px text-center text-[11px] text-ink-2"
-              >
-                {x}
-              </kbd>
-            ))}
-          </span>
-          <span className="text-[11px] text-ink-3 qt:text-[12px]">{k.what}</span>
-        </div>
-      ))}
-    </Module>
+    <button
+      type="button"
+      onClick={onPick}
+      disabled={disabled}
+      aria-pressed={on}
+      className={cn(
+        "hit flex w-full items-center gap-2 border-b border-ring/40 px-3 py-1.5 text-left last:border-b-0 disabled:pointer-events-none disabled:opacity-50",
+        on && "bg-ink/[0.06]",
+      )}
+    >
+      {/* A FILLED MARK WITH A TICK, NOT A BRIGHTER OUTLINE (design review, 2026-11-11):
+          the chosen row's box was the same empty square with a lighter edge, and read
+          as unticked beside a row that was lit. */}
+      <span
+        aria-hidden
+        className={cn(
+          "grid h-[14px] w-[14px] shrink-0 place-items-center rounded-full border",
+          on ? "border-ink bg-ink" : "border-ring-2",
+        )}
+      >
+        {on && (
+          <svg viewBox="0 0 12 12" className="h-[9px] w-[9px]" style={{ color: "var(--bg)" }}>
+            <path d="M2.6 6.3 5 8.6 9.4 3.7" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </span>
+      <span className={cn("w-[70px] shrink-0 text-[11px] qt:text-[12.5px]", on ? "text-ink" : "text-ink-2")}>{label}</span>
+      <span className="min-w-0 flex-1 truncate text-[9.5px] text-ink-4 qt:text-[11.5px] qt:text-ink-3">{hint}</span>
+    </button>
   );
 }
+

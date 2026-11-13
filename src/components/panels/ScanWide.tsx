@@ -124,8 +124,8 @@ export function Chips<T extends string>({
   counts,
 }: {
   items: ReadonlyArray<{ key: T; label: string; title?: string }>;
-  /** The chip that is lit; null when something beside the chips is the choice instead (Multicharts). */
-  on: T | null;
+  /** The chip that is lit. */
+  on: T;
   set: (k: T) => void;
   counts?: Partial<Record<T, number>> | null;
 }) {

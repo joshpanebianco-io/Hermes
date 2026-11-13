@@ -72,7 +72,7 @@ from ..config import BROWSER_UA, CACHE_DIR
 from ..holidays import is_trading_day, prev_trading_day
 from ..http import SourceStatus, fetch, json_body
 from .holdings import US_LISTED
-from .pool import HEADERS, URL, pool_body
+from .pool import HEADERS, URL, pool_body, session_points
 from .quotes import SPARK
 from .quotes import THEMES as ETF_THEMES
 from .scanner import _SYM, SECTOR
@@ -400,8 +400,10 @@ def evaluate(r: dict[str, Any], basis: str, read_at: float, *, pm_ok: bool, ah_o
         pm_state = "above" if last > pmh else "below" if last < pml else "inside"
     both: str | None = None
     if pre:
-        # The pre-market range cannot be through itself, so before the open
-        # "both ranges" is the previous day's levels alone (and says so).
+        # `both` is an OUTSIDE DAY: through the pre-market range and the previous
+        # day's the same way (owner, 2026-11-13; the page's chip says "Outside day").
+        # The pre-market range cannot be through itself, so before the open it is
+        # the previous day's levels alone (and the page says so).
         both = "up" if pd_state == "above" else "down" if pd_state == "below" else None
     elif pm_state == "above" and pd_state == "above":
         both = "up"
@@ -436,6 +438,8 @@ class Ctx:
     stage: dict[str, int] = field(default_factory=dict)
     #: What the engine does with the name today (sources/pool.verdict), for the row.
     verdict: Callable[[str], dict[str, Any] | None] = lambda _s: None
+    #: The Stocks list's own RVOL for a name it tracks, None for the rest (`rvol_for`).
+    rvol: Callable[[str], float | None] = lambda _s: None
 
 
 def span_stats(rows: list[dict[str, Any]], column: str, leaders: int = 3) -> dict[str, Any]:
@@ -640,16 +644,55 @@ class UniverseStore:
         ref = self.pm_ref.get(r["sym"])
         return ref is None or [r["pm_h"], r["pm_l"], r["pm_vol"]] != ref[:3]
 
+    def pm_traded(self, sym: str, pm_close: float | None, pm_volume: float | None) -> bool | None:
+        """For another read of the same screener columns (the pool's): are these a
+        pre-market of today? False when they are exactly the figures held before the
+        session began (`pm_ref`), True when they differ, None with no reference to
+        compare or nothing to compare it with."""
+        ref = self.pm_ref.get(sym)
+        if ref is None or (pm_close is None and pm_volume is None):
+            return None
+        return not (pm_volume == ref[2] and pm_close == ref[3])
+
     def ah_ok(self, r: dict[str, Any], basis: str) -> bool:
         if basis != "post":
             return True
         ref = self.ah_ref.get(r["sym"])
         return ref is None or [r["ah_c"], r["ah_vol"]] != ref[:2]
 
-    def _read(self, r: dict[str, Any], basis: str,
-              q: dict[str, Any] | None) -> dict[str, Any] | None:
-        return evaluate(r, basis, self.read_at or 0.0, pm_ok=self.pm_ok(r, basis),
-                        ah_ok=self.ah_ok(r, basis), q=q)
+    def _read(self, r: dict[str, Any], basis: str, q: dict[str, Any] | None,
+              own: float | None = None) -> dict[str, Any] | None:
+        e = evaluate(r, basis, self.read_at or 0.0, pm_ok=self.pm_ok(r, basis),
+                     ah_ok=self.ah_ok(r, basis), q=q)
+        if e is not None:
+            # The share to the decimal Extended hours rounds it to, so the two agree.
+            adv = _round(e["vol"] / r["avg"] * 100.0, 1) if e["vol"] and r["avg"] else None
+            e["rvol"] = self.rvol_for(r["sym"], basis, e["rvol"], e["vol"], adv, own)
+        return e
+
+    def rvol_for(self, sym: str, basis: str, read: float | None, vol: float | None,
+                 adv_pct: float | None, own: float | None = None) -> float | None:
+        """ONE RVOL FOR A NAME, WHICHEVER PAGE SHOWS IT (quant audit, 2026-11-13; owner:
+        "fix everything"). The pages had six: Setups the engine's time-of-day figure off
+        its bars, Breakouts the screener's time-of-day column, the pool a share of a whole
+        average day, Day 2/3 a fifth of the pre-market's share of one, Extended hours the
+        pre-market's own history; so one stock read 2.4 on one page and 0.6 on another.
+        What RVOL is now, everywhere:
+          - in the session, volume so far against an average day to the same minute
+            (`read`, the screener's; the pool reads the same column);
+          - once the session is over, the whole day against an average day (`read`);
+          - before the bell, the pre-market against its own usual pre-market (`_ext_rvol`,
+            the Extended hours figure: a fifth of a day's share until five mornings are
+            kept), since a day's RVOL does not exist yet.
+        And a name the Stocks list tracks shows the list's own (`own`, the engine's, off
+        live bars where the screener runs fifteen minutes behind), so the same stock reads
+        the same on every page. Before the bell the engine has none and the pre-market's
+        figure stands."""
+        if own is not None and basis != "pre":
+            return round(own, 2)
+        if basis == "pre":
+            return self._ext_rvol(sym, "pre", vol, adv_pct)[0]
+        return read
 
     def premarket_of(self, sym: str, trading_day: date,
                      now: datetime | None = None) -> dict[str, Any] | None:
@@ -676,10 +719,28 @@ class UniverseStore:
         return {"volume": r["pm_vol"], "high": r["pm_h"], "low": r["pm_l"], "last": r["pm_c"],
                 "asof": datetime.fromtimestamp(at, UTC).isoformat(), "source": "screener"}
 
+    def day_move(self, sym: str, now: datetime | None = None) -> float | None:
+        """The name's move since the previous close (%), as the screener has it fifteen
+        minutes behind: the pre-market print (or, before one, last evening's after-hours
+        print, which is where the name stands), the regular session's change, and after
+        the close that change with the after-hours move on top. What a headline's stated
+        move is held to (catalysts.STATED_MIN) for a name off the Stocks list."""
+        r = self.by_sym.get(sym)
+        if r is None:
+            return None
+        basis = basis_at(now or datetime.now(UTC))
+        if basis == "pre":
+            return r["pm_chg"] if self.pm_ok(r, basis) else r["ah_chg"]
+        if basis == "post" and r["chg"] is not None and r["ah_chg"] is not None \
+                and self.ah_ok(r, basis):
+            return ((1.0 + r["chg"] / 100.0) * (1.0 + r["ah_chg"] / 100.0) - 1.0) * 100.0
+        return r["chg"]
+
     def read_one(self, sym: str, ctx: Ctx, now: datetime | None = None) -> dict[str, Any] | None:
         """One name's reading, for the Day 2/3 table."""
         r = self.by_sym.get(sym)
-        return self._read(r, basis_at(now or datetime.now(UTC)), ctx.quote(sym)) if r else None
+        return self._read(r, basis_at(now or datetime.now(UTC)), ctx.quote(sym),
+                          ctx.rvol(sym)) if r else None
 
     # ---- the helpers other stores ask for -----------------------------------
 
@@ -722,9 +783,8 @@ class UniverseStore:
             e = self._read(r, basis, None)
             if e is None:
                 continue
-            # Before the open there is no relative volume; five percent of an
-            # average day traded pre-market reads as about 1x.
-            rv = (e["rvol"] or 0.0) if basis != "pre" else (e["adv_pct"] or 0.0) / 5.0
+            # Before the open RVOL is the pre-market's own (`rvol_for`).
+            rv = e["rvol"] or 0.0
             if e["both"]:
                 ranked.append((-10.0 - rv, r["sym"]))
             elif e["pd_state"] != "inside":
@@ -882,7 +942,7 @@ class UniverseStore:
             scanned += 1
             if (theme and not self.in_theme(r, theme)) or (industry and r["industry"] != industry):
                 continue
-            e = self._read(r, basis, ctx.quote(r["sym"]))
+            e = self._read(r, basis, ctx.quote(r["sym"]), ctx.rvol(r["sym"]))
             if e is None:
                 continue
             gate = {**e, "vol": last_session_volume(r, basis)} if listing else e
@@ -989,12 +1049,17 @@ class UniverseStore:
             avg = r["avg"]
             adv_pct = _round(v / avg * 100.0 if v and avg else None, 1)
             rvol, est = self._ext_rvol(r["sym"], session, v, adv_pct)
+            # The move in the name's own daily ATRs, from the price it moved from.
+            atr, ref = r["atr"], last / (1.0 + chg / 100.0) if chg > -100.0 else None
+            gap_atr = abs(last - ref) / atr if atr and ref else None
             h1, l1 = r["h1"], r["l1"]
             ok_pm = self.pm_ok(r, basis)
             out.append({"sym": r["sym"], "name": r["name"], "cap": r["cap"],
                         "sector": r["sector"], "float": r["float"], "last": round(last, 4),
                         "chg": round(chg, 2), "vol": v, "adv_pct": adv_pct,
                         "rvol": rvol, "rvol_est": est, "session": session,
+                        "gap_atr": _round(gap_atr),
+                        "in_play": round(session_points(gap_atr, adv_pct), 1),
                         "hi": hi, "lo": lo, "state": state, "live": is_live,
                         "pmh": r["pm_h"] if ok_pm else None, "pml": r["pm_l"] if ok_pm else None,
                         "inside": (r["high"] is not None and r["low"] is not None
@@ -1027,7 +1092,14 @@ class UniverseStore:
         else:
             floor, active = floor_of(session), basis == session
             out = self._gappers(ctx, session, cap, floor, basis)
-        out.sort(key=lambda e: (0 if (e["catalyst"] or {}).get("major") else 1, -abs(e["chg"])))
+        # A fresh major story first, then THE MOVE ON ITS VOLUME (quant audit, 2026-11-13;
+        # owner: "fix everything"): the move in daily ATRs and the session's share of an
+        # average day, read the way the pool reads the pre-market (pool.session_points), so
+        # this page and the pool agree on who is in play. By the bare percent a 100k-share
+        # +15% name sat above a 5M-share +8% one, and a 6% move in a stock that moves 8% on
+        # a quiet day above a 4% move in one that moves 1%.
+        out.sort(key=lambda e: (0 if (e["catalyst"] or {}).get("major") else 1,
+                                -e["in_play"], -abs(e["chg"])))
         ups_all, downs_all = [e for e in out if e["chg"] > 0], [e for e in out if e["chg"] < 0]
         chips = {
             "all": len(out),
@@ -1151,7 +1223,7 @@ class UniverseStore:
         for r in self.rows:
             if (r["cap"] or 0) < cap or r["chg"] is None or abs(r["chg"]) < min_move:
                 continue
-            e = self._read(r, basis, ctx.quote(r["sym"]))
+            e = self._read(r, basis, ctx.quote(r["sym"]), ctx.rvol(r["sym"]))
             if e is not None and (e["rvol"] or 0.0) >= 1.5:
                 out.append({**e, "raw": r})
         return out

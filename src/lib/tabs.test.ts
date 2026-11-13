@@ -16,8 +16,21 @@ test("the bar's pages, in bar order", () => {
 });
 
 test("the Scanner's views, once each, every one with a name and a hover", () => {
-  assert.deepEqual(SCAN_VIEW_KEYS, ["setups", "breakouts", "extended", "day23", "index", "log", "plan"]);
+  assert.deepEqual(SCAN_VIEW_KEYS, ["setups", "breakouts", "extended", "day23", "log", "plan", "multi"]);
   for (const v of SCAN_VIEWS) assert.ok(v.label && v.title, v.key);
+});
+
+test("Multicharts is a view, the one after Game plan: beside it in the band, under it in the sidebar", () => {
+  // The band's tabs and the sidebar's rows are both this list in this order.
+  assert.equal(SCAN_VIEW_KEYS.indexOf("multi"), SCAN_VIEW_KEYS.indexOf("plan") + 1);
+  assert.equal(SCAN_VIEWS.find((v) => v.key === "multi")?.label, "Multicharts");
+  // It is the scanner's own list drawn another way: Hermes is asked as the scanner.
+  assert.equal(askTab("scanner", "multi"), "scanner");
+});
+
+test("the Index view is gone: no view is named it, and the Stocks page asks Hermes as the scanner", () => {
+  assert.ok(!(SCAN_VIEW_KEYS as readonly string[]).includes("index"));
+  for (const v of SCAN_VIEW_KEYS) assert.notEqual(askTab("scanner", v), "tape");
 });
 
 test("Sectors is a tab of its own, between Macro and the Scanner, and no longer one of the Scanner's views", () => {
@@ -31,7 +44,6 @@ test("Futures sits after the Scanner, and Structure's old links land on it", () 
   assert.equal(TAB_KEYS.indexOf("futures"), TAB_KEYS.indexOf("scanner") + 1);
   assert.deepEqual(resolveTab("structure"), { tab: "futures" });
   assert.equal(askTab("futures"), "structure");
-  assert.equal(askTab("scanner", "index"), "tape");
   assert.equal(askTab("scanner", "setups"), "scanner");
 });
 
@@ -41,10 +53,10 @@ test("Analysis is off the bar: each written note lives with its desk, and old li
   assert.deepEqual(resolveTab("report"), { tab: "futures", fut: "brief" });
   assert.deepEqual(resolveTab("analysis"), { tab: "futures", fut: "brief" });
   assert.deepEqual(resolveTab("analysis", "futures"), { tab: "futures", fut: "brief" });
-  // The written game plan is the Scanner's last view.
+  // The written game plan is one of the Scanner's views.
   assert.deepEqual(resolveTab("plan"), { tab: "scanner", scan: "plan" });
   assert.deepEqual(resolveTab("analysis", "stocks"), { tab: "scanner", scan: "plan" });
-  assert.equal(SCAN_VIEW_KEYS.at(-1), "plan");
+  assert.ok((SCAN_VIEW_KEYS as readonly string[]).includes("plan"));
   assert.equal(resolveTab("nonsense"), null);
   assert.equal(resolveTab(undefined), null);
   // Hermes is told each note by the name the collector already knows it by.

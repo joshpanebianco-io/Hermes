@@ -272,238 +272,15 @@
   }
 
   /*
-   * THE STATIC TOP HAIRLINE IS GONE, and it had to be.
-   *
-   * It was a two-hue gradient on the top edge as a "this instrument is on" cue,
-   * from before the frame had a light at all. Once the frame effects below
-   * arrived it became noise in every mode: in Off it was colour on a frame
-   * meant to be plain, and in Travel or Breathe it was a second, static light
-   * competing with the real one. GEXYGEN removed its own for exactly this
-   * reason (2026-08-16) and the same argument applies here. The chassis is
-   * plain in every mode; the effect, when chosen, is the only light on it.
-   *
-   * ---------------------------------------------------------------------
-   * THE TRAVELLING LIGHT — a charge running the whole perimeter, clockwise.
-   *
-   * A conic gradient rotated by an animated angle, then masked down to a ring.
-   * `mask-composite: exclude` punches the content box out of a full-bleed
-   * background, which is what lets the light survive the rounded corners
-   * exactly — four edge gradients or a border-image both break there, and a
-   * corner that drops the light is worse than no light.
-   *
-   * CLOCKWISE FROM TWELVE, so it crosses the top edge left to right — the same
-   * direction the wordmark's sheen runs. Two moving things in the chrome
-   * disagreeing about direction reads as a mistake even when nobody can say
-   * why.
-   *
-   * The head is `--frame-b` and the tail fades through `--frame-a`: the two
-   * chrome hues the theme already owns, so this introduces no new colour.
-   *
-   * NO `animation` HERE, deliberately. A CSS animation of an angle is
-   * necessarily linear in ANGLE, and a rectangle's perimeter is not
-   * equidistant from its centre — a linear angle crawls the edge midpoints and
-   * accelerates through the corners. `useFrameLight.ts` drives the rotation
-   * through the Web Animations API on a curve derived from the frame's
-   * measured geometry instead. The paint is here; only the timing is there.
-   *
-   * THE GRADIENT TURNS; IT IS NOT REPAINTED. It used to live on this ring as
-   * `conic-gradient(from var(--border-angle))` with the registered angle
-   * animated — which re-rasterised a full-window masked gradient through two
-   * drop-shadows on every frame, all day: ~690ms of main-thread time a second
-   * on an idle tab (measured 2026-10-13, 815ms/s travel against 160 off). Now
-   * the ring is a real element (`.frame-light`, mounted by Terminal.tsx) whose
-   * one child carries the gradient FROM 0deg and is rotated by a `transform`
-   * animation — compositor work, no paint. A conic gradient turned about its
-   * own centre is the same picture as one started from a later angle, so the
-   * look is unchanged. The pseudo-element below is the shared ring geometry,
-   * and only breathe still paints into it.
+   * THE FRAME CARRIES NO LIGHT (owner, 2026-11-13: "get rid of the ... frame light
+   * and lets remove that from the app as well"). A ring on this boundary held a
+   * comet that ran the perimeter (travel) or glowed in place between the two frame
+   * hues (breathe), chosen in Settings; before it a static two-hue hairline sat on
+   * the top edge. All of it is gone: the ring's rules, its keyframes, the element
+   * Terminal.tsx mounted for it and lib/useFrameLight.ts. `--frame-a` and
+   * `--frame-b` stay, because Luminous Glass reads them for the light behind its
+   * cards and the lit state of its pills, and a preset still sets them.
    */
-  .app-frame::after,
-  .frame-light {
-    position: absolute;
-    /* Resolves against the PADDING box, so -1px lands exactly on the 1px
-       border — the ring sits ON the boundary rather than inside it. */
-    inset: -1px;
-    border-radius: inherit;
-    /* At exactly the border width the light sits *in* the boundary and reads
-       as the border changing colour; 2px reads as something travelling. */
-    padding: 2px;
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    mask-composite: exclude;
-    /*
-     * THE BLOOM IS THE NEON. A saturated hairline is a coloured line; what
-     * reads as a tube is the light it throws onto what surrounds it. Two
-     * stacked shadows because one cannot be both — the tight pass gives the
-     * core its heat, the wide one the halo.
-     *
-     * `drop-shadow`, not `box-shadow`: it follows the element's ALPHA, which
-     * after the mask is the comet alone. `box-shadow` would trace the whole
-     * rectangle and light all four edges permanently.
-     */
-    filter:
-      drop-shadow(0 0 3px color-mix(in oklab, var(--frame-b) 60%, transparent))
-      drop-shadow(0 0 9px color-mix(in oklab, var(--frame-a) 30%, transparent));
-    pointer-events: none;
-  }
-
-  /* Travel only. Off and breathe have no comet. */
-  .frame-light {
-    display: none;
-    overflow: hidden;
-  }
-  .app-frame.fx-travel > .frame-light {
-    display: block;
-  }
-
-  /*
-   * The comet itself: a square as wide as the frame's diagonal, centred on
-   * it, so the gradient covers every corner at any rotation. `--frame-d` is
-   * set by the hook from the measured box. Clockwise from twelve at rest; the
-   * hook's keyframes turn it.
-   */
-  .frame-light__spin {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: var(--frame-d, 200vmax);
-    height: var(--frame-d, 200vmax);
-    margin: calc(var(--frame-d, 200vmax) / -2) 0 0 calc(var(--frame-d, 200vmax) / -2);
-    background: conic-gradient(
-      from 0deg,
-      transparent 0deg,
-      transparent 236deg,
-      color-mix(in oklab, var(--frame-a) 22%, transparent) 272deg,
-      color-mix(in oklab, var(--frame-a) 70%, transparent) 310deg,
-      color-mix(in oklab, var(--frame-b) 85%, transparent) 332deg,
-      color-mix(in oklab, var(--frame-b) 96%, transparent) 352deg,
-      transparent 360deg
-    );
-    will-change: transform;
-  }
-
-  /*
-   * THE BREATHING VARIANT — same ring, different life.
-   *
-   * Instead of a comet travelling the border, the whole perimeter glows in
-   * place and alternates between the two chrome hues. The conic gradient is
-   * overridden with a flat colour, so the mask geometry — the part that makes
-   * the light hug the corners — is reused untouched, and the WAAPI driver
-   * stands down because the hook checks the mode.
-   *
-   * FOUR PHASES, NOT A CROSSFADE. One hue fading straight into the other
-   * passes through a blended midpoint that reads as a third, unnamed colour.
-   * Dipping to near-dark between them keeps each hue pure and gives the cycle
-   * its breath. 12s a lap, so it sits near the house rhythms without locking
-   * to them.
-   */
-  .app-frame.fx-breathe::after {
-    content: "";
-    background: color-mix(in oklab, var(--frame-a) 70%, transparent);
-    animation: frame-breathe 12s ease-in-out infinite;
-  }
-
-  /*
-   * THE GLOW IS A SECOND ELEMENT, and it has to be. The ring is a 2px hairline
-   * shaped by a mask, which imposes two limits at once: `drop-shadow` blurs
-   * the hairline's own alpha, and 2px of source spread over a 26px blur is
-   * arithmetic that ends near zero — while `box-shadow` on the ring is clipped
-   * by the very mask that shapes it. So a halo the size a breathing frame
-   * needs cannot come from the ring at any setting.
-   *
-   * ::before is free now the hairline is deleted, so in breathe mode it
-   * becomes a pure glow layer: no fill, only box-shadows on the same rounded
-   * rect. Same 12s timeline, so core and glow breathe as one thing.
-   */
-  .app-frame.fx-breathe::before {
-    content: "";
-    position: absolute;
-    inset: -1px;
-    border-radius: inherit;
-    pointer-events: none;
-    animation: frame-breathe-glow 12s ease-in-out infinite;
-  }
-
-  /* OFF — no light at all. The chassis is already plain in every mode, so this
-     only has to hide the effect ring. */
-  .app-frame.fx-off::after {
-    display: none;
-  }
-
-  @keyframes frame-breathe {
-    0%,
-    100% {
-      background: color-mix(in oklab, var(--frame-a) 70%, transparent);
-      filter:
-        drop-shadow(0 0 4px color-mix(in oklab, var(--frame-a) 80%, transparent))
-        drop-shadow(0 0 12px color-mix(in oklab, var(--frame-a) 45%, transparent))
-        drop-shadow(0 0 26px color-mix(in oklab, var(--frame-a) 22%, transparent));
-    }
-    25% {
-      background: color-mix(in oklab, var(--frame-a) 12%, transparent);
-      filter:
-        drop-shadow(0 0 3px color-mix(in oklab, var(--frame-a) 12%, transparent))
-        drop-shadow(0 0 8px color-mix(in oklab, var(--frame-a) 6%, transparent))
-        drop-shadow(0 0 16px color-mix(in oklab, var(--frame-a) 3%, transparent));
-    }
-    50% {
-      background: color-mix(in oklab, var(--frame-b) 70%, transparent);
-      filter:
-        drop-shadow(0 0 4px color-mix(in oklab, var(--frame-b) 80%, transparent))
-        drop-shadow(0 0 12px color-mix(in oklab, var(--frame-b) 45%, transparent))
-        drop-shadow(0 0 26px color-mix(in oklab, var(--frame-b) 22%, transparent));
-    }
-    75% {
-      background: color-mix(in oklab, var(--frame-b) 12%, transparent);
-      filter:
-        drop-shadow(0 0 3px color-mix(in oklab, var(--frame-b) 12%, transparent))
-        drop-shadow(0 0 8px color-mix(in oklab, var(--frame-b) 6%, transparent))
-        drop-shadow(0 0 16px color-mix(in oklab, var(--frame-b) 3%, transparent));
-    }
-  }
-
-  @keyframes frame-breathe-glow {
-    0%,
-    100% {
-      box-shadow:
-        0 0 16px 2px color-mix(in oklab, var(--frame-a) 55%, transparent),
-        0 0 48px 8px color-mix(in oklab, var(--frame-a) 26%, transparent),
-        inset 0 0 14px color-mix(in oklab, var(--frame-a) 16%, transparent);
-    }
-    25% {
-      box-shadow:
-        0 0 10px 1px color-mix(in oklab, var(--frame-a) 10%, transparent),
-        0 0 30px 4px color-mix(in oklab, var(--frame-a) 5%, transparent),
-        inset 0 0 10px color-mix(in oklab, var(--frame-a) 3%, transparent);
-    }
-    50% {
-      box-shadow:
-        0 0 16px 2px color-mix(in oklab, var(--frame-b) 55%, transparent),
-        0 0 48px 8px color-mix(in oklab, var(--frame-b) 26%, transparent),
-        inset 0 0 14px color-mix(in oklab, var(--frame-b) 16%, transparent);
-    }
-    75% {
-      box-shadow:
-        0 0 10px 1px color-mix(in oklab, var(--frame-b) 10%, transparent),
-        0 0 30px 4px color-mix(in oklab, var(--frame-b) 5%, transparent),
-        inset 0 0 10px color-mix(in oklab, var(--frame-b) 3%, transparent);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    /* Collapses to the final keyframe: a steady ring, lit but still. The comet
-       is a WAAPI animation that CSS cannot reach, so `useFrameLight` checks the
-       same query itself and declines to start. */
-    .app-frame.fx-breathe::after,
-    .app-frame.fx-breathe::before {
-      animation: none;
-    }
-  }
 
   /*
    * A MODULE, not a card.
@@ -586,7 +363,7 @@
    * about direction.
    *
    * THE RING IS PART OF THE BUTTON'S OWN BACKGROUND, not an overlay. It was
-   * first built the way the chassis light is — a pseudo-element masked down to
+   * first built the way the chassis light was (removed 2026-11-13) — a pseudo-element masked down to
    * a ring with `mask-composite: exclude` — and at 1x it looked rough: the
    * owner saw "black marks" on the curves (2026-09-22). On a 1px ring the outer
    * clip and the inner cut-out are anti-aliased SEPARATELY, their coverage
@@ -2204,8 +1981,8 @@
  * table were a card each, and its gaps lined up with nothing in the table below. Day
  * 2/3 and Extended hours already drew the row as one bar. So every `qt-stats` is the
  * card, a `qt-stat` in it is a flat cell, and two cells are parted by `--lum-part`, the
- * short rule a strip of quotes uses between its groups. The Index view's band
- * (`qt-strip`) and the Sectors tally (`qt-tally`) are drawn the same way, below. The
+ * short rule a strip of quotes uses between its groups. The Sectors tally
+ * (`qt-tally`) is drawn the same way, below. The
  * Futures overview's five books stay cards: each is a page's worth of one contract and
  * opens it, where a stat row is one summary.
  */
@@ -2263,35 +2040,6 @@
   border-radius: 12px;
   background: var(--lum-glass);
   box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
-}
-/*
- * The Index view's band (market/MarketStrip) is one card like every other page's stat
- * row, loaded or not (it was five tiles for a day, 2026-11-11, when the stat rows were
- * tiles). The cells are a `qt-tiles` grid inside it: flat, parted by the short rule.
- */
-.ui-lum .qt-strip {
-  margin: 0 0 var(--lum-gap);
-  background: var(--lum-glass);
-  border: 1px solid var(--lum-ring);
-  border-radius: 12px;
-  box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
-  overflow: hidden;
-}
-.ui-lum .qt-frame .qt-strip .qt-tiles {
-  gap: 0;
-  padding: 0;
-}
-.ui-lum .qt-strip .qt-tiles > * {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.ui-lum .qt-strip .qt-tiles > *:not(:last-child) {
-  background-image: var(--lum-part);
-  background-position: right center;
-  background-size: 1px 56%;
-  background-repeat: no-repeat;
 }
 /*
  * A tally strip inside a page card (Sectors' advancing / declining) is one strip in the
@@ -2484,7 +2232,7 @@
 }
 
 /* ---- the light behind the glass ------------------------------------------------------
- * The two chrome hues (Settings → Chrome), stronger than the faint washes they were,
+ * The two frame hues (a preset sets them), stronger than the faint washes they were,
  * and a cool one rising from the foot of the page. The dot field goes: with light
  * behind it the glass needs no texture. */
 .ui-lum {
@@ -2516,8 +2264,7 @@
 .ui-lum .module,
 .ui-lum .qt-tiles > *,
 .ui-lum .qt-crawl,
-.ui-lum .qt-stats,
-.ui-lum .qt-strip {
+.ui-lum .qt-stats {
   border-radius: 16px;
   border-color: var(--lum-ring);
   box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
@@ -2560,7 +2307,7 @@
  * dont think it needs ot be done in dashboard and amcro".) The band (`qt-mast`: a
  * page's views, its quotes, its search) was a card of its own, a gap above the card
  * that sums the page up. Where the first thing under it is a card of the band's own
- * width (a stat row, the Index view's band, a chip bar, a table, the Futures overview's
+ * width (a stat row, a chip bar, a table, the Futures overview's
  * books) the two are ONE CARD: the band squares its bottom corners and keeps its
  * bottom border as the rule between them, the frame under it gives up its top margin,
  * and that card squares its top and drops its own top border and lit edge. Where it is
@@ -2574,21 +2321,21 @@
  * the page took and then snapped onto the card that arrived. It is in the list now: the
  * page is one card from its first frame.
  */
-.ui-lum .qt-mast:has(+ .qt-frame > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
-.ui-lum .qt-mast:has(+ .qt-frame > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
-.ui-lum .qt-mast:has(+ .qt-frame > :first-child > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child) {
+.ui-lum .qt-mast:has(+ .qt-frame > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast:has(+ .qt-frame > :first-child > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast:has(+ .qt-frame > :first-child > :first-child > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child) {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   box-shadow: inset 0 1px 0 var(--lum-edge);
 }
-.ui-lum .qt-mast + .qt-frame:has(> :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
-.ui-lum .qt-mast + .qt-frame:has(> :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child),
-.ui-lum .qt-mast + .qt-frame:has(> :first-child > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child) {
+.ui-lum .qt-mast + .qt-frame:has(> :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast + .qt-frame:has(> :first-child > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child),
+.ui-lum .qt-mast + .qt-frame:has(> :first-child > :first-child > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child) {
   margin-top: 0;
 }
-.ui-lum .qt-mast + .qt-frame > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child,
-.ui-lum .qt-mast + .qt-frame > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child,
-.ui-lum .qt-mast + .qt-frame > :first-child > :first-child > :is(.qt-stats, .qt-strip, .qt-bar, .qt-sheet, .qt-wait):first-child {
+.ui-lum .qt-mast + .qt-frame > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child,
+.ui-lum .qt-mast + .qt-frame > :first-child > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child,
+.ui-lum .qt-mast + .qt-frame > :first-child > :first-child > :is(.qt-stats,.qt-bar, .qt-sheet, .qt-wait):first-child {
   border-top: 0;
   border-top-left-radius: 0;
   border-top-right-radius: 0;
@@ -2931,7 +2678,7 @@
 }
 
 /* ---- the cards: a step less round, as the screenshots' are ----------------------------- */
-.ui-side :is(.qt-mast, .qt-bar, .qt-sheet, .qt-card, .qt-wait, .qt-slab, .module, .qt-crawl, .qt-stats, .qt-strip, .qt-tally, .qt-drawer),
+.ui-side :is(.qt-mast, .qt-bar, .qt-sheet, .qt-card, .qt-wait, .qt-slab, .module, .qt-crawl, .qt-stats,.qt-tally, .qt-drawer),
 .ui-side .qt-tiles > *,
 .ui-side .qt-frame .qt-books {
   border-radius: 12px;

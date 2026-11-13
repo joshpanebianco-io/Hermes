@@ -1,7 +1,6 @@
 "use client";
 
 import type { BreadthAll } from "@/types/terminal";
-import { Module } from "@/components/ui/Module";
 
 /**
  * Breadth across the whole market — how many stocks moved, and by how much.
@@ -10,17 +9,11 @@ import { Module } from "@/components/ui/Module";
  * a sector table cannot show that. This counts every US stock at $2bn+ off the wide
  * read (sources/universe.py), so it is fifteen minutes behind: a picture of the day,
  * not a trigger.
+ *
+ * The bars and the count each way, drawn in the Dashboard's Breadth card. Macro had a
+ * panel of the same bars until 2026-11-13, when the page lost its two duplicates
+ * (MacroBoard.tsx).
  */
-export function Breadth({ data, ageMin }: { data?: BreadthAll | null; ageMin?: number }) {
-  if (!data || data.names === 0) return null;
-  return (
-    <Module title="Breadth" sub={`${data.names.toLocaleString()} stocks at $2bn+ · 15 min delayed`} ageMin={ageMin} bodyClassName="px-3 py-2">
-      <BreadthBars data={data} />
-    </Module>
-  );
-}
-
-/** The bars and the count each way; Macro's panel and the Dashboard's game plan. */
 export function BreadthBars({ data }: { data: Pick<BreadthAll, "buckets" | "advancers" | "decliners"> }) {
   const max = Math.max(1, ...data.buckets.map((b) => b.n));
   const total = Math.max(1, data.advancers + data.decliners);

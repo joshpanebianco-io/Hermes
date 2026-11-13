@@ -5,8 +5,6 @@ import type { Terminal as TerminalData } from "@/types/terminal";
 import { Wire } from "@/components/panels/Wire";
 import { Board } from "@/components/panels/Board";
 import { Rates } from "@/components/panels/Rates";
-import { Rotation } from "@/components/panels/Rotation";
-import { Breadth } from "@/components/panels/Breadth";
 import { Calendar } from "@/components/panels/Calendar";
 import { Earnings } from "@/components/panels/Earnings";
 import { Movers } from "@/components/panels/Movers";
@@ -29,27 +27,42 @@ import { ageStep } from "@/lib/format";
  * the one order, cut by the owner's principle that importance descends down a
  * column (2026-09-16), with what is live above what is scheduled.
  *
- * LEFT — what the market is doing. The CONSEQUENCES of the macro lead, because
- * they are short and they are the read: which sectors are being bought, and
- * which names carried the index. Rates next, the one panel whose data is
- * daily, because the curve and the policy path are what the books are priced
- * off. The macro board — VIX, energy, rates, the dollar, metals, the global
- * indices, crypto, with day-range bars — is last for the reason it was last
- * before: it is a screen tall, and the header strip already carries its
- * headline rows, so above the others it would bury them.
+ * LEFT — what the market is doing. The CONSEQUENCE of the macro lead first,
+ * because it is short and it is the read: which names carried the index.
+ * Earnings under it since 2026-11-13 (owner: "move the earnings card to the
+ * left and under index movers"), with the watchlist's names marked: the names
+ * that carried the index, then the ones about to report. It was the fourth
+ * card down the right column, under the calendar, the prints and the Fed
+ * diary, and it is the one diary on this page that is about stocks.
+ * Rates next, the one panel whose data is daily, because the curve and the
+ * policy path are what the books are priced off. The macro board — VIX,
+ * energy, rates, the dollar, metals, the global indices, crypto, with
+ * day-range bars — is last for the reason it was last before: it is a screen
+ * tall, and the header strip already carries its headline rows, so above the
+ * others it would bury them.
+ *
+ * NO SECTORS AND NO BREADTH HERE SINCE 2026-11-13 (owner: "streamline the app
+ * and make it have the most useful informaiton visible without clutter and
+ * noise"). The column opened with a sector rotation panel and a breadth panel,
+ * and each was a second, smaller copy of something with a page or a card of
+ * its own: the sectors are the Sectors tab (the heat map, the industries, the
+ * stocks in each) and the Dashboard's rotation row, and breadth is the
+ * Dashboard's card, the same bars off the same read. Two panels down, the
+ * movers open the column. (The rates were on screen under them without
+ * scrolling until earnings came between the two the same day: with 19 reports
+ * listed that card ran about 870px at 2560x1440, so the rates and the macro
+ * board are a scroll down the column.)
  *
  * RIGHT — what the day is scheduled to throw at it. The calendar first,
  * because it is where macro lives on this screen: the print that just landed
  * and its surprise are the most important fact on a data day, and on a quiet
  * day the calendar is what says it is quiet. Today's prints against
  * consensus and the Fed path under it (the stocks desk's read of the same
- * day), then the diaries — Fed & Treasury, earnings with the watchlist's
- * names marked, the sector peers reporting — and last the cross-asset moves
- * the names' drivers are read from.
+ * day), then the Fed & Treasury diary and the sector peers reporting, and
+ * last the cross-asset moves the names' drivers are read from.
  *
  * THE MARKET CONTEXT (prints, the Fed path, peers, cross-asset) is the
- * collector's, polled every twenty seconds by the Terminal and handed down;
- * the book, ranges, gamma and the tape count live on Structure.
+ * collector's, polled every twenty seconds by the Terminal and handed down.
  *
  * ONE LOADER, NOT ONE PER PANEL (owner, 2026-10-30: "instead of having
  * individual loading spinners for each module, lets just make it the whole
@@ -65,8 +78,6 @@ import { ageStep } from "@/lib/format";
 const MWire = memo(Wire);
 const MBoard = memo(Board);
 const MRates = memo(Rates);
-const MRotation = memo(Rotation);
-const MBreadth = memo(Breadth);
 const MCalendar = memo(Calendar);
 const MEarnings = memo(Earnings);
 const MMovers = memo(Movers);
@@ -81,7 +92,7 @@ const EMPTY = {} as Record<string, never>;
 const MACRO_GROUPS: React.ComponentProps<typeof Board>["groups"] = ["vol", "energy", "rates", "fx", "metals", "global", "crypto"];
 
 /** The sources this page reads — the board waits for each to have reported once. */
-const SOURCES = ["quotes", "wire", "calendar", "sectors", "constituents", "rates", "fed", "auctions", "earnings"];
+const SOURCES = ["quotes", "wire", "calendar", "constituents", "rates", "fed", "auctions", "earnings"];
 
 export function MacroBoard({ data, market: feed }: { data: TerminalData; market: MarketFeed }) {
   const st = data.status ?? {};
@@ -119,10 +130,8 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
     <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
       {/* ---- left: what the market is doing ------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        {/* The sectors only: the themes are the Sectors tab's cards (2026-11-10). */}
-        <MRotation rows={data.sectors ?? NONE} leaders={data.breadth_all?.leaders} cashOpen={cashOpen} ageMin={age("sectors")} error={st.sectors?.ok === false ? st.sectors.error : null} />
-        <MBreadth data={data.breadth_all} ageMin={age("breadth_all")} />
         <MMovers indices={data.constituents?.indices ?? EMPTY} cashOpen={cashOpen} ageMin={age("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
+        <MEarnings rows={earnings} watch={watch} today={data.expiry?.today ?? ""} ageMin={age("earnings")} error={st.earnings?.ok === false ? st.earnings.error : null} />
         <MRates rates={data.rates} pm={data.policy_meetings} ageMin={age("rates")} error={st.rates?.ok === false ? st.rates.error : null} />
         <MBoard title="Macro board" quotes={data.quotes ?? NONE} groups={MACRO_GROUPS} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
       </div>
@@ -143,7 +152,6 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
           ageMin={raw.fed == null ? age("auctions") : raw.auctions == null ? age("fed") : (ageStep(Math.max(raw.fed, raw.auctions)) ?? undefined)}
           error={st.fed?.ok === false ? st.fed.error : st.auctions?.ok === false ? st.auctions.error : null}
         />
-        <MEarnings rows={earnings} watch={watch} today={data.expiry?.today ?? ""} ageMin={age("earnings")} error={st.earnings?.ok === false ? st.earnings.error : null} />
         {(ctx || loading) && (
           <>
             <MPeers peers={ctx?.peers ?? null} />

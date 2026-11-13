@@ -31,6 +31,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { THROUGH_DAY_TITLE } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
 import { openTicker, useTicker } from "@/lib/ticker";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
@@ -50,25 +51,39 @@ import { usePinsChanged } from "@/lib/usePinsChanged";
  * does not trade it.
  */
 
+/*
+ * SIX CHIPS, EACH A CUT NOTHING ELSE ON THE PAGE MAKES (owner, 2026-11-13: "streamline
+ * the app and make it have the most useful informaiton visible without clutter and
+ * noise", after asking whether the pills were redundant). Two went: "Pinned", which
+ * re-listed names that are all on the Setups table already (its Gaps chip is the same
+ * question asked of your own list), and "Day 2/3", which is the tab this page's own
+ * "Multi-day tracker" button opens. The collector still answers both keys.
+ */
 const CHIPS: ReadonlyArray<{ key: ExtendedChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "pinned", label: "Pinned", title: "The names you starred" },
   { key: "news", label: "Has news", title: "A story about this name in the last day" },
   { key: "up", label: "Gap up" },
   { key: "down", label: "Gap down" },
-  { key: "through", label: "Outside day", title: "Through the previous day's high or low" },
+  // Not "Outside day": that is through both ranges (lib/outsideDay), and in an extended
+  // session this list knows the previous day's level alone.
+  { key: "through", label: "Through PDH/PDL", title: THROUGH_DAY_TITLE },
   { key: "inside", label: "Inside day", title: "The last bar sits inside the one before it" },
-  { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
 ];
 const CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
 const VOLS = [
   { value: 0, label: "Auto" },
   ...[5e4, 1e5, 5e5, 1e6].map((value) => ({ value, label: volWord(value) })),
 ];
+/*
+ * TWO SESSIONS, AND THE PAGE PICKS ONE BY THE CLOCK. There was a third choice, "All
+ * sessions", the two merged: through the whole regular session it was the pre-market
+ * list again, name for name (97 and 97 when it was checked), because the after-hours
+ * list is empty until 16:00. It went with the 2026-11-13 clear-out; a browser that had
+ * it saved follows the clock.
+ */
 type Session = "pre" | "post";
-type View = Session | "all";
 
-const SESSION_WORD: Record<View, string> = { pre: "Pre-market", post: "After-hours", all: "All sessions" };
+const SESSION_WORD: Record<Session, string> = { pre: "Pre-market", post: "After-hours" };
 const BADGE: Record<Session, string> = { pre: "PM", post: "AH" };
 
 const COLS = ["news", "move", "volume", "levels", "chart", "float"] as const;
@@ -77,8 +92,8 @@ const COL_NAME: Record<Col, string> = { news: "News", move: "Move", volume: "Vol
 const COL_DEFAULT: Col[] = ["news", "move", "volume", "levels", "chart"];
 
 export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () => void; onDay23?: () => void }) {
-  const [session, setSession] = usePersisted<View | "auto">("ext.session", "auto", oneOf("auto", "pre", "post", "all"));
-  const [chip, setChip] = usePersisted<ExtendedChip>("ext.chip", "all", oneOf("all", "up", "down", "news", "through", "inside", "day23", "pinned"));
+  const [session, setSession] = usePersisted<Session | "auto">("ext.session", "auto", oneOf("auto", "pre", "post"));
+  const [chip, setChip] = usePersisted<ExtendedChip>("ext.chip", "all", oneOf("all", "up", "down", "news", "through", "inside"));
   const [cap, setCap] = usePersisted<number>("ext.cap", 2e9, isNum);
   const [vol, setVol] = usePersisted<number>("ext.vol", 0, isNum);
   const [cols, setCols] = usePersisted<Col[]>("ext.cols", COL_DEFAULT, manyOf(...COLS));
@@ -99,7 +114,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
     const id = setInterval(read, 60_000);
     return () => clearInterval(id);
   }, []);
-  const shown: View = session === "auto" ? clock : session;
+  const shown: Session = session === "auto" ? clock : session;
 
   const q = useMemo(() => {
     const p = new URLSearchParams({ session: shown, chip, cap: String(cap) });
@@ -145,8 +160,8 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
     void load();
     onTrackChanged?.();
   };
-  const moveName = shown === "pre" ? "PM %" : shown === "post" ? "AH %" : "Move %";
-  const volName = shown === "pre" ? "PM vol" : shown === "post" ? "AH vol" : "Volume";
+  const moveName = shown === "pre" ? "PM %" : "AH %";
+  const volName = shown === "pre" ? "PM vol" : "AH vol";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -156,7 +171,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
           wide window and wrap on a narrow one; two more names fit on the screen. */}
       <div className="qt-stats flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-b border-ring px-4 py-2">
         <span className="seg">
-          {(["pre", "post", "all"] as const).map((v) => (
+          {(["pre", "post"] as const).map((v) => (
             <button key={v} type="button" onClick={() => setSession(v === clock ? "auto" : v)} {...segItem(shown === v)}>
               {SESSION_WORD[v]}
             </button>
@@ -166,7 +181,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
         {s.up && <Biggest r={s.up} />}
         {s.down && <Biggest r={s.down} />}
         <span aria-hidden className="h-6 w-px bg-ring-2" />
-        <Count label="Outside" value={s.through ?? data.chips.through} hue="text-desk-markets" sub="through PDH / PDL" />
+        <Count label="Through PD" value={s.through ?? data.chips.through} hue="text-desk-markets" sub="over PDH or under PDL" />
         <Count label="Inside day" value={s.inside ?? data.chips.inside ?? 0} sub="consolidating" />
         <Count label="Gapping up" value={s.gap_up ?? data.chips.up} hue="text-call-fig" news={s.gap_up_news} />
         <Count label="Gapping down" value={s.gap_down ?? data.chips.down} hue="text-put-fig" news={s.gap_down_news} />
@@ -178,7 +193,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
             </>
           ) : (
             <>
-              Last {shown === "all" ? "extended session" : SESSION_WORD[shown].toLowerCase()} · {dayName(data.day)}
+              Last {SESSION_WORD[shown].toLowerCase()} · {dayName(data.day)}
             </>
           )}{" "}
           · {delayedLine(data.read_age_min, data.delayed_min)}
@@ -236,7 +251,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
                     <th scope="col" className={TH}>
                       <button
                         type="button"
-                        title="Click: biggest gap up first, biggest gap down first, or back to news first"
+                        title="Click: biggest gap up first, biggest gap down first, or back to news first, then the move in ATRs on its volume"
                         onClick={() => setSort(sort === "news" ? "up" : sort === "up" ? "down" : "news")}
                         className={cn("qt-cap text-[10.5px] hover:text-ink-2", sort === "news" ? "text-ink-3" : "text-ink")}
                       >

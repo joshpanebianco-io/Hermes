@@ -178,3 +178,71 @@ def test_live_bars_take_the_streams_trade_in_every_session_not_overnight() -> No
     # A trade the bars were read after is already in them.
     store.fetched["AAA"] = bar_t + 200
     assert store.live_bars("AAA", pre) == store.bars["AAA"]
+
+
+# ------------------------------------------------- a stream that runs late (2026-11-12)
+#
+# On Thu 12 Nov 2026 the stream kept sending frames and every trade in them was 90 to
+# 440 seconds old on arrival. A chart laid that stale price on its last candle, and the
+# rail read "ok".
+
+NOON = ts(2026, 11, 9, 12, 0)  # the fixture's "now"
+
+
+def test_a_chart_is_told_the_newer_of_the_stream_and_the_five_second_quote() -> None:
+    late = {"price": 163.27, "at": NOON - 360.0, "session": "rth",
+            "minute": {"t": 1, "o": 1, "h": 1, "l": 1, "c": 1}}
+    # The stream is six minutes behind; the quote layer read a trade five seconds ago.
+    got = stream.chart_tick(late, (164.88, NOON - 5.0))
+    assert got is not None
+    assert (got["price"], got["at"]) == (164.88, NOON - 5.0)
+    assert (got["via"], got["session"]) == ("spark", "rth")
+    # The stream's minute candle is of a minute it has not caught up with.
+    assert got["minute"] is None
+    # A healthy stream is ahead of a five-second poll, and wins as it always did.
+    fresh = {"price": 164.90, "at": NOON - 0.4, "session": "rth", "minute": None}
+    assert stream.chart_tick(fresh, (164.88, NOON - 5.0)) is fresh
+    # No spark outside the regular session (the caller passes None): the stream's.
+    assert stream.chart_tick(late, None) is late
+
+
+def test_a_chart_with_no_stream_trade_takes_the_quote_and_one_with_neither_has_none() -> None:
+    got = stream.chart_tick(None, (10.5, NOON - 3.0))
+    assert got is not None and (got["price"], got["via"]) == (10.5, "spark")
+    # An overnight print with no session trade yet keeps its own key beside the quote's.
+    night = {"overnight": {"price": 10.2, "at": NOON - 9000.0}}
+    got = stream.chart_tick(night, (10.5, NOON - 3.0))
+    assert got is not None and got["price"] == 10.5 and got["overnight"]["price"] == 10.2
+    assert stream.chart_tick(None, None) is None
+    assert stream.chart_tick(night, None) is night
+
+
+def test_how_late_the_stream_runs_is_the_median_age_of_the_last_minutes_trades() -> None:
+    # Fifty trades in the last minute, each 110 seconds old when it arrived.
+    late = [(NOON - i, 110.0) for i in range(50)]
+    assert stream.lag_of(late, NOON) == 110.0
+    # Too few heard to say (a quiet minute overnight is not a late stream).
+    assert stream.lag_of(late[:10], NOON) is None
+    # Old news is not this minute's: trades received five minutes ago do not count.
+    assert stream.lag_of([(NOON - 300 - i, 110.0) for i in range(50)], NOON) is None
+    # A burst of old last-trades at connect does not outvote a busy, current flow.
+    mixed = [(NOON - 1, 400.0)] * 30 + [(NOON - 1, 0.3)] * 200
+    assert stream.lag_of(mixed, NOON) == 0.3
+
+
+def test_the_rail_says_stale_when_trades_arrive_late_and_ok_when_they_do_not() -> None:
+    s = _s()
+    s.connected = True
+    for i in range(60):
+        s.take(frame("AAPL", 356.0 + i / 100, int((NOON - 110.0) * 1000)))
+    st = s.status()
+    assert st.ok and st.source == "stale"
+    assert st.notes[0].startswith("trades arriving about 110s late")
+    assert st.age_min == round(110.0 / 60.0, 2)
+
+    s = _s()
+    s.connected = True
+    for i in range(60):
+        s.take(frame("AAPL", 356.0 + i / 100, int((NOON - 0.5) * 1000)))
+    st = s.status()
+    assert st.ok and st.source == "live" and not st.notes[0].startswith("trades arriving")

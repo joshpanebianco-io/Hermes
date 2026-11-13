@@ -14,13 +14,13 @@ import { ScanTable, sortValue, type ColSet, type SortKey } from "@/components/pa
 import { ChartControls, useChartPrefs } from "@/components/panels/ScanChart";
 import { ScanMulti } from "@/components/panels/ScanMulti";
 import { WatchlistEditor } from "@/components/panels/ScanWatchlist";
-import { useOptionsPrefs } from "@/lib/optionsPrefs";
 import { liveLine, scoreText } from "@/lib/bias";
 import { age, inMin, num, pct } from "@/lib/format";
 import { CHART_SLOTS, NO_HELD, TOP_N, isHeldSlots, topScores, type HeldSlots } from "@/lib/multiChart";
+import { OUTSIDE_DAY_TITLE, outsideDay } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
-import { isBool, oneOf, persist, usePersisted } from "@/lib/usePersisted";
+import { oneOf, persist, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
 import { openSearch, openTicker, useTicker } from "@/lib/ticker";
 import { SCAN_VIEWS, type ScanView } from "@/lib/tabs";
@@ -83,13 +83,16 @@ const PRESET: Record<SideFilter, (r: ScanRow, ctx: PresetCtx) => boolean> = {
   short: (r) => r.score.side === "short",
   mag7: (r) => MAG7.has(r.sym),
   pinned: (r, c) => c.pinned.has(r.sym),
-  both: (r) => r.trend !== 0,
   news: (r) => r.catalyst != null,
   gaps: (r) => Math.abs(gapOf(r) ?? 0) >= 2,
-  outside: (r) => {
-    const { pdh, pdl } = r.levels;
-    return r.last != null && pdh != null && pdl != null && (r.last > pdh || r.last < pdl);
-  },
+  // Through BOTH ranges the same way (lib/outsideDay): the owner's rule. It tested the
+  // previous day's range alone until 2026-11-13. That test was kept for an hour as a
+  // chip of its own ("Through PDH/PDL") and taken off this table the same day (owner:
+  // "are the pill filter bars redundant ... can we clean up redundancy"): every outside
+  // day is in it, on a down day it was the Short chip again (22 names, 20 of them
+  // short), and the PD range column says it on each row. Breakouts keeps it, where the
+  // Dashboard's two counts open it.
+  outside: (r) => outsideDay(r.last, r.levels) !== null,
   inside: (r) => {
     const { day_hi: hi, day_lo: lo, pdh, pdl } = r.levels;
     return hi != null && lo != null && pdh != null && pdl != null && hi <= pdh && lo >= pdl;
@@ -112,15 +115,14 @@ const PRESET_NAME: ReadonlyArray<{ key: SideFilter; label: string; title?: strin
   { key: "mag7", label: "MAG7", title: "The Magnificent Seven: Apple, Microsoft, Alphabet, Amazon, Nvidia, Meta, Tesla" },
   { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened, or is trading pre-market, 2% or more from the previous close" },
-  { key: "both", label: "Both ranges", title: "Through the pre-market range and the previous day's range, the same way" },
-  { key: "outside", label: "Outside day", title: "Through the previous day's high or low" },
+  { key: "outside", label: "Outside day", title: OUTSIDE_DAY_TITLE },
   { key: "inside", label: "Inside day", title: "Today's range so far inside the previous day's" },
   { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
 ];
 const POLL_SEC = 20;
 const LIVE_POLL_SEC = 5;
 
-type SideFilter = "all" | "top10" | Side | "mag7" | "pinned" | "both" | "news" | "gaps" | "outside" | "inside" | "day23";
+type SideFilter = "all" | "top10" | Side | "mag7" | "pinned" | "news" | "gaps" | "outside" | "inside" | "day23";
 type Bench = "SPY" | "QQQ";
 
 /**
@@ -166,7 +168,6 @@ export function Scanner({
   calendar = NO_ROWS,
   view,
   onView,
-  index = null,
   plan = null,
   prices = null,
 }: {
@@ -174,8 +175,6 @@ export function Scanner({
   calendar?: CalendarRow[];
   view: ScanView;
   onView: (v: ScanView) => void;
-  /** The Index view, built by the Terminal, which holds the market feed it reads. */
-  index?: React.ReactNode;
   /**
    * The Game plan view: the written pre-open plan, which was the stocks half of the
    * Analysis tab until 2026-11-11. Built by the Terminal, which holds its state so a
@@ -219,12 +218,15 @@ export function Scanner({
   const [sideF, setSideF] = usePersisted<SideFilter>(
     "scan.side",
     "all",
-    oneOf("all", "top10", "long", "short", "mag7", "pinned", "both", "news", "gaps", "outside", "inside", "day23"),
+    // "both" was the Both ranges chip, which is Outside day now, and "through" the
+    // previous day's level alone: a browser that had either saved opens on All, once.
+    oneOf("all", "top10", "long", "short", "mag7", "pinned", "news", "gaps", "outside", "inside", "day23"),
   );
-  // Multicharts: the table's place taken by six charts of the list's first ten. Which
-  // names hold which chart, and the one toolbar they all follow, are kept here, above
-  // the grid, so they are read from storage before the grid first draws.
-  const [multi, setMulti] = usePersisted<boolean>("scan.multi", false, isBool);
+  // Multicharts: six charts of the list's ten highest scores, a view of its own since
+  // 2026-11-13 (lib/tabs.ts). Which names hold which chart, and the one toolbar they
+  // all follow, are kept here, above the grid, so they are read from storage before
+  // the grid first draws. (It was a switch on the Setups bar, `scan.multi`, for a day;
+  // a browser that had it on opens the table, and the charts are one tab along.)
   const [held, setHeld] = usePersisted<HeldSlots>("scan.multi.slots", NO_HELD, isHeldSlots);
   const chartPrefs = useChartPrefs("multi");
   const [bench, setBench] = usePersisted<Bench>("scan.bench", "SPY", oneOf("SPY", "QQQ"));
@@ -240,7 +242,6 @@ export function Scanner({
   // can undo, so there it reads in the engine's own order. The saved choice is kept, and
   // is the sort again on Options.
   const sortBy: SortKey = sort === "ivrv" && cols !== "options" ? "score" : sort;
-  const { budget } = useOptionsPrefs();
   const [find, setFind] = useState("");
   const seq = useRef(0);
 
@@ -292,9 +293,9 @@ export function Scanner({
     return typed ? ranked.filter((r) => r.sym.includes(typed)) : ranked;
   }, [ranked, find]);
 
-  const charts = multi && view === "setups";
-  // The charts' ten: the ten highest scores on the whole list, best first. Not the
-  // chip's list any more: Multicharts is a choice beside the chips, one or the other.
+  const charts = view === "multi";
+  // The charts' ten: the ten highest scores on the whole list, best first, whatever
+  // chip the Setups table was left on.
   const pool = useMemo(() => {
     const all = data?.rows ?? [];
     const by = new Map(all.map((r) => [r.sym, r]));
@@ -403,66 +404,52 @@ export function Scanner({
         <ScanExtended onTrackChanged={load} onDay23={() => onView("day23")} />
       ) : view === "day23" ? (
         <ScanDay23 onTrackChanged={load} />
-      ) : view === "index" ? (
-        index
       ) : view === "plan" ? (
         plan
       ) : (
       <div className="flex min-h-0 flex-1 flex-col">
         {/* ---- the ranked list: the whole width, the name opens over it --- */}
-        <section aria-label="Ranked setups" className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {/* Not over the charts: the row sums up the table, and its height is the charts'
-              (on a 1920 screen it is a sixth of what two rows of them have). The band's
-              quotes stay, and the row is back with the table, one click away. */}
-          {view === "setups" && !charts && data && !data.offline && <SetupStats data={data} later={later} now={now} />}
-          {/* Not rendered on the Signal log (it was rendered and hidden): under Luminous the
-              band over the page joins the FIRST card under it, and a hidden bar was that
-              card, so the log's own bar kept its rounded top beneath a squared band. */}
-          {view !== "log" && (
+        <section aria-label={charts ? "Multicharts" : view === "log" ? "Signal log" : "Ranked setups"} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* The row sums up the table, so it is the Setups view's alone. Over the charts
+              its height would be theirs (on a 1920 screen it is a sixth of what two rows of
+              them have). */}
+          {view === "setups" && data && !data.offline && <SetupStats data={data} later={later} now={now} />}
+          {/*
+            * ONE BAR UNDER THE BAND, AND WHAT IT HOLDS IS THE VIEW'S. Setups: the chips and
+            * the table's tools. The Signal log: a line of words. Multicharts: the charts'
+            * one toolbar, the timeframes and the Indicators menu all six follow, at the
+            * left where a view's choices sit, with what the six are at the right where a
+            * view's status sits.
+            *
+            * MULTICHARTS LEFT THIS BAR ON 2026-11-13 (owner: "the multicharts should be up
+            * the top next to gameplan and on sidebar it should be under neath gameplan").
+            * For a day it was a button after the chips (2026-11-12: "a option next to the
+            * filter bar called multicharts"), then one of the bar's choices, the chips or
+            * the charts and never both lit. As a view it needs neither rule: the chips are
+            * not on its page.
+            *
+            * Exactly one of the three is rendered, never one rendered and hidden: under
+            * Luminous the band over the page joins the FIRST card under it, and a hidden
+            * bar was that card, so the log's own bar kept its rounded top beneath a
+            * squared band.
+            */}
+          {view === "log" ? (
+            <p className="qt-bar shrink-0 border-b border-ring px-4 py-2.5 text-[11.5px] text-ink-3">Every signal, and what it did afterwards</p>
+          ) : charts ? (
+            <div className="qt-bar flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ring px-4 py-2">
+              {/* One toolbar for the six: a chart in the grid has no toolbar of its own. */}
+              <ChartControls prefs={chartPrefs} hasBands={chartPrefs.tf !== "D"} shared />
+              <p className="fig ml-auto shrink-0 text-right text-[10.5px] leading-[1.25] text-ink-3" title="A chart keeps its name until you change it from its Change menu, or the name leaves the ten">
+                <span className="text-ink-2">{Math.min(CHART_SLOTS, pool.length)}</span> charts
+                <br />
+                the {TOP_N} highest scores
+              </p>
+            </div>
+          ) : (
           <div className="qt-bar flex shrink-0 flex-wrap items-center gap-2 border-b border-ring px-4 py-2">
-            {/* A chip is the table on that list: picking one leaves the charts. With the
-                charts up no chip is lit, and the one last picked is kept for the way back. */}
-            <Chips
-              items={PRESET_NAME}
-              on={charts ? null : sideF}
-              set={(k) => {
-                setSideF(k);
-                setMulti(false);
-              }}
-              counts={counts}
-            />
-            {/*
-              * MULTICHARTS, BESIDE THE FILTERS (owner, 2026-11-12: "a option next to the
-              * filter bar called multicharts which displays multiple charts from the top
-              * 10"): six charts in the table's place. While it is on, the end of the bar
-              * carries the charts' one toolbar where the table's tools were (the ticker
-              * box, the columns, the row count).
-              *
-              * IT IS ONE OF THE BAR'S CHOICES, NOT A SWITCH ON TOP OF THEM (owner, the same
-              * day: "leave the multicharts button the way it is but it needs to funciton
-              * like the pill bar it's next too - eg not both things can be selected at the
-              * same time"). It used to light beside whichever chip was lit, and the chip
-              * chose the charts' list: two things selected in one row. Now it is the
-              * chips or the charts. The charts are always the ten highest scores; a chip
-              * puts the table back on that chip's list; pressing Multicharts again puts
-              * the table back on the chip it was on.
-              */}
-            <button
-              type="button"
-              onClick={() => setMulti((v) => !v)}
-              aria-pressed={multi}
-              title={
-                multi
-                  ? "Back to the table, on the filter it was on"
-                  : `${CHART_SLOTS} live charts, three across and two down, from the ${TOP_N} highest scores. Pick a filter to go back to the table.`
-              }
-              {...segItem(multi, { className: "border border-ring-2" })}
-            >
-              <Glyph name="grid" size={12} />
-              Multicharts
-            </button>
+            <Chips items={PRESET_NAME} on={sideF} set={setSideF} counts={counts} />
             <div className="ml-auto flex items-center gap-2">
-              {!charts && <TickerFilter value={find} onChange={setFind} />}
+              <TickerFilter value={find} onChange={setFind} />
               {/*
                 * HOW TO TRADE THIS TAPE IS A BUTTON AMONG THE BAR'S BUTTONS (owner,
                 * 2026-11-11: "i dont like the 'How to trade this' text just being
@@ -472,7 +459,7 @@ export function Scanner({
                 * notes are the regime's own (the VIX band, its month, SPY's implied
                 * move, the tape), unchanged.
                 */}
-              {view === "setups" && data && !data.offline && data.regime.notes.length > 0 && (
+              {data && !data.offline && data.regime.notes.length > 0 && (
                 <Menu label="How to trade this" width={460}>
                   <ul className="space-y-2 text-[12px] leading-[1.45] text-ink-2">
                     {data.regime.notes.map((n) => (
@@ -484,38 +471,43 @@ export function Scanner({
                   </ul>
                 </Menu>
               )}
-              {charts ? (
-                // One toolbar for the six: a chart in the grid has no toolbar of its own.
-                <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5">
-                  <ChartControls prefs={chartPrefs} hasBands={chartPrefs.tf !== "D"} menusLeft={false} shared />
-                </div>
-              ) : (
-                <>
-                  <Menu label={<>Columns ·<span className="fig">{COL_WORD[cols]}</span></>} width={260}>
-                    <Choice label="Columns" options={COL_CHOICES} value={cols} set={setCols} />
-                    <Choice label="Relative strength against" options={BENCH_CHOICES} value={bench} set={setBench} />
-                    <p className="text-[11px] leading-[1.4] text-ink-3">Overview is what matters, Levels every column the Pine&apos;s scanner has, Options the chain. The score always uses SPY.</p>
-                  </Menu>
-                  <Showing shown={rows.length} total={data?.watchlist.length ?? null} word="on the list" />
-                </>
-              )}
+              <Menu label={<>Columns ·<span className="fig">{COL_WORD[cols]}</span></>} width={260}>
+                <Choice label="Columns" options={COL_CHOICES} value={cols} set={setCols} />
+                <Choice label="Relative strength against" options={BENCH_CHOICES} value={bench} set={setBench} />
+                <p className="text-[11px] leading-[1.4] text-ink-3">Overview is what matters, Levels every column the Pine&apos;s scanner has, Options the chain. The score always uses SPY.</p>
+              </Menu>
+              <Showing shown={rows.length} total={data?.watchlist.length ?? null} word="on the list" />
             </div>
           </div>
           )}
-          {view === "log" && <p className="qt-bar shrink-0 border-b border-ring px-4 py-2.5 text-[11.5px] text-ink-3">Every signal, and what it did afterwards</p>}
 
-          {charts && data && !data.offline && data.rows.length > 0 ? (
-            <ScanMulti
-              pool={pool}
-              // Another day is another list: its six start from its top.
-              listKey={data.trading_day}
-              what={`the top ${TOP_N}`}
-              held={held}
-              onHeld={setHeld}
-              prefs={chartPrefs}
-              session={data.session}
-              open={ticker}
-            />
+          {charts ? (
+            data && !data.offline && data.rows.length > 0 ? (
+              <ScanMulti
+                pool={pool}
+                // Another day is another list: its six start from its top.
+                listKey={data.trading_day}
+                what={`the top ${TOP_N}`}
+                held={held}
+                onHeld={setHeld}
+                prefs={chartPrefs}
+                session={data.session}
+                open={ticker}
+              />
+            ) : (
+              // The charts' page never falls back to the table: it waits, or says why not.
+              <div className="qt-sheet min-h-0 flex-1 overflow-auto">
+                {!data ? (
+                  <TableSkeleton />
+                ) : (
+                  <p className="px-6 py-10 text-center text-[12px] text-ink-3">
+                    {data.offline
+                      ? "Nothing to chart until the collector answers."
+                      : "No names scanned yet — the collector fetches the watchlist a third at a time, so the first full pass takes about a minute and a half."}
+                  </p>
+                )}
+              </div>
+            )
           ) : (
           <div className="qt-sheet min-h-0 flex-1 overflow-auto">
             {view === "log" ? (
@@ -545,7 +537,6 @@ export function Scanner({
                 now={now}
                 selected={ticker ?? selected?.sym ?? null}
                 onPick={pick}
-                budget={budget}
                 pinned={pinned}
                 onPinned={load}
               />

@@ -321,7 +321,7 @@ function OptionsFigures({ r, o, pick }: { r: ScanRow; o: OptionsCtx; pick: "fron
       </dl>
 
       <p className="mt-2.5 border-t border-ring pt-2 text-[11px] leading-[1.45] text-ink-3">
-        Rules, not advice. The contract under the block is the expiry rule&apos;s pick (Settings → Options), and risk
+        Rules, not advice. The contract under the block is the expiry rule&apos;s pick, and risk
         per contract runs from the setup&apos;s entry to its stop. Chains are Cboe&apos;s, delayed about fifteen
         minutes.
       </p>

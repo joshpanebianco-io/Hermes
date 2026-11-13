@@ -24,7 +24,18 @@ settled (L) and (E) signals, and reports:
      penalty was taken out on this reading (2026-11-05);
   7. the same top and bottom thirds for the list as it stood before the bell
      (cache/scanner_preopen.jsonl, one line a day from 2026-11-05);
-  8. a one-variable logistic fit of +1R on the total, for the slope.
+  8. a one-variable logistic fit of +1R on the total, for the slope;
+  9. (from 2026-11-13, the quant audit's phase 3) the news inside each day: signals
+     whose catalyst was with the side, against it and none, and by where the direction
+     came from (the name's move, the event's words, the tape, a report); signals the
+     RVOL gate held out of the top ten against the rest;
+ 10. the pool's own record (cache/pool_marks.jsonl): at each mark, the top ten of the
+     rank against the rest of its top fifty by the day each then had (range and move
+     in daily ATRs), and promoted names against the rest.
+
+READ ONLY WHAT IS ON THE CURRENT WEIGHTS. `--since 2026-11-13` reads the signals from
+that day on, when the quant audit's reweight went live; every earlier score is on older
+rules. Run it weekly and keep a change only if it holds on both halves.
 
 TWO MEASURES, BOTH WITH THE STOP KEPT. "At +1R" is a trade that takes +1R, is
 stopped at -1R, or is out at the close. "Held" is a trade held to the close,
@@ -55,6 +66,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from newsterminal.config import CACHE_DIR
 from newsterminal.scanlog import PREOPEN_NAME, TRADES, held_r
+from newsterminal.sources.pool import MARKS_NAME
 
 #: Below this many settled signals the report says the sample is too small
 #: to move a weight on; below MIN_PART per side of a part's split, that part
@@ -67,8 +79,8 @@ MIN_SAME_DAY = 3
 BANDS = ((0, 40), (40, 60), (60, 80), (80, 101))
 
 
-def load(path: str, days: int, today: date) -> list[dict[str, Any]]:
-    start = today - timedelta(days=days)
+def load(path: str, days: int, today: date, since: date | None = None) -> list[dict[str, Any]]:
+    start = (since - timedelta(days=1)) if since else today - timedelta(days=days)
     out: list[dict[str, Any]] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -164,9 +176,16 @@ def gap_line(label: str, top: list[dict[str, Any]], bottom: list[dict[str, Any]]
             f"   gap at +1R {g1:+.2f} R   gap held {gh:+.2f} R")
 
 
+def rank_score(e: dict[str, Any]) -> float:
+    """What the list was ranked on: the uncapped sum where the log has it (2026-11-13),
+    else the capped total."""
+    raw = (e.get("ctx") or {}).get("raw")
+    return float(raw) if isinstance(raw, int | float) else float(e["score"])
+
+
 def rank_lines(scored: list[dict[str, Any]]) -> list[str]:
     """Does the score separate a day's signals, on the whole and on both halves?"""
-    key = lambda e: float(e["score"])  # noqa: E731
+    key = rank_score
     early, late = halves(scored)
     return ["Top third of each day's signals by score against the bottom third, pooled, so the busiest days weigh most:",
             "         signals       +1R",
@@ -256,6 +275,121 @@ def penalty_lines(with_parts: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _split_lines(title: str, evs: list[dict[str, Any]],
+                 groups: list[tuple[str, Callable[[dict[str, Any]], bool]]]) -> list[str]:
+    """Each group inside each day against the rest of that day, as same_day_lines does
+    for a part: days ahead and the average gap."""
+    days = by_day(evs)
+    lines = [title, "  group                n   days ahead: +1R   +2R   held  |  average gap: +1R      held"]
+    for label, f in groups:
+        g1: list[float] = []
+        gh: list[float] = []
+        g2: list[float] = []
+        n = 0
+        for rows in days.values():
+            on = [e for e in rows if f(e)]
+            off = [e for e in rows if not f(e)]
+            n += len(on)
+            if len(on) < MIN_SAME_DAY or len(off) < MIN_SAME_DAY:
+                continue
+            g1.append((win(on) or 0.0) - (win(off) or 0.0))
+            g2.append((win_2r(on) or 0.0) - (win_2r(off) or 0.0))
+            gh.append((mean([held(e) for e in on]) or 0.0) - (mean([held(e) for e in off]) or 0.0))
+        k = len(g1)
+        if not k:
+            lines.append(f"  {label:<18} {n:>4}   no day with {MIN_SAME_DAY} or more on each side")
+            continue
+        ahead = [f"{sum(1 for x in g if x > 0)}/{k}" for g in (g1, g2, gh)]
+        lines.append(f"  {label:<18} {n:>4}               {ahead[0]:<5} {ahead[1]:<5} {ahead[2]:<5} |"
+                     f"               {(mean(g1) or 0.0) * 100:+5.1f} pts {mean(gh) or 0.0:+.2f} R")
+    return lines
+
+
+def news_lines(evs: list[dict[str, Any]]) -> list[str]:
+    """The catalyst as the log keeps it from 2026-11-13 (scanlog news_ctx), and the RVOL
+    gate."""
+    with_news = [e for e in evs if isinstance((e.get("ctx") or {}).get("news"), dict)]
+    if not with_news:
+        return ["News and the gate: no signal carries the catalyst read yet (logged from 2026-11-13)"]
+
+    def news(e: dict[str, Any]) -> dict[str, Any]:
+        return e["ctx"]["news"]
+
+    return [
+        *_split_lines(f"News inside each day ({len(with_news)} signals carry it):", with_news, [
+            ("with the side", lambda e: news(e).get("with") is True),
+            ("against the side", lambda e: news(e).get("with") is False),
+            ("none", lambda e: news(e).get("with") is None),
+            ("major with it", lambda e: news(e).get("with") is True and news(e).get("tier") == 1),
+            ("by the move", lambda e: news(e).get("src") == "move"),
+            ("by the words", lambda e: news(e).get("src") == "words"),
+            ("by the tape", lambda e: news(e).get("src") == "tape"),
+            ("a report", lambda e: news(e).get("src") == "report"),
+            ("tape set aside", lambda e: (news(e).get("set_aside") or 0) > 0),
+        ]),
+        "",
+        *_split_lines("The RVOL gate inside each day:", with_news, [
+            ("held out of top 10", lambda e: bool(e["ctx"].get("gated"))),
+        ]),
+    ]
+
+
+def load_marks(path: str, since: date | None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if since and str(e.get("day") or "") < since.isoformat():
+                    continue
+                out.append(e)
+    except OSError:
+        return []
+    return out
+
+
+def pool_lines(lines: list[dict[str, Any]]) -> list[str]:
+    """The pool's rank against the day each name then had (sources/pool MARKS_NAME):
+    the day's range and its move from the previous close, both in daily ATRs."""
+    outcome = {e["day"]: e.get("rows") or {} for e in lines if e.get("kind") == "outcome"}
+    marks = [e for e in lines if e.get("kind") == "mark" and e.get("day") in outcome]
+    if not marks:
+        return ["Pool marks: no mark with its day's outcome on file yet (logged from 2026-11-13)"]
+
+    def day_of(sym: str, day: str) -> tuple[float, float] | None:
+        o = outcome[day].get(sym) or {}
+        vals = [float(x) for x in (o.get(k) for k in ("close", "change", "high", "low", "atr"))
+                if isinstance(x, int | float)]
+        if len(vals) != 5:
+            return None
+        c, chg, hi, lo, atr = vals
+        if not atr:
+            return None
+        prev = c / (1.0 + chg / 100.0)
+        return (hi - lo) / atr, abs(c - prev) / atr
+
+    groups: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for m in marks:
+        for i, r in enumerate(m.get("rows") or []):
+            d = day_of(str(r.get("sym")), m["day"])
+            if d is None:
+                continue
+            groups["top 10" if i < 10 else "11-50"].append(d)
+            groups["promoted" if r.get("promoted") else "not promoted"].append(d)
+    out = [f"Pool marks ({len(marks)} marks over {len({m['day'] for m in marks})} days): "
+           "the day each name then had, in daily ATRs",
+           "  group           n    range   |move|"]
+    for g in ("top 10", "11-50", "promoted", "not promoted"):
+        xs = groups.get(g) or []
+        if xs:
+            out.append(f"  {g:<13} {len(xs):>4}   {mean([x[0] for x in xs]) or 0.0:5.2f}   "
+                       f"{mean([x[1] for x in xs]) or 0.0:5.2f}")
+    return out
+
+
 def load_preopen(path: str) -> list[dict[str, Any]]:
     """The pre-open lines on file, none if there is no file yet."""
     out: list[dict[str, Any]] = []
@@ -311,7 +445,8 @@ def logistic_slope(evs: list[dict[str, Any]], iters: int = 200, lr: float = 0.01
     return a, b
 
 
-def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] | None = None) -> str:
+def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] | None = None,
+           marks: list[dict[str, Any]] | None = None) -> str:
     lines = [f"Settled (L)/(E) signals over {days} days: {len(evs)}"]
     if len(evs) < MIN_TOTAL:
         lines.append(f"  under the {MIN_TOTAL}-signal guard: read as a hint, change no weight on it")
@@ -361,6 +496,11 @@ def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] |
     lines += same_day_lines(with_parts)
     lines.append("")
     lines += penalty_lines(with_parts)
+    lines.append("")
+    lines += news_lines(scored)
+    if marks is not None:
+        lines.append("")
+        lines += pool_lines(marks)
     return "\n".join(lines)
 
 
@@ -372,14 +512,19 @@ def main() -> int:
             stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--since", type=date.fromisoformat, default=None,
+                    help="read from this day on (YYYY-MM-DD) — e.g. 2026-11-13, the reweight")
     ap.add_argument("--path", default=os.path.join(CACHE_DIR, "scanner_events.jsonl"))
     args = ap.parse_args()
     try:
-        evs = load(args.path, args.days, datetime.now().date())
+        evs = load(args.path, args.days, datetime.now().date(), args.since)
     except OSError as e:
         print(f"no log: {e}")
         return 1
-    print(report(evs, args.days, load_preopen(os.path.join(os.path.dirname(args.path), PREOPEN_NAME))))
+    here = os.path.dirname(args.path)
+    days = (datetime.now().date() - args.since).days + 1 if args.since else args.days
+    print(report(evs, days, load_preopen(os.path.join(here, PREOPEN_NAME)),
+                 load_marks(os.path.join(here, MARKS_NAME), args.since)))
     return 0
 
 

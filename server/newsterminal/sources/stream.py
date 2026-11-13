@@ -84,6 +84,16 @@ HEALTHY_SEC = 120.0
 #: One-minute candles held per name: a whole extended session.
 MINUTES_KEPT = 16 * 60
 CHECK_FILE = os.path.join(CACHE_DIR, "stream_check.json")
+#: THE STREAM CAN RUN BEHIND THE MARKET WHILE IT LOOKS ALIVE. Measured in the session
+#: of Thu 12 Nov 2026 (a heavy day): frames kept arriving, thirteen a second for six
+#: names on a fresh connection of its own, and every trade in them was 90 to 440
+#: seconds old on arrival (AAPL 91s, SPY 148s, NVDA 377s, 1% away from its real
+#: price). The day before, the median was under a second. So a trade's age on arrival
+#: is watched: over the last LAG_WINDOW_SEC, with at least LAG_MIN_TICKS heard, a
+#: median past LATE_SEC is a late stream, and the rail says so instead of "ok".
+LATE_SEC = 20.0
+LAG_WINDOW_SEC = 60.0
+LAG_MIN_TICKS = 40
 
 
 class Tick(NamedTuple):
@@ -307,6 +317,34 @@ class StreamCheck:
             pass
 
 
+def lag_of(recent: Iterable[tuple[float, float]], now: float) -> float | None:
+    """How late the stream is running: the median age on arrival of the trades heard
+    in the last LAG_WINDOW_SEC, or None when too few were heard to say. `recent` is
+    (received, age) pairs. Pure."""
+    ages = [age for recv, age in recent if now - recv <= LAG_WINDOW_SEC]
+    return statistics.median(ages) if len(ages) >= LAG_MIN_TICKS else None
+
+
+def chart_tick(q: dict[str, Any] | None,
+               spark: tuple[float, float] | None) -> dict[str, Any] | None:
+    """What an open chart is told the last trade is: the NEWER of the stream's quote
+    and the spark layer's trade (`spark` is (price, epoch), given in the regular
+    session only, the one that layer reads). Pure.
+
+    The stream's used to win whenever it had one. On 2026-11-12 it ran minutes
+    behind, and a chart laid a 90-second-old price on its last candle while the
+    five-second quote beside it was current; the Setups rows were right all along
+    because the scanner already took the newer of the two (ScanStore._latest_trade).
+    The stream's minute candle goes when the spark's trade is used: it is the range
+    of a minute the stream has not caught up with.
+    """
+    has = q is not None and "price" in q
+    if spark is not None and (not has or float(spark[1]) > float((q or {}).get("at") or 0.0)):
+        return {**(q or {}), "price": float(spark[0]), "at": float(spark[1]),
+                "session": "rth", "minute": None, "via": "spark"}
+    return q
+
+
 class PriceStream:
     """The connection, what it is subscribed to, and what it has heard.
 
@@ -333,6 +371,8 @@ class PriceStream:
         self._ticks_min = 0
         self._names_min: set[str] = set()
         self._ages_min: list[float] = []
+        # The last few thousand trades' (received, age on arrival), for `lag_of`.
+        self._recent: deque[tuple[float, float]] = deque(maxlen=6000)
         self.check = StreamCheck()
 
     # ---- what to listen to -----------------------------------------------
@@ -370,7 +410,9 @@ class PriceStream:
             self.last_frame = tick.recv
             self._ticks_min += 1
             self._names_min.add(sym)
-            self._ages_min.append(max(0.0, tick.recv - tick.at))
+            age = max(0.0, tick.recv - tick.at)
+            self._ages_min.append(age)
+            self._recent.append((tick.recv, age))
             if tick.session is None:
                 self._overnight[sym] = tick
                 return sym
@@ -430,14 +472,23 @@ class PriceStream:
             st.error = "the websockets package is not installed"
             st.source = "unavailable"
             return st
+        now = time.time()
         with self._lock:
             connected, last, subscribed, err = (self.connected, self.last_frame, self.subscribed,
                                                 self.error)
+            lag = lag_of(list(self._recent), now)
         st.ok = connected
         st.items = subscribed
         st.source = "live" if connected else "unavailable"
-        st.age_min = round((time.time() - last) / 60.0, 2) if last else None
+        st.age_min = round((now - last) / 60.0, 2) if last else None
         st.notes = [f"{subscribed} names subscribed"]
+        if connected and lag is not None and lag > LATE_SEC:
+            # Connected and talking, but behind the market: "stale" on the rail, with
+            # how far behind, where it used to read "ok" (the note over LATE_SEC).
+            st.source = "stale"
+            st.age_min = round(lag / 60.0, 2)
+            st.notes.insert(0, f"trades arriving about {lag:.0f}s late: charts and rows "
+                               "take the five-second quote where it is newer")
         if not connected and err:
             st.error = err
         if connected:

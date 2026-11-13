@@ -18,6 +18,14 @@ test("the top ten are the ten highest scores, ties in the engine's order", () =>
   assert.deepEqual(rows.map((r) => r.sym), ["AMD", "AVGO", "FLY", "QQQ", "MSFT"]);
 });
 
+test("the engine's rank decides when every row carries one", () => {
+  // Both read 100 capped; the engine ranked the one without a penalty first, and kept a
+  // name under its usual volume out of the top (scanscore.rvol_gate).
+  const ranked = (sym: string, total: number, rank: number) => ({ sym, ok: true, score: { total, rank } });
+  const rows = [ranked("PEN", 100, 2), ranked("CLEAN", 100, 1), ranked("QUIET", 99, 4), ranked("MOVER", 90, 3)];
+  assert.deepEqual(topScores(rows, 3), ["CLEAN", "PEN", "MOVER"]);
+});
+
 test("nothing held: the six charts are the first six, in order", () => {
   assert.deepEqual(fillSlots([], TEN), TEN.slice(0, 6));
   assert.equal(fillSlots([], TEN).length, CHART_SLOTS);

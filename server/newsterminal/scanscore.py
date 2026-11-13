@@ -44,23 +44,34 @@ import math
 import re
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
+from functools import lru_cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import frame, marketctx, optcalc, releases, targets
 from .catalysts import (
+    MAJOR,
+    MINOR,
     NOISE,
+    NOTABLE,
     TALK,
     TIER_PENALTY,
     TIER_POINTS,
     about,
+    acted,
     analyst_upgrade,
     grade,
+    lead,
     move_grade,
     moved,
+    own_parts,
+    rated_both,
+    someone_else,
+    stated_move,
+    stated_today,
     story,
 )
-from .holidays import next_trading_day
+from .holidays import news_since, next_trading_day, prev_trading_day
 from .scan import Clock
 from .sources.shortint import squeeze_flag
 from .volterm import state as volterm_state
@@ -72,16 +83,39 @@ _NO_OWN_NEWS = frozenset({"SPY", "QQQ", "IWM"})
 ET = ZoneInfo("America/New_York")
 
 # ---- the weights (a heuristic rank — see the module docstring) --------------
-W_STRUCTURE = {2: 30, 1: 18}
-W_APPROACH = 10
+#
+# REWEIGHTED 2026-11-13 ON THE QUANT AUDIT (owner: "do everything you recommend"). On
+# the 481 live scored signals of sixteen sessions, with every day's own average taken
+# out: ENTRY LOCATION was the best part, ahead on 12 of 13 days (+28 points of +1R hit
+# rate, and on both halves of the record); MARKET alignment next, 9 of 12 (+22). RS,
+# the largest part at 25, did WORSE where it earned most, and only because of where
+# the entry was: strong RS with an extended entry lost 30 points of hit rate and
+# 0.89 R held (n 36), strong RS with a good entry held +0.30 R. RVOL showed nothing on
+# the trade (ahead 4 of 11 days) although it is the best read of how far a name will
+# still move (rest-of-day range on 9 of 9 sessions in the 5-minute bars): a filter,
+# not a direction. Structure paid 18 or 30 to 470 of 481 signals and so told them
+# apart hardly at all; the daily frame showed no edge (7 of 14 days), and a year of
+# daily bars showed yesterday's and the month's momentum telling nothing of the next
+# day. So: location 14 → 25, market 15 → 20, RS 25 → 20 and paid in full only on a
+# live entry (RS_POOR otherwise), RVOL 15 → 8 and a gate on the top of the list
+# (RVOL_GATE), structure 30 → 20, frame 12 → 6. In-sample, on the same sixteen days:
+# a better prior, not a measurement. tools/fit_score.py --since 2026-11-13 reads only
+# the signals on these weights; keep a change only if it holds on both halves.
+W_STRUCTURE = {2: 20, 1: 12}
+W_APPROACH = 7
 # THE STRATEGY DECIDES THIS ONE (owner, 2026-11-05: "the strategy revolves around
 # trending stocks and momentum"), and the Pine ranks by RS. The record cannot settle
 # it: inside a day strong RS reached +2R more often on 3 days of 8, at 79% against 44%
 # on Nov 2 and 29% against 58% on Oct 30, and 20 and 25 rank about even. RS is measured
 # from yesterday's close, so it includes the gap; the log keeps the 1-hour RS beside it
 # (scanlog `ctx`) to test RS now against RS since the close.
-W_RS = 25
+W_RS = 20
 RS_FULL = 1.0  # RS of +1 daily ATR over SPY earns the whole RS part
+#: RS is paid in full only on a live entry (retest, pullback, near VWAP / the 8 EMA);
+#: anywhere else — extended far from it, failed, approaching, chop, the wrong side of
+#: VWAP, or a pre-market plan whose RS is the gap — at most this (2026-11-13).
+RS_POOR = 5
+RS_GOOD_ENTRY = frozenset({"retest", "pullback", "extended_near"})
 # A LIVE ENTRY IS A LIVE ENTRY (2026-11-05). A retest earned 20, the most, and did
 # the worst of the live states on both halves of the record: +1R 30% and 45%, where
 # a pullback made 54% and 57%, and near-VWAP or the 8 EMA 46% and 87%. The strategy's
@@ -89,15 +123,20 @@ RS_FULL = 1.0  # RS of +1 daily ATR over SPY earns the whole RS part
 # others; it has only stopped outranking them. Wrong side of VWAP stays at zero: 22%
 # and 44% on the same split, which settles that open call.
 W_LOCATION = {
-    "retest": 14, "pullback": 14, "extended_near": 14, "extended_far": 4,
-    "approaching": 6, "forming": 8, "failed": 0, "chop": 0,
+    "retest": 25, "pullback": 25, "extended_near": 25, "extended_far": 7,
+    "approaching": 11, "forming": 14, "failed": 0, "chop": 0,
 }
 # RVOL PAYS FROM 1.5x (2026-11-05). Inside a day, signals at 1.5x or more reached +2R
 # more often on 5 days of 6, while 1.0x to 1.5x did worse than under 1.0x, ahead on 2
 # days of 9. Thin: 49 signals at 1.5x or more, 33 of them from two sessions. The 1.25x
 # step is the owner's, and untested: the log held only the points, so it cannot split
 # that band. `ctx` keeps the raw RVOL from here on.
-W_VOLUME = ((2.0, 15), (1.5, 12), (1.25, 6), (1.0, 3))
+W_VOLUME = ((2.0, 8), (1.5, 6), (1.25, 3), (1.0, 2))
+#: THE GATE (2026-11-13): in the regular session a name under this RVOL does not make
+#: the top GATE_TOP of the list, whatever it scores. RVOL says whether a name is still
+#: moving; a setup on a name the market has left alone is not a top-ten trade.
+RVOL_GATE = 1.0
+GATE_TOP = 10
 
 # ---- in play: the volume part's stand-in before the bell ----------------------
 # BEFORE 09:30 RVOL DOES NOT EXIST (Yahoo's pre-market bars carry no volume), so
@@ -154,6 +193,8 @@ P_CATALYST = -10
 #: An offering filed against a long keeps the old six: a form, not a headline.
 P_OFFERING = -6
 W_INPLAY = W_GAP + W_PMVOL
+#: Until this ET minute after the bell, a name with no RVOL yet keeps its in-play part.
+OPENING_INPLAY_END = 9 * 60 + 45
 # THE CLOCK, FROM THE RECORD (1,258 settled signals to 2026-11-04): (L)/(E) signals
 # in the first thirty minutes reached +1R 39% of the time and in the last hour 36%,
 # against 52% from 10:00 to 14:00, and on both halves of the record. A penalty: it
@@ -178,10 +219,11 @@ RECORD_SOLID = 30
 #: The daily frame (frame.py): the whole part with the daily trend, half of
 #: it between the averages, nothing against it — and a flag when against.
 #: DOUBLED (2026-11-05): 56% against the 46% of a setup against the daily trend.
-W_FRAME = 12
-W_BIAS = 8
-W_CONFIRM = 4
-W_SECTOR = 3
+W_FRAME = 6
+W_BIAS = 11
+W_CONFIRM = 5
+W_SECTOR = 4
+W_MARKET = W_BIAS + W_CONFIRM + W_SECTOR
 SECTOR_MIN = 0.2  # pp of excess return over SPY before a sector counts as a tailwind
 P_FUEL = -10
 FUEL_USED = 1.2  # the day's range as a multiple of daily ATR
@@ -536,8 +578,16 @@ def peer_flag(peers: list[dict[str, Any]], trading_day: date) -> dict[str, Any] 
 
 
 def earnings_for(sym: str, rows: list[dict[str, Any]], trading_day: date) -> dict[str, Any] | None:
-    """The report that matters to a session: last night's, today's, or the week's. Pure."""
+    """The report that matters to a session: last night's, today's, or the week's. Pure.
+
+    LAST NIGHT IS THE LAST TRADING DAY'S EVENING (quant audit, 2026-11-13). It was the
+    calendar day before, so on a Monday Friday's after-the-close report was nobody's,
+    and the same the morning after a holiday. A report after the close of any day from
+    the previous trading day on is last night's (`last_night`), and it is the report
+    that matters ahead of the week's next one; `days` stays the calendar count."""
     best: dict[str, Any] | None = None
+    best_key: tuple[int, int] | None = None
+    prev = prev_trading_day(trading_day)
     for r in rows:
         if (r.get("symbol") or "").upper() != sym:
             continue
@@ -546,14 +596,17 @@ def earnings_for(sym: str, rows: list[dict[str, Any]], trading_day: date) -> dic
         except ValueError:
             continue
         days = (d - trading_day).days
-        if days < -1 or days > 5:
+        last_night = r.get("when") == "after" and prev <= d < trading_day
+        if not last_night and (days < 0 or days > 5):
             continue
-        if days == -1 and r.get("when") != "after":
-            continue
-        if best is None or abs(days) < abs(best["days"]):
+        key = (0 if last_night or days == 0 else 1, abs(days))
+        if best_key is None or key < best_key:
+            best_key = key
             best = {"date": d.isoformat(), "when": r.get("when") or "unspecified", "days": days,
                     "eps_forecast": r.get("eps_forecast"), "eps_actual": r.get("eps_actual"),
                     "surprise_pct": r.get("surprise_pct")}
+            if last_night:
+                best["last_night"] = True
     return best
 
 
@@ -714,7 +767,27 @@ _BULL = re.compile(
     r"\btops? (?:estimates|expectations)|"
     r"\bfda (?:approv|clear)|approved by the fda|met (?:its |the )?primary endpoint|"
     r"positive (?:phase|topline|trial|data)|to be acquired|acquired by|"
-    r"\b(?:wins?|awarded)\b[^.]{0,40}\bcontract\b",
+    r"\b(?:wins?|awarded)\b[^.]{0,40}\bcontract\b|"
+    # The events the words did not reach (quant audit, 2026-11-13): guidance however it
+    # is worded ("Raises 2026 Revenue Forecast" was no direction), a trial that met its
+    # goal, a seat in an index, a buyback, a split, a raised or special dividend, a
+    # court win.
+    r"\b(?:rais|lift|boost|hik|increas)\w*\b[^.;]{0,30}\b(?:guidance|outlook|forecasts?|"
+    r"projections?)\b|\bguides? (?:above|higher|up|ahead)\b|"
+    r"\b(?:strong|upbeat|bullish|robust|solid|rosy|better[- ]than[- ]expected)\s+"
+    r"(?:guidance|outlook|forecast)\b|"
+    r"\b(?:guidance|outlook|forecast) (?:tops|beats|above|exceeds)\b|"
+    r"\b(?:meets?|met|achieves?|achieved|hits?|hit)\b[^.;]{0,30}\b(?:primary|main|key) "
+    r"(?:endpoint|goal)|\bstatistically significant\b|"
+    r"\bpositive (?:results|readout|interim|pivotal)\b|"
+    r"\b(?:join|joins|joining|to join|added to|to be added to|inclusion in|included in|"
+    r"enters?|to enter)\s+(?:the\s+)?(?:s&p|nasdaq[- ]100|dow\b)|"
+    r"\bbuybacks?\b|\b(?:share|stock) repurchases?\b|\brepurchase (?:program|plan)\b|"
+    r"\b(?:[2-9]|1\d|20)[- ]for[- ]1\b|(?<!reverse )\b(?:stock|share) split\b|"
+    r"\bspecial (?:cash )?dividend\b|\b(?:raises?|raised|increases?|increased|hikes?|hiked|"
+    r"boosts?|boosted)\b[^.;]{0,30}\bdividends?\b|"
+    r"\b(?:wins?|won)\b[^.;]{0,30}\b(?:lawsuit|case|appeal|ruling|verdict|patent)\b|"
+    r"\b(?:lawsuit|case|suit) (?:dismissed|tossed)\b",
     re.I)
 _BEAR = re.compile(
     r"downgrad|cut\w* (?:its |the |their )?(?:price )?target|"
@@ -728,27 +801,117 @@ _BEAR = re.compile(
     r"withdraw\w* (?:its )?guidance|"
     r"(?:guidance|outlook|forecast) (?:cut|lowered|slashed|trimmed|withdrawn)|"
     r"\bmiss(?:es|ed)?\b|\bfalls? short\b|"
-    r"\b(?:secondary|stock|share) offering|\bprobe\b|investigat|\brecall\b|lawsuit|"
+    r"\b(?:secondary|stock|share) offering|\bprobes?\b|investigat|\brecalls?\b|lawsuits?|"
+    r"\bsued\b|"
     r"\bfda (?:rejects?|declines?|refuses?)|complete response letter|clinical hold|"
-    r"(?:trial|study) (?:fails|failed)|failed (?:to meet|its) primary|\bbankrupt|\bchapter 11\b",
+    r"(?:trial|study) (?:fails|failed)|failed (?:to meet|its) primary|\bbankrupt|\bchapter 11\b|"
+    # (2026-11-13) Guidance cut however it is worded; equity raised (common stock, a
+    # convertible, a registered direct, an at-the-market programme); a trial that missed;
+    # an index exit; an executive leaving; a short seller; a dividend cut; a reverse split.
+    r"\b(?:cut|lower|slash|trim|reduc|withdr[ae]w|pull|suspend)\w*\b[^.;]{0,30}"
+    r"\b(?:guidance|outlook|forecasts?|projections?)\b|\bguides? (?:below|lower|down|light)\b|"
+    r"\b(?:weak|soft|disappointing|downbeat|gloomy|bleak|cautious|tepid|lackluster|"
+    r"lacklustre|light)\s+(?:guidance|outlook|forecast)\b|"
+    r"\b(?:guidance|outlook|forecast) (?:misses|disappoints|below|trails)\b|"
+    r"\b(?:public|follow-on|upsized|proposed|underwritten|registered direct|at-the-market)\s+"
+    r"(?:equity\s+)?offering\b|"
+    r"\boffering of\b[^.;]{0,40}\b(?:common|ordinary|shares|stock|ads|adss|american depositary|"
+    r"units|warrants)\b|\bconvertible (?:senior )?notes\b|\bat-the-market\b|"
+    r"\b(?:fails?|failed|misses?|missed|did not meet|didn['’]t meet|does not meet)\b[^.;]{0,30}"
+    r"\b(?:primary|main|key) (?:endpoint|goal)|(?:trial|study) (?:halted|stopped|paused)\b|"
+    r"\bdiscontinu\w* (?:the )?(?:trial|study|development|program)\b|\bcrl\b|"
+    r"\b(?:removed|dropped|deleted|to be removed|to be dropped|exits?|to exit)\s+(?:from\s+)?"
+    r"(?:the\s+)?(?:s&p|nasdaq[- ]100|dow\b)|"
+    r"\b(?:ceo|chief executive|cfo|chief financial officer|founder)\b[^.;]{0,40}"
+    r"\b(?:steps? down|stepping down|resigns?|resigned|to step down|ousted|exits?|departs?|"
+    r"departure|to depart|to leave|leaving|fired|terminated)\b|"
+    r"\b(?:ousts?|fires?)\s+(?:its\s+)?(?:ceo|chief executive|cfo)\b|"
+    r"\bshort[- ]sellers?\b|\bshort report\b|\bshort position in\b|"
+    r"\b(?:hindenburg|muddy waters|citron research|spruce point|culper research|kerrisdale|"
+    r"grizzly research|wolfpack research|iceberg research|fuzzy panda|blue orca|"
+    r"white diamond research|bleecker street research|viceroy research)\b|"
+    r"\b(?:cuts?|slashes?|slashed|suspends?|suspended|eliminates?|eliminated|halts?|halted|"
+    r"omits?)\b[^.;]{0,30}\bdividends?\b|\breverse (?:stock )?split\b",
     re.I)
 _OFFERING_FORMS = ("S-1", "S-3", "424B", "F-1", "F-3")
 
 
-def headline_direction(title: str) -> str | None:
-    """"bull", "bear", or None — the four catalyst kinds, by what the title says
-    was done, never by the price move it describes. Both ways at once is None."""
-    bull = bool(_BULL.search(title)) or analyst_upgrade(title)
-    bear = bool(_BEAR.search(title))
+def headline_direction(title: str, sym: str | None = None,
+                       names: Sequence[str] = ()) -> str | None:
+    """"bull", "bear", or None — by what the title says was done, never by the price
+    move it describes. Both ways at once is None.
+
+    READ IN THE NAME'S OWN CLAUSE (quant audit, 2026-11-13). The words were read across
+    the whole title, so another company's news set this one's direction: "Intel Jumps
+    After AMD Misses Estimates" cost an Intel long ten. With the name known (`sym`,
+    `names`), the words are read in the lead it heads (catalysts.lead: up to the first
+    "after", "as", "on" …); and where the name is the OBJECT of the action
+    (catalysts.acted), the action is the direction: upgraded is bull, downgraded bear,
+    bid for bull (a target is paid a premium), a short seller's target bear. Pure.
+
+    Kept by its arguments, as catalysts.grade is: it is asked for every fresh headline
+    under every name on every read of the list (2026-11-11: uncached regular expressions
+    on that path pinned the collector)."""
+    return _direction(title or "", sym or "", tuple(names))
+
+
+@lru_cache(maxsize=32768)
+def _direction(title: str, sym: str, names: tuple[str, ...]) -> str | None:
+    """`headline_direction` on arguments that can be a key."""
+    scope = title
+    if sym:
+        # One firm raising it and another cutting it is no direction (catalysts.rated_both).
+        if rated_both(title, sym, names):
+            return None
+        done = acted(title, sym, names)
+        if done == "up":
+            return "bull"
+        if done in ("down", "short"):
+            return "bear"
+        g = grade(title)
+        if done == "deal" and g.tag == "Deal":
+            return "bull"
+        # An analyst's note is the named company's from end to end: its action comes
+        # after the joiner ("Bernstein maintains Home Depot at Market Perform, raises price
+        # target to $357"), so it is read whole, as far as it speaks for the name
+        # (catalysts.own_parts: "Intel Upgraded as AMD Downgraded" is Intel's upgrade).
+        if g.tag in ("Analyst", "Target"):
+            scope = own_parts(title, sym, names)
+        elif about(title, sym, names):
+            if someone_else(title, sym, names):
+                return None
+            scope = " ".join(lead(title, sym, names)) or title
+    bull = bool(_BULL.search(scope)) or analyst_upgrade(scope)
+    bear = bool(_BEAR.search(scope))
     if bull == bear:
         return None
     return "bull" if bull else "bear"
 
 
+#: THE TAPE HAS THE LAST WORD (quant audit, 2026-11-13). A headline's direction is read
+#: from words; the market's is read from the price. Where the name has moved at least
+#: this far against SPY since the previous close (RS, in its daily ATRs), a story whose
+#: words point the other way is set aside rather than scored either way ("Palantir Stock
+#: Falls Despite Earnings Beat" was +20 to a long), and a major or notable story whose
+#: words give no direction ("Acme Reports Q3 Results", "Merck to Buy Verona", "Acme CEO
+#: Steps Down") takes the tape's. Under it the tape has not spoken and the words stand.
+TAPE_CLEAR = 0.5
+
+def day_move_of(row: dict[str, Any]) -> float | None:
+    """The name's move since the previous close (%), whatever the session: the pre-market
+    or after-hours print included. Pure."""
+    last, pdc = row.get("last"), (row.get("levels") or {}).get("pdc")
+    if isinstance(last, (int, float)) and isinstance(pdc, (int, float)) and pdc > 0:
+        return (last / pdc - 1.0) * 100.0
+    return None
+
+
 def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
                   news: list[dict[str, Any]] | None,
                   filings: list[dict[str, Any]] | None, sym: str | None = None,
-                  names: Sequence[str] = ()) -> dict[str, Any]:
+                  names: Sequence[str] = (), *, tape: float | None = None,
+                  fresh_min: float | None = None,
+                  day_move: float | None = None) -> dict[str, Any]:
     """The catalyst part: {pts, note, against} — points with the side (up to
     W_CATALYST), P_CATALYST against it with the item quoted in `against`, zero
     with no directional item. Pure.
@@ -765,17 +928,40 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
     news is the larger one. A minor note against the side costs 3 where it used
     to cost the full penalty, since it now earns only 3 with it.
     """
-    items: list[tuple[str, int, str, int]] = []  # (direction, weight, text, penalty)
+    # (direction, weight, text, penalty, what it was: the grade, where its direction came
+    # from and its age — logged with each signal so the record can test the news, phase 3)
+    items: list[tuple[str, int, str, int, dict[str, Any]]] = []
+    # The tape's direction, when it has spoken (TAPE_CLEAR); None when it has not.
+    tape_dir = (("bull" if tape > 0 else "bear")
+                if isinstance(tape, (int, float)) and abs(tape) >= TAPE_CLEAR else None)
+    set_aside: list[str] = []
+    # Stories whose stated move the name has not made today (STATED_MIN), and analyst
+    # headlines that rate it both ways (catalysts.rated_both).
+    earlier: list[str] = []
+    mixed = 0
+
+    def heard(d: str, text: str) -> bool:
+        """Does the tape let a direction read from words stand? Records it if not."""
+        if tape_dir is not None and d != tape_dir:
+            set_aside.append(text)
+            return False
+        return True
+
     days, when = (earnings or {}).get("days"), (earnings or {}).get("when")
     sp = (earnings or {}).get("surprise_pct")
-    if earnings and (days == -1 or (days == 0 and when == "pre")):
-        when_txt = "after the close" if days == -1 else "this morning"
+    last_night = bool((earnings or {}).get("last_night")) or days == -1
+    if earnings and (last_night or (days == 0 and when == "pre")):
+        when_txt = "after the close" if last_night else "this morning"
         if isinstance(sp, (int, float)) and sp != 0:
-            items.append(("bull" if sp > 0 else "bear", W_CATALYST,
-                          f"reported {when_txt}, EPS {sp:+.1f}% vs estimate", P_CATALYST))
+            d0 = "bull" if sp > 0 else "bear"
+            text0 = f"reported {when_txt}, EPS {sp:+.1f}% vs estimate"
+            if heard(d0, text0):
+                items.append((d0, W_CATALYST, text0, P_CATALYST,
+                              {"tag": "Report", "tier": MAJOR, "src": "report", "age_min": None}))
+    window = fresh_min if isinstance(fresh_min, (int, float)) else CATALYST_FRESH_MIN
     fresh = [h for h in news or []
              if isinstance(h, dict) and h.get("age_min") is not None
-             and h["age_min"] <= CATALYST_FRESH_MIN]
+             and h["age_min"] <= window]
     for h in fresh:
         title = str(h.get("title") or "")
         g = grade(title)
@@ -803,32 +989,70 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
             g = move_grade(title) or g
         if g.tag in TALK:
             continue
-        d = headline_direction(title)
-        if d is None:
-            d = mv
-        if d is None:
-            continue
         pub = str(h.get("publisher") or "").strip()
         age = h.get("age_min")
         age_txt = f"{round(age / 60)}h" if isinstance(age, (int, float)) and age >= 60 else (
             f"{round(age)}m" if isinstance(age, (int, float)) else "")
         text = f"{pub + ': ' if pub else ''}\"{str(h.get('title') or '').strip()[:90]}\""
-        items.append((d, min(TIER_POINTS[g.tier], W_CATALYST),
-                      f"{text} ({age_txt})" if age_txt else text, TIER_PENALTY[g.tier]))
+        text = f"{text} ({age_txt})" if age_txt else text
+        if sym and rated_both(title, sym, names):
+            # Two calls, two ways: no direction, and not the tape's either.
+            mixed += 1
+            continue
+        said = stated_move(title, sym, names) if sym else None
+        if not stated_today(said, day_move):
+            assert said is not None and day_move is not None
+            earlier.append(f"{text} says {said:+.1f}%, the name is {day_move:+.1f}% since "
+                           "the close")
+            continue
+        # THE NAME'S OWN STATED MOVE FIRST (2026-11-13): it is the market's verdict on the
+        # news, where the event's words may be anybody's ("Palantir Stock Falls Despite
+        # Earnings Beat" was a beat). Then the words, in the name's own clause. Then, for
+        # a story that matters and says no way, the tape (TAPE_CLEAR).
+        d = mv or headline_direction(title, sym, names)
+        src = "move" if mv else "words"
+        if d is not None:
+            if not heard(d, text):
+                continue
+        elif g.tier in (MAJOR, NOTABLE) and tape_dir is not None:
+            d, src = tape_dir, "tape"
+            text = f"{text} · its direction from the tape"
+        else:
+            continue
+        items.append((d, min(TIER_POINTS[g.tier], W_CATALYST), text, TIER_PENALTY[g.tier],
+                      {"tag": g.tag, "tier": g.tier, "src": src,
+                       "age_min": age if isinstance(age, (int, float)) else None}))
     for f in filings or []:
         form = str((f or {}).get("form") or "")
         desc = str((f or {}).get("desc") or form)
         if form.startswith(_OFFERING_FORMS):
-            items.append(("bear", 3, f"offering filed: {desc[:60]}", P_OFFERING))
+            text = f"offering filed: {desc[:60]}"
+            if heard("bear", text):
+                items.append(("bear", 3, text, P_OFFERING,
+                              {"tag": "Filing", "tier": MINOR, "src": "filing", "age_min": None}))
         elif form.startswith("8-K") and "bankruptcy" in desc.lower():
-            items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}", P_CATALYST))
+            items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}", P_CATALYST,
+                          {"tag": "Filing", "tier": MAJOR, "src": "filing", "age_min": None}))
+    more = f" and {len(set_aside) - 1} more" if len(set_aside) > 1 else ""
+    aside = f" · set aside, the tape disagrees: {set_aside[0]}{more}" if set_aside else ""
+    if earlier:
+        more = f" and {len(earlier) - 1} more" if len(earlier) > 1 else ""
+        aside += f" · set aside, an earlier move: {earlier[0]}{more}"
+    if mixed:
+        aside += (" · set aside, analysts rating it both ways" if mixed == 1 else
+                  f" · set aside, {mixed} headlines rating it both ways")
+    # What the record keeps of the read (scanlog ctx `news`, phase 3 of the quant audit):
+    # how many headlines were in the window, how many the tape set aside, and the item
+    # that decided the part — its grade, its direction and where that came from.
+    seen = {"fresh": len(fresh), "set_aside": len(set_aside), "earlier": len(earlier),
+            "mixed": mixed}
     if side not in ("long", "short") or not items:
         n_fresh = len(fresh)
         why = ("no side" if side not in ("long", "short") else
                f"no directional catalyst · {n_fresh} headline{'s' if n_fresh != 1 else ''} "
                f"since the close" if n_fresh else "no directional catalyst · no headlines since "
                "the close")
-        return {"pts": 0, "note": why, "against": None}
+        return {"pts": 0, "note": why + aside, "against": None, "item": None, **seen}
     mine = "bull" if side == "long" else "bear"
     with_items = sorted((it for it in items if it[0] == mine), key=lambda x: -x[1])
     against_items = sorted((it for it in items if it[0] != mine), key=lambda x: -x[1])
@@ -838,12 +1062,14 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         note = f"against the {side} · {best_against[2]}"
         if best_with:
             note += f" · with it: {best_with[2]}"
-        return {"pts": best_against[3], "note": note, "against": best_against[2]}
+        return {"pts": best_against[3], "note": note + aside, "against": best_against[2],
+                "item": {**best_against[4], "dir": best_against[0], "with": False}, **seen}
     assert best_with is not None
     note = f"with the {side} · {best_with[2]}"
     if best_against:
         note += f" · against it: {best_against[2]}"
-    return {"pts": min(best_with[1], W_CATALYST), "note": note, "against": None}
+    return {"pts": min(best_with[1], W_CATALYST), "note": note + aside, "against": None,
+            "item": {**best_with[4], "dir": best_with[0], "with": True}, **seen}
 
 
 def _signal_minute(at_et: Any) -> int | None:
@@ -910,18 +1136,49 @@ def liquidity_penalty(score: dict[str, Any], options: dict[str, Any] | None) -> 
     note = (f"{spread:.1f}% at-the-money spread" if isinstance(spread, (int, float))
             else "wide spread")
     parts = [*score.get("parts", []), _part("liquidity", "Options liquidity", P_LIQUIDITY, 0, note)]
-    return {**score, "parts": parts, "total": max(0, min(100, sum(p["pts"] for p in parts)))}
+    raw = sum(p["pts"] for p in parts)
+    return {**score, "parts": parts, "total": max(0, min(100, raw)), "raw": raw}
 
 
 def rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
-    """The table's order: the score, then on a tie the name nearest its entry, then the
-    stronger against SPY, then the ticker, so a tie does not flicker. Pure."""
+    """The table's order: the raw score (score_row: the uncapped sum, so a penalty
+    counts at the top), then on a tie the name nearest its entry, then the stronger
+    against SPY, then the ticker, so a tie does not flicker. Pure."""
     entry = (row.get("setup") or {}).get("entry") or {}
     dist = entry.get("dist_atr")
     rs = (row.get("rs") or {}).get("SPY")
-    return (not row.get("ok"), -(row.get("score") or {}).get("total", 0),
+    sc = row.get("score") or {}
+    raw = sc.get("raw")
+    return (not row.get("ok"), -(raw if isinstance(raw, (int, float)) else sc.get("total", 0)),
             abs(dist) if isinstance(dist, (int, float)) else 99.0,
             -abs(rs) if isinstance(rs, (int, float)) else 0.0, str(row.get("sym")))
+
+
+def rvol_gate(rows: list[dict[str, Any]], session: str) -> list[dict[str, Any]]:
+    """The ranked list with no name under RVOL_GATE in its top GATE_TOP, in the regular
+    session (RVOL_GATE). A gated name keeps its score and its place among the rest, and
+    says why (`score.gated`). Before the bell and after it RVOL is not the read, and a
+    name with no RVOL yet is not held back for it. Pure on the order; marks the rows."""
+    if session != "rth":
+        return rows
+
+    def low(r: dict[str, Any]) -> bool:
+        rv = r.get("rvol")
+        return bool(r.get("ok")) and isinstance(rv, (int, float)) and rv < RVOL_GATE
+
+    top: list[dict[str, Any]] = []
+    rest: list[dict[str, Any]] = []
+    for r in rows:
+        (top if len(top) < GATE_TOP and r.get("ok") and not low(r) else rest).append(r)
+    # Only a name the gate actually moved says so: one that would have ranked above the
+    # last of the ten.
+    if len(top) == GATE_TOP:
+        last = rank_key(top[-1])
+        for r in rest:
+            if low(r) and isinstance(r.get("score"), dict) and rank_key(r) < last:
+                r["score"]["gated"] = (f"RVOL {r['rvol']:.2f}, under {RVOL_GATE:g}: "
+                                       f"kept out of the top {GATE_TOP}")
+    return top + sorted(rest, key=rank_key)
 
 
 def score_band(total: int | float | None) -> str | None:
@@ -983,46 +1240,56 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     s = (row.get("lvl_state") or 0) * d
     if d and s in W_STRUCTURE:
         pts = W_STRUCTURE[s]
-        # Which one, in the strategy's own words: through the previous day's level is
-        # an outside setup, through the pre-market's alone an inside one. It used to
-        # say "(inside setup)" for both, which was wrong for a name over PDH and
-        # under PMH.
+        # Which levels, said plainly. AN OUTSIDE DAY IS THROUGH BOTH (owner,
+        # 2026-11-13: "an outside day should be either above both premarket high and
+        # previous day high or previous day low and pre market low"). This note used
+        # to call a name through the previous day's level alone "an outside setup",
+        # PMH not taken or not; the points were and are for the levels taken (two
+        # score more than one), so only the words were wrong.
         broke = row.get("broken") or {}
         day_key, pm_key = ("pdh", "pmh") if d > 0 else ("pdl", "pml")
         word = "above" if d > 0 else "below"
         if s == 2:
-            note = "outside both levels"
+            note = f"an outside day: {word} {day_key.upper()} and {pm_key.upper()}"
         elif broke.get(day_key) and not (row.get("levels") or {}).get("pm_done"):
             # Before the bell there is no pre-market level to have taken yet.
-            note = f"{word} {day_key.upper()}: an outside setup, the pre-market range not set yet"
+            note = f"{word} {day_key.upper()}, the pre-market range not set yet"
         elif broke.get(day_key):
-            note = f"{word} {day_key.upper()} only: an outside setup, {pm_key.upper()} not taken"
+            note = (f"{word} {day_key.upper()} only, {pm_key.upper()} not taken: "
+                    "not an outside day")
         elif broke.get(pm_key):
-            note = f"{word} {pm_key.upper()} only: an inside setup, inside yesterday's range"
+            note = f"{word} {pm_key.upper()} only, inside yesterday's range"
         else:
-            note = "outside one level"
+            note = "through one level"
     elif state == "approaching":
         pts, note = W_APPROACH, f"approaching {setup.get('level') or 'a level'}"
     else:
         pts, note = 0, "inside the levels" if d else "no side"
-    parts.append(_part("structure", "Structure", pts, 30, note))
+    parts.append(_part("structure", "Structure", pts, max(W_STRUCTURE.values()), note))
 
-    # ---- relative strength ---------------------------------------------------
-    rs = (row.get("rs") or {}).get("SPY")
-    if d and rs is not None:
-        frac = max(0.0, min(1.0, rs * d / RS_FULL))
-        parts.append(_part("rs", "RS vs SPY", frac * W_RS, W_RS,
-                           f"{rs:+.2f} ATR vs SPY"))
-    else:
-        parts.append(_part("rs", "RS vs SPY", 0, W_RS,
-                           "no RS yet" if rs is None else "no side"))
-
-    # ---- location ------------------------------------------------------------
+    # Where the entry is: the location part below, and what RS is paid against it.
     entry = setup.get("entry")
     loc_key = state
     if state == "extended":
         near = entry is not None and abs(entry.get("dist_atr") or 99) <= 1.0
         loc_key = "extended_near" if near else "extended_far"
+    good_entry = loc_key in RS_GOOD_ENTRY and not setup.get("lost_vwap")
+
+    # ---- relative strength ---------------------------------------------------
+    rs = (row.get("rs") or {}).get("SPY")
+    if d and rs is not None:
+        frac = max(0.0, min(1.0, rs * d / RS_FULL))
+        rs_pts = frac * W_RS
+        rs_note = f"{rs:+.2f} ATR vs SPY"
+        if not good_entry and rs_pts > RS_POOR:
+            rs_pts = RS_POOR
+            rs_note += " · capped: no live entry"
+        parts.append(_part("rs", "RS vs SPY", rs_pts, W_RS, rs_note))
+    else:
+        parts.append(_part("rs", "RS vs SPY", 0, W_RS,
+                           "no RS yet" if rs is None else "no side"))
+
+    # ---- location ------------------------------------------------------------
     pts = W_LOCATION.get(loc_key, 0)
     note = {
         "retest": "at the broken level", "pullback": "between the level and extended",
@@ -1039,7 +1306,13 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
 
     # ---- volume (in play before the bell) -----------------------------------
     rvol = row.get("rvol")
-    if session in ("pre", "closed"):
+    # IN PLAY HOLDS UNTIL RVOL EXISTS (quant audit, 2026-11-13). RVOL needs a finished
+    # five-minute bar, so from 09:30 to 09:35 every name had neither part and the list
+    # lost up to sixteen points at once at the bell. In the opening quarter hour only:
+    # later, a missing RVOL is a gap in the bars, not the bell.
+    opening = (now is not None and session == "rth" and rvol is None
+               and now.astimezone(ET).hour * 60 + now.astimezone(ET).minute < OPENING_INPLAY_END)
+    if session in ("pre", "closed") or opening:
         ip, inote = in_play(row, premkt)
         parts.append(_part("inplay", "In play", ip, W_INPLAY, inote))
     else:
@@ -1067,7 +1340,7 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     against_tape = tape_against(side, conviction)
     if against_tape:
         bits.append(against_tape)
-    parts.append(_part("market", "Market", pts, 15, ", ".join(bits) or "no tailwind"))
+    parts.append(_part("market", "Market", pts, W_MARKET, ", ".join(bits) or "no tailwind"))
 
     # ---- the daily frame -----------------------------------------------------
     ws = frame.with_side(frame_read, side)
@@ -1085,8 +1358,12 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     # ---- the catalyst, for direction ------------------------------------------
     cat = catalyst if catalyst is not None else catalyst_read(side, earnings, news, None)
     cpts = cat.get("pts") or 0
-    parts.append(_part("catalyst", "Catalyst", cpts, W_CATALYST if cpts >= 0 else 0,
-                       str(cat.get("note") or "")))
+    cpart = _part("catalyst", "Catalyst", cpts, W_CATALYST if cpts >= 0 else 0,
+                  str(cat.get("note") or ""))
+    # What decided it, for the signal log (scanlog `ctx.news`); not drawn on the page.
+    cpart["read"] = {"item": cat.get("item"), "fresh": cat.get("fresh"),
+                     "set_aside": cat.get("set_aside")}
+    parts.append(cpart)
 
     # ---- penalties -----------------------------------------------------------
     clk = clock_penalty(row.get("signals"), now)
@@ -1104,8 +1381,13 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         parts.append(_part("failed", "Failed break", P_FAILED, 0,
                            f"{setup.get('level') or 'level'} broke and failed"))
 
-    total = max(0, min(100, sum(p["pts"] for p in parts)))
-    return {"total": total, "side": side, "parts": parts}
+    # THE LIST IS RANKED ON THE RAW SUM (quant audit, 2026-11-13). The parts add past 100
+    # and the total is capped to read as a score, so a name at 108 with a ten-point
+    # penalty showed 100 beside a name at 100 without one, and the tie fell to entry
+    # distance: the penalty did nothing where it mattered most. `raw` is uncapped and is
+    # what `rank_key` sorts on; `total` is what the page shows.
+    raw = sum(p["pts"] for p in parts)
+    return {"total": max(0, min(100, raw)), "raw": raw, "side": side, "parts": parts}
 
 
 def flags_for(row: dict[str, Any], earnings: dict[str, Any] | None,
@@ -1265,6 +1547,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
     sector_rs = {s.get("key"): s.get("rs_day") for s in sectors}
 
     now_ts = now.timestamp()
+    # The news this session trades on: since the previous trading day's close
+    # (holidays.news_since), as minutes back from now — the catalyst's window.
+    fresh_min = max(0.0, (now_ts - news_since(now.astimezone(ET), td).timestamp()) / 60.0)
     out_rows: list[dict[str, Any]] = []
     for sym in watchlist:
         base = rows_in.get(sym)
@@ -1313,7 +1598,11 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         row["short"] = (shorts or {}).get(sym)
         row["promoted"] = (promoted or {}).get(sym)
         side0 = (row.get("setup") or {}).get("side")
-        cat = catalyst_read(side0, earn, all_news, fil, sym=sym, names=called)
+        # The tape: the name's move against SPY since the previous close, in its daily
+        # ATRs (RS) — what the news is checked against (TAPE_CLEAR).
+        cat = catalyst_read(side0, earn, all_news, fil, sym=sym, names=called,
+                            tape=(row.get("rs") or {}).get("SPY"), fresh_min=fresh_min,
+                            day_move=day_move_of(row))
         if row.get("ok"):
             row["score"] = score_row(row, reg, srs, earn, event, session,
                                      premkt=row["premkt"], news=nws,
@@ -1350,6 +1639,14 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         out_rows.append(row)
 
     out_rows.sort(key=rank_key)
+    out_rows = rvol_gate(out_rows, session)
+    # The engine's order, stamped: the page's Top 10 and Multicharts read it rather than
+    # sort the capped total again (src/lib/multiChart.topScores).
+    n = 0
+    for r in out_rows:
+        if r.get("ok") and isinstance(r.get("score"), dict):
+            n += 1
+            r["score"]["rank"] = n
     ages = [r["age_min"] for r in out_rows if r.get("age_min") is not None]
     return {
         "ok": any(r.get("ok") for r in out_rows),

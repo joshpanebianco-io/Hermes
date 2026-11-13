@@ -106,13 +106,9 @@ const ALERT_KINDS = new Set(["L", "E", "BO", "NEAR"]);
 /** The reader's settings as the page sent them, checked field by field; null when absent. */
 function asPrefs(v: unknown): ReaderPrefs | null {
   if (!v || typeof v !== "object") return null;
-  const o = v as { options?: unknown; alerts?: unknown };
-  const opt = o.options && typeof o.options === "object" ? (o.options as Record<string, unknown>) : {};
+  const o = v as { alerts?: unknown };
   const al = o.alerts && typeof o.alerts === "object" ? (o.alerts as Record<string, unknown>) : null;
-  const b = opt.budget;
   return {
-    budget: typeof b === "number" && Number.isFinite(b) && b > 0 ? Math.round(b * 100) / 100 : null,
-    zeroDte: opt.zeroDte !== false,
     alerts: al
       ? {
           on: al.on !== false,

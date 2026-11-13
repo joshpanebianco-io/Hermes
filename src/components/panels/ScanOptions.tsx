@@ -5,7 +5,6 @@ import { estTitle, optionsPick, premiumHue, shortDate, strike } from "@/componen
 import { CARD } from "@/components/panels/ScanWide";
 import { Tick } from "@/components/ui/Tick";
 import { OptionsFiguresPopover } from "@/components/vol/OptionsFigures";
-import { useOptionsPrefs } from "@/lib/optionsPrefs";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -30,7 +29,6 @@ import { cn } from "@/lib/cn";
 
 export function ScanOptions({ r }: { r: ScanRow }) {
   const o = r.options;
-  const prefs = useOptionsPrefs();
   return (
     <section className={CARD} aria-label={`${r.sym} options`}>
       <div className="mb-2.5 flex items-baseline gap-2">
@@ -44,19 +42,17 @@ export function ScanOptions({ r }: { r: ScanRow }) {
       {!o || !o.ok ? (
         <p className="text-[12px] text-ink-3">{o?.error ?? "No chain yet — the options job reads Cboe a few names at a time."}</p>
       ) : (
-        <Body r={r} o={o} budget={prefs.budget} zeroDte={prefs.zeroDte} />
+        <Body r={r} o={o} />
       )}
     </section>
   );
 }
 
-function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: number | null; zeroDte: boolean }) {
+function Body({ r, o }: { r: ScanRow; o: OptionsCtx }) {
   const front = o.em.find((e) => e.key === "front");
   const weekly = o.em.find((e) => e.key === "weekly");
-  // 0DTE off in Settings: no same-day contract on any name — the weekly instead.
-  const hideFront = !zeroDte && front?.dte === 0;
-  const contracts = o.contracts.filter((c) => !(hideFront && c.key === "front"));
-  const pick = optionsPick(o, zeroDte);
+  const contracts = o.contracts;
+  const pick = optionsPick(o);
   // What every figure's long form reads — the row, its chain, the rule's pick.
   const explain = { r, o, pick };
   // The pick first: it is the contract the rule says to trade.
@@ -232,7 +228,7 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
               <p className="qt-cap text-[10.5px] text-ink-3">
                 {k === "front" ? "Front expiry" : "Weekly"} · {r.score.side === "short" ? "puts" : "calls"}
                 {k === pick && (
-                  <span className="ml-2 text-call-fig" title="The expiry the desk's rule picks for this name — Settings → Options">
+                  <span className="ml-2 text-call-fig" title="The expiry the desk's rule picks for this name: the same-day front on SPY, QQQ and IWM when one is listed, the weekly elsewhere">
                     the pick
                   </span>
                 )}
@@ -240,7 +236,7 @@ function Body({ r, o, budget, zeroDte }: { r: ScanRow; o: OptionsCtx; budget: nu
               {contracts
                 .filter((c) => c.key === k)
                 .map((c) => (
-                  <ContractCard key={`${c.key}-${c.kind}`} c={c} budget={budget} />
+                  <ContractCard key={`${c.key}-${c.kind}`} c={c} />
                 ))}
             </div>
           ))}
@@ -327,9 +323,8 @@ function signedCompact(v: number | null | undefined): string {
   return `${v > 0 ? "+" : "−"}${compact(Math.abs(v))}`;
 }
 
-function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) {
+function ContractCard({ c }: { c: OptContract }) {
   const hue = c.right === "C" ? "text-call-fig" : "text-put-fig";
-  const size = budget != null && c.risk_per_contract ? Math.floor(budget / c.risk_per_contract) : null;
   return (
     <div className="rounded-[4px] border border-ring-2 px-3 py-2.5">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -364,12 +359,6 @@ function ContractCard({ c, budget }: { c: OptContract; budget: number | null }) 
           <>
             About <span className="fig text-ink">${Math.round(c.risk_per_contract)}</span> at risk per contract
             {c.stock_risk != null && <span className="text-ink-3"> to a ${c.stock_risk.toFixed(2)} stock stop</span>}
-            {size != null && (
-              <>
-                {" · "}
-                <span className={cn("fig", size > 0 ? "text-ink" : "text-put-fig")}>{size}</span> for a ${budget} budget
-              </>
-            )}
             {c.stock_entry != null && c.stock_stop != null && (
               <span className="mt-0.5 block text-[10.5px] text-ink-3" title={c.risk_basis ?? undefined}>
                 entry <span className="fig">{num(c.stock_entry)}</span> → stop <span className="fig">{num(c.stock_stop)}</span>

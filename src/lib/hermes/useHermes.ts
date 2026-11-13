@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { describeTool, readNdjson } from "@/lib/ask/stream";
 import { alertPrefsNow } from "@/lib/alerts";
-import { optionsPrefsNow } from "@/lib/optionsPrefs";
 import type { Desk } from "@/lib/tabs";
 
 /**
@@ -245,9 +244,11 @@ export function useHermes(): HermesController {
           const res = await fetch("/api/ask", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            // The reader's settings ride along, so "how many contracts" or
-            // "what alerts am I getting" has the page's own answer (2026-10-31).
-            body: JSON.stringify({ tab: "hermes", sym, desk, messages: history, summary, prefs: { options: optionsPrefsNow(), alerts: alertPrefsNow() } }),
+            // The reader's alert settings ride along, so "what alerts am I getting"
+            // has the page's own answer (2026-10-31). The options budget and the
+            // same-day switch rode with them until Settings lost that section
+            // (2026-11-13).
+            body: JSON.stringify({ tab: "hermes", sym, desk, messages: history, summary, prefs: { alerts: alertPrefsNow() } }),
             signal: ctrl.signal,
             cache: "no-store",
           });

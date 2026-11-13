@@ -223,7 +223,10 @@ def test_a_live_signal_carries_where_it_stood_on_the_list() -> None:
                               "atr_b": 0.8, "state": "forming",
                               # The name's own shape (daytype, 2026-11-10): none here, no levels.
                               "pd_range_atr": None, "pd_close_pos": None, "pm_range_atr": None,
-                              "gap_atr": None}
+                              "gap_atr": None,
+                              # The quant audit's phase 3 (2026-11-13): the uncapped score, the
+                              # RVOL gate and the catalyst read; none on a bare test row.
+                              "raw": None, "gated": False, "news": None}
     late = datetime(2026, 11, 5, 13, 0, tzinfo=ET)
     assert "ctx" not in scanlog.candidates(rows, "rth", "2026-11-05", late)[0]
 

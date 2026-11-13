@@ -286,13 +286,10 @@ class MomentumStore:
             # reading's time-of-day figure: a whole day's average made every name read
             # a tenth of normal at 10:00 and full by the close, so the score drifted
             # up all session and the volume part said nothing in the morning (audit,
-            # 2026-11-11). Once the day is whole, the day against an average one.
-            if basis == "pre":
-                normal = (e["adv_pct"] or 0.0) / 5.0
-            elif basis == "rth" and e.get("rvol") is not None:
-                normal = float(e["rvol"])
-            else:
-                normal = (e["adv_pct"] or 0.0) / 100.0
+            # 2026-11-11). Once the day is whole, the day against an average one. All
+            # three are the reading's RVOL since 2026-11-13 (universe.rvol_for), the
+            # figure every page shows; before the bell the pre-market's own.
+            normal = float(e.get("rvol") or 0.0)
             rows.append({
                 "sym": sym, "name": r["name"], "cap": r["cap"], "sector": r["sector"],
                 "side": side, "stage": stage, "moved": moved, "move": move, "vx": vx,

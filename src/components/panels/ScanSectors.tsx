@@ -26,6 +26,7 @@ import {
   volWord,
 } from "@/components/panels/ScanWide";
 import { cn } from "@/lib/cn";
+import { OUTSIDE_DAY_TITLE } from "@/lib/outsideDay";
 import { compact, dir, num, pct } from "@/lib/format";
 import { heatMax, heatStyle } from "@/lib/heat";
 import { segItem } from "@/lib/seg";
@@ -65,7 +66,8 @@ const SPANS: ReadonlyArray<{ key: HeatSpan; label: string; word: string }> = [
 ];
 const CHIPS: ReadonlyArray<{ key: BreakoutChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "both", label: "Both ranges", title: "Through the pre-market range and the previous day's range, the same way" },
+  // The collector's `both`: an outside day, as on Breakouts (lib/outsideDay).
+  { key: "both", label: "Outside day", title: OUTSIDE_DAY_TITLE },
   { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened 2% or more away from the previous close" },
   { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range" },
@@ -333,7 +335,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
               {has("themes") && <th scope="col" className={TH}>Themes</th>}
               {has("momentum") && (
                 <>
-                  <th scope="col" className={cn(TH, "text-right")}>{header("rvol", "RVol", "Against the 30-day average; by time of day in the session")}</th>
+                  <th scope="col" className={cn(TH, "text-right")}>{header("rvol", "RVol", "Against the 30-day average; by time of day in the session; before the bell, the pre-market against its usual pre-market")}</th>
                   <th scope="col" className={cn(TH, "text-right")}>{header("chg", "% Chg", "Against the previous close")}</th>
                   <th scope="col" className={cn(TH, "text-right")}>{header("gap", "Gap", "The open against the previous close")}</th>
                   <th scope="col" className={cn(TH, "text-right")} title="The past week, as TradingView's screener counts it">1W</th>

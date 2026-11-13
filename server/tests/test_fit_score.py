@@ -87,3 +87,34 @@ def test_the_report_reads_the_rank_the_penalties_and_the_morning_list() -> None:
     assert "clock       fired on 2, too few to read" in text
     # No morning on file is a line, not a failure.
     assert "no morning on file yet" in fit.report(evs, 30, None)
+
+
+# ---- the quant audit's phase 3 (2026-11-13) ------------------------------------------
+
+
+def test_the_news_and_the_gate_are_read_inside_each_day() -> None:
+    def with_news(day: str, hit: bool, w: bool | None, src: str | None,
+                  gated: bool = False) -> dict[str, Any]:
+        e = ev(day, 60, hit=hit)
+        e["ctx"] = {"raw": 104, "gated": gated,
+                    "news": {"with": w, "src": src, "tier": 1, "set_aside": 0}}
+        return e
+
+    evs = [with_news(d, True, True, "move") for d in ("2026-11-16", "2026-11-17") for _ in range(3)]
+    evs += [with_news(d, False, None, None) for d in ("2026-11-16", "2026-11-17") for _ in range(3)]
+    text = "\n".join(fit.news_lines(evs))
+    assert "with the side" in text and "2/2" in text
+    # The rank tests read the uncapped sum where the log has it.
+    assert fit.rank_score(evs[0]) == 104.0
+    assert "no signal carries" in fit.news_lines([ev("d", 50)])[0]
+
+
+def test_the_pools_record_reads_each_mark_against_its_days_outcome() -> None:
+    rows = [{"sym": f"S{i}", "promoted": i < 3} for i in range(12)]
+    outcome = {f"S{i}": {"close": 110.0, "change": 10.0 if i < 10 else 1.0, "high": 112.0,
+                         "low": 100.0, "atr": 4.0} for i in range(12)}
+    text = "\n".join(fit.pool_lines([
+        {"kind": "mark", "day": "2026-11-16", "mark": "09:25", "rows": rows},
+        {"kind": "outcome", "day": "2026-11-16", "rows": outcome}]))
+    assert "top 10" in text and "11-50" in text and "promoted" in text
+    assert "no mark" in fit.pool_lines([{"kind": "mark", "day": "d", "rows": rows}])[0]

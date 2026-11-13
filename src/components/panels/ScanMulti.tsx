@@ -17,7 +17,9 @@ import { openTicker } from "@/lib/ticker";
  * Multicharts — six of the list's first ten names as live charts, three across and two
  * down (owner, 2026-11-12: "displays multiple charts from the top 10 ... maybe start with
  * 6 - lay it out so its 3 columns 2 rows etc and then have the options to change what is
- * displayed in those 6 charts from the top 10").
+ * displayed in those 6 charts from the top 10"). One of the Stocks tab's views since
+ * 2026-11-13, the tab after Game plan (lib/tabs.ts); it began as a button on the Setups
+ * chip bar.
  *
  * SIX, BECAUSE THAT IS WHAT STILL READS. Measured the day it was built, the candles of
  * each chart get 772 by 512 pixels on the 2560 screen and 566 by 348 on a 1920 one: room
@@ -26,8 +28,8 @@ import { openTicker } from "@/lib/ticker";
  * chart's Change menu.
  *
  * THE CHARTS HAVE THE PAGE. The Setups stat row is not drawn over them (Scanner.tsx) and
- * the bar over them is one line: on a 1920 screen those two took 58 pixels off every
- * chart's height.
+ * the bar over them is one line, the charts' own toolbar: on a 1920 screen a stat row and
+ * a second bar took 58 pixels off every chart's height.
  *
  * EACH CHART IS THE SLIDE-OUT'S OWN (ScanChart): the same bars, levels, wave, VWAP and
  * signals, the last candle moving on the stream. What it gives up is its toolbar: the
@@ -60,9 +62,9 @@ export function ScanMulti({
 }: {
   /** The list's first ten, in its own order: what the six are drawn from. */
   pool: ScanRow[];
-  /** Which list that is (the day, the chip, the sort): held names apply to it alone. */
+  /** Which list that is (the trading day): held names apply to it alone. */
   listKey: string;
-  /** The ten in words, for the Change menu: "the top 10", "the top 10 of Long". */
+  /** The ten in words, for the Change menu: "the top 10". */
   what: string;
   held: HeldSlots;
   onHeld: (h: HeldSlots) => void;
@@ -85,7 +87,7 @@ export function ScanMulti({
   if (pool.length === 0) {
     return (
       <div className={cn(CELL, "flex-1 items-center justify-center")}>
-        <p className="max-w-[520px] px-6 py-8 text-center text-[12px] leading-[1.5] text-ink-3">Nothing on this filter to chart. Pick another chip, or All.</p>
+        <p className="max-w-[520px] px-6 py-8 text-center text-[12px] leading-[1.5] text-ink-3">No name on the list has a score to chart yet.</p>
       </div>
     );
   }
@@ -101,7 +103,7 @@ export function ScanMulti({
         if (!sym || !e) {
           return (
             <div key={`none-${i}`} className={cn(CELL, "items-center justify-center")}>
-              {i === slots.length && <p className="px-6 text-center text-[12px] text-ink-3">Only {slots.length} on this filter.</p>}
+              {i === slots.length && <p className="px-6 text-center text-[12px] text-ink-3">Only {slots.length} on the list.</p>}
             </div>
           );
         }

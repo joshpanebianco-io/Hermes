@@ -154,11 +154,13 @@ def test_in_the_session_the_volume_is_read_for_the_time_of_day() -> None:
         got = _table(s, rows, read=reading(rvol), basis=basis, today=date(2026, 11, 9))
         return int(got["rows"][0]["score"])
 
-    # 10:00 ET: 12% of an average day traded, which for the hour is 2.4x normal. Against
-    # a whole day that was 0.12 of normal and worth 2 of the 30; for the hour it is all 30.
-    assert score(2.4, "rth") - score(None, "rth") == 28
-    # With the day finished, the day's volume against an average day, as before.
-    assert score(2.4, "last") == score(None, "last")
+    # 10:00 ET: 12% of an average day traded, which for the hour is 2.4x normal: all 30.
+    # A reading with no RVOL earns nothing for volume; until 2026-11-13 it fell back to
+    # 0.12 of a whole day (2 of the 30). What RVOL is for each basis is the reading's
+    # business since then (universe.rvol_for), the figure every page shows.
+    assert score(2.4, "rth") - score(None, "rth") == 30
+    # With the day finished the reading's RVOL is the whole day's, read the same way.
+    assert score(1.0, "last") - score(None, "last") == 15
 
 
 @pytest.mark.parametrize(

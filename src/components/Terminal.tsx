@@ -12,9 +12,7 @@ import { StockPlan } from "@/components/panels/StockPlan";
 import { Dashboard } from "@/components/Dashboard";
 import { MacroBoard } from "@/components/MacroBoard";
 import { FuturesBoard } from "@/components/futures/FuturesBoard";
-import { IndexBoard } from "@/components/IndexBoard";
 import { FUT_NAME, FUT_VIEW_KEYS, type FutView } from "@/lib/futures";
-import type { MarketFeed } from "@/lib/useMarket";
 import { AlertStrip } from "@/components/shell/AlertStrip";
 import { SectorsBoard } from "@/components/SectorsBoard";
 import { QuoteTiles } from "@/components/market/QuoteTiles";
@@ -35,7 +33,6 @@ import { OfflineProvider } from "@/components/state/Offline";
 import { cn } from "@/lib/cn";
 import { useReport } from "@/lib/useReport";
 import { useStockPlan, type PlanController } from "@/lib/useStockPlan";
-import { useFrameLight, type FrameFx } from "@/lib/useFrameLight";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import {
   SCAN_VIEWS,
@@ -138,25 +135,17 @@ export function Terminal({
   // The Hermes tab's chats and its stream, owned here so an answer being
   // written survives a tab switch (useHermes).
   const hermes = useHermes();
-  // The stocks desk's market context, polled here rather than by the boards
-  // that read it, so switching between Macro and Structure does not start it
-  // over — and the boards' one loader (lib/ready.ts) does not show twice.
+  // The stocks desk's market context, polled here rather than by the board
+  // that reads it (Macro: prints, the Fed path, peers, cross-asset), so leaving
+  // the page and coming back does not start it over.
   const market = useMarket();
 
   /*
-   * The chassis light. Held here because the frame it draws on lives here, and
-   * persisted so the choice survives a reload like every other preference.
-   * `useFrameLight` only drives "travel" — breathe is pure CSS and off hides
-   * the ring, and for both the hook stands down and cancels any comet left
-   * running from a live switch.
+   * NO CHASSIS LIGHT (owner, 2026-11-13: "get rid of the ... frame light and lets
+   * remove that from the app as well"). A comet ran the window's edge, or the whole
+   * edge breathed, chosen in Settings and kept in storage as `frame.fx`; the frame is
+   * plain now, with no setting, no hook and no ring element under it.
    */
-  const [fx, setFx] = usePersisted<FrameFx>(
-    "frame.fx",
-    "travel",
-    oneOf("off", "travel", "breathe"),
-  );
-  const frameRef = useRef<HTMLDivElement | null>(null);
-  useFrameLight(frameRef, fx);
   /*
    * The URL wins over storage when it says something. `?tab=report` is an
    * explicit instruction from whoever followed the link; the remembered tab is
@@ -367,11 +356,11 @@ export function Terminal({
               prices={side ? undefined : quoteRow(DASH_GROUPS, { spread: true })}
             />
           ) : tab === "settings" ? (
-            <Settings theme={theme} onTheme={setTheme} fx={fx} onFx={setFx} ui={ui} onUi={setUi} />
+            <Settings theme={theme} onTheme={setTheme} ui={ui} onUi={setUi} />
           ) : tab === "hermes" ? (
             <HermesTab hermes={hermes} desk={desk} />
           ) : tab === "scanner" ? (
-            <ScannerTab calendar={data.calendar ?? NONE} view={scanView} onView={setScanView} data={data} market={market} plan={plan} />
+            <ScannerTab calendar={data.calendar ?? NONE} view={scanView} onView={setScanView} data={data} plan={plan} />
           ) : tab === "futures" ? (
             <FuturesBoard data={data} view={futView} onView={setFutView} report={report} />
           ) : tab === "sectors" ? (
@@ -391,22 +380,14 @@ export function Terminal({
     <OfflineProvider value={Boolean(data.offline)}>
     <div className="h-screen overflow-hidden p-2 sm:p-3 qt:p-0 qt:sm:p-0">
       <div
-        ref={frameRef}
         className={cn(
           "app-frame flex h-full w-full flex-col overflow-hidden",
-          `fx-${fx}`,
           // Every figure that changes glitches before it glows. Subtle is the
           // whole useful range at this type size — see the note in globals.css
           // — so it is a constant rather than another switch in Settings.
           "fx-glitch-subtle",
         )}
       >
-        {/* The travelling light's ring and the gradient that turns inside it —
-            see `.frame-light` in globals.css and useFrameLight. */}
-        <div className="frame-light" aria-hidden>
-          <div className="frame-light__spin" />
-        </div>
-
         {side ? (
           <div className="qt-side-shell flex min-h-0 flex-1">
             <Sidebar tab={tab} scanView={scanView} futView={futView} onTab={setTab} onScan={openScan} onFut={openFut} />
@@ -462,14 +443,12 @@ function ScannerTab({
   view,
   onView,
   data,
-  market,
   plan,
 }: {
   calendar: CalendarRow[];
   view: ScanView;
   onView: (v: ScanView) => void;
   data: TerminalData;
-  market: MarketFeed;
   /** The written game plan's state, the Terminal's, so a plan being written survives a change of page. */
   plan: PlanController;
 }) {
@@ -480,7 +459,6 @@ function ScannerTab({
       calendar={calendar}
       view={view}
       onView={onView}
-      index={view === "index" ? <IndexBoard data={data} market={market} /> : null}
       plan={view === "plan" ? <StockPlan {...plan} /> : null}
       prices={<QuoteTiles quotes={data.quotes ?? []} groups={SCAN_GROUPS} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} />}
     />

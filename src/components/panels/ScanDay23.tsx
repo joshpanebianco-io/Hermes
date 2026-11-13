@@ -30,6 +30,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { THROUGH_DAY_TITLE } from "@/lib/outsideDay";
 import { useTicker } from "@/lib/ticker";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { usePinsChanged } from "@/lib/usePinsChanged";
@@ -49,7 +50,9 @@ import { usePinsChanged } from "@/lib/usePinsChanged";
 
 const CHIPS: ReadonlyArray<{ key: Day23Chip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "through", label: "Outside", title: "Through the previous day's high or low" },
+  // Not "Outside": an outside day is through both ranges (lib/outsideDay); this is the
+  // previous day's level alone.
+  { key: "through", label: "Through PDH/PDL", title: THROUGH_DAY_TITLE },
   { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range: resting" },
   { key: "long", label: "Long" },
   { key: "short", label: "Short" },
@@ -116,7 +119,7 @@ export function ScanDay23({ onTrackChanged }: { onTrackChanged?: () => void }) {
       <div className="qt-stats flex shrink-0 flex-wrap items-stretch gap-x-2 gap-y-1 border-b border-ring px-2 py-2">
         <Card part glyph="check" hue="text-call-fig" value={c.day1} word="Strong Day 1" sub={`a ${move}%+ move on 1.5× volume`} />
         <Card part glyph="inside" hue="text-desk-macro" value={c.inside} word="Inside days" sub="building, not triggered" />
-        <Card glyph="bolt" hue="text-flip-fig" value={c.through} word="Outside" sub="through the previous day's levels" />
+        <Card glyph="bolt" hue="text-flip-fig" value={c.through} word="Through PD" sub="over PDH or under PDL" />
         <div className="relative ml-auto flex items-center gap-1 rounded-[5px] border border-desk-macro/40 px-2 pt-1.5">
           <span className="qt-cap absolute -top-[6px] left-2 bg-bg px-1 text-[9px] text-desk-macro">Day stage</span>
           <Card part glyph="up" hue="text-ink" value={c.day2} word="Day 2" sub="first continuation day" />

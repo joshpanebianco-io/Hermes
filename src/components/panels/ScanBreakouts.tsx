@@ -31,6 +31,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { OUTSIDE_DAY_TITLE, THROUGH_DAY_TITLE } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
@@ -56,15 +57,24 @@ import { usePinsChanged } from "@/lib/usePinsChanged";
  * NO SCORE. The 0-100 rank needs bars, and belongs to the tracked names.
  */
 
+/*
+ * SIX CHIPS (owner, 2026-11-13: "streamline the app and make it have the most useful
+ * informaiton visible without clutter and noise", after asking whether the pills were
+ * redundant). Two went. "Pinned" listed the names already on the Setups table, where
+ * they are read live with a score, on the one page built to find names that are NOT on
+ * it (6 of 36 rows when it was counted). "Day 2/3" is the tab beside this one. The
+ * collector still answers both keys, and the Sectors tab still offers them.
+ */
 const CHIPS: ReadonlyArray<{ key: BreakoutChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "pinned", label: "Pinned", title: "The names you starred" },
   { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened 2% or more away from the previous close" },
-  { key: "both", label: "Both ranges", title: "Through the pre-market range and the previous day's range, the same way" },
-  { key: "through", label: "Outside day", title: "Through the previous day's high or low" },
+  // `both` is an OUTSIDE DAY (owner, 2026-11-13: above both highs or below both lows).
+  // It read "Both ranges" and the chip after it, the previous day's level alone, was
+  // the one called "Outside day". The keys are what the collector knows them by.
+  { key: "both", label: "Outside day", title: OUTSIDE_DAY_TITLE },
+  { key: "through", label: "Through PDH/PDL", title: THROUGH_DAY_TITLE },
   { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range" },
-  { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
 ];
 const CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
 const VOLS = [0, 1e5, 5e5, 1e6, 5e6].map((value) => ({ value, label: volWord(value) }));
@@ -86,7 +96,7 @@ const BASIS_WORD: Record<BreakoutsPayload["basis"], string> = {
 };
 
 export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void }) {
-  const [chip, setChip] = usePersisted<BreakoutChip>("brk.chip", "both", oneOf("all", "both", "news", "gaps", "through", "inside", "day23", "pinned"));
+  const [chip, setChip] = usePersisted<BreakoutChip>("brk.chip", "both", oneOf("all", "both", "news", "gaps", "through", "inside"));
   const [cap, setCap] = usePersisted<number>("brk.cap", 2e9, isNum);
   const [vol, setVol] = usePersisted<number>("brk.vol", 5e5, isNum);
   const [rvol, setRvol] = usePersisted<number>("brk.rvol", 2, isNum);
@@ -167,7 +177,7 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
           {/* What the read is and how old, in the bar with the table's other facts, where
               Day 2/3 has it (owner, 2026-11-11: it was a loose line at the end of the
               stat tiles, and "sticks out"). */}
-          <p className="fig text-[11px] whitespace-nowrap text-ink-3" title={data.basis === "pre" ? "Before the open the pre-market range is still forming, so Both ranges reads the previous day's levels alone." : undefined}>
+          <p className="fig text-[11px] whitespace-nowrap text-ink-3" title={data.basis === "pre" ? "Before the open the pre-market range is still forming, so Outside day reads the previous day's levels alone." : undefined}>
             {BASIS_WORD[data.basis]} · {dayName(data.day)} · {delayedLine(data.read_age_min, data.delayed_min, s.live)}
           </p>
           <TickerFilter value={find} onChange={setFind} />
@@ -221,8 +231,10 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
                   <>
                     <th scope="col" className={TH}>
                       {data.basis === "rth"
-                        ? header("rvol", "RVol", "vs usual by now", "Volume so far against the same time of day on the last five sessions: TradingView's figure, fifteen minutes behind")
-                        : header("rvol", "RVol", "day vs 30-day avg", "The session's whole volume against the 30-day average day: the same figure as the Volume column's share of an average day. In the session it is read by time of day instead.")}
+                        ? header("rvol", "RVol", "vs usual by now", "Volume so far against the same time of day on recent sessions: for a name on the Stocks list its own figure, so it reads the same on every page; for the rest TradingView's, fifteen minutes behind")
+                        : data.basis === "pre"
+                          ? header("rvol", "RVol", "pre-mkt vs usual", "The pre-market's volume against this name's usual pre-market: the Extended hours figure (until five mornings are kept, a fifth of its share of an average day). A day's RVol starts at the open.")
+                          : header("rvol", "RVol", "day vs 30-day avg", "The session's whole volume against the 30-day average day: the same figure as the Volume column's share of an average day. In the session it is read by time of day instead.")}
                     </th>
                     <th scope="col" className={cn(TH, "text-right")}>{header("chg", "Chg", "vs prev close", "Against the previous close", true)}</th>
                     <th scope="col" className={cn(TH, "text-right")}>{header("gap", "Gap", "open vs prev close", "The open against the previous close", true)}</th>

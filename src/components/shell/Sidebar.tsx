@@ -76,11 +76,6 @@ const ICON = {
       <path d="M4 11a8 8 0 0 1 14-4l2 2M20 4v5h-5M20 13a8 8 0 0 1-14 4l-2-2M4 20v-5h5" />
     </Icon>
   ),
-  index: (
-    <Icon>
-      <path d="M5 20V10M12 20V4M19 20v-7" />
-    </Icon>
-  ),
   log: (
     <Icon>
       <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />
@@ -89,6 +84,13 @@ const ICON = {
   note: (
     <Icon>
       <path d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6" />
+    </Icon>
+  ),
+  // Three across and two down, as the charts are.
+  multi: (
+    <Icon>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M9 5v14M15 5v14M3 12h18" />
     </Icon>
   ),
   sectors: (
@@ -132,9 +134,9 @@ const SCAN_ICON: Record<ScanView, React.ReactNode> = {
   breakouts: ICON.breakouts,
   extended: ICON.extended,
   day23: ICON.day23,
-  index: ICON.index,
   log: ICON.log,
   plan: ICON.note,
+  multi: ICON.multi,
 };
 
 export function Sidebar({

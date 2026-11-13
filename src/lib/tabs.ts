@@ -31,8 +31,8 @@
  *              overview of the five and a view per contract (its chart with the
  *              levels, the ladder, session ranges, the profile, gamma) and the
  *              written brief (owner, 2026-11-10: "a seperate futures section").
- *              It took Structure's place; Structure's stocks half is the
- *              Scanner's Index view
+ *              It took Structure's place; Structure's stocks half was the
+ *              Scanner's Index view until 2026-11-13 (see SCAN_VIEWS)
  *   Hermes AI  the assistant with the whole terminal in front of it
  *   Settings
  *
@@ -42,7 +42,7 @@
  * as its Brief view, and its stocks half, the written game plan, had last been
  * generated on 29 Oct, since when the Dashboard's own game plan card has done that
  * job every morning. So each note lives with its desk: the brief is Futures → Brief,
- * the written plan is the Scanner's last view (Game plan), one click from the
+ * the written plan is the Scanner's Game plan view, one click from the
  * Dashboard's card. The bar is seven pages (the number keys that reached them went on 2026-11-11).
  *
  * The desk therefore survives only as what a question to Hermes is labelled with:
@@ -80,16 +80,35 @@ export const TAB_KEYS: readonly Tab[] = TABS.map((t) => t.key);
  * Dashboard's links into a view and the question to Hermes all name the same ones.
  * (A sidebar listed them too from 2026-11-09 to 2026-11-11, behind a setting; the
  * owner kept the top bar and it was taken out.)
+ *
+ * THE INDEX VIEW WENT ON 2026-11-13 (owner: "i want to streamline the
+ * app and make it have the most useful informaiton visible without clutter and noise",
+ * and for everything but the Dashboard "do what you think best"). It was a page of
+ * eight panels about SPY, QQQ and IWM, and what a session is traded off was already
+ * nearer the eye: the three and the VIX are in the band over every view, the tape's
+ * lean is the Tape figure on the Setups row (its hover is the vote by vote count),
+ * breadth is the Dashboard's card, the VIX's curve and the put/call ratios are on
+ * Futures. What it alone drew (the three against their levels as a table, dealer gamma
+ * in ETF prices, the index options, the fuel) Hermes still reads: the collector serves
+ * all of it and `/api/market` is polled as before. A browser that remembers the view
+ * opens Setups.
  */
 export const SCAN_VIEWS = [
   { key: "setups", label: "Setups", title: "The list, ranked: levels, signals, the score and the options" },
   { key: "breakouts", label: "Breakouts", title: "Every US stock against its levels" },
   { key: "extended", label: "Extended hours", title: "The pre-market and after-hours gappers" },
   { key: "day23", label: "Day 2/3", title: "The big movers, and whether they are still moving" },
-  { key: "index", label: "Index", title: "SPY, QQQ and IWM against their levels, dealer gamma, the tape's conviction and breadth" },
   { key: "log", label: "Signal log", title: "Every signal, and what it did afterwards" },
   // The stocks half of what was the Analysis tab, as Brief is the Futures section's last view.
   { key: "plan", label: "Game plan", title: "The written pre-open game plan: the regime, and for each top name what to watch, the trigger and what makes it wrong" },
+  // A VIEW OF ITS OWN, AFTER GAME PLAN (owner, 2026-11-13: "on quiet and luminous layout,
+  // the multicharts should be up the top next to gameplan and on sidebar it should be
+  // under neath gameplan"). It was a button at the end of the Setups chips for a day,
+  // one of that bar's choices: the chips or the charts. It never was a filter of the
+  // table, it is another way to look at the ten best names, which is what a view is.
+  // This list is both rows, the band's tabs and the sidebar's, so one entry puts it in
+  // both places.
+  { key: "multi", label: "Multicharts", title: "Six live charts from the ten highest scores, three across and two down" },
 ] as const;
 
 export type ScanView = (typeof SCAN_VIEWS)[number]["key"];
@@ -158,12 +177,11 @@ export function deskOf(t: Tab): Desk | null {
  * The key the collector's Ask context knows for a page (server ask.py), which
  * keeps the names it had: the futures digest is "structure", the two written
  * notes are "report" (the brief, Futures → Brief) and "plan" (the game plan, the
- * Scanner's last view), and the Scanner's Index view reads the stocks digest as
- * "tape"; everything else is its own key.
+ * Scanner's Game plan view); everything else is its own key. ("tape", the stocks digest,
+ * was the Scanner's Index view; no page asks as it since that view went.)
  */
 export function askTab(t: Tab, view?: ScanView, fut?: string): string {
   if (t === "futures") return fut === "brief" ? "report" : "structure";
-  if (t === "scanner" && view === "index") return "tape";
   if (t === "scanner" && view === "plan") return "plan";
   return t;
 }

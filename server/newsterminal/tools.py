@@ -166,14 +166,16 @@ PANELS: dict[str, str] = {
     "expiry": "Structure · OpEx week, month end and the next expiries",
     "cot": "Structure, futures · CFTC Commitments of Traders per book: the net, its change "
            "and its percentile of the year",
-    "tape_count": "Structure, stocks · the tape's score, the eleven reads with thresholds, "
-                  "which can vote, the grade and the conviction cap",
-    "breadth": "Structure, stocks · sectors up and down, equal weight against SPY, how many "
-               "NDX and SPX names are up",
-    "fuel": "Structure, stocks · how much of the implied day SPY, QQQ and IWM have used, the "
-            "gap, relative volume",
-    "index_options": "Structure, stocks · the SPY, QQQ and IWM chains: IV30, IV/RV, skew, the "
-                     "front expected move, flow",
+    # The four below were the Stocks tab's Index view, which was removed on 2026-11-13.
+    # The data is served as before; only the Tape figure is still drawn on a page.
+    "tape_count": "Stocks, the Tape figure on the Setups row · the tape's score, the eleven "
+                  "reads with thresholds, which can vote, the grade and the conviction cap",
+    "breadth": "Stocks, on no page since the Index view went · sectors up and down, equal "
+               "weight against SPY, how many NDX and SPX names are up",
+    "fuel": "Stocks, on no page since the Index view went · how much of the implied day SPY, "
+            "QQQ and IWM have used, the gap, relative volume",
+    "index_options": "Stocks, on no page since the Index view went · the SPY, QQQ and IWM "
+                     "chains: IV30, IV/RV, skew, the front expected move, flow",
     "prints": "Macro · today's US releases against consensus, and their read",
     "rates": "Macro · the Treasury curve with daily changes, real yields, spreads, the "
              "effective funds rate and the FOMC path priced per meeting",
@@ -181,8 +183,11 @@ PANELS: dict[str, str] = {
                  "Beige Book and Treasury coupon auctions ahead",
     "cross_asset": "Macro · the dollar, yields, credit, oil, gold and the other cross-asset "
                    "rows, risk appetite and multi-day moves",
-    "sector_rotation": "Macro · the eleven sector ETFs: day, week and month change and excess "
-                       "return against SPY, and equal weight against cap weight",
+    # Macro drew this and market_breadth as panels until 2026-11-13; each has a page or a
+    # card of its own, so Macro's copies went.
+    "sector_rotation": "Sectors, and the Dashboard's rotation row · the eleven sector ETFs: "
+                       "day, week and month change and excess return against SPY, and equal "
+                       "weight against cap weight",
     "index_movers": "Macro · all forty names on the map for NDX and SPX: weight, move and "
                     "contribution, and what they add up to (book narrows it to one index)",
     "sector_peers": "Macro, stocks · the watchlist's sector peers reporting this week",
@@ -208,9 +213,10 @@ PANELS: dict[str, str] = {
                "against PDH or PDL",
     "stock_news": "Stocks · the freshest major company stories, tagged by ticker and kind "
                   "(earnings, guidance, FDA, deal, offering)",
-    "market_breadth": "Macro · advancers against decliners across every US stock at $2bn+ by "
-                      "the size of the move, and each sector's leading stocks",
-    "themes": "Macro · the theme ETFs (semis, software, cybersecurity, biotech, gold miners "
+    "market_breadth": "Dashboard, the Breadth card · advancers against decliners across every "
+                      "US stock at $2bn+ by the size of the move, and each sector's leading "
+                      "stocks",
+    "themes": "Sectors · the theme ETFs (semis, software, cybersecurity, biotech, gold miners "
               "and the rest): day, week and month change and excess return against SPY",
     "past_notes": "Futures, Brief and Stocks, Game plan · the stored briefs and game plans, "
                   "newest first, with the ids "
@@ -1104,7 +1110,8 @@ def _breakouts_body(g: dict[str, Any]) -> dict[str, Any]:
                 f"rvol {_num(r.get('rvol'))}x",
                 f"PM {r.get('pm_state')}", f"PD {r.get('pd_state')}"]
         if r.get("both"):
-            bits.append(f"through both {r['both']}")
+            # Through both ranges the same way is an outside day (owner, 2026-11-13).
+            bits.append(f"outside day {r['both']}")
         if r.get("live"):
             bits.append("live")
         s = _story(r.get("catalyst"))

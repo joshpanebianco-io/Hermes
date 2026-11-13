@@ -243,7 +243,17 @@ export interface ScanRow {
     note: string;
   };
   signals: ScanSignal[];
-  score: { total: number; side: Side | null; parts: ScoreRow[] };
+  score: {
+    total: number;
+    side: Side | null;
+    parts: ScoreRow[];
+    /** The uncapped sum the list is ranked on (2026-11-13); `total` is it capped to 0–100. */
+    raw?: number;
+    /** The name's place in the engine's order, 1 first: the raw sum, then the RVOL gate. */
+    rank?: number;
+    /** Why the RVOL gate kept a name out of the top ten, when it did. */
+    gated?: string;
+  };
   flags: ScanFlag[];
   earnings: {
     date: string;
@@ -910,6 +920,10 @@ export interface ExtendedRow {
   /** This session's volume against its own average; an estimate until five sessions are on file. */
   rvol?: number | null;
   rvol_est?: boolean;
+  /** The move in the name's daily ATRs, and the in-play read the default order sorts by
+   *  (the pool's pre-market part: the move in ATRs and the share of an average day). */
+  gap_atr?: number | null;
+  in_play?: number;
   session?: "pre" | "post";
   hi?: number;
   lo?: number;

@@ -191,8 +191,11 @@ def test_the_story_shown_is_the_most_important_of_the_day_not_the_newest() -> No
     got = tvnews.best(rows, "IRTC", NOW)
     assert got is not None and got["title"].startswith("iRhythm plunges")
     assert got["tag"] == "Earnings"
-    # Past the day's window it no longer counts.
-    assert tvnews.best(rows, "IRTC", NOW + 40 * 3600) is None
+    # Past the day's window it no longer counts: by Tuesday afternoon a Friday-evening
+    # story is two sessions old. (On the Sunday between it still counts: it is Monday's
+    # news, the session since Friday's close — holidays.news_since, 2026-11-13.)
+    assert tvnews.best(rows, "IRTC", NOW + 4 * 86400) is None
+    assert tvnews.best(rows, "IRTC", NOW + 40 * 3600) is not None
 
 
 def test_the_window_is_counted_back_from_the_session_on_the_page() -> None:
@@ -316,7 +319,9 @@ def test_a_fresh_major_story_is_worth_three_to_the_pool() -> None:
      ("Goldman initiates coverage on Micron with Buy", "Analyst", 2),
      # And what was right stays right: the day's own moves, with their reasons.
      ("Microsoft Stock Falls On Anthropic Challenge To Office Software", "Move", 1),
-     ("Dropbox stock falls after pricing $1.1B convertible notes", "Move", 1),
+     # The event by name since 2026-11-13: a convertible is an offering (major either way,
+     # and the stock's own fall still sets its direction).
+     ("Dropbox stock falls after pricing $1.1B convertible notes", "Offering", 1),
      ("GE Vernova falls nearly 10% after SoftBank revises AI data center plans", "Move", 1),
      ("Amazon Stock Climbs as Ring Unveils a Security Drone That Flies Around Your Home",
       "Move", 1),

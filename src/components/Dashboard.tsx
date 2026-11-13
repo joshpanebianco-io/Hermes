@@ -159,7 +159,7 @@ export function Dashboard({
       </div>
       <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[minmax(0,5fr)_minmax(0,3.7fr)_minmax(0,3.6fr)] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
-        <TopSetups rows={data.top} onAll={() => toScanner("setups", { "scan.side": "all", "scan.multi": false })} />
+        <TopSetups rows={data.top} onAll={() => toScanner("setups", { "scan.side": "all" })} />
         <InPlay d={data.inplay} onAll={() => toScanner("extended")} />
         <StockNews stories={data.stories} live={data.news_live} />
       </div>

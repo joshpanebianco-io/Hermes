@@ -42,11 +42,10 @@ test("a question across names is sent to the scanner table, and nothing is missi
 
 test("the reader's settings read as the Settings tab sets them", () => {
   assert.equal(prefsBlock(null), "");
-  const on = prefsBlock({ budget: 500, zeroDte: false, alerts: { on: true, desktop: false, sound: true, kinds: ["L", "BO"], minScore: 40 } });
-  assert.match(on, /Options budget: \$500 of premium at risk on one trade\./);
-  assert.match(on, /off, so every name gets the weekly/);
+  const on = prefsBlock({ alerts: { on: true, desktop: false, sound: true, kinds: ["L", "BO"], minScore: 40 } });
   assert.match(on, /on, for the \(L\) retest, the ◆ breakout, names scoring 40 or more; sound on, desktop notifications off/);
-  const unset = prefsBlock({ budget: null, zeroDte: true, alerts: { on: false, desktop: false, sound: false, kinds: [], minScore: 0 } });
-  assert.match(unset, /not set, so the Stocks tab shows no contract count/);
+  // The options budget and the same-day switch left Settings on 2026-11-13.
+  assert.doesNotMatch(on, /budget|0DTE/);
+  const unset = prefsBlock({ alerts: { on: false, desktop: false, sound: false, kinds: [], minScore: 0 } });
   assert.match(unset, /Alerts: off\./);
 });

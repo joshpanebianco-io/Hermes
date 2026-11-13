@@ -35,8 +35,8 @@ import { useNow } from "@/lib/useNow";
  * - nq, es, gc, sil, cl1").
  *
  * IT REPLACES STRUCTURE'S FUTURES HALF, in Structure's place on the bar, so the
- * header's room is unchanged; the stocks half is the Scanner's
- * Index view. The page is built the way the Scanner is: a row of views, a row of
+ * header's room is unchanged; the stocks half was the Scanner's
+ * Index view until that went on 2026-11-13 (lib/tabs.ts). The page is built the way the Scanner is: a row of views, a row of
  * figures, one framed body.
  *
  *   Overview   the five side by side: price, bias, gamma, the implied day, the

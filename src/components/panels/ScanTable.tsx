@@ -20,7 +20,6 @@ import {
 } from "@/components/panels/ScanWide";
 import { compact, dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { useOptionsPrefs } from "@/lib/optionsPrefs";
 import { togglePin } from "@/lib/ticker";
 
 /**
@@ -73,7 +72,6 @@ export function ScanTable({
   now,
   selected,
   onPick,
-  budget,
   pinned,
   onPinned,
   session,
@@ -88,7 +86,6 @@ export function ScanTable({
   now: number | null;
   selected: string | null;
   onPick: (sym: string) => void;
-  budget: number | null;
   /** The owner's list, for each row's star. */
   pinned: ReadonlySet<string>;
   onPinned: () => void;
@@ -260,11 +257,6 @@ export function ScanTable({
               <Th right title="Premium at risk per contract to the stock-level stop: the stop distance × delta × 100 — in the session, off the contract's estimate at the live stock price">
                 Risk / ct
               </Th>
-              {budget != null && (
-                <Th right title={`How many contracts $${budget} of premium risk buys`}>
-                  Size
-                </Th>
-              )}
             </>
           )}
         </tr>
@@ -280,7 +272,6 @@ export function ScanTable({
             session={session}
             now={now}
             on={selected === r.sym}
-            budget={budget}
             pinned={pinned.has(r.sym)}
             onPinned={onPinned}
             onPick={() => onPick(r.sym)}
@@ -371,7 +362,6 @@ function Row({
   session,
   now,
   on,
-  budget,
   pinned,
   onPinned,
   onPick,
@@ -383,7 +373,6 @@ function Row({
   session: Session;
   now: number | null;
   on: boolean;
-  budget: number | null;
   pinned: boolean;
   onPinned: () => void;
   onPick: () => void;
@@ -463,7 +452,7 @@ function Row({
     );
   }
 
-  if (cols === "options") return <OptionsRow r={r} lead={lead} handlers={handlers} budget={budget} />;
+  if (cols === "options") return <OptionsRow r={r} lead={lead} handlers={handlers} />;
   if (cols === "overview") return <OverviewRow r={r} bench={bench} session={session} pinBg={pinBg} pinned={pinned} onPinned={onPinned} handlers={handlers} now={now} />;
 
   const rs = r.rs[bench];
@@ -707,23 +696,18 @@ function OptionsRow({
   r,
   lead,
   handlers,
-  budget,
 }: {
   r: ScanRow;
   lead: React.ReactNode;
   handlers: Record<string, unknown>;
-  budget: number | null;
 }) {
   const o = r.options;
-  const { zeroDte } = useOptionsPrefs();
   const front = o?.em.find((e) => e.key === "front");
   const weekly = o?.em.find((e) => e.key === "weekly");
   // The contract the expiry rule picks — the same one the Game plan quotes.
-  const pick = o ? optionsPick(o, zeroDte) : "weekly";
-  // 0DTE off in Settings: no same-day contract, on any name.
-  const longs = o?.contracts.filter((x) => x.kind === "long" && (zeroDte || x.dte > 0)) ?? [];
+  const pick = o ? optionsPick(o) : "weekly";
+  const longs = o?.contracts.filter((x) => x.kind === "long") ?? [];
   const c = longs.find((x) => x.key === pick) ?? longs[0];
-  const size = budget != null && c?.risk_per_contract ? Math.floor(budget / c.risk_per_contract) : null;
   return (
     <tr {...(handlers as React.HTMLAttributes<HTMLTableRowElement>)}>
       {lead}
@@ -734,7 +718,7 @@ function OptionsRow({
         <Tick value={num(r.last)} className="fig text-[12.5px] text-ink" />
       </td>
       {!o || !o.ok ? (
-        <td colSpan={budget != null ? 12 : 11} className={cn(TD, "text-[11.5px] text-ink-3")}>
+        <td colSpan={11} className={cn(TD, "text-[11.5px] text-ink-3")}>
           {o?.error ?? (
             <span title="Cboe's delayed chains load one name every ten seconds after a start">
               <HelmInline label="Chain loading" />
@@ -796,11 +780,6 @@ function OptionsRow({
           <td className={cn(TD, "fig text-right text-[12px] text-ink-2")}>
             {c?.risk_per_contract != null ? `$${Math.round(c.risk_per_contract)}` : "—"}
           </td>
-          {budget != null && (
-            <td className={cn(TD, "fig text-right text-[12px]", size ? "text-ink" : "text-ink-3")}>
-              {size != null ? (size > 0 ? `${size}` : "0") : "—"}
-            </td>
-          )}
         </>
       )}
     </tr>
@@ -1145,13 +1124,13 @@ export function estTitle(c: OptContract): string | null {
 
 /**
  * The contract the desk trades on this name: the collector's rule (`o.pick` —
- * the same-day front on SPY / QQQ / IWM, the weekly elsewhere), unless 0DTE is
- * off in Settings and the pick is a same-day expiry.
+ * the same-day front on SPY / QQQ / IWM, the weekly elsewhere). Settings carried a
+ * switch that turned same-day contracts off, and a risk-per-trade budget that added
+ * a contract count, until 2026-11-13 (owner: "can we remove the options tab too in
+ * settings? what does that even do?"); the rule's pick is now the pick.
  */
-export function optionsPick(o: OptionsCtx, zeroDte: boolean): "front" | "weekly" {
-  const pick = o.pick ?? "weekly";
-  const sameDay = o.em.find((e) => e.key === "front")?.dte === 0 || o.contracts.some((c) => c.key === "front" && c.dte === 0);
-  return pick === "front" && !zeroDte && sameDay ? "weekly" : pick;
+export function optionsPick(o: OptionsCtx): "front" | "weekly" {
+  return o.pick ?? "weekly";
 }
 
 /** "2026-10-16" → "Oct 16". */

@@ -235,9 +235,14 @@ ALIASES: dict[str, list[str]] = {
     "PLTR": ["Palantir"], "HOOD": ["Robinhood"], "COIN": ["Coinbase"], "SPCX": ["SpaceX"],
     "AVGO": ["Broadcom"], "MU": ["Micron"], "ORCL": ["Oracle"], "CRM": ["Salesforce"],
     "SMCI": ["Super Micro", "Supermicro"], "ARM": ["Arm Holdings"], "UBER": ["Uber"],
-    "MSTR": ["MicroStrategy"], "SOFI": ["SoFi"], "TSM": ["TSMC"], "JPM": ["JPMorgan"],
+    "MSTR": ["MicroStrategy"], "SOFI": ["SoFi"], "TSM": ["TSMC", "Taiwan Semiconductor"],
+    "JPM": ["JPMorgan"],
     "GS": ["Goldman Sachs"], "BA": ["Boeing"], "WMT": ["Walmart"], "COST": ["Costco"],
-    "DIS": ["Disney"], "XOM": ["Exxon"], "LLY": ["Eli Lilly"], "UNH": ["UnitedHealth"],
+    # How the headlines write them too (2026-11-13): "Lilly Raises Guidance" and
+    # "ExxonMobil Beats" named no company the table knew. Not "Goldman" or "JP Morgan"
+    # alone: those are the banks' analysts in every other company's headline.
+    "DIS": ["Disney"], "XOM": ["Exxon", "ExxonMobil"], "LLY": ["Eli Lilly", "Lilly"],
+    "UNH": ["UnitedHealth"],
     "MRVL": ["Marvell"], "SNDK": ["Sandisk", "SanDisk"], "CRWV": ["CoreWeave"],
     "NBIS": ["Nebius"], "GME": ["GameStop"], "SHOP": ["Shopify"],
 }
@@ -1015,6 +1020,7 @@ class ScanStore:
         if t is None:
             return None
         row = scan.row_of(sym, t, tech("SPY"), tech("QQQ"), clock)
+        row["volume"] = scan.day_volume(row.get("volume"), self.meta.get(sym), clock.trading_day)
         row["sector"] = SECTOR.get(sym) or self.pool_sectors.get(sym) or sector
         row["adv"] = avg_day([d.volume for d in (self.daily.get(sym) or [])
                               if d.day < clock.trading_day])
@@ -1044,6 +1050,9 @@ class ScanStore:
         rows: dict[str, dict[str, Any]] = {}
         for sym, tech in techs.items():
             row = scan.row_of(sym, tech, techs.get("SPY"), techs.get("QQQ"), clock)
+            # Today's volume as the tape counts it, not the bars' short sum (scan.day_volume).
+            row["volume"] = scan.day_volume(row.get("volume"), self.meta.get(sym),
+                                            clock.trading_day)
             # The static table first; a promoted name the table does not know
             # takes the pool's sector (sources/pool.TV_SECTOR), else none.
             row["sector"] = SECTOR.get(sym) or self.pool_sectors.get(sym)

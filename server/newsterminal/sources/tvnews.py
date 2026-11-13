@@ -37,10 +37,22 @@ import urllib.parse
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from ..catalysts import MAJOR, NOISE, grade, story
+from ..catalysts import MAJOR, NOISE, grade, stated_move, stated_today, story
 from ..config import BROWSER_UA, CACHE_DIR
+from ..holidays import news_since
 from ..http import SourceStatus, fetch, json_body
+
+_ET = ZoneInfo("America/New_York")
+
+
+def since_close(at: float) -> float:
+    """When the news the session at `at` trades on starts (holidays.news_since): the
+    previous trading day's close. Every window here reaches back at least that far
+    (quant audit, 2026-11-13): counted only in hours from now, Friday's after-close
+    news had left every window by Monday's pre-market. Pure."""
+    return news_since(datetime.fromtimestamp(at, _ET)).timestamp()
 
 FLOW_URL = ("https://news-mediator.tradingview.com/public/news-flow/v2/news"
             "?filter=lang:en&filter=market:stock&filter=market_country:US"
@@ -128,7 +140,8 @@ def parse(doc: Any, want: str | None = None) -> list[dict[str, Any]]:
 
 def best(stories: Iterable[dict[str, Any]], sym: str, now: float,
          hours: float = CATALYST_HOURS, names: Sequence[str] = (),
-         strict: bool = True) -> dict[str, Any] | None:
+         strict: bool = True,
+         move: Callable[[], float | None] | None = None) -> dict[str, Any] | None:
     """The most important story about `sym` in the window: tier, then newest, or None
     when nothing held is one. It has to BE this name's story (catalysts.story; `names`
     are what a headline calls the company): its lead names the company and it describes
@@ -138,15 +151,27 @@ def best(stories: Iterable[dict[str, Any]], sym: str, now: float,
     2026-11-11). A name the table has no words for is still left to the feed's tag, and
     so is a headline that does not name a company whose words are only a guess (`strict`
     is False; catalysts.story). The story comes back with the grade it has AS this
-    name's (a list that is the name's own move is a Move). Pure."""
-    cut = now - hours * 3600.0
+    name's (a list that is the name's own move is a Move). The window reaches back
+    `hours`, or to the previous session's close where that is further (`since_close`).
+    A story that states a move the name has not made since the previous close is an
+    earlier day's and is passed over (catalysts.STATED_MIN): `move` gives the name's
+    move (%), asked only when a story states one. Pure."""
+    cut = min(now - hours * 3600.0, since_close(now))
     mine: list[tuple[int, float, dict[str, Any]]] = []
+    moved: list[float | None] = []
     for s in stories:
         if s["at"] < cut or sym not in s["syms"] or len(s["syms"]) > MAX_RELATED:
             continue
         g = story(s["title"], sym, names, str(s.get("provider") or ""), strict)
-        if g is not None:
-            mine.append((g.tier, -s["at"], {**s, "tag": g.tag, "tier": g.tier}))
+        if g is None:
+            continue
+        said = stated_move(s["title"], sym, names) if move is not None else None
+        if said is not None:
+            if not moved:
+                moved.append(move() if move is not None else None)
+            if not stated_today(said, moved[0]):
+                continue
+        mine.append((g.tier, -s["at"], {**s, "tag": g.tag, "tier": g.tier}))
     return min(mine, key=lambda x: x[:2])[2] if mine else None
 
 
@@ -170,6 +195,9 @@ class NewsStore:
         #: `strict`); a filer's first word is a guess. Set by the collector; unset, they
         #: are taken as given.
         self.sure: Callable[[str], bool] | None = None
+        #: A name's move since the previous close (%), set by the collector, for the
+        #: stories that state one (`best`). Unset, no story is held to its number.
+        self.move: Callable[[str], float | None] | None = None
         self._load()
 
     # ---- persistence --------------------------------------------------------
@@ -315,12 +343,17 @@ class NewsStore:
         anchor = ref if ref is not None else t
         with self._lock:
             stories = list(self.by_sym.get(sym) or [])
-        s = best(stories, sym, anchor, names=self._called(sym), strict=self._strict(sym))
+        mover = self.move
+        s = best(stories, sym, anchor, names=self._called(sym), strict=self._strict(sym),
+                 move=(lambda: mover(sym)) if mover is not None else None)
         if s is None:
             return None
+        # Fresh: FRESH_HOURS old at most, or since the previous session's close, so
+        # Monday's pre-market still counts Friday evening's report.
+        fresh = anchor - s["at"] <= FRESH_HOURS * 3600.0 or s["at"] >= since_close(anchor)
         return {"title": s["title"], "url": s["url"], "provider": s["provider"], "tag": s["tag"],
                 "tier": s["tier"], "age_min": round((t - s["at"]) / 60.0, 1),
-                "major": s["tier"] == MAJOR and anchor - s["at"] <= FRESH_HOURS * 3600.0}
+                "major": s["tier"] == MAJOR and fresh}
 
     def major(self, sym: str, now: float | None = None) -> str | None:
         """The tag of a fresh major story about the name, or None — the pool's question."""
@@ -356,9 +389,10 @@ class NewsStore:
         …", "EDRY: Revenue and adjusted EBITDA surged …") on a desk that trades names
         at two billion and over (2026-11-11). None keeps them all."""
         t = now if now is not None else time.time()
+        cut = min(t - CATALYST_HOURS * 3600.0, since_close(t))
         with self._lock:
             rows = [s for s in self.stories.values() if s["tier"] == MAJOR
-                    and t - s["at"] <= CATALYST_HOURS * 3600.0
+                    and s["at"] >= cut
                     and len(s["syms"]) <= MAX_RELATED]
         rows.sort(key=lambda s: -s["at"])
         seen: set[tuple[tuple[str, ...], str]] = set()
@@ -388,9 +422,10 @@ class NewsStore:
         """The freshest major stories, one line each, for Hermes."""
         t = now if now is not None else time.time()
         keep = set(syms) if syms is not None else None
+        cut = min(t - CATALYST_HOURS * 3600.0, since_close(t))
         with self._lock:
             rows = [s for s in self.stories.values() if s["tier"] == MAJOR
-                    and t - s["at"] <= CATALYST_HOURS * 3600.0
+                    and s["at"] >= cut
                     and len(s["syms"]) <= MAX_RELATED
                     and (keep is None or keep & set(s["syms"]))]
         rows.sort(key=lambda s: -s["at"])

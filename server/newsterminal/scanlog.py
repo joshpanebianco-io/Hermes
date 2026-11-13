@@ -91,6 +91,7 @@ from .scan import (
     fmt_px,
     resample,
     risk_of,
+    rth_bar_days,
 )
 
 EVENTS_FILE = os.path.join(CACHE_DIR, "scanner_events.jsonl")
@@ -225,6 +226,27 @@ def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None
     return out
 
 
+def news_ctx(score: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What the catalyst part read, as the log keeps it: its points, the item that decided
+    it (grade, tier, direction, whether with the side, where the direction came from —
+    the name's move, the event's words, the tape, a report or a filing — and its age), how
+    many headlines were in the window and how many the tape set aside. None without a
+    catalyst part. Pure."""
+    parts = (score or {}).get("parts") if isinstance(score, dict) else None
+    part = next((p for p in parts or [] if isinstance(p, dict) and p.get("key") == "catalyst"),
+                None)
+    if part is None:
+        return None
+    raw_read = part.get("read")
+    read: dict[str, Any] = raw_read if isinstance(raw_read, dict) else {}
+    raw_item = read.get("item")
+    item: dict[str, Any] = raw_item if isinstance(raw_item, dict) else {}
+    return {"pts": part.get("pts"), "tag": item.get("tag"), "tier": item.get("tier"),
+            "dir": item.get("dir"), "with": item.get("with"), "src": item.get("src"),
+            "age_min": item.get("age_min"), "fresh": read.get("fresh"),
+            "set_aside": read.get("set_aside")}
+
+
 def shape_ctx(r: dict[str, Any]) -> dict[str, Any]:
     """A row's own day shape in its daily ATRs: yesterday's range and close position,
     the pre-market range, and the gap (the pre-market last against the previous close
@@ -265,7 +287,13 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
                # The name's own day shape, for the session-type question (daytype.py,
                # 2026-11-10): yesterday's range in its daily ATRs and where it closed,
                # the pre-market range and the gap in the same unit. Logged, not scored.
-               **shape_ctx(r)}
+               **shape_ctx(r),
+               # PHASE 3 OF THE QUANT AUDIT (2026-11-13): the record has to be able to test
+               # the news and the new rank, so the uncapped score, whether the RVOL gate
+               # held the name back, and what the catalyst read (news_ctx) go with it.
+               "raw": (r.get("score") or {}).get("raw"),
+               "gated": bool((r.get("score") or {}).get("gated")),
+               "news": news_ctx(r.get("score"))}
         out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts, ctx)
         if session != "rth" or r.get("last") is None:
             continue
@@ -440,10 +468,11 @@ def floor_at(bars5: list[Bar], bar_t: int) -> float | None:
     the retest buffer there, BUF_MULT x the ATR, worked from the bars up to it as the
     scanner works it. None when the bars do not hold that bar, or too few come before
     it for the ATR to have settled. Pure."""
-    bars10 = resample([b for b in bars5 if b.t < bar_t + BAR_SEC])
+    upto = [b for b in bars5 if b.t < bar_t + BAR_SEC]
+    bars10 = resample(upto)
     if len(bars10) < max(REFLOOR_MIN_BARS, ATR_LEN + 1) or bars10[-1].t != bar_t:
         return None
-    a = atr(bars10)[-1]
+    a = atr(bars10, sessions=rth_bar_days(upto))[-1]
     return a * BUF_MULT if a else None
 
 

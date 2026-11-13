@@ -397,17 +397,38 @@ def ema(xs: list[float], n: int) -> list[float]:
     return out
 
 
-def atr(bars: list[Bar], n: int = ATR_LEN) -> list[float | None]:
-    """Pine's ta.atr: RMA of the true range, seeded with the SMA of the first n. Pure."""
+def atr(bars: list[Bar], n: int = ATR_LEN,
+        sessions: dict[int, date] | None = None) -> list[float | None]:
+    """Pine's ta.atr: RMA of the true range, seeded with the SMA of the first n. Pure.
+
+    `sessions` (`rth_bar_days`) keeps it to the regular session, which is what the
+    scanner's ten-minute ATR is since the quant audit (2026-11-13; owner: "fix
+    everything"). Run over every bar, the free feed's thin pre-market bars and the
+    04:00 bar's overnight gap set the 09:30 buffer: fourteen quiet pre-market bars
+    shrank it, so the opening bars read "extended" and a near-miss retest missed, and
+    a gap of a few percent in one true range swelled it for the next hour. With
+    `sessions` only regular-session bars count, a session's first bar is its own high
+    to low (the night's gap is the daily ATR's business), and every other bar carries
+    the last session value forward, so the list still lines up with `bars`. The Pine
+    script's chart ATR counts the extended bars when its chart shows them; this is the
+    one place the port departs from it, on purpose.
+    """
     out: list[float | None] = []
     trs: list[float] = []
     a: float | None = None
-    for i, b in enumerate(bars):
-        if i == 0:
+    prev: Bar | None = None
+    prev_day: date | None = None
+    for b in bars:
+        day = sessions.get(b.t) if sessions is not None else None
+        if sessions is not None and day is None:
+            out.append(a)
+            continue
+        if prev is None or (sessions is not None and day != prev_day):
             tr = b.high - b.low
         else:
-            pc = bars[i - 1].close
+            pc = prev.close
             tr = max(b.high - b.low, abs(b.high - pc), abs(b.low - pc))
+        prev, prev_day = b, day
         trs.append(tr)
         if a is None:
             if len(trs) >= n:
@@ -415,6 +436,24 @@ def atr(bars: list[Bar], n: int = ATR_LEN) -> list[float | None]:
         else:
             a = (a * (n - 1) + tr) / n
         out.append(a)
+    return out
+
+
+def rth_bar_days(bars5: list[Bar], days: list[date] | None = None,
+                 mods: list[int] | None = None, step: int = BAR_SEC) -> dict[int, date]:
+    """Each regular-session `step` bar's start → its trading day, for `atr`. `days` and
+    `mods` are the bars' ET dates and minutes when the caller has them. Pure."""
+    if days is None or mods is None:
+        stamps = [datetime.fromtimestamp(b.t, ET) for b in bars5]
+        days, mods = [s.date() for s in stamps], [_mod(s) for s in stamps]
+    ends: dict[date, int] = {}
+    out: dict[int, date] = {}
+    for b, d, m in zip(bars5, days, mods, strict=True):
+        end = ends.get(d)
+        if end is None:
+            end = ends[d] = rth_end(d)
+        if RTH_START <= m < end:
+            out[b.t - b.t % step] = d
     return out
 
 
@@ -735,6 +774,29 @@ def official_close(meta: dict[str, Any] | None) -> tuple[date, float] | None:
     return (dt.date(), float(p)) if _mod(dt) >= rth_end(dt.date()) else None
 
 
+def day_volume(bars_vol: float | None, meta: dict[str, Any] | None,
+               trading_day: date) -> float | None:
+    """Today's volume as the tape counts it: the chart's own consolidated figure for
+    the trading day's regular session, or the bars' sum where that is larger. Pure.
+
+    THE BARS UNDERCOUNT (quant audit, 2026-11-13; owner: "fix everything"). Yahoo's
+    5-minute bars miss a fifth to two fifths of a day's shares (META on 12 Nov: 8.09M
+    in the bars against 10.25M on the tape), and the share of an average day divided
+    them by the daily rows' full count, so every name read light: a normal day showed
+    about 75%. `regularMarketVolume` is the tape's count as of the download; it is the
+    previous session's until today's first regular trade (`regularMarketTime`), so it
+    is used only once that is today's. Each is a floor on the truth, hence the larger.
+    RVOL is not this: it divides the bars by the bars (`technicals`), like for like.
+    """
+    if meta:
+        v, t = meta.get("regularMarketVolume"), meta.get("regularMarketTime")
+        if isinstance(v, int | float) and v > 0 and isinstance(t, int | float):
+            dt = datetime.fromtimestamp(int(t), ET)
+            if dt.date() == trading_day and _mod(dt) >= RTH_START:
+                return max(float(v), bars_vol or 0.0)
+    return bars_vol
+
+
 def official_range(day: DayBar | None, hi: float, lo: float) -> tuple[float, float]:
     """A session still trading: the 5-minute bars' high and low (`hi`, `lo`), widened
     to the daily row's where that reaches further. The row is a copy from earlier in
@@ -963,7 +1025,7 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     e1, e2, e3 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
     w_top = [max(a, b, c) for a, b, c in zip(e1, e2, e3, strict=True)]
     w_bot = [min(a, b, c) for a, b, c in zip(e1, e2, e3, strict=True)]
-    atr10 = atr(bars10)
+    atr10 = atr(bars10, sessions=rth_bar_days(bars, days, mods))
     if bars10:
         tech.ema8, tech.wave_hi, tech.wave_lo = e1[-1], w_top[-1], w_bot[-1]
         e200 = structure.ema_read(closes)

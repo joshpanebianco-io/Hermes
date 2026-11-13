@@ -72,7 +72,7 @@ from .http import CACHE, SourceStatus, fetch, json_body
 from .policy import meetings_priced
 from .scanlog import EventLog
 from .scanscore import build as scanner_build
-from .scanscore import earnings_for, names_of, next_report
+from .scanscore import day_move_of, earnings_for, names_of, next_report
 from .sessions import globex_trade_date, session_state
 from .sources import auctions as auc_src
 from .sources import calendar as cal_src
@@ -206,6 +206,8 @@ class Collector:
         # Only the table's names are held against a headline that does not carry them
         # (catalysts.story): a filer's first word is a guess at what the wire writes.
         self.stock_news.sure = scan_src.ALIASES.__contains__
+        # A story that states a move is held to the name's real one (catalysts.STATED_MIN).
+        self.stock_news.move = self._day_move
         self.universe = uni_src.UniverseStore()
         # The scanner's pre-market range is checked against these two reads, which
         # are not Yahoo's bars (`_pm_range`; scan.technicals says why).
@@ -214,6 +216,10 @@ class Collector:
         self.momentum = mom_mod.MomentumStore()
         self.pool.news = self.stock_news.major
         self.pool.stage = self._strong
+        # Whether the pool's pre-market columns are today's, and today's pre-market range
+        # for an outside day after the open (pool.fresh_premarket, pool.outside_both).
+        self.pool.pm_seen = self.universe.pm_traded
+        self.pool.pm_range = self._pm_range
         # The session-type record (daytype.py): a card per book before the bell,
         # its label after the close. Loaded so a restart keeps the day's marks.
         # The backfill's rows beside it are the record's larger half, and the
@@ -654,18 +660,16 @@ class Collector:
 
     def scanner_tick(self, sym: str) -> dict[str, Any]:
         """What an open chart asks for every second: the last trade and this
-        minute's candle, off the stream, or the spark layer's trade when the
-        stream has none. Asking keeps the name subscribed."""
+        minute's candle, off the stream, or the spark layer's trade when that is
+        the newer of the two or the stream has none (stream.chart_tick). Asking
+        keeps the name subscribed."""
         sym = sym.strip().upper()
         self.stream.touch(sym)
-        q = self.stream.quote(sym)
         now = time.time()
         clock = self.scan.clock(datetime.now(UTC))
-        if q is None or "price" not in q:
-            spark = self.scan.live.get(sym)
-            if spark is not None and clock.session == "rth":
-                q = {**(q or {}), "price": spark.price, "at": float(spark.at), "session": "rth",
-                     "minute": None, "via": "spark"}
+        spark = self.scan.live.get(sym) if clock.session == "rth" else None
+        q = stream_src.chart_tick(self.stream.quote(sym),
+                                  (spark.price, float(spark.at)) if spark is not None else None)
         if q is None:
             return {"ok": False, "sym": sym, "clock_session": clock.session,
                     "connected": self.stream.connected}
@@ -712,6 +716,20 @@ class Collector:
     def _catalyst(self, sym: str) -> dict[str, Any] | None:
         return self.stock_news.catalyst(sym, ref=uni_src.news_anchor(datetime.now(UTC)))
 
+    def _day_move(self, sym: str) -> float | None:
+        """A name's move since the previous close (%): the Stocks list's own for a name it
+        tracks (live bars), else the wide read's. With no session on, the wide pages show
+        the last session, so its move is the one a story is held to."""
+        now = datetime.now(UTC)
+        if uni_src.basis_at(now) != "last":
+            with self._lock:
+                row = ((self._state.get("scanner") or {}).get("rows") or {}).get(sym)
+            if isinstance(row, dict):
+                mv = day_move_of(row)
+                if mv is not None:
+                    return mv
+        return self.universe.day_move(sym, now)
+
     def _strong(self) -> dict[str, dict[str, Any]]:
         """The strong Day 2/3 tracks, for the pool's rank (momentum.strong)."""
         now = datetime.now(UTC)
@@ -725,10 +743,17 @@ class Collector:
         now = datetime.now(UTC)
         basis = uni_src.basis_at(now)
         pinned, tracked = frozenset(self.scan.pinned()), frozenset(self.scan.symbols())
+        with self._lock:
+            rows = (self._state.get("scanner") or {}).get("rows") or {}
+        # The Stocks list's RVOL for the names it tracks, so a stock reads the same on
+        # every page (universe.rvol_for).
+        own = {str(s): float(r["rvol"]) for s, r in rows.items()
+               if isinstance(r, dict) and isinstance(r.get("rvol"), int | float)}
         return uni_src.Ctx(
             quote=self.stream.quote, catalyst=self._catalyst, pinned=pinned, tracked=tracked,
             stage=self.momentum.stages(now.astimezone(ET).date(), basis != "last"),
-            verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked))
+            verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked),
+            rvol=own.get)
 
     def breakouts(self, **kw: Any) -> dict[str, Any]:
         return self.universe.breakouts(self._ctx(), **kw)

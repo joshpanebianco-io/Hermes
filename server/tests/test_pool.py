@@ -83,14 +83,21 @@ def test_in_play_worked_examples() -> None:
     rows = {r["symbol"]: r for r in pool.parse(fixture())[0]}
     td = date(2026, 10, 23)
     ko = pool.in_play(rows["KO"], "day", td)
-    # Both parts full at 8, and past full each earns a little more (2026-11-11):
-    # 1.67 ATR is 4 x ln(1.67 / 0.75) / ln(4) = 2.3 over, 115% of a day 4 x ln(114.88 / 40)
-    # / ln(10) = 1.8 over. It read 16.0 when both parts stopped at their full mark.
-    assert (ko["score"], ko["gap_atr"], ko["vol_pct"]) == (20.1, 1.67, 114.88)
-    assert ko["reason"] == "moved 1.67 ATR · today 114.9% of ADV"
+    # The move is full at 8 and past full earns a little more (2026-11-11): 1.67 ATR is
+    # 4 x ln(1.67 / 0.75) / ln(4) = 2.3 over. The volume part is RVOL since 2026-11-13,
+    # and with no time-of-day figure on the row (the session is over) it is the whole
+    # day against an average one: 1.15 is 8 x ln(1.15 / 0.75) / ln(2 / 0.75) = 3.5. It
+    # read 20.1 when 115% of a day was the full 8 and 1.8 over.
+    assert (ko["score"], ko["gap_atr"], ko["vol_pct"], ko["rvol"]) == (13.8, 1.67, 114.88, 1.15)
+    assert ko["reason"] == "moved 1.67 ATR · RVOL 1.15×"
     nvda = pool.in_play(rows["NVDA"], "day", td)
-    # 0.21 ATR is 1.3; 76% of a day is the full 8 and 4 x ln(76 / 40) / ln(10) = 1.1 over.
-    assert (nvda["score"], nvda["gap_atr"]) == (10.4, 0.21)
+    # 0.21 ATR is 1.3; RVOL 0.76 is just past the first point's 0.75: 0.1. It read 10.4
+    # when 76% of an average day was the full volume part.
+    assert (nvda["score"], nvda["gap_atr"]) == (1.4, 0.21)
+    assert pool.in_play({**rows["NVDA"], "rvol": None}, "day", td)["reason"] == (
+        "moved 0.21 ATR · no RVOL read")
+    assert pool.in_play(rows["KO"], "last", td)["reason"] == (
+        "moved 1.67 ATR · last session RVOL 1.15×")
     sndk = pool.in_play(rows["SNDK"], "pre", td)
     assert (sndk["score"], sndk["gap_atr"], sndk["vol_pct"]) == (9.3, 0.34, 2.25)
     assert sndk["reason"] == "gap 0.34 ATR · pre-market 2.3% of ADV"
@@ -109,7 +116,9 @@ def test_in_play_worked_examples() -> None:
      (3.0, 0.75, 3.0, 4.0),
      (9.0, 0.75, 3.0, 4.0),      # and no further than the far mark
      (40.0, 40.0, 400.0, 0.0),
-     (400.0, 40.0, 400.0, 4.0)],
+     (400.0, 40.0, 400.0, 4.0),
+     (2.0, 2.0, 10.0, 0.0),       # RVOL: full at 2x, the far mark 10x
+     (10.0, 2.0, 10.0, 4.0)],
 )
 def test_past_its_full_mark_a_part_earns_up_to_four_more(x: float, full: float, far: float,
                                                          want: float) -> None:
@@ -128,10 +137,12 @@ def test_the_top_of_the_rank_separates_and_the_bar_does_not_move() -> None:
 
     # The evening of Tue 10 Nov: these three read 16.0 each (20 to 21 with their news
     # and levels) when both parts stopped at full. Their moves and volumes are theirs.
+    # The session over, RVOL is the whole day: 4.17x, 3.12x and 0.89x. KKR's 0.89x was
+    # the full 8 when 40% of an average day was full (17.6 then); now it is 1.4.
     gfl = pool.in_play(name("GFL", 2.21, 416.5), "day", td)["score"]
     nvda = pool.in_play(name("NVDA", 1.12, 311.7), "day", td)["score"]
     kkr = pool.in_play(name("KKR", 0.80, 88.5), "day", td)["score"]
-    assert (gfl, nvda, kkr) == (23.1, 20.7, 17.6)
+    assert (gfl, nvda, kkr) == (20.9, 18.3, 9.5)
     # Under both full marks nothing changes, so who clears the bar is who cleared it:
     # a 0.4-ATR move alone is still 3.7, one short of MIN_SCORE.
     quiet = pool.in_play(name("Q", 0.40, 1.0), "day", td)["score"]
@@ -146,7 +157,10 @@ def test_rank_reads_the_pre_market_before_the_bell_and_the_day_after() -> None:
     assert [r["symbol"] for r in pre[:3]] == ["KO", "SNDK", "MU"]
     assert pre[0]["reason"].startswith("gap ")
     day = pool.rank(q, scan.clock_at(et(2026, 10, 23, 11, 0)))
-    assert [r["symbol"] for r in day[:3]] == ["KO", "TSM", "MU"]
+    # In the session the volume part reads the screener's time-of-day RVOL (the
+    # fixture's column is the whole day's: the reply was taken after the close).
+    assert [r["symbol"] for r in day[:3]] == ["KO", "SPCX", "TSM"]
+    assert day[0]["rvol"] == 1.15
     assert day[0]["reason"].startswith("moved ")
     # the weekend ranks for Monday, on the last session's figures
     sat = pool.rank(q, scan.clock_at(et(2026, 10, 24, 10, 0)))
@@ -295,8 +309,10 @@ def test_store_post_open_mark_fills_and_then_holds(monkeypatch: Any, tmp_path: A
     store.tick(pinned, et(2026, 10, 23, 9, 26))
     assert store.for_scan()[1] == ["KO", "SNDK"]
     store.tick(pinned, et(2026, 10, 23, 10, 1))
-    # the day-basis rank at 10:00: TSM 12.7, MU 12.2, SPCX 10.9, then NVDA 9.3 ahead of NBIS 8.0
-    assert store.for_scan()[1] == ["KO", "SNDK", "TSM", "MU", "SPCX", "NVDA"]
+    # The day-basis rank at 10:00 on RVOL (2026-11-13): SPCX 6.1, TSM 5.7, MU 4.8 clear
+    # MIN_SCORE; NVDA, flat on 0.76x, does not (9.3 when a whole average day was the
+    # yardstick), so the fourth slot stays empty.
+    assert store.for_scan()[1] == ["KO", "SNDK", "SPCX", "TSM", "MU"]
     assert store.marks_done == ["08:00", "09:00", "09:25", "10:00"]
     kept = [dict(p) for p in store.promoted]
     # a later read changes nothing: the list holds until the day rolls

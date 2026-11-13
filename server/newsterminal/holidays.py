@@ -31,7 +31,7 @@ and on the cash market's half days the futures halt at 13:15 ET.
 
 from __future__ import annotations
 
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 HOLIDAYS: dict[date, str] = {
     # 2025
@@ -145,6 +145,41 @@ def prev_trading_day(d: date) -> date:
     while not is_trading_day(d):
         d -= timedelta(days=1)
     return d
+
+
+# ---------------------------------------------------------------- the news day
+#
+# WHEN TODAY'S NEWS STARTS (quant audit, 2026-11-13). The score counted a headline for
+# sixteen hours back from NOW, so a story at 16:05 left the score at 08:05 the next
+# morning, before the open it was the reason for, and on a Monday nothing from Friday's
+# close counted anywhere. The news a session trades on is everything since the previous
+# session's close: a weekend and a holiday are skipped, a half day closes at 13:00, and
+# the last half hour of that session is included, because a story at 15:45 moved the
+# close and the next open alike.
+NEWS_MARGIN_MIN = 30
+#: The ET minute the news day rolls to the next trading day: 20:00, when the scanner's
+#: own day rolls (the after-hours session is over).
+NEWS_ROLL_MIN = 20 * 60
+
+
+def news_day(et: datetime) -> date:
+    """The trading day a moment's news is for: today until 20:00 ET on a trading day,
+    else the next trading day (weekends and holidays included). Pure; `et` in New York
+    time."""
+    d = et.date()
+    if is_trading_day(d) and et.hour * 60 + et.minute < NEWS_ROLL_MIN:
+        return d
+    return next_trading_day(d)
+
+
+def news_since(et: datetime, day: date | None = None) -> datetime:
+    """When the news for `day` (else the day `et` falls in, `news_day`) starts: the
+    previous trading day's regular close, NEWS_MARGIN_MIN before it. Monday's starts at
+    Friday's close, the day after Thanksgiving's at Wednesday's. Pure; `et` aware, in
+    New York time, and the answer in the same zone."""
+    prev = prev_trading_day(day or news_day(et))
+    m = close_minute(prev) - NEWS_MARGIN_MIN
+    return datetime(prev.year, prev.month, prev.day, m // 60, m % 60, tzinfo=et.tzinfo)
 
 
 # ---------------------------------------------------------------- CME Globex

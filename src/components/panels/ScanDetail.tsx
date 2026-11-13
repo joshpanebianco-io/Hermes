@@ -404,6 +404,8 @@ function Score({ r, side, stage }: { r: ScanRow; side: Side | null; stage: numbe
           );
         })}
       </ul>
+      {/* Why the list holds a name lower than its score (scanscore.rvol_gate, 2026-11-13). */}
+      {r.score.gated && <p className="mt-2 text-[11.5px] leading-[1.4] text-flip-fig">{r.score.gated}</p>}
       {r.setup.note && <p className="mt-2.5 border-t border-ring/60 pt-2 text-[12px] leading-[1.45] text-ink-2">{r.setup.note}</p>}
       {/* THE RECORD LINE (owner, 2026-10-23: "as high probability as
           possible"): what logged signals of this kind, side and band did —

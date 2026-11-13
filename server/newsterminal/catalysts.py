@@ -282,30 +282,119 @@ _GUIDE = re.compile(
     r"(guidance|outlook|forecast)|(guidance|outlook|forecast) (cut|raise|hike|lowered|slashed)",
     re.I,
 )
+# "QUARTERLY" ALONE IS NOT A REPORT (quant audit, 2026-11-13): "XYZ Declares Quarterly
+# Dividend" graded a major Earnings story, earned the pool its news points and put a
+# routine declaration at the top of Extended hours. The word counts with what it
+# qualifies. ("Nvidia Revenue Soars 62% on AI Demand" is a move with its reason, and
+# `_FILL` lets "Revenue" sit between the name and the verb.)
 _EARN = re.compile(
-    r"\bearnings\b|\bresults\b|\bq[1-4]\b|\b(first|second|third|fourth)[- ]quarter\b|\bquarterly\b|"
+    r"\bearnings\b|\bresults\b|\bq[1-4]\b|\b(first|second|third|fourth)[- ]quarter\b|"
+    r"\b(?:quarterly|annual) (?:revenue|sales|profit|results|earnings|loss)\b|"
     r"\beps\b|\bbeats?\b|\bmiss(es|ed)?\b|\bprofit\b|guidance|outlook|\bforecasts?\b",
     re.I,
 )
-_FDA = re.compile(
-    r"\bfda\b|\bphase (1|2|3|i{1,3})\b|\bclinical\b|\btopline\b|\bprimary endpoint\b|"
-    r"\bcomplete response\b|\bpdufa\b",
+# A REPORT THAT HAS HAPPENED, as against one talked about: what may override an analyst's
+# note that comes later in the same headline (`_first_event`).
+_EARN_DONE = re.compile(
+    r"\bbeats?\b|\btops?\s+(?:estimates|expectations|views|forecasts)\b|\bmiss(?:es|ed)?\b|"
+    r"\b(?:reports?|reported|posts?|posted|delivers?|delivered)\b[^.;]{0,30}"
+    r"\b(?:results|earnings|profit|loss|revenue|quarter)\b",
     re.I,
 )
+_FDA = re.compile(
+    r"\bfda\b|\bphase (?:1|2|3|i{1,3})[ab]?\b|\bphase [123]/[123]\b|\bclinical\b|\btopline\b|"
+    r"\bprimary endpoint\b|\bpivotal (?:trial|study|data)\b|\bcomplete response\b|\bpdufa\b|"
+    r"\bcrl\b",
+    re.I,
+)
+# "TO BUY" IS A DEAL ONLY WITH A DEAL'S WORDS AROUND IT (2026-11-13): "Merck to Buy
+# Verona Pharma for $10 Billion" was a minor news item, while "Billionaire Continues to
+# Buy Nvidia" must stay one. A company agreeing, planning or bidding to buy, or "to buy"
+# a named company for a price.
 _DEAL = re.compile(
-    r"\bacqui(re|res|red|ring|sition)\b|\bmerger\b|\bmerge\b|\btakeover\b|\bbuyout\b|"
-    r"\btake[- ]private\b|definitive agreement",
+    r"\bacqui(?:re|res|red|ring|sitions?)\b|\bmergers?\b|\bmerges?\b|\btakeover\b|\bbuyout\b|"
+    r"\btake[- ]private\b|definitive agreement|"
+    r"\b(?:agrees?|agreed|plans?|set|nears?|in talks|offers?|bids?|moves?|seeks?|looks?)\s+to\s+"
+    r"(?:buy|acquire|purchase)\b|"
+    r"\bto buy\s+[A-Z][\w&.'’-]*(?:\s+[A-Z][\w&.'’-]*){0,3}\s+(?:for|in)\s+(?:\$|about|around|a\b)|"
+    r"\bbids? for\b|\bdeal to (?:buy|acquire)\b",
     re.I,
 )
 _CONTRACT = re.compile(r"\bcontract\b|\bawarded\b|\bwins?\b.{0,40}\b(deal|order)\b", re.I)
+# AN OFFERING IS WRITTEN MANY WAYS (2026-11-13): "Announces Proposed Offering of $500
+# Million Convertible Senior Notes" was a minor news item.
 _OFFERING = re.compile(
-    r"\b(public|secondary|stock|share|equity|convertible|notes?|registered direct)\s+offering\b|"
-    r"\bprices? .{0,40}offering\b|\bat-the-market\b",
+    r"\b(public|secondary|stock|share|equity|convertible|notes?|registered direct|follow-on|"
+    r"proposed|upsized|underwritten)\s+offering\b|"
+    r"\boffering of\b[^.;]{0,60}\b(?:notes|shares|stock|common|ordinary|ads|adss|units)\b|"
+    r"\bconvertible (?:senior )?notes\b|\bprices? .{0,40}offering\b|\bat-the-market\b",
     re.I,
 )
+# PLURALS (2026-11-13): "Tesla Recalls 2 Million Vehicles" and "DOJ Probes …" were minor.
 _LEGAL = re.compile(
-    r"\bprobe\b|\bsubpoena|\bdoj\b|\bsec (charges|sues|probe)\b|\bbankrupt|\bchapter 11\b|"
-    r"\brecall\b|\bantitrust\b|\bfraud\b",
+    r"\bprobes?\b|\bsubpoena|\bdoj\b|\bsec (charges|sues|probe)\b|\bbankrupt|\bchapter 11\b|"
+    r"\brecalls?\b|\bantitrust\b|\bfraud\b|\binvestigation\b|\blawsuits?\b|\bsued\b",
+    re.I,
+)
+# ---- events the grade had no word for (quant audit, 2026-11-13) ---------------------
+# Each moves a stock on the day it is announced, and each scored nothing.
+_INDEX = re.compile(
+    r"\b(?:join|joins|joining|to join|added to|to be added to|inclusion in|included in|enters?|"
+    r"to enter|added into|removed from|dropped from|deleted from|to be removed from|"
+    r"to be dropped from|exits?|to exit)\s+(?:the\s+)?(?:s&p\s?500|s&p\s?midcap\s?400|"
+    r"s&p\s?400|s&p\s?smallcap\s?600|s&p\s?600|nasdaq[- ]100|dow jones industrial average|"
+    r"dow jones industrials|the dow)\b",
+    re.I,
+)
+_SHORT_SELLER = re.compile(
+    r"\bshort[- ]sellers?\b|\bshort report\b|\bdiscloses? (?:a )?short (?:position|bet)\b|"
+    r"\bshort position in\b|\b(?:hindenburg|muddy waters|citron research|spruce point|"
+    r"culper research|kerrisdale|grizzly research|wolfpack research|iceberg research|"
+    r"fuzzy panda|blue orca|white diamond research|bleecker street research|j capital|"
+    r"viceroy research)\b",
+    re.I,
+)
+_EXEC = re.compile(
+    r"\b(?:ceo|chief executive|cfo|chief financial officer|founder|chairman)\b[^.;]{0,40}"
+    r"\b(?:steps? down|stepping down|resigns?|resigned|resigning|to step down|ousted|exits?|"
+    r"exiting|departs?|departing|departure|to depart|to leave|leaving|fired|terminated|"
+    r"retires?|retiring|to retire)\b|"
+    r"\b(?:ousts?|fires?|names? new|appoints? new|replaces?)\s+(?:its\s+)?"
+    r"(?:ceo|chief executive|cfo)\b",
+    re.I,
+)
+_BUYBACK = re.compile(
+    r"\bbuybacks?\b|\b(?:share|stock) repurchases?\b|"
+    r"\brepurchase (?:program|plan|authori[sz]ation)\b|"
+    r"\bauthori[sz]es?\b[^.;]{0,40}\brepurchase\b",
+    re.I,
+)
+_SPLIT = re.compile(
+    r"\b(?:stock|share) split\b|\b\d{1,2}[- ]for[- ]\d{1,2}\b(?:[^.;]{0,20}\bsplit\b)?", re.I)
+# A DIVIDEND IS NEWS WHEN IT CHANGES: a special one, a raise, a cut, a suspension. A
+# routine declaration is a diary entry and is graded as PR (noise).
+_DIV_CHANGE = re.compile(
+    r"\bspecial (?:cash )?dividend\b|"
+    r"\b(?:raises?|raised|increases?|increased|hikes?|hiked|boosts?|boosted|cuts?|slashes?|"
+    r"slashed|suspends?|suspended|eliminates?|eliminated|halts?|halted|omits?|reinstates?)\b"
+    r"[^.;]{0,30}\bdividends?\b|\bdividends? (?:hike|increase|raise|cut|suspension)\b",
+    re.I,
+)
+#: The dividend changes that are a company in trouble, notable rather than minor.
+_DIV_CUT = re.compile(
+    r"\b(?:cuts?|slashes?|slashed|suspends?|suspended|eliminates?|eliminated|halts?|halted|"
+    r"omits?)\b[^.;]{0,30}\bdividends?\b|\bdividends? (?:cut|suspension)\b",
+    re.I,
+)
+_DIVIDEND = re.compile(r"\bdividends?\b|\bdistribution\b", re.I)
+#: A head that says something HAPPENED: what lets the first clause of a headline speak
+#: for it when the rest is talk ("Nvidia Beats Estimates, Here's What Wall Street Thinks").
+_DONE = re.compile(
+    r"\b(?:beats?|tops?|topped|miss(?:es|ed)?|rais\w*|cut\w*|lower\w*|reports?|reported|posts?|"
+    r"posted|delivers?|delivered|approv\w*|clears?|cleared|meets?|met|fails?|failed|wins?|won|"
+    r"awarded|signs?|signed|agrees?|agreed|completes?|completed|upgraded|downgraded|"
+    r"guides?|slashes|slashed|withdraws?|suspends?|recalls?|acquires?|acquired|to acquire|"
+    r"to buy|join|joins|resigns?|steps? down)\b",
     re.I,
 )
 # ---- a move, and which way ---------------------------------------------------------
@@ -320,7 +409,16 @@ _DOWN = (r"plunges?|plunged|plunging|sinks?|sank|sunk|sinking|tumbles?|tumbled|t
          r"fall|falls|fell|falling|slides?|slid|sliding|dives?|dove|diving|tanks?|tanked|"
          r"tanking|plummets?|plummeted|plummeting|nosedives?|nosedived|slips?|slipped|"
          r"slipping|craters?|cratered|cratering|skids?|skidded|sell[- ]?off|sells off|sold off")
-_MOVE = re.compile(rf"\b(?:{_UP}|{_DOWN})\b", re.I)
+#: A VERB THAT IS NOT A PRICE MOVE (2026-11-13): "Intel Drops Plans for Ohio Fab" and
+#: "Apple Drops Price of iPhone" read as the stock falling and cost a long three.
+_NOT_PRICE = (r"(?!\s+(?:plans?|bids?|offers?|lawsuits?|suits?|claims?|deals?|charges?|prices?|"
+              r"pricing|support|features?|products?|mandates?|pursuit|appeals?|cases?|efforts?|"
+              r"programs?|projects?|requirements?|bans?|tariffs?|fees?|names?|lineup|line-up|"
+              r"ads?|models?|guidance|forecasts?|outlook|out of)\b)"
+              # A place in a ranking is not a price (live, 2026-11-13: "Apple rises 26 places
+              # on the Roundtable 100" cost Apple's short ten).
+              r"(?!\s+\d+\s+(?:places?|spots?|positions?|ranks?|notches)\b)")
+_MOVE = re.compile(rf"\b(?:{_UP}|{_DOWN})\b{_NOT_PRICE}", re.I)
 #: What makes a move a story: the move and why. "Axon Stock Plunges as Delayed Drone
 #: Deals Hit Revenue" says why; "five chip stocks skyrocket, what you need to know" does not.
 #: WHEN IS NOT WHY (audit, 2026-11-11): "Why AMD shares are rallying on Tuesday?" and
@@ -365,29 +463,55 @@ def grade(title: str) -> Grade:
     t = title or ""
     if _NOISE.search(t):
         return Grade("Notice", NOISE)
-    if _PREVIEW.search(t):
-        return Grade("Preview", MINOR)
-    if _OPINION.search(t) or (_EXPLAINER.match(t) and not _MOVE.search(t)):
-        return Grade("Opinion", MINOR)
-    if _LIST.search(t):
-        return Grade("List", MINOR)
-    if _RECAP.search(t):
-        return Grade("Recap", MINOR)
+    talk = _talk(t)
+    if talk is not None:
+        # THE FIRST CLAUSE CAN SPEAK FOR THE HEADLINE (quant audit, 2026-11-13). A report
+        # with talk after it was talk: "Nvidia Beats Estimates, Here's What Wall Street
+        # Thinks" a list, "Delta Beats Estimates, Analysts Expect Strong Holiday" a
+        # preview, "Palantir Soars 20% After Earnings Beat. Should You Buy Now?" an
+        # opinion, and none of them was held under its name. When the headline's first
+        # clause says something happened and grades as an event, the event is the grade.
+        # Not for a recap: last week's move is last week's however it is put.
+        if talk.tag != "Recap":
+            head = _head(t)
+            if head != t and _DONE.search(head):
+                g = grade(head)
+                if g.tier in (MAJOR, NOTABLE) and g.tag not in NOT_NEWS:
+                    return g
+        return talk
     # After the kinds above, which keep their names (and none of which is held as a
     # story either: NOT_NEWS); before the events, so a template cannot read as one.
     if _FILLER.search(t):
         return Grade("Filler", NOISE)
     if _PR.search(t):
         return Grade("PR", NOISE)
+    # A routine dividend is a diary entry (2026-11-13): "Declares Quarterly Dividend" was
+    # a major Earnings story by its "quarterly". A changed one is news, below.
+    if (_DIVIDEND.search(t) and not _DIV_CHANGE.search(t) and not _EARN_DONE.search(t)
+            and not _GUIDE.search(t)):
+        return Grade("PR", NOISE)
     # An analyst first: "Price Target Raised After Q3 Beat" is the note, not the beat.
-    if _RATING.search(t) or analyst_upgrade(t):
-        return Grade("Analyst", NOTABLE)
-    if _TARGET.search(t):
-        return Grade("Target", MINOR)
+    # UNLESS THE EVENT COMES FIRST (2026-11-13): "Lilly Raises Guidance; Analysts Raise
+    # Price Targets" is the guidance, and the notes are what followed it.
+    rating, up, target = _RATING.search(t), analyst_upgrade(t), _TARGET.search(t)
+    if rating or up or target:
+        at = [m.start() for m in (rating, target) if m]
+        if up:
+            u = _UPGRADE.search(t)
+            if u:
+                at.append(u.start())
+        ev = _event_before(t, min(at)) if at else None
+        if ev is not None:
+            return ev
+        return Grade("Analyst", NOTABLE) if (rating or up) else Grade("Target", MINOR)
     if _GUIDE.search(t):
         return Grade("Guidance", MAJOR)
     if _FDA.search(t):
         return Grade("FDA", MAJOR)
+    if _INDEX.search(t):
+        return Grade("Index", MAJOR)
+    if _SHORT_SELLER.search(t):
+        return Grade("Short", MAJOR)
     if _DEAL.search(t):
         return Grade("Deal", MAJOR)
     if _OFFERING.search(t):
@@ -398,7 +522,50 @@ def grade(title: str) -> Grade:
         return Grade("Earnings", MAJOR)
     if _CONTRACT.search(t):
         return Grade("Contract", MAJOR)
+    # The notable events (2026-11-13). A move with its reason outranks them, as it does
+    # every minor or notable story: "Acme Jumps 9% on $5 Billion Buyback" is the move.
+    for tag, pat, tier in (("Exec", _EXEC, NOTABLE), ("Buyback", _BUYBACK, NOTABLE),
+                           ("Split", _SPLIT, NOTABLE), ("Dividend", _DIV_CUT, NOTABLE),
+                           ("Dividend", _DIV_CHANGE, MINOR)):
+        if pat.search(t):
+            mv = move_grade(t)
+            return mv if mv is not None and mv.tier == MAJOR else Grade(tag, tier)
     return move_grade(t) or Grade("News", MINOR)
+
+
+def _talk(t: str) -> Grade | None:
+    """The talk grades, in their order: a preview, an opinion, a list, a recap. Pure."""
+    if _PREVIEW.search(t):
+        return Grade("Preview", MINOR)
+    if _OPINION.search(t) or (_EXPLAINER.match(t) and not _MOVE.search(t)):
+        return Grade("Opinion", MINOR)
+    if _LIST.search(t):
+        return Grade("List", MINOR)
+    if _RECAP.search(t):
+        return Grade("Recap", MINOR)
+    return None
+
+
+#: Where a guidance headline's subject is: the noun, not the verb before it, so "Raises
+#: Acme Price Target After Strong Guidance" stays the analyst's note.
+_GUIDE_NOUN = re.compile(r"\b(?:guidance|outlook|forecasts?)\b", re.I)
+
+
+def _event_before(t: str, pos: int) -> Grade | None:
+    """A major event whose words come before position `pos` (an analyst's note), or
+    None. Only events that have happened: "Q3" alone is a date. Pure."""
+    g = _GUIDE.search(t)
+    if g:
+        n = _GUIDE_NOUN.search(t, g.start())
+        if n and n.start() < pos:
+            return Grade("Guidance", MAJOR)
+    for tag, pat in (("FDA", _FDA), ("Index", _INDEX), ("Short", _SHORT_SELLER),
+                     ("Deal", _DEAL), ("Offering", _OFFERING), ("Legal", _LEGAL),
+                     ("Earnings", _EARN_DONE), ("Contract", _CONTRACT)):
+        m = pat.search(t)
+        if m and m.start() < pos:
+            return Grade(tag, MAJOR)
+    return None
 
 
 @lru_cache(maxsize=_KEPT)
@@ -440,6 +607,15 @@ _JOIN = re.compile(
     rf"{_STOP}|\s[-–—]\s|[?!]\s",
     re.I)
 _PIECE = re.compile(r"[,;:]\s+")
+#: Where a headline's first clause ends, for `grade`'s head: a sentence's stop, a
+#: question, a comma before a new capitalised clause, a dash.
+_HEAD_END = re.compile(rf"{_STOP}|[?!]\s|[?!]$|,\s+(?=[A-Z])|\s[-–—]\s")
+
+
+def _head(t: str) -> str:
+    """A headline's first clause (`_HEAD_END`), or the whole of it. Pure."""
+    m = _HEAD_END.search(t)
+    return t[:m.start()].strip() if m else t
 #: A short label before a colon ("Earnings call transcript: Infineon jumps …") is
 #: skipped when it names nobody; "Nvidia: …" keeps its label as the lead.
 _LABEL = re.compile(r"^([^:]{1,40}):\s+")
@@ -454,10 +630,39 @@ _LEAD_PRE = r"^\W*(?:[\w'’&.$%/-]+\s+){0," + str(_LEAD_WORDS) + "}?"
 ROUNDUP = 3
 #: Words that may sit between a name and its verb: "Broadcom Stocks Jump", "Nvidia
 #: (NVDA) Stock Is Falling", "Apple's shares pop".
-_FILL = (r"(?:\s*['’]s|\s+(?:\([A-Z.$:]{1,12}\)|stocks?|shares?|share price|inc\.?|corp\.?|"
-         r"ltd\.?|plc|co\.?|technology|technologies|holdings|platforms|group|systems|"
+_FILL = (r"(?:\s*['’]s|\s+(?:\([A-Z.$:]{1,12}\)|stocks?|shares?|share price|stock price|inc\.?|"
+         r"corp\.?|ltd\.?|plc|co\.?|technology|technologies|holdings|platforms|group|systems|"
+         # The figures a company reports move with the company (2026-11-13): "Nvidia
+         # Revenue Soars 62% on AI Demand" was a major story with no direction.
+         r"revenues?|sales|profits?|earnings|eps|net income|income|margins?|orders|bookings|"
+         r"backlog|"
          r"is|are|was|were|has|have|just|also|now|still))*")
-_MOVE_DIR = re.compile(rf"{_FILL}\s+(?:({_UP})|({_DOWN}))\b", re.I)
+_MOVE_DIR = re.compile(rf"{_FILL}\s+(?:({_UP})|({_DOWN}))\b{_NOT_PRICE}", re.I)
+#: A PIECE OF A PRESS RELEASE'S LEAD THAT IS A FIGURE, NOT ANOTHER COMPANY (2026-11-13):
+#: "Acme Corp. Reports Third Quarter 2026 Results: Revenue Up 20%, EPS $1.05, Raises
+#: Full-Year Guidance" was four pieces, so a round-up, so nobody's story. Only the pieces
+#: that could name somebody count towards a round-up (`roundup`).
+_FIGURE_PIECE = re.compile(
+    r"^\W*(?:revenues?|sales|net (?:income|sales|loss|revenue)|eps|earnings|profits?|loss|"
+    r"margins?|gross|operating|adjusted|ebitda|cash|free cash|backlog|bookings|orders|"
+    r"guidance|outlook|raises|lowers|cuts|reaffirms|reiterates|record|q[1-4]|fy|full[- ]year|"
+    r"up\b|down\b|\$|[+-]?\d)",
+    re.I)
+
+
+def roundup(pieces: Sequence[str]) -> bool:
+    """Is a lead of these pieces a round-up of several companies? More than ROUNDUP
+    pieces that could each name one; a press release's figures are not names. Pure."""
+    named = [pc for i, pc in enumerate(pieces) if i == 0 or not _FIGURE_PIECE.match(pc)]
+    return len(named) > ROUNDUP
+
+
+#: Words after a name that make the subject somebody else: "Apple Supplier Foxconn Beats
+#: Estimates" is Foxconn's report, "SoftBank-Backed X Soars" is X's move.
+_OTHERS = re.compile(
+    r"(?:\s*['’]s)?(?:-backed\b|\s+(?:suppliers?|rivals?|partners?|peers?|customers?|"
+    r"competitors?|backer|investors?|spin-?off|spun-?off|chip supplier|parts supplier)\b)",
+    re.I)
 
 
 class _Pats(NamedTuple):
@@ -465,6 +670,24 @@ class _Pats(NamedTuple):
     lead: tuple[re.Pattern[str], ...]
     #: The name as the object of an analyst's sentence: "… buy rating on Strategy".
     noted: tuple[re.Pattern[str], ...]
+    #: The name as the object of what somebody did to it: upgraded, bought, shorted.
+    acted: tuple[re.Pattern[str], ...]
+
+
+#: THE NAME AS THE OBJECT OF THE ACTION (quant audit, 2026-11-13). A long firm's name or
+#: a buyer's puts the company past the lead's first four words, and the story was
+#: nobody's: "Bank of America Securities Upgrades Micron to Buy", "Johnson & Johnson to
+#: Acquire Intra-Cellular for $14.6 Billion", "Hindenburg Discloses Short Position in
+#: Acme". The company an analyst rates, a buyer bids for or a short seller targets is
+#: what the story is about (`acted` says which of those it was).
+_ACTED_PRE = (
+    r"\b(?:upgrad\w*|downgrad\w*|"
+    r"(?:to |agrees? to |agreed to |plans? to |set to |will |nears? (?:a )?deal to |"
+    r"in talks to |offers? to |bids? to |moves? to |seeks? to )(?:acquire|buy|purchase|take over)|"
+    r"acquires|acquired|acquiring|"
+    r"takeover (?:of|bid for|offer for)|bids? for|offer for|deal for|merge with|merger with|"
+    r"short (?:position|report|bet|stake) (?:in|on|against))\s+"
+    r"(?:(?:the|its|rival|peer|smaller|chipmaker|drugmaker|biotech|start-?up)\s+)?")
 
 
 #: An analyst's note names its company after "on": "Cantor Fitzgerald reiterates buy
@@ -487,7 +710,8 @@ def _pats(sym: str, names: tuple[str, ...]) -> _Pats:
              for n in names if n and len(n) >= 2]
     return _Pats(tuple(re.compile(s, f) for s, f in srcs),
                  tuple(re.compile(_LEAD_PRE + s, f) for s, f in srcs),
-                 tuple(re.compile(f"(?i:{_NOTED_PRE})" + s, f) for s, f in srcs))
+                 tuple(re.compile(f"(?i:{_NOTED_PRE})" + s, f) for s, f in srcs),
+                 tuple(re.compile(f"(?i:{_ACTED_PRE})" + s, f) for s, f in srcs))
 
 
 def lead(title: str, sym: str = "", names: Sequence[str] = ()) -> list[str]:
@@ -512,7 +736,7 @@ def about(title: str, sym: str, names: Sequence[str] = ()) -> bool | None:
     if not any(p.search(title or "") for p in pats.any):
         return None
     pieces = lead(title, sym, names)
-    if len(pieces) > ROUNDUP:
+    if roundup(pieces):
         return False
     # A HEADLINE THAT OPENS ON ANOTHER COMPANY'S NAME AND TICKER IS THAT COMPANY'S (audit,
     # 2026-11-11): "AMC Global Media Inc (AMCX) Q3 2026 Earnings Call Highlights:
@@ -527,7 +751,40 @@ def about(title: str, sym: str, names: Sequence[str] = ()) -> bool | None:
     # piece, over an upgrade four minutes old.
     told = [pc for pc in pieces if not _SAYS.match(pc)]
     return (any(lp.match(pc) for pc in told for lp in pats.lead)
-            or any(p.search(title or "") for p in pats.noted))
+            or any(p.search(title or "") for p in pats.noted)
+            or any(p.search(title or "") for p in pats.acted))
+
+
+def someone_else(title: str, sym: str, names: Sequence[str] = ()) -> bool:
+    """Does the name lead only as somebody else's supplier, rival or backer ("Apple
+    Supplier Foxconn Beats Estimates")? The story is still listed under it (it bears on
+    the name); its event is not the name's, so it sets no direction. Pure."""
+    pats = _pats(sym, tuple(names))
+    for pc in lead(title, sym, names):
+        for lp in pats.lead:
+            m = lp.match(pc)
+            if m:
+                return bool(_OTHERS.match(pc, m.end()))
+    return False
+
+
+def acted(title: str, sym: str, names: Sequence[str] = ()) -> str | None:
+    """What was done to the name when it is the object of the headline's action:
+    "up" (upgraded), "down" (downgraded), "deal" (bid for or bought), "short" (a short
+    seller's target), else None. Pure."""
+    for p in _pats(sym, tuple(names)).acted:
+        m = p.search(title or "")
+        if not m:
+            continue
+        verb = m.group(0).lower()
+        if "upgrad" in verb:
+            return "up"
+        if "downgrad" in verb:
+            return "down"
+        if "short" in verb:
+            return "short"
+        return "deal"
+    return None
 
 
 def moved(title: str, sym: str, names: Sequence[str] = ()) -> str | None:
@@ -535,7 +792,7 @@ def moved(title: str, sym: str, names: Sequence[str] = ()) -> str | None:
     by the verb that follows it; None otherwise. Pure."""
     pats = _pats(sym, tuple(names))
     pieces = lead(title, sym, names)
-    if len(pieces) > ROUNDUP:
+    if roundup(pieces):
         return None
     for pc in pieces:
         for lp in pats.lead:
@@ -546,6 +803,121 @@ def moved(title: str, sym: str, names: Sequence[str] = ()) -> str | None:
             if v:
                 return "bull" if v.group(1) else "bear"
     return None
+
+
+#: The words between a name and its price verb, without the reported figures `_FILL`
+#: lets through for direction: "Nvidia Revenue Soars 62%" is the revenue's 62%, not
+#: the stock's.
+_FILL_PX = (r"(?:\s*['’]s|\s+(?:\([A-Z.$:]{1,12}\)|stocks?|shares?|share price|stock price|"
+            r"inc\.?|corp\.?|ltd\.?|plc|co\.?|technology|technologies|holdings|platforms|group|"
+            r"systems|is|are|was|were|has|have|just|also|now|still))*")
+_STATED = re.compile(
+    rf"{_FILL_PX}\s+(?:({_UP})|({_DOWN}))\s+"
+    r"(?:(?:nearly|almost|about|over|more than|around|roughly|another|as much as|up to|"
+    r"some)\s+)?(\d{1,3}(?:\.\d+)?)\s?(?:%|percent\b)",
+    re.I)
+
+
+#: A HEADLINE'S NUMBER IS THE MARKET'S VERDICT ONLY ON THE DAY IT DESCRIBES (2026-11-13;
+#: owner: "fix everything"). The news window reaches back to the previous close, so the
+#: evening wrap "Stock Market Today, Nov. 12: AMD Jumps 5.9% on Bank of America Price
+#: Target" counted as Friday's catalyst with AMD flat on Friday, and Yahoo's "Palantir
+#: stock falls 19% as Wall Street spots a warning", a fall over weeks, cost a Palantir
+#: long ten on a day it was down 2%. Where the lead states the name's own move of at
+#: least STATED_MIN percent, the name must have made STATED_SHARE of it, the same way,
+#: since the previous close (`stated_today`); else the story is an earlier move: the
+#: score sets it aside (scanscore.catalyst_read) and a row's story passes it over
+#: (sources/tvnews.best). A faded jump keeps its story: "jumps 8%" with the name up 2%
+#: stands.
+STATED_MIN = 2.0
+STATED_SHARE = 0.25
+
+
+def stated_today(stated: float | None, day_move: float | None) -> bool:
+    """Is a stated move (%) one the name has made since the previous close? Unknown
+    either way, or too small to tell from noise: yes. Pure."""
+    if stated is None or day_move is None or abs(stated) < STATED_MIN:
+        return True
+    return (day_move > 0) == (stated > 0) and abs(day_move) >= STATED_SHARE * abs(stated)
+
+
+def stated_move(title: str, sym: str, names: Sequence[str] = ()) -> float | None:
+    """The move the lead says THIS name made, in percent with its sign ("AMD Jumps 5.9%
+    on …" → 5.9), or None when it states none (`STATED_MIN`'s note). Pure; kept by its
+    arguments, as `grade` is, since every row's stories are asked on every read."""
+    return _stated(title or "", sym, tuple(names))
+
+
+@lru_cache(maxsize=16384)
+def _stated(title: str, sym: str, names: tuple[str, ...]) -> float | None:
+    pats = _pats(sym, names)
+    pieces = lead(title, sym, names)
+    if roundup(pieces):
+        return None
+    for pc in pieces:
+        for lp in pats.lead:
+            m = lp.match(pc)
+            if not m:
+                continue
+            s = _STATED.match(pc, m.end())
+            if s:
+                v = float(s.group(3))
+                return v if s.group(1) else -v
+    return None
+
+
+#: TWO NOTES, TWO WAYS (2026-11-13): "China Renaissance Upgraded Apple (AAPL) to Buy. DZ
+#: Bank Cut It to Sell" read as an upgrade, the second call unread. A headline is split
+#: into its sentences and clauses; a part speaks for the name when it names it, calls it
+#: "it" or "the stock", or opens on the rating verb with no subject of its own.
+_PARTS = re.compile(r"(?<=[.;!?])\s+|\s+(?:but|while|whereas|as|and|after|even as)\s+", re.I)
+_IT = re.compile(r"\b(?:it|them|the stock|the shares|its shares|shares)\b", re.I)
+_RATE_UP = re.compile(
+    r"\bupgrad\w*|\b(?:rais|lift|mov|bump)\w*\s+(?:\S+\s+){0,2}?to\s+"
+    r"(?:buy|outperform|overweight|strong buy|accumulate|add)\b", re.I)
+_RATE_DOWN = re.compile(
+    r"\bdowngrad\w*|\b(?:cut|lower|mov|trim|reduc|slash)\w*\s+(?:\S+\s+){0,2}?to\s+"
+    r"(?:sell|underperform|underweight|neutral|hold|market perform|sector perform|"
+    r"equal[- ]weight|in[- ]line|peer perform|reduce|strong sell)\b", re.I)
+_VERB_FIRST = re.compile(r"^\W*(?:upgrad|downgrad|cut|lower|rais|lift|trim|mov)\w*\b", re.I)
+
+
+def _my_parts(title: str, sym: str, names: Sequence[str]) -> list[str]:
+    """The sentences and clauses of a headline that speak for this name (`_PARTS`)."""
+    pats = _pats(sym, tuple(names))
+    out: list[str] = []
+    mine = False
+    for part in _PARTS.split(title or ""):
+        if not part.strip():
+            continue
+        if any(p.search(part) for p in pats.any) or _IT.search(part):
+            mine = True
+        elif not _VERB_FIRST.match(part):
+            mine = False
+        if mine:
+            out.append(part)
+    return out
+
+
+def rated_both(title: str, sym: str, names: Sequence[str] = ()) -> bool:
+    """Does the headline carry a rating raised AND a rating cut for this name? The score
+    reads such a headline as no direction at all (scanscore). Pure; kept by its
+    arguments, as `grade` is."""
+    return _rated_both(title or "", sym, tuple(names))
+
+
+@lru_cache(maxsize=16384)
+def _rated_both(title: str, sym: str, names: tuple[str, ...]) -> bool:
+    parts = _my_parts(title, sym, names)
+    return (any(_RATE_UP.search(p) for p in parts)
+            and any(_RATE_DOWN.search(p) for p in parts))
+
+
+def own_parts(title: str, sym: str, names: Sequence[str] = ()) -> str:
+    """An analyst headline as far as it speaks for this name: "Intel Upgraded as AMD
+    Downgraded" is "Intel Upgraded" for Intel, where read whole it was both ways and
+    so no direction. The whole title when no part names it. Pure."""
+    return " ".join(_my_parts(title, sym, names)) or title
 
 
 # ---- a story, or not one ------------------------------------------------------------
@@ -609,7 +981,7 @@ def _story(title: str, sym: str, names: tuple[str, ...], publisher: str,
     # knows; a tag the table has no words for (an index, a name from the wide scan) was
     # never asked, so "MU, AMD, AVGO, Other Chip Stocks Surge As CoreWeave Earnings
     # Reignite AI Trade" reached the Dashboard's stock news by its NDX tag (2026-11-11).
-    if len(lead(title, sym, names)) > ROUNDUP:
+    if roundup(lead(title, sym, names)):
         return None
     g = grade(title)
     if g.tier == NOISE:

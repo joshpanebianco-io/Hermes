@@ -363,21 +363,40 @@ def test_score_parts_sum_to_the_total() -> None:
     reg = {"bias": "long", "confirm": "confirm"}
     sc = scanscore.score_row(_row(), reg, 0.5, None, None)
     by = {p["key"]: p["pts"] for p in sc["parts"]}
-    assert by == {"structure": 30, "rs": 15, "location": 14, "volume": 12, "market": 15,
+    # The weights of the quant audit (2026-11-13): structure 20, RS 20, location 25,
+    # RVOL 8, market 20 (11 + 5 + 4), frame 6, catalyst 20.
+    assert by == {"structure": 20, "rs": 12, "location": 25, "volume": 6, "market": 20,
                   "frame": 0, "catalyst": 0}
-    assert sc["total"] == 86 and sc["side"] == "long"
+    assert sc["total"] == 83 and sc["raw"] == 83 and sc["side"] == "long"
 
 
 @pytest.mark.parametrize(
     ("rvol", "want"),
-    [(None, 0), (0.99, 0), (1.0, 3), (1.24, 3), (1.25, 6), (1.49, 6), (1.5, 12), (1.99, 12),
-     (2.0, 15), (6.0, 15)],
+    [(None, 0), (0.99, 0), (1.0, 2), (1.24, 2), (1.25, 3), (1.49, 3), (1.5, 6), (1.99, 6),
+     (2.0, 8), (6.0, 8)],
 )
 def test_relative_volume_pays_by_its_steps(rvol: float | None, want: int) -> None:
     sc = scanscore.score_row(_row(rvol=rvol), {"bias": "long", "confirm": "confirm"}, None, None,
                              None)
     part = next(p for p in sc["parts"] if p["key"] == "volume")
-    assert (part["pts"], part["max"]) == (want, 15)
+    assert (part["pts"], part["max"]) == (want, 8)
+
+
+def test_in_play_holds_until_rvol_exists_in_the_opening_minutes() -> None:
+    # Quant audit, 2026-11-13: at 09:33 no five-minute bar has finished, so RVOL is None;
+    # the list kept its in-play read instead of losing it for every name at once.
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    reg = {"bias": "long", "confirm": "confirm"}
+
+    def keys(h: int, m: int) -> list[str]:
+        sc = scanscore.score_row(_row(rvol=None), reg, None, None, None, "rth",
+                                 now=datetime(2026, 11, 16, h, m, tzinfo=et))
+        return [p["key"] for p in sc["parts"]]
+
+    assert "inplay" in keys(9, 33) and "volume" not in keys(9, 33)
+    assert "volume" in keys(10, 30) and "inplay" not in keys(10, 30)
 
 
 def test_relative_strength_fills_at_one_daily_atr_in_the_trade_s_direction() -> None:
@@ -386,7 +405,48 @@ def test_relative_strength_fills_at_one_daily_atr_in_the_trade_s_direction() -> 
                                  {"bias": "long", "confirm": "confirm"}, None, None, None)
         return next(p for p in sc["parts"] if p["key"] == "rs")["pts"]
 
-    assert (rs_pts(1.0), rs_pts(2.5), rs_pts(0.5), rs_pts(0.0), rs_pts(-0.4)) == (25, 25, 12, 0, 0)
+    assert (rs_pts(1.0), rs_pts(2.5), rs_pts(0.5), rs_pts(0.0), rs_pts(-0.4)) == (20, 20, 10, 0, 0)
+
+
+def test_relative_strength_is_paid_in_full_only_on_a_live_entry() -> None:
+    # Quant audit, 2026-11-13: strong RS with an extended entry was the worst combination
+    # in the log (-30 points of +1R hit rate, -0.89 R held); with a good entry it held.
+    reg = {"bias": "long", "confirm": "confirm"}
+
+    def rs_part(**setup: Any) -> dict[str, Any]:
+        s = {"side": "long", "state": "retest", "level": "PMH", "lost_vwap": False,
+             "entry": {"kind": "PMH", "price": 1.0, "dist_atr": 0.1}, **setup}
+        sc = scanscore.score_row(_row(rs={"SPY": 1.5, "QQQ": None}, setup=s), reg, None, None, None)
+        return next(p for p in sc["parts"] if p["key"] == "rs")
+
+    assert rs_part()["pts"] == 20
+    assert rs_part(state="pullback")["pts"] == 20
+    near = {"kind": "VWAP", "price": 1.0, "dist_atr": 0.6}
+    assert rs_part(state="extended", entry=near)["pts"] == 20
+    far = rs_part(state="extended", entry={"kind": "VWAP", "price": 1.0, "dist_atr": 3.0})
+    assert far["pts"] == scanscore.RS_POOR and "capped" in far["note"]
+    assert rs_part(state="failed")["pts"] == scanscore.RS_POOR
+    assert rs_part(lost_vwap=True)["pts"] == scanscore.RS_POOR
+    # Before the bell the RS is the gap, which in play already reads.
+    assert rs_part(state="forming")["pts"] == scanscore.RS_POOR
+
+
+def test_the_rvol_gate_keeps_a_quiet_name_out_of_the_top_ten() -> None:
+    def row(sym: str, raw: int, rvol: float | None) -> dict[str, Any]:
+        return {"sym": sym, "ok": True, "rvol": rvol, "score": {"total": min(100, raw), "raw": raw},
+                "setup": {"entry": {"dist_atr": 0.5}}, "rs": {"SPY": 1.0}}
+
+    rows = [row("QUIET", 99, 0.6)] + [row(f"M{i}", 90 - i, 1.4) for i in range(12)]
+    rows.sort(key=scanscore.rank_key)
+    gated = scanscore.rvol_gate(rows, "rth")
+    names = [r["sym"] for r in gated]
+    assert "QUIET" not in names[:10] and names[10] == "QUIET"
+    quiet = next(r for r in gated if r["sym"] == "QUIET")
+    assert "kept out of the top 10" in quiet["score"]["gated"]
+    # Before the bell RVOL is not the read; and a name with no RVOL yet is not held back.
+    assert scanscore.rvol_gate(rows, "pre")[0]["sym"] == "QUIET"
+    unknown = [row("NEW", 99, None)] + [row(f"M{i}", 90 - i, 1.4) for i in range(12)]
+    assert scanscore.rvol_gate(unknown, "rth")[0]["sym"] == "NEW"
 
 
 def test_score_clamps_at_zero_and_lists_penalties() -> None:
@@ -823,7 +883,7 @@ def test_before_the_bell_in_play_stands_in_for_rvol() -> None:
         sc = scanscore.score_row(_row(), {"bias": None, "confirm": None}, None, None,
                                  None, session=session)
         vol = next(p for p in sc["parts"] if p["key"] == "volume")
-        assert (vol["pts"], vol["note"]) == (12, "RVOL 1.60")
+        assert (vol["pts"], vol["note"]) == (6, "RVOL 1.60")
 
 
 # --- the live layer and the close read ---------------------------------------------------

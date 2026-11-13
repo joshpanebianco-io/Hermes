@@ -59,7 +59,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import config, daytype, drivers, marketctx, structure
+from . import config, daytype, drivers, futfill, marketctx, structure
 from . import dashboard as dash_mod
 from . import futures as fut_mod
 from . import momentum as mom_mod
@@ -222,6 +222,8 @@ class Collector:
         self._today_seen: dict[str, dict[str, float]] = {}
         self._today_logged: set[str] = set()
         self._today_lock = threading.Lock()
+        #: Each futures book's ETF fill as last measured, and when (`_fut_fill`).
+        self._fut_fills: dict[str, tuple[float, tuple[float, int, list[scan_mod.Bar]] | None]] = {}
         #: The Today list's names as last drawn, for the SEC job's insider reads (`_sec_extra`).
         self._today_syms: list[str] = []
         self.scan.sec_extra = self._sec_extra
@@ -638,8 +640,77 @@ class Collector:
             bars = fut_mod.parse(r.json())
         except (ValueError, TypeError):
             bars = []
+        now = datetime.now(UTC)
+        # THE LAST TEN MINUTES FROM THE ETF (futfill.py): CME's bars run ten minutes
+        # behind; the ETF's minutes since the future's last one, in the future's prices.
+        got = self._fut_fill(book) if tf != "D" and bars else None
+        extra = futfill.fill(got[1], got[2], got[0], int(now.timestamp())) if got else []
+        if extra:
+            bars = [*bars, *(b for b in extra if b.t > bars[-1].t)]
         ladder = report_mod.live_ladder(self.snapshot(), book)
-        return fut_mod.series(bars, tf, datetime.now(UTC), ladder, book)
+        out = fut_mod.series(bars, tf, now, ladder, book)
+        if got is not None:
+            out["filled"] = {"proxy": futfill.PROXY[book], "bars": len(extra), "from": got[1],
+                             "ratio": round(got[0], 6)}
+        return out
+
+    def _fut_fill(self, book: str) -> tuple[float, int, list[scan_mod.Bar]] | None:
+        """(future ÷ its ETF, the future's last minute, the ETF's one-minute bars) for a
+        book, or None when either has no bars or they share no minute (futfill.py). Held
+        ten seconds: an open chart asks every second."""
+        now = time.monotonic()
+        held = self._fut_fills.get(book)
+        if held is not None and now - held[0] < 10.0:
+            return held[1]
+        etf, sym = futfill.PROXY.get(book), fut_mod.SYMBOL.get(book)
+        if etf is None or sym is None:
+            return None
+
+        def minutes(s: str, key: str) -> list[scan_mod.Bar]:
+            r = fetch(fut_mod.CHART.format(sym=urllib.parse.quote(s), rng="1d", iv="1m"), key=key,
+                      ttl_sec=15.0, ua=BROWSER_UA, timeout=12, stale_max_sec=300.0,
+                      validate=json_body)
+            if not r.ok:
+                return []
+            try:
+                return fut_mod.parse(r.json())
+            except (ValueError, TypeError):
+                return []
+
+        fut1, etf1 = minutes(sym, f"fut_{book}_1m_1d"), minutes(etf, f"etf1m_{etf}")
+        r = futfill.ratio(fut1, etf1)
+        got = (r[0], fut1[-1].t, etf1) if r is not None and fut1 else None
+        self._fut_fills[book] = (now, got)
+        return got
+
+    def futures_tick(self, book: str) -> dict[str, Any]:
+        """What an open futures chart asks for every second: the ETF's last trade in the
+        future's prices (futfill.scaled_tick), between 04:00 and 17:00 ET. Asking keeps
+        the ETF subscribed."""
+        book = book.strip().upper()
+        clock = self.scan.clock(datetime.now(UTC))
+        etf = futfill.PROXY.get(book)
+        none = {"ok": False, "sym": book, "clock_session": clock.session,
+                "connected": self.stream.connected}
+        if etf is None:
+            return none
+        self.stream.touch(etf)
+        got = self._fut_fill(book)
+        if got is None:
+            return none
+        spark = self.scan.live.get(etf) if clock.session == "rth" else None
+        q = stream_src.chart_tick(self.stream.quote(etf),
+                                  (spark.price, float(spark.at)) if spark is not None else None)
+        # No stream trade for the ETF, or one older than its newest minute bar: the bar.
+        newest = got[2][-1] if got[2] else None
+        if newest is not None and (q is None or "price" not in q
+                                   or float(q.get("at") or 0.0) < newest.t):
+            q = futfill.bar_quote(newest, time.time())
+        t = futfill.scaled_tick(q, got[0], book, etf)
+        if t is None:
+            return none
+        t.pop("overnight", None)
+        return {**none, **t, "ok": True, "age_sec": round(time.time() - float(t["at"]), 1)}
 
     def scanner_bars(self, sym: str, tf: str = "10m") -> dict[str, Any]:
         """One name's mini-chart series (scan.chart_series) off the bars held —
@@ -945,27 +1016,9 @@ class Collector:
         payload = {str(r.get("sym")): r for r in self.scanner_payload().get("rows") or []}
         if phase.key == "session":
             rows = today_mod.rank_session(list(payload.values()), favs=favs, tracked=tracked)
-        elif phase.key in ("pre", "open"):
+        elif phase.key == "pre":
             engine = self._engine_rows()
-            ctx = self._ctx()
-            rows, note = self._today_pre(now, phase, favs, tracked, engine, ctx)
-            if phase.key == "open":
-
-                def price(sym: str) -> tuple[float | None, bool]:
-                    q = self.stream.quote(sym)
-                    if (q and isinstance(q.get("price"), int | float) and q.get("session") == "rth"
-                            and now.timestamp() - float(q.get("at") or 0.0) <= today_mod.LIVE_SEC):
-                        return float(q["price"]), True
-                    r = payload.get(sym) or {}
-                    if isinstance(r.get("last"), int | float):
-                        return float(r["last"]), bool(r.get("live"))
-                    w = self.universe.read_one(sym, ctx, now) or {}
-                    return (float(w["last"]) if isinstance(w.get("last"), int | float) else None,
-                            False)
-
-                rows = today_mod.rank_open(
-                    rows, engine=payload, wide=lambda s: self.universe.read_one(s, ctx, now),
-                    price=price)
+            rows, note = self._today_pre(now, phase, favs, tracked, engine, self._ctx())
         else:
             rows = self._today_evening(now, phase, favs, tracked)
             if not self.universe.rows:

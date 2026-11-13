@@ -40,6 +40,7 @@ import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { mergeTick, nextEma } from "@/lib/chartLive";
 import { CHART_COLORS, setChartColors, useChartColors } from "@/lib/chartColors";
 import { extKind, shadeRuns, type ExtKind } from "@/lib/chartShade";
+import { wallRank } from "@/lib/walls";
 
 /**
  * One name's chart, drawn the way the Pine script draws it: the candles, the four
@@ -64,13 +65,13 @@ import { extKind, shadeRuns, type ExtKind } from "@/lib/chartShade";
  * level lines, the signals) and the wave tinted by the row's level state, faintly.
  * VWAP is ink, not amber: amber means the gamma flip on this terminal.
  *
- * EXTENDED HOURS ARE SHADED AND THEIR CANDLES DIMMED, because the strategy is a
- * regular-session one and the pre-market is where its levels come from. The chart's
- * own colours may say otherwise, and Josh does (owner, 2026-11-12, from their own
- * chart: the shaded colours "the same as this ... and make sure that they dont shade
- * over the actual candles"): the after-hours blue, the pre-market sand, and a candle
- * in either at full strength. The shading was always beneath the candles; what read
- * as shade over them was the dimming.
+ * THE PRE-MARKET IS SHADED, because the strategy is a regular-session one and the
+ * pre-market is where its levels come from. Josh's colours (owner, 2026-11-12, from
+ * their own chart: the shaded colours "the same as this ... and make sure that they dont
+ * shade over the actual candles") shade the after-hours blue and the pre-market sand;
+ * the default colours shade the pre-market alone (2026-11-13). Candles in either are at
+ * full strength since 2026-11-13: the default chart drew them at half, and that read as
+ * shade over them.
  *
  * A FUTURES BOOK IS NOT SHADED (owner, 2026-11-10: "the futures chart should mark
  * from the 18:00 open ... i dont like" the extended-hours shading). Its overnight
@@ -180,12 +181,6 @@ const ANCHOR_CHOICES: ReadonlyArray<{ value: VwapAnchor; label: string }> = [
   { value: "week", label: "Week" },
 ];
 const ANCHOR_WORD: Record<VwapAnchor, string> = { globex: "18:00", london: "London", rth: "09:30", week: "week" };
-const ANCHOR_TITLE: Record<VwapAnchor, string> = {
-  globex: "each 18:00 reopen",
-  london: "each London open (07:00 London, 02:00 ET most of the year)",
-  rth: "each 09:30 cash open, built to the 16:00 close and held overnight",
-  week: "each week's Sunday reopen",
-};
 type BandCount = 0 | 1 | 2 | 3;
 const isBandCount = (v: unknown): v is BandCount => v === 0 || v === 1 || v === 2 || v === 3;
 const BAND_CHOICES: ReadonlyArray<{ value: BandCount; label: string }> = [
@@ -224,7 +219,6 @@ interface Palette {
   /** Behind the pre-market's bars and behind the after-hours': one neutral shade, unless the chart's colours name two. */
   shadePre: string;
   shadePost: string;
-  grid: string;
   /** The chart's ground and the line at the last price: the interface's, unless the chart has colours of its own. */
   bg: string;
   priceLine: string;
@@ -248,11 +242,16 @@ function readPalette(area: Element): Palette {
   const v = (n: string) => cs.getPropertyValue(n).trim();
   const up = v("--call-fig");
   const down = v("--put-fig");
-  // How strongly an extended-hours candle is drawn: half, unless the chart's colours
-  // give a figure of their own (Josh: 1, the candle as it is in the regular session).
+  // How strongly an extended-hours candle is drawn: in full, as Josh's colours always
+  // did (owner, 2026-11-13: "can we have the shaded part not reduce the color of the
+  // candles?"); a chart's colours may still give a figure of their own.
   const own = Number.parseFloat(v("--chart-ext-candle"));
-  const dim = Number.isFinite(own) ? Math.min(1, Math.max(0, own)) : 0.5;
-  const shade = rgba(v("--surface-2"), 0.55);
+  const dim = Number.isFinite(own) ? Math.min(1, Math.max(0, own)) : 1;
+  // The default pre-market shade: a light lift on the dark ground. It was the surface
+  // tone at 55%, a grey on a grey, and on the Luminous sheet it could not be seen at all
+  // (owner, 2026-11-13: "you cant tell the difference on default"). 7% was seen but
+  // faint; 13% after "can we also make the extended hours shading obvious".
+  const shade = rgba(v("--ink"), 0.13);
   return {
     up,
     down,
@@ -264,8 +263,13 @@ function readPalette(area: Element): Palette {
     ring: v("--ring"),
     ring2: v("--ring-2"),
     shadePre: v("--chart-shade-pre") || shade,
-    shadePost: v("--chart-shade-post") || shade,
-    grid: v("--chart-grid") || rgba(v("--ring"), 0.45),
+    // THE TWO HALVES TOLD APART ON THE DEFAULT COLOURS (owner, 2026-11-13). With one
+    // neutral shade for both, the evening ran into the morning as one block from 16:00
+    // ("you cant tell the difference on default"); the after-hours went unshaded for an
+    // hour, then came back as "like the pre market but less bright": the same lift at
+    // half the strength, then "reduce the strength slightly more": 4.5%. Josh's colours
+    // give each half its own hue.
+    shadePost: v("--chart-shade-post") || rgba(v("--ink"), 0.045),
     bg: v("--chart-bg") || "transparent",
     priceLine: v("--chart-price") || v("--ink-3"),
     ma20: v("--desk-markets"),
@@ -299,6 +303,29 @@ interface OverlayData {
 }
 
 const NO_OVERLAY: OverlayData = { shades: [], opens: [], openHue: "", wave: null, segments: [], font: "" };
+
+/** A gamma wall's label, drawn by the chart and not the library (lib/walls). */
+interface WallTag {
+  v: number;
+  word: string;
+  /** Triangles: 3 for the heaviest wall on its side. */
+  n: number;
+  up: boolean;
+  bg: string;
+  fg: string;
+}
+
+/**
+ * Black or white on a label of this colour, by the chart library's own weights (0.199,
+ * 0.687, 0.114; over 160 is black), so a drawn wall label reads like the library's
+ * labels beside it: dark on the teal, white on the pink, as PDH and PML are.
+ */
+function contrastInk(hex: string): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return "#ffffff";
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) => parseInt(h, 16));
+  return 0.199 * r + 0.687 * g + 0.114 * b > 160 ? "#000000" : "#ffffff";
+}
 
 class Overlays implements ISeriesPrimitive<Time> {
   private params: SeriesAttachedParameter<Time> | null = null;
@@ -402,8 +429,77 @@ class Overlays implements ISeriesPrimitive<Time> {
 
   private view: IPrimitivePaneView = { zOrder: () => "bottom", renderer: () => this.renderer };
 
+  /*
+   * THE WALLS' LABELS, DRAWN HERE (owner, 2026-11-14: "do option 3"; lib/walls says why).
+   * The library's own label for a level is text in one size, and no character is a solid
+   * flat triangle between ▴ and ▲; so the walls' lines carry no title of their own and
+   * this draws one in the same place, the right edge at the line's price: a box in the
+   * line's colour, the name in the chart's type, then the triangles, each about two
+   * thirds of the type's height.
+   */
+  private walls: { tags: WallTag[]; px: number; font: string } = { tags: [], px: 11, font: "monospace" };
+
+  setWalls(tags: WallTag[], px: number, font: string): void {
+    this.walls = { tags, px, font };
+    this.params?.requestUpdate();
+  }
+
+  private labels: IPrimitivePaneRenderer = {
+    draw: (target) => {
+      const p = this.params;
+      const w = this.walls;
+      if (!p || w.tags.length === 0) return;
+      target.useBitmapCoordinateSpace(({ context: c, bitmapSize, horizontalPixelRatio: hr, verticalPixelRatio: vr }) => {
+        c.save();
+        c.font = `${Math.round(w.px * vr)}px ${w.font}`;
+        c.textBaseline = "middle";
+        c.textAlign = "left";
+        const padX = Math.round(5 * hr);
+        const boxH = Math.round((w.px + 6) * vr);
+        const triH = Math.round(w.px * 0.62 * vr);
+        const triW = Math.round(w.px * 0.72 * hr);
+        const gap = Math.round(2 * hr);
+        const space = Math.round(5 * hr);
+        for (const t of w.tags) {
+          const py = p.series.priceToCoordinate(t.v);
+          if (py === null) continue;
+          const yy = Math.round(py * vr);
+          const textW = Math.ceil(c.measureText(t.word).width);
+          const width = padX * 2 + textW + space + t.n * triW + (t.n - 1) * gap;
+          const x0 = bitmapSize.width - width;
+          const y0 = yy - Math.round(boxH / 2);
+          c.fillStyle = t.bg;
+          c.fillRect(x0, y0, width, boxH);
+          c.fillStyle = t.fg;
+          c.fillText(t.word, x0 + padX, yy + Math.round(0.5 * vr));
+          const top = yy - Math.round(triH / 2);
+          const bottom = top + triH;
+          let tx = x0 + padX + textW + space;
+          for (let k = 0; k < t.n; k++) {
+            c.beginPath();
+            if (t.up) {
+              c.moveTo(tx, bottom);
+              c.lineTo(tx + triW, bottom);
+              c.lineTo(tx + triW / 2, top);
+            } else {
+              c.moveTo(tx, top);
+              c.lineTo(tx + triW, top);
+              c.lineTo(tx + triW / 2, bottom);
+            }
+            c.closePath();
+            c.fill();
+            tx += triW + gap;
+          }
+        }
+        c.restore();
+      });
+    },
+  };
+
+  private labelView: IPrimitivePaneView = { zOrder: () => "top", renderer: () => this.labels };
+
   paneViews(): readonly IPrimitivePaneView[] {
-    return [this.view];
+    return [this.view, this.labelView];
   }
 }
 
@@ -503,6 +599,7 @@ export function ScanChart({
   state,
   em = null,
   barsUrl,
+  tickUrl,
   live: streaming = true,
   store = "scan",
   prefs: shared,
@@ -514,7 +611,12 @@ export function ScanChart({
   em?: { lo: number; hi: number; label: string } | null;
   /** Where the bars come from: a stock's by default, a futures book's on the Futures page. */
   barsUrl?: string;
-  /** Lay the stream's last trade on the last candle every second. Futures run on their slow poll. */
+  /**
+   * Where the last trade comes from each second: a stock's stream by default; a futures
+   * book's is its ETF's trade in the future's prices (server futfill.py, 2026-11-14).
+   */
+  tickUrl?: string;
+  /** Lay the last trade on the last candle every second. */
   live?: boolean;
   /** The prefix the timeframe and layers are remembered under, so each page keeps its own. */
   store?: string;
@@ -679,7 +781,10 @@ export function ScanChart({
       }
     } else {
       const ext = shadeRuns(kinds);
-      for (const r of ext.runs) shades.push({ from: r.from, to: r.to, hue: r.kind === "pre" ? p.shadePre : p.shadePost });
+      for (const r of ext.runs) {
+        const hue = r.kind === "pre" ? p.shadePre : p.shadePost;
+        if (hue) shades.push({ from: r.from, to: r.to, hue });
+      }
       opens.push(...ext.opens);
     }
 
@@ -737,13 +842,23 @@ export function ScanChart({
       add("EML", band.lo, p.ink3, true, false, null, "EM");
     }
     // A futures book's ladder: the flip and the walls, the settle, the opening range.
+    const walls: WallTag[] = [];
     for (const x of d.lines ?? []) {
       // The walls and the flip go when this chart's GEX switch is off; the settle and
       // the opening range are not gamma and stay.
       if (!gexRef.current && GEX_TONES.has(x.tone)) continue;
       const hue = x.tone === "call" ? p.up : x.tone === "put" ? p.down : x.tone === "flip" ? p.ink2 : p.ink3;
-      list.push({ key: `L:${x.label}`, v: x.v, hue, dashed: true, faint: x.tone === "ref", layer: null, title: x.label });
+      // A wall's label is the chart's to draw, its rank as triangles (Overlays, lib/walls):
+      // the line itself carries no title.
+      const wall = wallRank(x.label);
+      if (wall) walls.push({ v: x.v, word: wall.word, n: wall.n, up: wall.up, bg: rgba(hue, 0.85), fg: contrastInk(hue) });
+      list.push({ key: `L:${x.label}`, v: x.v, hue, dashed: true, faint: x.tone === "ref", layer: null, title: wall ? "" : x.label });
     }
+    b.overlays.setWalls(
+      walls,
+      Math.round(11 * (Number(getComputedStyle(document.documentElement).getPropertyValue("--ui-zoom")) || 1)),
+      getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace",
+    );
     levelList.current = list;
     for (const l of list) {
       b.levels.push(
@@ -832,7 +947,9 @@ export function ScanChart({
         fontSize: Math.round(11 * (Number(getComputedStyle(document.documentElement).getPropertyValue("--ui-zoom")) || 1)),
         attributionLogo: true,
       },
-      grid: { vertLines: { color: p.grid }, horzLines: { color: p.grid } },
+      // No grid (owner, 2026-11-13: "can we get rid of the grid lines on the charts"): the
+      // level lines and the price scale carry the reading.
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       rightPriceScale: { borderColor: p.ring, scaleMargins: { top: 0.08, bottom: 0.06 } },
       localization: {
         timeFormatter: (t: unknown) => {
@@ -956,7 +1073,6 @@ export function ScanChart({
       palette.current = next;
       chart.applyOptions({
         layout: { background: { type: ColorType.Solid, color: next.bg }, textColor: next.ink3 },
-        grid: { vertLines: { color: next.grid }, horzLines: { color: next.grid } },
         rightPriceScale: { borderColor: next.ring },
         timeScale: { borderColor: next.ring },
         crosshair: { vertLine: { color: next.ink3 }, horzLine: { color: next.ink3 } },
@@ -1089,7 +1205,7 @@ export function ScanChart({
       if (dead) return;
       if (document.visibilityState === "visible") {
         try {
-          const r = await fetch(`/api/scanner/tick/${encodeURIComponent(sym)}`, { cache: "no-store" });
+          const r = await fetch(tickUrl ?? `/api/scanner/tick/${encodeURIComponent(sym)}`, { cache: "no-store" });
           const t = (await r.json()) as TickPayload;
           if (!dead && t.sym === sym) {
             clockRef.current = t.clock_session;
@@ -1107,7 +1223,7 @@ export function ScanChart({
       dead = true;
       clearTimeout(id);
     };
-  }, [sym, streaming]);
+  }, [sym, streaming, tickUrl]);
 
   // A layer, the anchor, the bands or the GEX switch toggled, or the row's state changed: repaint what is held.
   useEffect(() => {
@@ -1165,10 +1281,9 @@ export function ChartControls({
   hasBands,
   state = 0,
   menusLeft = true,
-  shared = false,
 }: {
   prefs: ChartPrefs;
-  /** One toolbar over several charts (Multicharts): the menu says so. */
+  /** One toolbar over several charts (Multicharts). Accepted; the note it worded is gone. */
   shared?: boolean;
   /** A futures book: one more switch, for its gamma lines. */
   future?: boolean;
@@ -1191,9 +1306,6 @@ export function ChartControls({
   const emaHue = (l: (typeof EMA_LAYERS)[number]) =>
     l === "ema8" ? (state > 0 ? "var(--call-fig)" : state < 0 ? "var(--put-fig)" : "var(--ink-3)") : l === "ema20" ? "var(--desk-markets)" : l === "ema50" ? "var(--desk-macro)" : "var(--ink-3)";
 
-  // A stock's signals are read on ten-minute bars; a future's chart carries none.
-  const offTen = !future && tf !== "10m" && tf !== "D";
-
   const strip = (
     <span className="seg shrink-0" role="group" aria-label="Chart timeframe">
       {TFS.map((t) => (
@@ -1210,12 +1322,26 @@ export function ChartControls({
       ))}
     </span>
   );
+  /*
+   * EACH AVERAGE ITS OWN ROW, NO BOX ROUND THE FOUR (owner, 2026-11-14: "on the indicators
+   * card im not a fan of the huge box for all ema's", then, after a row of short switches,
+   * "i prefer it the old way but without the one single box for all"). The rows are as they
+   * were, the swatch, the name and the note; the one `seg` box that held all four is gone,
+   * and each row is a pill of its own.
+   */
   const averages = (
     <div>
       <p className="qt-cap mb-1 text-[10px] text-ink-3">Moving averages</p>
-      <span className="seg flex-col items-stretch" role="group" aria-label="Moving averages">
+      <div className="flex flex-col gap-1" role="group" aria-label="Moving averages">
         {EMA_LAYERS.map((l) => (
-          <button key={l} type="button" title={LAYER_TITLE[l]} onClick={() => toggle(l)} aria-pressed={layers.includes(l)} {...segItem(layers.includes(l), { className: "justify-between gap-3" })}>
+          <button
+            key={l}
+            type="button"
+            title={LAYER_TITLE[l]}
+            onClick={() => toggle(l)}
+            aria-pressed={layers.includes(l)}
+            {...segItem(layers.includes(l), { className: "w-full justify-between gap-3 border border-ring-2" })}
+          >
             <span className="flex items-center gap-2">
               {/* `chart-hue`: the swatch takes the chart's colours, as the line it stands for does. */}
               <span aria-hidden data-colors={colors} className="chart-hue h-[2px] w-[14px] shrink-0 rounded-full" style={{ background: emaHue(l) }} />
@@ -1224,7 +1350,7 @@ export function ChartControls({
             {EMA_NOTE[l] && <span className="text-[10.5px] text-ink-3">{EMA_NOTE[l]}</span>}
           </button>
         ))}
-      </span>
+      </div>
     </div>
   );
   /*
@@ -1274,11 +1400,6 @@ export function ChartControls({
     emasOn.length ? `EMA ${emasOn.map((l) => EMA_LEN[l]).join(" · ")}` : null,
     vwapOn ? `VWAP${anchored ? ` ${ANCHOR_WORD[anchor]}` : ""}${bands && hasBands ? ` ±${bands}σ` : ""}` : null,
   ].filter(Boolean);
-  const vwapNote = anchored
-    ? `VWAP starts again at ${ANCHOR_TITLE[anchor]}, and its bands are measured from the same start.`
-    : tf === "D"
-      ? "A daily bar has no VWAP: it shows on the intraday views."
-      : "VWAP runs from the 09:30 open, today only, so there is none before the bell.";
   return (
     <>
       {strip}
@@ -1291,11 +1412,8 @@ export function ChartControls({
           {switches}
         </div>
         {colours}
-        <p className="text-[11px] leading-[1.4] text-ink-3">
-          {shared ? "One set for every chart on the page. The averages are on each chart's own bars" : "The averages are on this chart's own bars"}, so they change with the
-          timeframe. {vwapNote}
-          {offTen && " The (L) and (E) signals are read on ten-minute bars."} The colours are for every chart in the app.
-        </p>
+        {/* No note at the foot (owner, 2026-11-13: "can remove this from the indicator pop
+            up"): how the averages, VWAP, the signals and the colours behave was told there. */}
       </Menu>
     </>
   );
@@ -1341,8 +1459,23 @@ function LiveChip({ t, short = false }: { t: TickPayload | null; short?: boolean
     if (age < 90) {
       word = age < 10 ? `live ${Math.max(0, Math.round(age))}s` : `${Math.round(age)}s ago`;
       hue = age < 10 ? "bg-call-fig" : "bg-flip-fig";
-      title = t.via === "spark" ? "The last trade, from the five-second quote layer" : "The last trade, from the live stream, laid on the last candle";
+      title =
+        t.via === "etf"
+          ? `${t.proxy ?? "The ETF"}'s last trade in ${t.sym}'s prices (× ${t.ratio?.toFixed(4) ?? "the ratio"}): CME's own bars run ten minutes behind, so the minutes since are ${t.proxy ?? "the ETF"}'s, scaled. Between 04:00 and 17:00 ET.`
+          : t.via === "spark"
+            ? "The last trade, from the five-second quote layer"
+            : "The last trade, from the live stream, laid on the last candle";
+      if (t.via === "etf" && t.source === "bars") {
+        // The ETF's newest minute bar stood in for a trade the stream did not send.
+        word = "≤1 min";
+        hue = "bg-flip-fig";
+        title = `${t.proxy ?? "The ETF"}'s newest one-minute bar in ${t.sym}'s prices: the live stream sends no trades for ${t.proxy ?? "it"}, so the last candle is up to a minute behind. CME's own bars run ten minutes behind.`;
+      }
+      if (t.via === "etf" && !short) word = `${word} · via ${t.proxy}`;
     }
+  } else if (t && !t.ok && t.sym && ["NQ", "ES", "GC", "SIL", "CL"].includes(t.sym)) {
+    word = "10 min delayed";
+    title = "CME's bars run ten minutes behind. Between 04:00 and 17:00 ET the minutes since come from the tracking ETF; outside those hours there is no live fill.";
   }
   return (
     <span className="fig ml-auto flex shrink-0 items-center gap-2 text-[11px] text-ink-3" title={title}>

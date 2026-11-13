@@ -199,11 +199,11 @@ PANELS: dict[str, str] = {
                   "far (sym narrows it to one name)",
     "record": "Stocks · the signal record over twenty sessions by kind, side and score band: "
               "count, +1R rate, R held to the close with the stop kept, median best and worst",
-    "today_list": "Stocks, Today · the one list for the hour it is: after hours the movers "
-                  "since the close and the day's big ones, overnight the prep for the next "
-                  "session, pre-market what is in play into the open, at the open (09:30 to "
-                  "10:00) those names by what the bell has done, in the session the setups "
-                  "by score; each name with why it is there, its story and its plan",
+    "today_list": "Stocks, Scanner (the view called Today until 2026-11-13) · the one list "
+                  "for the hour it is: after hours the movers since the close and the day's "
+                  "big ones, overnight the prep for the next session, pre-market what is in "
+                  "play into the open, from the 09:30 bell to the close the setups by score; "
+                  "each name with why it is there, its story and its plan",
     "breakouts": "Stocks, Breakouts · the wide scan, every US stock at $2bn+ against its "
                  "levels: names through both the pre-market and previous-day ranges, relative "
                  "volume, the gap, each name's most important story (fifteen minutes delayed "

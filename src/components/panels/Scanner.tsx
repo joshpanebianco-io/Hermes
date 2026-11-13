@@ -3,9 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Regime, ScannerPayload, ScanRow, Side } from "@/types/scanner";
 import { HelmLoader } from "@/components/ui/HelmLoader";
-import { ShellAction } from "@/components/shell/SideHeader";
 import { useSide } from "@/components/state/UiMode";
-import { ScanLog } from "@/components/panels/ScanLog";
 import { ScanBreakouts } from "@/components/panels/ScanBreakouts";
 import { ScanExtended } from "@/components/panels/ScanExtended";
 import { ScanDay23 } from "@/components/panels/ScanDay23";
@@ -13,9 +11,8 @@ import { Choice, Chips, Glyph, Menu, Showing, StatCard, capWord, gapOf, isNum, i
 import { ScanTable, sortValue, type ColSet, type SortKey } from "@/components/panels/ScanTable";
 import { ChartControls, useChartPrefs } from "@/components/panels/ScanChart";
 import { ScanMulti } from "@/components/panels/ScanMulti";
-import { WatchlistEditor } from "@/components/panels/ScanWatchlist";
 import { liveLine, scoreText } from "@/lib/bias";
-import { age, inMin, num, pct } from "@/lib/format";
+import { inMin, num, pct } from "@/lib/format";
 import { CHART_SLOTS, NO_HELD, TOP_N, isHeldSlots, topScores, type HeldSlots } from "@/lib/multiChart";
 import { OUTSIDE_DAY_TITLE, outsideDay } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
@@ -126,7 +123,7 @@ const PRESET_NAME: ReadonlyArray<{ key: SideFilter; label: string; title?: strin
   {
     key: "insiders",
     label: "Insiders",
-    title: "An insider bought on the open market ($100k+), or sold $1M+ outside a pre-planned 10b5-1 plan, in the last 30 days (SEC Form 4s, for the names on Today and on the list)",
+    title: "An insider bought on the open market ($100k+), or sold $1M+ outside a pre-planned 10b5-1 plan, in the last 30 days (SEC Form 4s, for the names on the Scanner and on the list)",
   },
 ];
 const POLL_SEC = 20;
@@ -204,7 +201,6 @@ export function Scanner({
   const [data, setData] = useState<ScannerPayload | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
   const ticker = useTicker();
   // The Sidebar interface lists this page's views itself and carries its prices and
   // search in the shell's header: the band is not drawn there (state/UiMode).
@@ -414,51 +410,11 @@ export function Scanner({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {side ? (
-        // The Sidebar interface: the views are in the sidebar and the prices and the
-        // search in its header, so the band is not drawn. What is left of it is the
-        // Watchlist button, which goes in the header's slot, with the scan's state
-        // (what the band's dot said) on its hover.
-        <ShellAction>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            title={
-              data && !data.offline
-                ? [
-                    "Edit your favourites",
-                    data.trading_day ? `Levels for ${dayName(data.trading_day)}` : null,
-                    `${data.rows.filter((r) => r.ok).length} of ${data.watchlist.length} names read, ${age(data.age_min)} ago`,
-                    data.status?.error ?? null,
-                  ]
-                    .filter(Boolean)
-                    .join("\n")
-                : "Edit your favourites"
-            }
-            {...segItem(editing, { className: "border border-ring-2" })}
-          >
-            Watchlist
-          </button>
-        </ShellAction>
-      ) : (
-        <Masthead
-          data={data}
-          onWatchlist={() => setEditing((v) => !v)}
-          editing={editing}
-          view={view}
-          onView={onView}
-          prices={prices}
-        />
-      )}
-      {editing && (
-        <WatchlistEditor
-          onSaved={() => {
-            setEditing(false);
-            void load();
-          }}
-          onCancel={() => setEditing(false)}
-        />
-      )}
+      {/* NO WATCHLIST BUTTON AND NO SESSION WORD (owner, 2026-11-13: "remove the
+          pre-market next to watch list since we already show what session and then also
+          remove watchlist"). The header says the session; a favourite is its row's star.
+          The Sidebar interface draws no band, and had the button in its header: gone too. */}
+      {!side && <Masthead data={data} view={view} onView={onView} prices={prices} />}
 
       {data?.offline || failed ? (
         <p className="qt-slab border-b border-ring bg-err/10 px-6 py-2 text-[12px] text-err">
@@ -481,7 +437,7 @@ export function Scanner({
       ) : (
       <div className="flex min-h-0 flex-1 flex-col">
         {/* ---- the ranked list: the whole width, the name opens over it --- */}
-        <section aria-label={charts ? "Multicharts" : view === "log" ? "Signal log" : "Ranked setups"} className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <section aria-label={charts ? "Multicharts" : "Ranked setups"} className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* The row sums up the table, so it is the Setups view's alone. Over the charts
               its height would be theirs (on a 1920 screen it is a sixth of what two rows of
               them have). */}
@@ -507,9 +463,7 @@ export function Scanner({
             * bar was that card, so the log's own bar kept its rounded top beneath a
             * squared band.
             */}
-          {view === "log" ? (
-            <p className="qt-bar shrink-0 border-b border-ring px-4 py-2.5 text-[11.5px] text-ink-3">Every signal, and what it did afterwards</p>
-          ) : charts ? (
+          {charts ? (
             <div className="qt-bar flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ring px-4 py-2">
               {/* One toolbar for the six: a chart in the grid has no toolbar of its own. */}
               <ChartControls prefs={chartPrefs} hasBands={chartPrefs.tf !== "D"} shared />
@@ -524,26 +478,11 @@ export function Scanner({
             <Chips items={PRESET_NAME} on={sideF} set={setSideF} counts={counts} />
             <div className="ml-auto flex items-center gap-2">
               {/*
-                * HOW TO TRADE THIS TAPE IS A BUTTON AMONG THE BAR'S BUTTONS (owner,
-                * 2026-11-11: "i dont like the 'How to trade this' text just being
-                * randomly there, it sticks out"). It was a line of text at the end of
-                * the stat tiles that opened the desk's notes as loose lines under
-                * them: neither the words nor what they opened sat in anything. The
-                * notes are the regime's own (the VIX band, its month, SPY's implied
-                * move, the tape), unchanged.
+                * NO "HOW TO TRADE THIS" (owner, 2026-11-13: "can we remove the 'how to
+                * trade this' it's just random i dont even know what purpose it serves").
+                * It opened the regime's stock lines on the VIX band and the tape; the VIX
+                * card's own read and the Market overview say the same where they are read.
                 */}
-              {data && !data.offline && data.regime.notes.length > 0 && (
-                <Menu label="How to trade this" width={460}>
-                  <ul className="space-y-2 text-[12px] leading-[1.45] text-ink-2">
-                    {data.regime.notes.map((n) => (
-                      <li key={n} className="flex gap-2">
-                        <span aria-hidden className="mt-[7px] h-[4px] w-[4px] shrink-0 rounded-[1px] bg-ink-4" />
-                        {n}
-                      </li>
-                    ))}
-                  </ul>
-                </Menu>
-              )}
               {isToday && (
                 <Menu label={<>Filters · <span className="fig">{filterWord}</span></>}>
                   <Choice label="Market cap" options={TODAY_CAPS} value={fCap} set={setFCap} />
@@ -601,13 +540,7 @@ export function Scanner({
             )
           ) : (
           <div className="qt-sheet min-h-0 flex-1 overflow-auto">
-            {view === "log" ? (
-              <ScanLog onPick={(s) => {
-                // The name opens over the record, which stays where it was read.
-                setSel(s);
-                openTicker(s);
-              }} />
-            ) : !data || (isToday && !today && !data.offline) ? (
+            {!data || (isToday && !today && !data.offline) ? (
               <TableSkeleton />
             ) : rows.length === 0 ? (
               <p className="px-6 py-10 text-center text-[12px] text-ink-3">
@@ -653,12 +586,11 @@ const TODAY_SECTORS = ["", "XLK", "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI
 }));
 
 /** How often Today is read again: a phase that moves by the second, read often. */
-const TODAY_POLL_SEC: Record<PhaseKey, number> = { session: 10, open: 10, pre: 15, after: 30, overnight: 60 };
+const TODAY_POLL_SEC: Record<PhaseKey, number> = { session: 10, pre: 15, after: 30, overnight: 60 };
 const TODAY_EMPTY: Record<PhaseKey, string> = {
   after: "Nothing has moved enough since the close to make the list yet.",
   overnight: "Nothing moved enough this evening to make the list.",
   pre: "Nothing is in play yet this morning. Names arrive as the pre-market trades.",
-  open: "The pre-market's names arrive here at the bell.",
   session: "The engine has read no names yet.",
 };
 
@@ -695,23 +627,15 @@ function TableSkeleton() {
 /* -------------------------------------------------------------------------- */
 
 function Masthead({
-  data,
-  onWatchlist,
-  editing,
   view,
   onView,
   prices,
 }: {
   data: ScannerPayload | null;
-  onWatchlist: () => void;
-  editing: boolean;
   view: ScanView;
   onView: (v: ScanView) => void;
   prices: React.ReactNode;
 }) {
-  const ok = data?.rows.filter((r) => r.ok).length ?? 0;
-  const total = data?.watchlist.length ?? 0;
-  const fromPool = data?.pool?.promoted.length ?? 0;
   const legacy = useLegacyViews();
   return (
     <div className="qt-mast flex min-h-[44px] shrink-0 flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 qt:px-4">
@@ -740,42 +664,10 @@ function Masthead({
             <span className="min-w-0 flex-1 truncate text-left">Search ticker or company…</span>
           </button>
         </span>
-        {data && !data.offline && (
-          <span
-            className="fig text-[11px] whitespace-nowrap text-ink-3"
-            title={[
-              data.trading_day ? `Levels for ${dayName(data.trading_day)}` : null,
-              `${ok} of ${total} names read${fromPool > 0 ? `, ${fromPool} from the pool` : ""}, ${age(data.age_min)} ago`,
-              data.status?.error ?? data.status?.notes.join(" · ") ?? null,
-            ]
-              .filter(Boolean)
-              .join("\n")}
-          >
-            <span
-              aria-hidden
-              className={cn(
-                "mr-1.5 inline-block h-[6px] w-[6px] rounded-full align-middle",
-                data.status?.ok ? "bg-call" : "bg-err",
-              )}
-            />
-            {SESSION_WORD[data.session]}
-          </span>
-        )}
-        <button type="button" onClick={onWatchlist} {...segItem(editing, { className: "border border-ring-2" })}>
-          Watchlist
-        </button>
       </div>
     </div>
   );
 }
-
-/** The session in a word or two, beside the status dot. */
-const SESSION_WORD: Record<ScannerPayload["session"], string> = {
-  pre: "Pre-market",
-  rth: "Regular session",
-  post: "After hours",
-  closed: "Market closed",
-};
 
 /**
  * THE PAGE'S HEAD, AS THE SCREENSHOTS HAVE IT: how many on each side, the most
@@ -790,6 +682,71 @@ const SESSION_WORD: Record<ScannerPayload["session"], string> = {
  * with a record kept on futures sessions and none against these stocks' signals, so on
  * this page it was another desk's figure. It lives on the Futures tab.
  */
+/**
+ * THE DAY'S PHASES, ONE CARD (owner, 2026-11-13: "a pop out card when you click on pre
+ * market - ranked by in play etc, that shows each session with a small brief"). The
+ * hours and what each phase ranks by are server/today.py's; the words are a short
+ * reading of its docstring. In the order a trading day runs, from the pre-market.
+ */
+const PHASE_GUIDE: ReadonlyArray<{ key: TodayPhase["key"]; label: string; hours: string; ranks: string; brief: string }> = [
+  {
+    key: "pre",
+    label: "Pre-market",
+    hours: "04:00–09:30",
+    ranks: "In play",
+    brief: "What is in play going into the open: the gap in daily ATRs, pre-market volume against a normal day, a report or fresh news, a level already through, a Day 2 or 3. Each name shows both triggers; the gap's side is a lean, not a call.",
+  },
+  {
+    key: "session",
+    label: "Session",
+    hours: "09:30–16:00",
+    ranks: "Setup score",
+    brief: "The best trades now, from the bell, by the engine's setup score: where the entry is, the levels broken, strength against SPY, the market, relative volume, the daily frame and the catalyst. Relative volume is thin until about 09:45, so read the first minutes' with care.",
+  },
+  {
+    key: "after",
+    label: "After hours",
+    hours: "16:00–20:00",
+    ranks: "In play",
+    brief: "What is moving after the close and the day's big movers, by the move in daily ATRs, volume against normal, news, a report and tomorrow's Day 2. The prep for the next session starts here.",
+  },
+  {
+    key: "overnight",
+    label: "Overnight",
+    hours: "20:00–04:00",
+    ranks: "In play",
+    brief: "The prep for the next session: the evening's movers and the reports due before the open. Weekends and market holidays read as overnight too.",
+  },
+];
+
+function PhaseGuide({ phase }: { phase: TodayPhase }) {
+  return (
+    <div className="w-[min(520px,calc(100vw-24px))] px-4 py-3 text-ink">
+      <div className="flex items-baseline gap-2">
+        <span className="qt-cap text-[10.5px] text-ink-3">The Scanner through the day</span>
+        <span className="fig ml-auto text-[11px] text-ink-3">New York time</span>
+      </div>
+      <ul className="mt-2 flex flex-col">
+        {PHASE_GUIDE.map((p) => {
+          const now = p.key === phase.key;
+          return (
+            <li key={p.key} className={cn("border-b border-ring/50 py-2 last:border-b-0", now && "-mx-2 rounded-[6px] bg-desk-macro/[0.08] px-2")}>
+              <div className="flex flex-wrap items-baseline gap-x-2.5">
+                <span className={cn("text-[13px] font-semibold", now ? "text-desk-macro" : "text-ink")}>{p.label}</span>
+                <span className="fig text-[11.5px] text-ink-3">{p.hours}</span>
+                {now && <span className="qt-cap text-[9.5px] text-desk-macro">now · {phase.next_label} {untilWord(phase.ends_in_min)}</span>}
+                <span className="qt-cap ml-auto text-[9.5px] text-ink-2">ranked by {p.ranks.toLowerCase()}</span>
+              </div>
+              <p className="mt-1 text-[12px] leading-[1.45] text-ink-2">{p.brief}</p>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-[11px] leading-[1.4] text-ink-3">On a half day the session ends at 13:00 and the after-hours phase runs to 17:00.</p>
+    </div>
+  );
+}
+
 function SetupStats({
   data,
   later,
@@ -841,8 +798,9 @@ function SetupStats({
             value={phase.label}
             hue="text-desk-macro"
             label={phase.key === "session" ? "Ranked by setup" : "Ranked by in play"}
-            title={`${phase.title}${phase.key === "after" || phase.key === "overnight" ? `, for ${dayName(phase.day)}` : ""}.\nAfter hours 16:00–20:00 · overnight to 04:00 · pre-market 04:00–09:30 · the open 09:30–10:00 · session 10:00–16:00`}
+            title={`${phase.title}${phase.key === "after" || phase.key === "overnight" ? `, for ${dayName(phase.day)}` : ""}. Click for every phase of the day.`}
             sub={`${phase.next_label} ${untilWord(phase.ends_in_min)}`}
+            pop={{ label: "The Scanner through the day", panel: <PhaseGuide phase={phase} /> }}
           />
         )}
         <StatCard glyph="up" tint="up" value={longs.length} hue="text-call-fig" label="Bullish signals" sub={`${longs.filter((r) => r.broken.pdh).length} breaking PDH`} />

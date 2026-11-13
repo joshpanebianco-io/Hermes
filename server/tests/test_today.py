@@ -33,10 +33,11 @@ def et(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
     [
         # Friday 13 Nov 2026
         (et(2026, 11, 13, 3, 59), "overnight", date(2026, 11, 13), "pre"),
-        (et(2026, 11, 13, 4, 0), "pre", date(2026, 11, 13), "open"),
-        (et(2026, 11, 13, 9, 29), "pre", date(2026, 11, 13), "open"),
-        (et(2026, 11, 13, 9, 30), "open", date(2026, 11, 13), "session"),
-        (et(2026, 11, 13, 9, 59), "open", date(2026, 11, 13), "session"),
+        (et(2026, 11, 13, 4, 0), "pre", date(2026, 11, 13), "session"),
+        (et(2026, 11, 13, 9, 29), "pre", date(2026, 11, 13), "session"),
+        # The session from the bell (2026-11-13): there is no open phase.
+        (et(2026, 11, 13, 9, 30), "session", date(2026, 11, 13), "after"),
+        (et(2026, 11, 13, 9, 59), "session", date(2026, 11, 13), "after"),
         (et(2026, 11, 13, 10, 0), "session", date(2026, 11, 13), "after"),
         (et(2026, 11, 13, 15, 59), "session", date(2026, 11, 13), "after"),
         # After the close the list is for the next session: Monday.
@@ -116,33 +117,6 @@ def test_the_pre_market_list_is_the_pools_rank_on_live_prices() -> None:
     # Only names over the pool's bar, and never a benchmark.
     assert all(r["score"] >= pool.MIN_SCORE for r in got)
     assert got[0]["score_kind"] == "in play" and got[0]["score_max"] == pool.SCORE_MAX
-
-
-# ---- the open ------------------------------------------------------------------------
-
-
-def _pre(sym: str, score: float, lean: str = "long") -> dict[str, Any]:
-    return {"sym": sym, "score": score, "lean": lean, "last": 100.0, "chg": 2.0, "why": []}
-
-
-def test_the_open_orders_the_pre_markets_names_by_what_the_bell_did() -> None:
-    pre = [_pre("A", 20.0), _pre("B", 18.0), _pre("C", 15.0), _pre("D", 12.0), _pre("E", 9.0)]
-    engine = {
-        "A": {"ok": True, "setup": {"state": "failed", "side": "long"}},
-        "B": {"ok": True, "setup": {"state": "approaching", "side": "long"}},
-        "C": {"ok": True, "setup": {"state": "retest", "side": "long", "note": "At PMH"}},
-        "D": {"ok": True, "setup": {"state": "extended", "side": "long",
-                                    "entry": {"dist_atr": 3.0}}},
-    }
-    wide = {"E": {"pd_state": "above", "pm_state": "inside", "pdc": 98.0}}
-    got = today.rank_open(pre, engine=engine, wide=wide.get, price=lambda s: (101.0, True))
-    assert [r["sym"] for r in got] == ["C", "D", "E", "B", "A"]
-    assert [r["status"] for r in got] == ["entry live", "through a level", "through a level",
-                                          "not triggered", "failed"]
-    assert got[0]["setup"]["note"] == "At PMH" and got[0]["live"]
-    # Near VWAP / the 8 EMA is a live entry; the wrong side of VWAP is not.
-    assert today.open_group({"state": "extended", "entry": {"dist_atr": 0.6}}, None, "long") == 0
-    assert today.open_group({"state": "retest", "lost_vwap": True}, None, "long") == 3
 
 
 # ---- the session -------------------------------------------------------------------

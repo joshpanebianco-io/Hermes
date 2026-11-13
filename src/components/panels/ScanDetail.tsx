@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { isBool, usePersisted } from "@/lib/usePersisted";
 import type { Catalyst, ScanRow, Side } from "@/types/scanner";
-import { ScanOptions } from "@/components/panels/ScanOptions";
 import { CARD, Glyph, capShort, gapOf } from "@/components/panels/ScanWide";
 import { ago, compact, dir, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -72,13 +71,12 @@ export function ScanDetail({
   r,
   bench,
   now,
-  tracked = true,
   stage = null,
 }: {
   r: ScanRow;
   bench: "SPY" | "QQQ";
   now: number | null;
-  /** A name off the list has no chain read; it says so rather than spinning. */
+  /** Accepted for the callers; the Options card it served is gone. */
   tracked?: boolean;
   /** Which day of a multi-day move, for the score card's corner. */
   stage?: number | null;
@@ -98,19 +96,9 @@ export function ScanDetail({
       <KeyLevels r={r} />
       <Score r={r} side={side} stage={stage} />
       <NewsCard r={r} now={now} />
-      <Fold id="setup" title="The setup, in full">
-        <Setup r={r} side={side} />
-      </Fold>
-      <Fold id="options" title="Options" right={r.options?.iv30 != null ? <span className="fig">IV {r.options.iv30.toFixed(0)}%</span> : undefined}>
-        {tracked ? (
-          <ScanOptions r={r} />
-        ) : (
-          <p className="text-[12px] text-ink-3">Chains are read for the names on the list. Track this name to load its options.</p>
-        )}
-      </Fold>
-      <Fold id="ladder" title="Every level, with its distance">
-        <Ladder r={r} />
-      </Fold>
+      {/* NO SETUP-IN-FULL, LADDER OR OPTIONS CARDS (owner, 2026-11-13: "get rid of the
+          set up in full card, every level with its distance, and options"). The key levels,
+          the score and the news above say what the setup is; the folds repeated them. */}
       <Fold id="catalysts" title="Earnings, filings and flags">
         <Catalysts r={r} />
       </Fold>
@@ -262,101 +250,6 @@ function KeyLevels({ r }: { r: ScanRow }) {
   );
 }
 
-const Cap = ({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) => (
-  <div className="mb-2 flex items-baseline gap-2">
-    <h3 className="qt-cap text-[10.5px] font-semibold text-ink-3">{children}</h3>
-    {right && <div className="ml-auto text-[11px] text-ink-3">{right}</div>}
-  </div>
-);
-
-/* -------------------------------------------------------------------------- */
-
-function Setup({ r, side }: { r: ScanRow; side: Side | null }) {
-  const e = r.setup.entry;
-  const live = r.setup.state === "retest";
-  return (
-    <div>
-      <p
-        className={cn(
-          "text-[16px] leading-tight font-semibold",
-          live && side ? sideHue(side) : r.setup.state === "approaching" ? "text-flip-fig" : "text-ink",
-        )}
-      >
-        {side === "long" ? "Long · " : side === "short" ? "Short · " : ""}
-        {setupLabel(r)}
-      </p>
-      {r.setup.note && <p className="mt-1.5 text-[12.5px] leading-[1.5] text-ink-2">{r.setup.note}</p>}
-      {e && (
-        <p className="mt-2.5 text-[12px] text-ink-3">
-          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">Entry reference</span>
-          <span className="text-ink-2">{e.kind === "EMA8" ? "8 EMA wave" : e.kind}</span>{" "}
-          <span className="fig text-ink">{num(e.price)}</span>
-          <span className="fig ml-1.5 text-ink-3">
-            · price {e.dist_atr >= 0 ? "+" : ""}
-            {e.dist_atr.toFixed(2)} ATR from it
-          </span>
-        </p>
-      )}
-
-      {/* THE DAILY FRAME (owner, 2026-10-22): a PDH break inside a downtrend
-          and one at new highs read the same on ten-minute bars and are not
-          the same trade. The words are the collector's (frame.read). */}
-      {r.frame_read?.text && (
-        <p className="mt-2 text-[12px] text-ink-3">
-          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">Daily</span>
-          <span
-            className={cn(
-              r.frame_read.trend === "up" ? "text-call-fig" : r.frame_read.trend === "down" ? "text-put-fig" : "text-ink-2",
-            )}
-          >
-            {r.frame_read.trend === "up" ? "uptrend" : r.frame_read.trend === "down" ? "downtrend" : "between the averages"}
-          </span>
-          <span className="text-ink-2"> · {r.frame_read.text}</span>
-        </p>
-      )}
-      {/* THE TEN-MINUTE 200 EMA (structure.py, 2026-10-30): the side filter on
-          the strategy's own timeframe. */}
-      {r.levels.ema200 != null && (
-        <p className="mt-1 text-[12px] text-ink-3">
-          <span className="qt-cap mr-1.5 text-[10.5px] text-ink-3">10m</span>
-          <span className={cn((r.trend200 ?? 0) === 1 ? "text-call-fig" : (r.trend200 ?? 0) === -1 ? "text-put-fig" : "text-ink-2")}>
-            {(r.trend200 ?? 0) === 1 ? "above" : (r.trend200 ?? 0) === -1 ? "below" : "on"} the 200 EMA
-          </span>
-          <span className="text-ink-2">
-            {" "}
-            · {r.levels.ema200.toFixed(2)}
-            {r.ema200_slope ? `, ${r.ema200_slope}` : ""} — longs above it, shorts below; a retest into it tends to fail
-          </span>
-        </p>
-      )}
-
-      <div className="mt-3.5">
-        <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">Signals today · confirmed 10-minute bars</p>
-        {r.signals.length === 0 ? (
-          <p className="text-[12px] text-ink-3">None yet.</p>
-        ) : (
-          <ul className="flex flex-col">
-            {r.signals.map((s, i) => (
-              <li key={`${s.kind}-${s.at_et}-${i}`} className="flex items-baseline gap-2.5 py-[3px] text-[12px]">
-                <span className="fig w-[40px] shrink-0 text-ink-3">{s.at_et}</span>
-                <span
-                  className={cn(
-                    "fig w-[46px] shrink-0 font-semibold",
-                    s.kind === "E_SETUP" || s.kind === "BO" ? "text-ink-2" : sideHue(s.side),
-                  )}
-                >
-                  {s.kind === "E_SETUP" ? "(E)" : s.kind === "BO" ? "◆" : `(${s.kind})`}{" "}
-                  {s.kind === "E_SETUP" ? "" : s.side === "long" ? "▲" : "▼"}
-                </span>
-                <span className="min-w-0 text-ink-2">{s.note}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 
@@ -432,16 +325,6 @@ function Score({ r, side, stage }: { r: ScanRow; side: Side | null; stage: numbe
 
 /* -------------------------------------------------------------------------- */
 
-interface Rung {
-  key: string;
-  label: string;
-  price: number;
-  tone: "call" | "put" | "neutral" | "spot" | "broken-hi" | "broken-lo";
-  hint?: string;
-  /** A word after the label: where the figure comes from, when that needs saying. */
-  mark?: string;
-}
-
 /**
  * THE OFFICIAL DAY'S LEVEL, WHEN THE CHART'S BARS STOP SHORT OF IT. PDH and PDL are
  * the daily bar's; the 5-minute bars the candles are drawn from leave out the opening
@@ -472,98 +355,6 @@ function pmPastBars(what: "high" | "low", level: number | null, bars: number | n
   return offBars(level, bars)
     ? `The pre-market ${what} from ${src}. Yahoo's 5-minute bars reach ${num(bars)}: they are missing part of today's pre-market, so the candles stop short of this line.`
     : undefined;
-}
-
-function Ladder({ r }: { r: ScanRow }) {
-  const L = r.levels;
-  const rungs: Rung[] = [];
-  const add = (key: string, label: string, price: number | null, tone: Rung["tone"], hint?: string, mark?: string) => {
-    if (price != null && Number.isFinite(price)) rungs.push({ key, label, price, tone, hint, mark });
-  };
-  const official = (what: string, bars: number | null | undefined) =>
-    ` — the official day's ${what}. The 5-minute bars reach ${num(bars)}: they miss the opening prints, so the candles stop short of this line.`;
-  const hiOff = offBars(L.pdh, L.pdh_bars);
-  const loOff = offBars(L.pdl, L.pdl_bars);
-  add("pdh", "PDH", L.pdh, r.broken.pdh ? "broken-hi" : "call", `previous regular-session high${hiOff ? official("high", L.pdh_bars) : ""}`, hiOff ? "official" : undefined);
-  const pmSrc = pmSource(r);
-  const pmhNote = pmPastBars("high", L.pmh, L.pmh_bars, pmSrc);
-  const pmlNote = pmPastBars("low", L.pml, L.pml_bars, pmSrc);
-  add("pmh", "PMH", L.pm_done ? L.pmh : null, r.broken.pmh ? "broken-hi" : "call", `pre-market high${pmhNote ? ` — ${pmhNote}` : ""}`, pmhNote ? "wider" : undefined);
-  add("pml", "PML", L.pm_done ? L.pml : null, r.broken.pml ? "broken-lo" : "put", `pre-market low${pmlNote ? ` — ${pmlNote}` : ""}`, pmlNote ? "wider" : undefined);
-  add("pdl", "PDL", L.pdl, r.broken.pdl ? "broken-lo" : "put", `previous regular-session low${loOff ? official("low", L.pdl_bars) : ""}`, loOff ? "official" : undefined);
-  add("vwap", "VWAP", L.vwap, "neutral", "volume-weighted average price for the session");
-  add("ema8", "8 EMA", L.ema8, "neutral", "the 8 EMA on ten-minute bars");
-  add("ema200", "200 EMA", L.ema200 ?? null, "neutral", "the 200 EMA on ten-minute bars — the side filter");
-  add("pdc", "Prev close", L.pdc, "neutral");
-  add("dhi", "Day high", L.day_hi, "neutral", "today's regular-session high so far");
-  add("dlo", "Day low", L.day_lo, "neutral", "today's regular-session low so far");
-  if (!L.pm_done) {
-    add("pmh_f", "PMH forming", L.pmh, "neutral", "pre-market high so far — locks at 09:30");
-    add("pml_f", "PML forming", L.pml, "neutral", "pre-market low so far — locks at 09:30");
-  }
-  if (r.last != null) rungs.push({ key: "last", label: "Last", price: r.last, tone: "spot" });
-  rungs.sort((a, b) => b.price - a.price);
-
-  const atr = r.atr_b;
-  return (
-    <section className={CARD}>
-      <Cap right={atr != null ? <span className="fig">10m ATR {num(atr)}</span> : undefined}>Levels</Cap>
-      {L.wave_hi != null && L.wave_lo != null && (
-        <p className="mb-2 text-[11.5px] text-ink-3">
-          8 EMA wave <span className="fig text-ink-2">{num(L.wave_lo)}</span>–
-          <span className="fig text-ink-2">{num(L.wave_hi)}</span>
-        </p>
-      )}
-      <ul className="flex flex-col">
-        {rungs.map((g) => {
-          const d = r.last != null && atr ? (g.price - r.last) / atr : null;
-          const spot = g.tone === "spot";
-          return (
-            <li
-              key={g.key}
-              title={g.hint}
-              className={cn(
-                "grid grid-cols-[minmax(0,1fr)_88px_70px] items-baseline gap-2 py-[3px]",
-                spot && "my-0.5 border-y border-ring bg-surface-2 py-[5px]",
-              )}
-            >
-              <span
-                className={cn(
-                  "text-[12px]",
-                  spot && "font-semibold text-ink",
-                  g.tone === "call" && "text-call-fig",
-                  g.tone === "put" && "text-put-fig",
-                  g.tone === "neutral" && "text-ink-2",
-                  (g.tone === "broken-hi" || g.tone === "broken-lo") && "text-ink-3",
-                )}
-              >
-                {(g.tone === "broken-hi" || g.tone === "broken-lo") && (
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "mr-1.5 inline-block h-[7px] w-[7px] rounded-[1px] align-middle",
-                      g.tone === "broken-hi" ? "bg-call-fig" : "bg-put-fig",
-                    )}
-                  />
-                )}
-                {g.label}
-                {(g.tone === "broken-hi" || g.tone === "broken-lo") && (
-                  <span className="qt-cap ml-1.5 text-[9.5px] text-ink-3">broken</span>
-                )}
-                {g.mark && <span className="qt-cap ml-1.5 text-[9.5px] text-ink-3">{g.mark}</span>}
-              </span>
-              <span className={cn("fig text-right text-[12.5px]", spot ? "text-ink" : "text-ink-2")}>
-                {num(g.price)}
-              </span>
-              <span className="fig text-right text-[11px] text-ink-3">
-                {spot || d == null ? "" : `${d >= 0 ? "+" : ""}${d.toFixed(1)} ATR`}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
-  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -751,9 +542,16 @@ function Headlines({ news, now, top }: { news: ScanRow["news"]; now: number | nu
           );
         })}
       </ul>
-      {!all && news.length > HEADLINES_SHOWN && (
-        <button type="button" onClick={() => setAll(true)} className="hit mt-1.5 w-full rounded-[3px] border border-ring-2 py-1 text-[11.5px] text-ink-3 hover:text-ink">
-          Show {news.length - HEADLINES_SHOWN} more
+      {/* Both ways (owner, 2026-11-13: "show more ... but then no option to collapse it
+          back"): the same button folds the list back to the first few. */}
+      {news.length > HEADLINES_SHOWN && (
+        <button
+          type="button"
+          onClick={() => setAll((v) => !v)}
+          aria-expanded={all}
+          className="hit mt-1.5 w-full rounded-[3px] border border-ring-2 py-1 text-[11.5px] text-ink-3 hover:text-ink"
+        >
+          {all ? "Show less" : `Show ${news.length - HEADLINES_SHOWN} more`}
         </button>
       )}
     </>

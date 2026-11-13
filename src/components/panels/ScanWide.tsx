@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Catalyst, RangeState, ScanRow, Verdict } from "@/types/scanner";
 import { TickerLogo } from "@/components/ui/TickerLogo";
+import { Popover } from "@/components/ui/Popover";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
@@ -553,6 +554,7 @@ export function StatCard({
   label,
   sub,
   title,
+  pop,
 }: {
   glyph: string;
   tint?: keyof typeof CARD_TINT;
@@ -561,17 +563,33 @@ export function StatCard({
   label: string;
   sub?: React.ReactNode;
   title?: string;
+  /** The whole card opens a card of its own on a click (the Today phase card's guide). */
+  pop?: { label: string; panel: React.ReactNode };
 }) {
-  return (
-    <div className="qt-stat flex min-w-[170px] flex-1 items-center gap-3 border-r border-ring px-4 py-[7px] last:border-r-0" title={title}>
+  const inner = (
+    <>
       <span className={cn("flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[5px] border border-ring-2 bg-surface-2", CARD_TINT[tint])}>
         <Glyph name={glyph} />
       </span>
-      <div className="min-w-0">
-        <p className={cn("fig text-[16px] leading-none whitespace-nowrap", hue ?? "text-ink")}>{value}</p>
-        <p className="qt-cap mt-[5px] text-[9.5px] leading-none text-ink-2">{label}</p>
-        {sub != null && sub !== "" && <p className="mt-[3px] truncate text-[11px] leading-[1.2] text-ink-3">{sub}</p>}
-      </div>
+      <span className="block min-w-0">
+        <span className={cn("fig block text-[16px] leading-none whitespace-nowrap", hue ?? "text-ink")}>{value}</span>
+        <span className="qt-cap mt-[5px] block text-[9.5px] leading-none text-ink-2">
+          {label}
+          {pop && <span aria-hidden className="ml-1 text-ink-3">▾</span>}
+        </span>
+        {sub != null && sub !== "" && <span className="mt-[3px] block truncate text-[11px] leading-[1.2] text-ink-3">{sub}</span>}
+      </span>
+    </>
+  );
+  return (
+    <div className="qt-stat flex min-w-[170px] flex-1 items-center gap-3 border-r border-ring px-4 py-[7px] last:border-r-0" title={pop ? undefined : title}>
+      {pop ? (
+        <Popover label={pop.label} panel={pop.panel} title={title} className="-mx-2 -my-1 flex min-w-0 flex-1 items-center gap-3 px-2 py-1">
+          {inner}
+        </Popover>
+      ) : (
+        inner
+      )}
     </div>
   );
 }

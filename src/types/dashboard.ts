@@ -61,6 +61,20 @@ export interface DashSetup {
   n: number | null;
 }
 
+export interface DashOverview {
+  id: string;
+  et_label: string;
+  created_utc: string | null;
+  /** Written by the 09:00 ET clock rather than the button. */
+  auto: boolean;
+  trading_day: string | null;
+  headline: string;
+  /** What it means for the list. */
+  focus: string;
+  /** Up to three: the calendar's releases first, then the model's. */
+  risks: string[];
+}
+
 export interface DashboardPayload {
   ok: boolean;
   session: ScanSession;
@@ -93,6 +107,8 @@ export interface DashboardPayload {
   top: DashRow[];
   /** The pool's rank with the engine's verdict; null until the pool has been read. */
   inplay: DashInPlay | null;
+  /** The latest market overview's card (server overview.latest_card), in In play's place since 2026-11-13. */
+  overview?: DashOverview | null;
   stories: DashStory[];
   news_live: boolean;
   rotation: Array<{ key: string; label: string; day_pct: number | null; rs_day: number | null; leaders: string[] }>;

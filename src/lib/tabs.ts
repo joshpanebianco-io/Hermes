@@ -98,15 +98,17 @@ export const TAB_KEYS: readonly Tab[] = TABS.map((t) => t.key);
  * Breakouts, Extended hours and Day 2/3 were four answers to "what should I look at
  * now", each ranked its own way. Today is one list that changes what it ranks by with
  * the clock (server today.py): the evening's movers, the pre-market's names in play, the
- * open's triggers, the session's setups. The strip is Today, Charts (the Multicharts
- * view), Record (the signal log) and Market (the overview). The four old
+ * open's triggers, the session's setups. The strip is Scanner, Charts (the Multicharts
+ * view) and Market (the overview). The four old
  * views stay reachable for a week behind Settings → Interface (`group: "legacy"`,
  * lib/legacyViews.ts), then go. A browser that remembers one of them opens Today.
  */
 export const SCAN_VIEWS = [
-  { key: "today", label: "Today", group: "main", title: "The best stocks for the hour it is: the evening's movers, then what is in play into the open, then the open's triggers, then the session's setups" },
+  // Called Today until 2026-11-13 ("i think we hsould rename 'today' to Scanner"); the key stays.
+  { key: "today", label: "Scanner", group: "main", title: "The best stocks for the hour it is: the evening's movers, then what is in play into the open, then the session's setups from the bell" },
   { key: "multi", label: "Charts", group: "main", title: "Six live charts of the list's best names, three across and two down" },
-  { key: "log", label: "Record", group: "main", title: "Every signal, and what it did afterwards" },
+  // No Record view since 2026-11-13 ("can we get rid of the record section completely"):
+  // the signal log is still kept on the server, read by the score card and Hermes.
   // The stocks half of what was the Analysis tab. Next to Record (owner, 2026-11-13: "can we
   // move game plan next to Record?"); it was a button on Today for an hour. Later the same day
   // the per-name plans gave way to a market overview, and the view was renamed Market (the

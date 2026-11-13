@@ -409,6 +409,13 @@ def futures_bars(
     return COLLECTOR.futures_bars(book, tf)
 
 
+@app.get("/api/futures/tick/{book}")
+def futures_tick(book: str) -> dict[str, Any]:
+    """A futures chart's live last candle: the ETF's last trade in the future's prices
+    (futfill.py), polled every second; `ok: false` outside 04:00-17:00 ET."""
+    return COLLECTOR.futures_tick(book[:6])
+
+
 @app.get("/api/scanner/bars/{sym}")
 def scanner_bars(
     sym: str, tf: str = Query("10m", pattern=r"^(1m|3m|5m|10m|30m|60m|D)$"),
@@ -469,8 +476,9 @@ def scanner_sectors() -> dict[str, Any]:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict[str, Any]:
-    """The Dashboard tab, whole."""
-    return COLLECTOR.dashboard()
+    """The Dashboard tab, whole, with the latest market overview's card (overview.py),
+    which took the In play card's place on 2026-11-13."""
+    return {**COLLECTOR.dashboard(), "overview": overview_mod.latest_card()}
 
 
 @app.get("/api/scanner/extended")

@@ -254,9 +254,10 @@ def series(bars: list[Bar], tf: str, now: datetime, ladder: dict[str, Any] | Non
     lines: list[dict[str, Any]] = []
     for r in (ladder or {}).get("rows") or []:
         label = str(r.get("label") or "")
+        # The gamma levels only. The prior settle and the opening range were drawn too, as
+        # grey references, until the owner had them off the chart (2026-11-14: "can we
+        # remove those levels"); the ladder keeps both, for Hermes and the brief.
         tone = LINE_KINDS.get(str(r.get("kind")))
-        if label == "Prior settle" or label.startswith("Opening range"):
-            tone = "ref"
         if tone and isinstance(r.get("price"), int | float):
             lines.append({"v": float(r["price"]), "label": label, "tone": tone})
     hi, lo = _row(ladder, "Expected move high"), _row(ladder, "Expected move low")

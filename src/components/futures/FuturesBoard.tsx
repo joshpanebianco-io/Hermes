@@ -28,6 +28,21 @@ import { placedName } from "@/lib/releases";
 import { segItem } from "@/lib/seg";
 import type { ReportController } from "@/lib/useReport";
 import { useNow } from "@/lib/useNow";
+import { wallRank } from "@/lib/walls";
+
+/**
+ * A level's name; a gamma wall's rank as triangles (lib/walls), set at three quarters of
+ * the type so they stand about the chart's drawn triangles' height (2026-11-14).
+ */
+function LevelName({ label }: { label: string }) {
+  const w = wallRank(label);
+  if (!w) return <>{label}</>;
+  return (
+    <>
+      {w.word} <span className="text-[0.75em]">{(w.up ? "▲" : "▼").repeat(w.n)}</span>
+    </>
+  );
+}
 
 /**
  * Futures — everything about the futures traded, on one page (owner, 2026-11-10:
@@ -390,7 +405,7 @@ function BookCard({ book, data, next, now, onPick }: { book: FutBook; data: Term
         <Line label="Above" hue="text-call-fig">
           {r.up ? (
             <span className="fig">
-              {num(r.up.price, r.dp)} <span className="text-ink-3">{r.up.label}</span>
+              {num(r.up.price, r.dp)} <span className="text-ink-3"><LevelName label={r.up.label} /></span>
             </span>
           ) : (
             "—"
@@ -399,7 +414,7 @@ function BookCard({ book, data, next, now, onPick }: { book: FutBook; data: Term
         <Line label="Below" hue="text-put-fig">
           {r.down ? (
             <span className="fig">
-              {num(r.down.price, r.dp)} <span className="text-ink-3">{r.down.label}</span>
+              {num(r.down.price, r.dp)} <span className="text-ink-3"><LevelName label={r.down.label} /></span>
             </span>
           ) : (
             "—"
@@ -603,7 +618,9 @@ function BookView({ book, data }: { book: FutBook; data: TerminalData }) {
           />
         </div>
         <section aria-label={`${book} chart`} className="qt-card order-first flex min-h-[460px] min-w-0 flex-col overflow-hidden rounded-[6px] border border-ring xl:order-none xl:min-h-0">
-          <ScanChart key={book} sym={book} state={0} barsUrl={`/api/futures/bars/${book}`} live={false} store="fut" />
+          {/* Live from the tracking ETF between 04:00 and 17:00 ET (server futfill.py, 2026-11-14):
+              CME's own bars run ten minutes behind. */}
+          <ScanChart key={book} sym={book} state={0} barsUrl={`/api/futures/bars/${book}`} tickUrl={`/api/futures/tick/${book}`} store="fut" />
         </section>
       </div>
     </div>

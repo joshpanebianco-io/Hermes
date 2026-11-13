@@ -108,7 +108,7 @@ breaks its **pre-market** or **previous-day** high (low), and the trade is the
 **retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
 far from the level for it to come back.
 
-**Today, one list for the hour it is (2026-11-13).** The tab opens on **Today**: the best
+**The Scanner, one list for the hour it is (2026-11-13; called Today for its first day).** The tab opens on the **Scanner**: the best
 stocks for the time of day, re-read on its own and ranked by what each phase can actually
 know (server `today.py`):
 
@@ -117,21 +117,24 @@ know (server `today.py`):
 | After hours, 16:00–20:00 | moving after the close, and the day's big movers | the move in daily ATRs, volume against normal, a story or a report, tomorrow's Day 2 |
 | Overnight, 20:00–04:00 and shut days | the prep for the next session | the same, with the reports due before the open |
 | Pre-market, 04:00–09:30 | in play going into the open | the pool's own rank on live prices: gap in ATRs, pre-market volume against an average day, a report or a story, already through a level, Day 2/3 |
-| The open, 09:30–10:00 | the pre-market's names, by what the bell has done | entry live, through a level, not triggered, failed; then their in-play score |
-| Session, 10:00–16:00 | the best trades now | the engine's setup score below, unchanged |
+| Session, 09:30–16:00 | the best trades now | the engine's setup score below, unchanged |
 
 Before the bell a move's size can be read and its direction cannot (a gap of 3+ daily ATRs
 meant 2.7x a normal range over a year; the gap's direction told nothing), so the evening and
 pre-market lists rank how in play a name is and show both triggers, the gap's side as a lean,
-never a call. The open's first half hour reached +1R on 39% of signals against 52% from
-10:00, so the open orders names by what has happened to them rather than by a setup score.
-**Today is drawn in the Setups table below** (its columns, chips and colours; the owner
+never a call. From the bell the setup score ranks: until 2026-11-13 the first half hour was
+a phase of its own that ordered names by what the bell had done to them, which left relative
+strength and the open's own volume out. The open's first half hour reached +1R on 39% of
+signals against 52% from 10:00, and relative volume is thin until about 09:45: worth knowing
+when reading an early signal.
+**The Scanner is drawn in the Setups table below** (its columns, chips and colours; the owner
 kept that look), in Today's order: the names in play first, then the rest of the tracked
 list. The phase is the stat row's first card, and before 10:00 the Score column is how in
 play a name is, as a share of the most it can score, with the reasons in its hover. A name
 the engine does not track yet is drawn from the wide read until the pool takes it. The
-strip is **Today**, **Charts** (six live charts of the best names), **Record** (the signal
-log) and **Market** (the AI market overview). **The
+strip is **Scanner**, **Charts** (six live charts of the best names) and **Market** (the AI
+market overview); the Record view went on 2026-11-13, and the signal log it showed is still
+kept by the collector. **The
 pinned names are favourites**: each morning the fifteen most in play are tracked with SPY,
 QQQ and IWM, and the pool's picks (06:00, 07:00, 08:00, 09:00, 09:25, then 10:00) fill the
 rest of the forty, so the market's best can reach the list; a favourite not tracked today
@@ -545,7 +548,7 @@ single names every ten, one request every ten seconds at most):
 
 The strip's last view, next to Record, and one click from the Dashboard's game plan
 card (*Market overview*). Until 2026-11-13 it was the **Game plan**, a plan per name;
-the Today list already ranks the names and the Setups table carries their levels, so
+the Scanner already ranks the names and the Setups table carries their levels, so
 the per-name plans gave way to the market they trade in. **It writes itself at 09:00
 ET on a trading day** (`overview.auto_due`: once anything has been written since 09:00
 it stands; a refusal gets one more try five minutes later), and **Write again** writes

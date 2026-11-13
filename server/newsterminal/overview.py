@@ -27,6 +27,7 @@ out, and there is time to read it.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -473,6 +474,53 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], today: dict[str, Any] |
     return sp.ask_chain(base, messages, schema(story_ids(facts)), "market_overview", SKELETON,
                         key=key, sanitize=lambda obj: sanitize(obj, facts), verify=unverified,
                         store=sp._store)
+
+
+# --------------------------------------------------------------------------
+# The Dashboard's card (owner, 2026-11-13: the In play card was the Scanner's
+# pre-market list twice, and this took its place).
+# --------------------------------------------------------------------------
+
+#: The last card built, keyed by the stored file's name and when it was written, so a
+#: Dashboard poll reads a file only when a new overview has been stored.
+_CARD: dict[str, Any] = {"key": None, "card": None}
+
+
+def card_of(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """A stored overview → what the Dashboard's card prints: the headline, what it means
+    for the list, and up to three risks (the calendar's first). None for anything else. Pure."""
+    b = rec.get("plan")
+    if rec.get("kind") != KIND or not rec.get("ok") or not isinstance(b, dict):
+        return None
+    facts = rec.get("facts") if isinstance(rec.get("facts"), dict) else {}
+    return {"id": rec.get("id"), "et_label": rec.get("et_label"),
+            "created_utc": rec.get("created_utc"), "auto": bool(rec.get("auto")),
+            "trading_day": facts.get("trading_day"), "headline": b.get("headline") or "",
+            "focus": b.get("focus") or "",
+            "risks": [*(b.get("events") or []), *(b.get("risks") or [])][:3]}
+
+
+def latest_card() -> dict[str, Any] | None:
+    """The newest stored overview's card, or None when none has been written."""
+    try:
+        names = sorted((n for n in os.listdir(sp.PLANS_DIR) if n.endswith(".json")),
+                       reverse=True)
+    except OSError:
+        return None
+    for name in names[:10]:
+        path = os.path.join(sp.PLANS_DIR, name)
+        try:
+            key = f"{name}:{os.path.getmtime(path)}"
+        except OSError:
+            continue
+        if _CARD["key"] == key:
+            return _CARD["card"]  # type: ignore[no-any-return]
+        rec = sp.load(name[:-5])
+        got = card_of(rec) if isinstance(rec, dict) else None
+        if got is not None:
+            _CARD.update(key=key, card=got)
+            return got
+    return None
 
 
 def _created(h: dict[str, Any]) -> datetime | None:

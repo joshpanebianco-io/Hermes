@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { setAskFocus } from "@/lib/ask/open";
 import type { CalendarRow } from "@/types/terminal";
-import type { DashInPlay, DashInPlayRow, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
+import type { DashOverview, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
 import { BreadthBars } from "@/components/panels/Breadth";
 import { setupLabel } from "@/components/panels/ScanDetail";
-import { CARD, CatalystCell, Chips, Spark, TD, TH, Tag, TrackButton, ageWord, dayName, rowProps } from "@/components/panels/ScanWide";
+import { CARD, CatalystCell, Chips, Spark, TD, TH, ageWord, dayName, rowProps } from "@/components/panels/ScanWide";
 import { PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { SectorGlyph } from "@/components/ui/SectorGlyph";
@@ -160,7 +160,7 @@ export function Dashboard({
       <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[minmax(0,5fr)_minmax(0,3.7fr)_minmax(0,3.6fr)] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
         <TopSetups rows={data.top} onAll={() => toScanner("today", { "today.side": "all" })} />
-        <InPlay d={data.inplay} onAll={() => toScanner("extended")} />
+        <MarketCard o={data.overview ?? null} tradingDay={data.trading_day} onOpen={() => toScanner("plan")} />
         <StockNews stories={data.stories} live={data.news_live} />
       </div>
       <Rotation d={data} onHeat={() => toSectors()} onSector={(k) => toSectors({ "sec.mode": "cards", "sec.sel": k })} />
@@ -403,7 +403,7 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
     // sidebar open) the table was wider than the card and the score, the one figure the
     // card is ranked by, was cut off its right edge. The small chart gives way there.
     <section className={cn(CARD, "@container flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Top setups" sub="The scanner's own rank" right={<Go onClick={onAll}>Open the Today list</Go>} />
+      <Head title="Top setups" sub="The scanner's own rank" right={<Go onClick={onAll}>Open the Scanner</Go>} />
       <div className="shrink-0">
         <Chips items={TOP_CHIPS} on={chip} set={setChip} counts={counts} />
       </div>
@@ -450,94 +450,49 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
 }
 
 /**
- * In play — the pool's rank across the whole market, where My list stood (owner,
- * 2026-11-10: "lets remove 'my list' and replace it with something else that's
- * useful"). The pinned list was the same names every day; this is who is moving on
- * volume and news right now, why (sources/pool.in_play's own words), and what the
- * engine has done about it: taken at a mark, pinned, on the list, or one Track away.
- * Before the bell it reads the pre-market; after it, the day's move and volume.
+ * THE MARKET OVERVIEW'S CARD, WHERE IN PLAY STOOD (owner, 2026-11-13: "what can we
+ * replace the 'in play' section on the dashboard? it seems redundant", then "okay do that").
+ * In play was the pool's top ten, the Scanner's own pre-market list a second time. This is
+ * the one read the page did not carry: the AI overview written at 09:00 ET (the Stocks
+ * tab's Market view), cut to its headline, what it means for the list and three risks.
+ * Its news and its sectors are left to the Stock news and Rotation cards beside it.
  */
-function InPlay({ d, onAll }: { d: DashInPlay | null; onAll: () => void }) {
-  const ticker = useTicker();
-  const rows = d?.rows ?? [];
-  const sub = d
-    ? [
-        d.qualified != null ? `${d.qualified} qualify` : null,
-        d.promoted ? `${d.promoted} promoted${d.marks_done.length ? ` at ${d.marks_done[d.marks_done.length - 1]}` : ""}` : null,
-        d.next_mark ? `next mark ${d.next_mark} ET` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : "the pool's rank across the market";
+function MarketCard({ o, tradingDay, onOpen }: { o: DashOverview | null; tradingDay: string; onOpen: () => void }) {
+  // The overview is the session's when it was written for the day the page is reading.
+  const current = o != null && o.trading_day === tradingDay;
+  const sub = !o ? "the AI read of the market, written at 09:00 ET" : current ? `written ${o.auto ? "at 09:00 ET" : (o.et_label.split(", ")[1] ?? o.et_label)}` : `from ${o.et_label}`;
   return (
     <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="In play" sub={sub} right={<Go onClick={onAll}>View Extended hours</Go>} />
-      <div className="min-h-0 flex-1 overflow-auto">
-        {rows.length === 0 ? (
-          <p className="py-8 text-center text-[12px] text-ink-3">{d ? "Nothing over the pool's bar right now." : "The pool has not been read yet — it reads from 04:00 ET."}</p>
-        ) : (
-          <table className="w-full border-separate border-spacing-0 text-left">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th scope="col" className={TH}>Ticker</th>
-                <th
-                  scope="col"
-                  className={cn(TH, "text-right")}
-                  title="The pool's in-play score: the gap in the name's own ATRs, pre-market volume against an average day, a report, a fresh story, a level already taken, a Day 2 or 3. Nothing under 4 is promoted."
-                >
-                  In play
-                </th>
-                <th scope="col" className={TH}>Why</th>
-                <th scope="col" className={TH} title="What the engine has done with the name today">Engine</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.sym} {...rowProps(r.sym, ticker === r.sym)}>
-                  <td className={TD}>
-                    <div className="flex items-center gap-2">
-                      <TickerLogo sym={r.sym} size={18} />
-                      <div className="min-w-0 leading-[1.2]">
-                        <p className="text-[12.5px] font-semibold text-ink" title={r.name ?? undefined}>{r.sym}</p>
-                        <p className="fig text-[10.5px] text-ink-3">{r.last != null ? num(r.last, 2) : "—"}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className={cn(TD, "text-right whitespace-nowrap")}>
-                    <span className="fig text-[12.5px] text-ink">{r.score.toFixed(1)}</span>
-                    <span aria-hidden className="ml-2 inline-block h-[4px] w-[36px] rounded-[1px] bg-ring align-middle">
-                      <span className="block h-full rounded-[1px] bg-ink-3" style={{ width: `${Math.max(4, Math.min(100, (r.score / (d?.score_max ?? 32)) * 100))}%` }} />
-                    </span>
-                  </td>
-                  <td className={cn(TD, "max-w-[260px] text-[11px] leading-snug text-ink-2")}>{r.reason}</td>
-                  <td className={cn(TD, "whitespace-nowrap")}>
-                    <Engine v={r.verdict} sym={r.sym} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Head title="Market overview" sub={sub} right={<Go onClick={onOpen}>Open the Market overview</Go>} />
+      {!o ? (
+        <p className="py-8 text-center text-[12px] text-ink-3">No overview yet. It writes itself at 09:00 ET on a trading day, or from the Market view&apos;s button.</p>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto pr-1">
+          {!current && <p className="mb-2 text-[11px] text-ink-3">The next is written at 09:00 ET.</p>}
+          <p className="text-[14px] leading-[1.45] font-semibold text-ink">{o.headline}</p>
+          {o.focus && (
+            <div className="mt-3">
+              <p className="qt-cap mb-1 text-[10px] text-ink-3">For today&apos;s list</p>
+              <p className="text-[12.5px] leading-[1.5] text-ink-2">{o.focus}</p>
+            </div>
+          )}
+          {o.risks.length > 0 && (
+            <div className="mt-3">
+              <p className="qt-cap mb-1 text-[10px] text-ink-3">Risks</p>
+              <ul className="flex flex-col gap-1">
+                {o.risks.map((r) => (
+                  <li key={r} className="flex gap-2 text-[12px] leading-[1.45] text-ink-2">
+                    <span aria-hidden className="mt-[7px] h-[4px] w-[4px] shrink-0 rounded-[1px] bg-ink-4" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
-}
-
-/** The engine's verdict on an In play row, as the wide tables' tags say it; Track where it is one click away. */
-function Engine({ v, sym }: { v: DashInPlayRow["verdict"]; sym: string }) {
-  if (!v) return <span className="text-ink-4">—</span>;
-  // No "Pool 06:00" (owner, 2026-11-13, the Pool tag removed): a name the app put on the
-  // list itself is on the list, as one tracked by hand is.
-  if (v.state === "promoted") return <Tag tone="flat" title={`On today's list since ${v.mark} ET`}>On the list</Tag>;
-  if (v.state === "pinned") return <Tag tone="flat" title="One of your favourites">Favourite</Tag>;
-  if (v.state === "hand" || v.state === "tracked") return <Tag tone="flat" title="On today's list">On the list</Tag>;
-  if (v.state === "inplay")
-    return (
-      <span onClick={(e) => e.stopPropagation()}>
-        <TrackButton sym={sym} tracked={false} />
-      </span>
-    );
-  return <span className="text-ink-4" title="Under the pool's bar">—</span>;
 }
 
 function StockNews({ stories, live }: { stories: DashStory[]; live: boolean }) {

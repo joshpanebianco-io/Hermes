@@ -64,8 +64,8 @@ def test_a_view_carries_the_overnight_as_its_forming_range_and_the_ladder_as_lin
     assert pre["ok"] and pre["tf"] == "10m" and len(pre["bars"]) == 85  # 18:00 to 08:00, ten-minute
     assert pre["levels"] == {"pdh": 28129.0, "pdl": 27316.0, "pmh": 28109.0, "pml": 28018.0,
                              "pm_done": False}
-    assert {x["label"] for x in pre["lines"]} == {
-        "Put wall 3", "Prior settle", "Opening range high", "Gamma flip"}
+    # The gamma levels alone: the settle and the opening range left the chart 2026-11-14.
+    assert {x["label"] for x in pre["lines"]} == {"Put wall 3", "Gamma flip"}
     assert pre["em"] == {"lo": 27613.0, "hi": 28485.0, "label": "EM ±436"}
     assert [s["kind"] for s in pre["sessions"]] == ["pre"]
     # Once the cash session opens, the overnight is final.

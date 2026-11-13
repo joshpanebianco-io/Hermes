@@ -2549,6 +2549,13 @@
   --desk-markets: #b45309;
   --desk-macro: #7c3aed;
   --flip-fig: #b45309;
+  /* The helm that stands in the chart while it loads, and its glow, in the chart's own
+     black and blue (owner, 2026-11-14: "on the josh color charts the hermes logo loading
+     spinner is like silver and hard to see. can we just use black and blue"): the app's
+     mark colours are made for a dark ground, and on this grey they washed out. */
+  --icon-a: #000000;
+  --icon-b: #3179f5;
+  --title-sheen: #3179f5;
 }
 .qt-chart[data-colors="josh"] {
   background: var(--chart-bg);

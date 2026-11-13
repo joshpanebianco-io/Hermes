@@ -186,7 +186,7 @@ export function StockPlan({
             <p className="px-4 py-10 text-center text-[11.5px] leading-relaxed text-ink-3">
               No market overview yet. It writes itself at 09:00 ET on a trading day, or press{" "}
               <span className="fig text-flip">Generate</span>. It reads SPY, QQQ and IWM against their levels, the
-              sectors, the day&apos;s prints and the Fed, the stories leading the tape and the top of the Today list.
+              sectors, the day&apos;s prints and the Fed, the stories leading the tape and the top of the Scanner.
             </p>
           ) : plan.error ? (
             <Failed error={plan.error} raw={plan.raw} noun={overview ? "overview" : "plan"} />
@@ -648,7 +648,7 @@ function PickItem({ n }: { n: OverviewPick }) {
 function TodayTop({ t }: { t: OverviewFacts["today"] }) {
   return (
     <div className="mt-4">
-      <p className="qt-cap mb-1 text-[10.5px] text-ink-3">Top of Today{t.phase ? ` · ${t.phase}` : ""}</p>
+      <p className="qt-cap mb-1 text-[10.5px] text-ink-3">Top of the Scanner{t.phase ? ` · ${t.phase}` : ""}</p>
       <ul className="flex flex-col">
         {t.rows.map((r) => (
           <li

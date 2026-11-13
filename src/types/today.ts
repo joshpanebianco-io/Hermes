@@ -2,7 +2,7 @@ import type { Catalyst, ScanRow } from "@/types/scanner";
 
 /** GET /api/scanner/today — the Stocks tab's one list (server today.py). */
 
-export type PhaseKey = "after" | "overnight" | "pre" | "open" | "session";
+export type PhaseKey = "after" | "overnight" | "pre" | "session";
 
 export interface TodayPhase {
   key: PhaseKey;

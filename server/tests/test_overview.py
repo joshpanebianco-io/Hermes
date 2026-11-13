@@ -209,6 +209,29 @@ def test_generate_stores_an_overview_beside_the_plans(monkeypatch: Any, tmp_path
     assert h[0]["id"] == out["id"] and h[0]["kind"] == "overview" and h[0]["auto"] is True
 
 
+def test_the_dashboard_card_is_the_newest_overview_and_skips_the_old_plans(
+        monkeypatch: Any, tmp_path: Any) -> None:
+    """The Dashboard's card (2026-11-13, in place of In play): the headline, what it means
+    for the list and three risks, the calendar's first; a game plan is not an overview."""
+    monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))
+    monkeypatch.setattr(ov, "_CARD", {"key": None, "card": None})
+    assert ov.latest_card() is None
+    sp._store({"id": "20261112-091014", "et_label": "old", "model": "m", "ok": True,
+               "plan": {"headline": "a game plan", "plans": []}})
+    assert ov.latest_card() is None
+    body = {"headline": "Tech leads", "focus": "Favour longs in tech.", "news": [],
+            "events": ["08:30 PPI — before the open."], "risks": ["QQQ under 685.01.", "b", "c"]}
+    sp._store({"id": "20261113-090010", "kind": "overview", "ok": True, "auto": True,
+               "et_label": "Fri 13 Nov, 09:00 ET", "created_utc": "2026-11-13T14:00:10+00:00",
+               "facts": {"trading_day": "2026-11-13"}, "plan": body})
+    got = ov.latest_card()
+    assert got is not None and got["headline"] == "Tech leads" and got["auto"] is True
+    assert got["risks"] == ["08:30 PPI — before the open.", "QQQ under 685.01.", "b"]
+    assert got["trading_day"] == "2026-11-13"
+    # Read again from the cache, not the file, until a new one is stored.
+    assert ov.latest_card() is got
+
+
 def test_generate_without_a_key_invents_nothing(monkeypatch: Any, tmp_path: Any) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))

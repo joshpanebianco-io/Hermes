@@ -171,14 +171,14 @@ export function Settings({
         {section === "interface" && (
           <Part title="Stocks views" sub="Today replaced Setups, Breakouts, Extended hours and Day 2/3 on 13 Nov">
             <Choice
-              label="Today, Charts and Record"
+              label="Scanner, Charts and Record"
               hint="One list that changes with the time of day: the evening's movers, then what is in play into the open, then the open's triggers, then the session's setups"
               on={!legacyViews}
               onPick={() => setLegacyViews(false)}
             />
             <Choice
               label="Also the old four"
-              hint="Setups, Breakouts, Extended hours and Day 2/3 back in the strip beside Today, for this week only"
+              hint="Setups, Breakouts, Extended hours and Day 2/3 back in the strip beside the Scanner, for this week only"
               on={legacyViews}
               onPick={() => setLegacyViews(true)}
             />

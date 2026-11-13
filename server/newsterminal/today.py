@@ -9,14 +9,21 @@ then "make premarket 4:00-9:30 and the open 9:30-10:00 and then the rest of the
 session". Setups, Breakouts, Extended hours and Day 2/3 were four answers to one
 question, each ranked its own way; this is one answer that changes with the clock.
 
-Five phases (ET; a half day closes at 13:00 and its late session ends at 17:00):
+Four phases (ET; a half day closes at 13:00 and its late session ends at 17:00):
 
   after      the close → 20:00   moving after the close, and the day's big movers
   overnight  20:00 → 04:00, and every day the market is shut: the evening's movers and
              the reports due before the next open, the prep for the next session
   pre        04:00 → 09:30       in play going into the open
-  open       09:30 → 10:00       the pre-market's names, ordered by what they have done
-  session    10:00 → the close   the best trades now: the engine's setup score
+  session    09:30 → the close   the best trades now: the engine's setup score
+
+THE OPEN IS THE SESSION (owner, 2026-11-13: "i think 9:30-16:00 should just be ranked by
+score? because a lot of good trades can be taken in the first 30 mins"). From 09:30 to
+10:00 there was a fifth phase, "the open", which kept the pre-market's in-play score and
+ordered the names by what the bell had done to them (entry live, through a level, not
+triggered, failed), on the audit's figures below. It left relative strength and the
+open's own volume out of the order, which is what the first half hour shows best; the
+setup score reads both, so it ranks from the bell.
 
 WHAT EACH RANKS BY, AND WHY (the quant audit of 2026-11-13). Before the bell the size of
 a move can be read and its direction cannot: a gap of 3+ daily ATRs meant 2.7x a normal
@@ -25,10 +32,10 @@ overnight and the pre-market lists rank how in play a name is, read the way the 
 reads it (sources/pool: the move in daily ATRs, volume against normal, a report, a fresh
 major story, a level already through, a Day 2 or 3), and show the levels both ways with
 the gap's side as a lean, never a call. The open's first half hour reached +1R on 39% of
-signals against 52% from 10:00, and RVOL is thin until about 09:45, so the open keeps
-the pre-market's in-play score and orders the names by what the bell has done to them:
-an entry live, through a level, not triggered, failed. From 10:00 the engine's score
-ranks, unchanged, so the two-week test of its weights runs on.
+signals against 52% from 10:00, and RVOL is thin until about 09:45: worth knowing when
+reading an early signal, and no longer a reason to rank the first half hour another way
+(above). From 09:30 the engine's score ranks, unchanged, so the two-week test of its
+weights runs on.
 
 Everything here is pure: the collector hands in the reads (collector.today).
 """
@@ -47,20 +54,18 @@ from .sources.scanner import BENCHMARKS
 
 ET = scan.ET
 
-PHASES = ("after", "overnight", "pre", "open", "session")
+PHASES = ("after", "overnight", "pre", "session")
 LABELS = {"after": "After hours", "overnight": "Overnight", "pre": "Pre-market",
-          "open": "The open", "session": "Session"}
+          "session": "Session"}
 TITLES = {
     "after": "Moving after the close, and today's big movers: the prep for the next session",
     "overnight": "The prep for the next session: the evening's movers and the reports "
                  "due before the open",
     "pre": "In play going into the open",
-    "open": "The open: the pre-market's names, by what the bell has done to them",
     "session": "The best trades now",
 }
 PRE_START = 4 * 60
 OPEN_START = 9 * 60 + 30
-SESSION_START = 10 * 60
 #: Rows shipped before the bell and in the evening (the session ships every tracked row).
 TOP_N = 30
 #: A name that came into the top ten this recently is marked new (collector.today).
@@ -93,7 +98,10 @@ class Phase:
         return {"key": self.key, "label": LABELS[self.key], "title": TITLES[self.key],
                 "day": self.day.isoformat(), "ends_utc": self.ends.isoformat(),
                 "ends_in_min": round((self.ends - now).total_seconds() / 60.0, 1),
-                "next": self.next_key, "next_label": LABELS[self.next_key]}
+                "next": self.next_key,
+                # The session's start is still called the open where it is counted down
+                # to ("The open in 48m"), though it is no phase of its own any more.
+                "next_label": "The open" if self.next_key == "session" else LABELS[self.next_key]}
 
 
 def _at(d: date, minute: int) -> datetime:
@@ -104,7 +112,7 @@ def phase_at(now: datetime) -> Phase:
     """The phase at `now`. Pure.
 
     Worked examples (tests/test_today.py has the table): Friday 13 Nov 2026 03:59 is
-    overnight for the 13th, 04:00 pre, 09:30 open, 10:00 session, 16:00 after hours for
+    overnight for the 13th, 04:00 pre, 09:30 session, 16:00 after hours for
     Monday the 16th, 20:00 overnight for Monday, and the whole weekend overnight for
     Monday; Friday 27 Nov (a half day) is after hours from 13:00 to 17:00; Thanksgiving
     is overnight for the 27th.
@@ -117,9 +125,7 @@ def phase_at(now: datetime) -> Phase:
         if m < PRE_START:
             return Phase("overnight", d, _at(d, PRE_START), "pre")
         if m < OPEN_START:
-            return Phase("pre", d, _at(d, OPEN_START), "open")
-        if m < SESSION_START:
-            return Phase("open", d, _at(d, SESSION_START), "session")
+            return Phase("pre", d, _at(d, OPEN_START), "session")
         if m < close:
             return Phase("session", d, _at(d, close), "after")
         nxt = next_trading_day(d)
@@ -262,62 +268,6 @@ def rank_pre(ranked: list[dict[str, Any]], rows: dict[str, dict[str, Any]], *,
         })
         if len(out) >= limit:
             break
-    return out
-
-
-# ----------------------------------------------------------------------- the open
-
-#: The open's order: an entry live (a retest, a pullback, near VWAP / the 8 EMA), through
-#: a level with no entry yet, not triggered, then failed or chopping.
-GROUP_WORDS = ("entry live", "through a level", "not triggered", "failed")
-
-
-def open_group(setup: dict[str, Any] | None, wide: dict[str, Any] | None,
-               lean: str | None) -> int:
-    """Where a name stands since the bell (GROUP_WORDS), from the engine's setup when
-    the name is tracked, else the wide read's place against its levels. Pure."""
-    if setup:
-        state = setup.get("state")
-        entry = setup.get("entry") or {}
-        if setup.get("lost_vwap") and state not in ("forming", None):
-            return 3
-        if state in ("retest", "pullback"):
-            return 0
-        if state == "extended":
-            return 0 if abs(entry.get("dist_atr") or 99) <= 1.0 else 1
-        if state in ("failed", "chop"):
-            return 3
-        return 2
-    if wide:
-        up = wide.get("pd_state") == "above" or wide.get("pm_state") == "above"
-        down = wide.get("pd_state") == "below" or wide.get("pm_state") == "below"
-        if (lean == "long" and up) or (lean == "short" and down) or (lean is None and (up or down)):
-            return 1
-    return 2
-
-
-def rank_open(pre: list[dict[str, Any]], *, engine: dict[str, dict[str, Any]],
-              wide: Callable[[str], dict[str, Any] | None],
-              price: Callable[[str], tuple[float | None, bool]]) -> list[dict[str, Any]]:
-    """The open: the pre-market list as it stood at the bell (`pre`, rank_pre's rows with
-    their in-play score kept), re-ordered by GROUP_WORDS and then that score, each with
-    the engine's setup where the name is tracked. `price(sym)` is the live last and
-    whether it is live. Pure."""
-    out: list[dict[str, Any]] = []
-    for row in pre:
-        sym = row["sym"]
-        eng = engine.get(sym) or {}
-        setup = eng.get("setup") if eng.get("ok") else None
-        w = wide(sym)
-        g = open_group(setup, w, row.get("lean"))
-        last, live = price(sym)
-        ref = _num((eng.get("levels") or {}).get("pdc")) or _num((w or {}).get("pdc"))
-        chg = (last / ref - 1.0) * 100.0 if last is not None and ref else row.get("chg")
-        out.append({**row, "last": last if last is not None else row.get("last"), "live": live,
-                    "chg": chg, "move": "day", "group": g, "status": GROUP_WORDS[g],
-                    "setup": _setup_out(setup),
-                    "lean": (setup or {}).get("side") or row.get("lean")})
-    out.sort(key=lambda r: (r["group"], -(r["score"] or 0.0)))
     return out
 
 
@@ -603,7 +553,7 @@ def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
     trig = ((t.get("plan") or {}).get(lean) if lean else None) or {}
     pre_like = phase in ("pre", "after", "overnight")
     move = t.get("chg")
-    if phase == "open" or t.get("move") == "day":
+    if t.get("move") == "day":
         chg, ext = move, None
     else:
         chg, ext = _num(w.get("chg")), move

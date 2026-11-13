@@ -98,7 +98,7 @@ export function suggestionsFor(tab: string, sym: string | null): string[] {
         "Summarise the market overview",
         "Which sector has the best story behind it?",
         "What would change the read at the open?",
-        "Which names on Today fit the read?",
+        "Which names on the Scanner fit the read?",
       ];
     case "hermes":
       return HERMES_SUGGESTIONS.slice(0, 4);

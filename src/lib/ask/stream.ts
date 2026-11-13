@@ -71,7 +71,7 @@ const PANEL_WORDS: Record<string, string> = {
   sector_rotation: "sector rotation",
   index_movers: "the index movers",
   sector_peers: "the sector peers",
-  today_list: "the Today list",
+  today_list: "the Scanner list",
   breakouts: "the Breakouts scan",
   pre_market_gappers: "the pre-market gappers",
   after_hours_gappers: "the after-hours gappers",

@@ -136,7 +136,6 @@ const SCAN_ICON: Record<ScanView, React.ReactNode> = {
   breakouts: ICON.breakouts,
   extended: ICON.extended,
   day23: ICON.day23,
-  log: ICON.log,
   plan: ICON.note,
   multi: ICON.multi,
 };

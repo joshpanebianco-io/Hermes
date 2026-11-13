@@ -68,7 +68,7 @@ export function Earnings({
   return (
     <Module
       title="Earnings"
-      sub={watch ? `${rows.length} reports · ${mine} on your watchlist` : `${rows.length} large caps`}
+      sub={watch ? `${rows.length} reports · ${mine} on the Scanner` : `${rows.length} large caps`}
       ageMin={ageMin}
       error={error}
       bodyClassName="px-0 py-0"
@@ -76,7 +76,7 @@ export function Earnings({
       {rows.length === 0 ? (
         <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           {watch
-            ? "Nothing on your watchlist or among the large caps reports in the next few sessions."
+            ? "Nothing on the Scanner or among the large caps reports in the next few sessions."
             : "Nothing big enough to move an index in the next few sessions."}
         </p>
       ) : (
@@ -132,7 +132,7 @@ export function Earnings({
                     <TickerLogo sym={r.symbol} size={13} />
                     {r.symbol}
                     {watch?.has(r.symbol) && (
-                      <span aria-label="on your watchlist" className="h-[5px] w-[5px] shrink-0 rounded-full bg-flip-fig qt:rounded-[1px]" />
+                      <span aria-label="on the Scanner" className="h-[5px] w-[5px] shrink-0 rounded-full bg-flip-fig qt:rounded-[1px]" />
                     )}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-3">{r.name}</span>

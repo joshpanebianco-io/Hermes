@@ -49,8 +49,10 @@ export function Board({
   groups?: Quote["group"][];
   title?: string;
 }) {
+  // In the order asked for: the Macro page puts volatility and rates first (owner,
+  // 2026-11-14: "yes put vix and rates first"). With none asked, GROUPS' own order.
   const wanted = groups ?? GROUPS.map((g) => g.key);
-  const shown = GROUPS.filter((g) => wanted.includes(g.key));
+  const shown = wanted.flatMap((k) => GROUPS.filter((g) => g.key === k));
 
   return (
     <Module title={title} ageMin={ageMin} error={error} bodyClassName="px-0 py-0">

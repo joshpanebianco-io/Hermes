@@ -816,7 +816,13 @@ export interface TickPayload {
   /** The session the trade fell in; never overnight. */
   session?: "pre" | "rth" | "post" | "closed" | null;
   clock_session?: ScanSession;
-  via?: "stream" | "spark";
+  /** "etf": a futures chart's tick, the tracking ETF's trade in the future's prices (server futfill.py). */
+  via?: "stream" | "spark" | "etf";
+  /** The ETF a futures tick is carried by, and the future ÷ ETF ratio it was scaled with. */
+  proxy?: string;
+  ratio?: number;
+  /** A futures tick's source: the ETF's live trade, or its newest one-minute bar (up to a minute old). */
+  source?: "trade" | "bars";
   age_sec?: number | null;
   minute?: { t: number; o: number; h: number; l: number; c: number } | null;
   /** The newest overnight print, when it is newer than the last session trade. */

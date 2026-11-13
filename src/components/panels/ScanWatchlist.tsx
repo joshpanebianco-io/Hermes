@@ -21,6 +21,8 @@ import { segItem } from "@/lib/seg";
 
 /** The scanner's cap — sources/scanner.MAX_SYMBOLS; the pool fills what the pinned list leaves of it. */
 const CAP = 40;
+/** Always on the list and nobody's favourite (sources/scanner.BENCHMARKS, 2026-11-13). */
+const BENCHMARKS = ["SPY", "QQQ", "IWM"];
 
 export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
   const [text, setText] = useState("");
@@ -30,7 +32,7 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
   const [busy, setBusy] = useState(false);
 
   const take = useCallback((w: Watchlist) => {
-    setText(w.symbols.join(" "));
+    setText(w.symbols.filter((s) => !BENCHMARKS.includes(s)).join(" "));
     setDflt(w.default);
     setPool(w.pool ?? null);
     if (w.error) setErr(w.error);
@@ -53,8 +55,9 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
     .toUpperCase()
     .split(/[\s,;]+/)
     .map((s) => s.replace(/^\$/, "").trim())
-    .filter(Boolean);
-  const slots = Math.max(0, CAP - symbols.length);
+    .filter(Boolean)
+    .filter((s) => !BENCHMARKS.includes(s));
+  const slots = Math.max(0, CAP - BENCHMARKS.length - symbols.length);
 
   const save = async (list: string[]) => {
     setBusy(true);
@@ -135,12 +138,12 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
     <div className="qt-slab qt-editor flex shrink-0 flex-col gap-2 border-b border-ring bg-surface-2/40 px-6 py-3">
       <div className="flex items-baseline gap-3">
         <label htmlFor="scan-watchlist" className="qt-cap text-[10.5px] text-ink-3">
-          Pinned
+          Favourites
         </label>
         <p className="text-[11.5px] text-ink-3">
-          Your names, always scanned — tickers separated by spaces or commas, up to {CAP}. SPY and QQQ are always
-          fetched as the benchmarks; list them to see them as rows. What the pinned list leaves of the {CAP}, the pool
-          fills with today&apos;s movers. New names appear within a minute or two.
+          Your names — tickers separated by spaces or commas. Each morning the fifteen most in play are tracked. SPY,
+          QQQ and IWM are always on the list as the benchmarks and are never favourites. What the favourites leave
+          of the {CAP}, the pool fills with today&apos;s movers. Empty is fine: nothing favourited.
         </p>
       </div>
       <textarea
@@ -153,7 +156,7 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
       />
       <div className="flex items-center gap-2">
         <span className="fig text-[11px] text-ink-3">
-          {symbols.length} pinned · {slots} {slots === 1 ? "slot" : "slots"} for the pool
+          {symbols.length} {symbols.length === 1 ? "favourite" : "favourites"} · {slots} {slots === 1 ? "slot" : "slots"} for the pool
         </span>
         {err && <span className="text-[11.5px] text-err">{err}</span>}
         <div className="ml-auto flex items-center gap-2">
@@ -173,7 +176,7 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
           </button>
           <button
             type="button"
-            disabled={busy || symbols.length === 0}
+            disabled={busy}
             onClick={() => void save(symbols)}
             {...segItem(true, { className: "border border-ring-2 disabled:cursor-not-allowed disabled:opacity-40" })}
           >
@@ -183,13 +186,13 @@ export function WatchlistEditor({ onSaved, onCancel }: { onSaved: () => void; on
       </div>
       {gone.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ring/60 pt-2">
-          <span className="qt-cap text-[10.5px] text-ink-3">Unpinned recently</span>
+          <span className="qt-cap text-[10.5px] text-ink-3">Removed recently</span>
           {gone.map((u) => (
             <button
               key={u.sym}
               type="button"
               onClick={() => putBackInText(u)}
-              title={`Taken off the list with its star, ${unpinnedWhen(u.at)}. Click to put it back where it was, then Save.`}
+              title={`Taken off your favourites with its star, ${unpinnedWhen(u.at)}. Click to put it back where it was, then Save.`}
               {...segItem(false, { className: "border border-ring-2" })}
             >
               <span className="font-semibold text-ink">{u.sym}</span>
@@ -237,8 +240,8 @@ function PoolStrip({
           {...segItem(pool.on, { className: "border border-ring-2 disabled:cursor-not-allowed disabled:opacity-40" })}
           title={
             pool.on
-              ? "Promotion is on: the pool fills the free slots at 08:00, 09:00, 09:25 and 10:00 ET. Click to turn it off and run the pinned list alone."
-              : "Promotion is off: the pinned list alone. Click to turn it on — the pool reads again and runs today's latest mark."
+              ? "Promotion is on: the pool fills the free slots at 08:00, 09:00, 09:25 and 10:00 ET. Click to turn it off and run your favourites alone."
+              : "Promotion is off: your favourites alone. Click to turn it on — the pool reads again and runs today's latest mark."
           }
         >
           {pool.on ? "Promotion on" : "Promotion off"}
@@ -278,9 +281,9 @@ function PoolStrip({
                 type="button"
                 onClick={() => onPin(p.symbol)}
                 className="hit text-[10.5px] text-ink-3 hover:text-ink"
-                title="Keep it: add to the pinned list, then Save"
+                title="Keep it: add to your favourites, then Save"
               >
-                pin
+                ★ add
               </button>
             </span>
           ))}

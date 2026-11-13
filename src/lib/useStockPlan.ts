@@ -6,7 +6,8 @@ import { NO_SERVER, followJob } from "./jobs";
 import { usePersisted } from "./usePersisted";
 
 /**
- * The Game plan tab's state, owned above the tab switch — `useReport`'s
+ * The Market view's state (the Game plan's until 2026-11-13; the routes and the
+ * store are still the plan's), owned above the tab switch — `useReport`'s
  * arrangement, for the same reasons (see that file): a generation outlives the
  * panel, so leaving the tab while a plan is being written does not abandon
  * it; `seq` lets only the newest generation land and `openSeq` only the newest
@@ -35,6 +36,8 @@ export interface PlanController {
   discardMany: (ids: string[]) => void;
   discardAll: () => void;
   retry: () => void;
+  /** Ask for the list and any running job without disturbing the note on screen. */
+  poll: () => void;
   startedAt: number | null;
 }
 
@@ -178,5 +181,32 @@ export function useStockPlan(initial: PlanFeed | null = null): PlanController {
 
   const retry = useCallback(() => void refresh(), [refresh]);
 
-  return { top, setTop, feed, busy, viewing, generate, open, discard, discardMany, discardAll, retry, startedAt };
+  /*
+   * THE 09:00 WRITE REACHES AN OPEN PAGE (2026-11-13). The collector writes the
+   * market overview by itself at 09:00 ET (overview.auto_due); a page that has
+   * sat open since earlier only learns of it by asking. `poll` takes the job and
+   * the list, so a running job is followed by the effect above, and takes the
+   * newest note only when the reader is not looking at an older one.
+   */
+  const viewingRef = useRef<string | null>(null);
+  viewingRef.current = viewing;
+  const poll = useCallback(() => {
+    void (async () => {
+      try {
+        const r = await fetch("/api/plan", { cache: "no-store" });
+        const next = (await r.json()) as PlanFeed;
+        if (next.offline) return;
+        setFeed((prev) => {
+          if (!prev) return next;
+          const head = next.history[0]?.id;
+          const fresh = head != null && head !== prev.history[0]?.id && viewingRef.current === null;
+          return { ...prev, history: next.history, job: next.job ?? null, ...(fresh ? { latest: next.latest } : {}) };
+        });
+      } catch {
+        /* same */
+      }
+    })();
+  }, []);
+
+  return { top, setTop, feed, busy, viewing, generate, open, discard, discardMany, discardAll, retry, poll, startedAt };
 }

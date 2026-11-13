@@ -239,6 +239,12 @@ def rank_pre(ranked: list[dict[str, Any]], rows: dict[str, dict[str, Any]], *,
         if sym in BENCHMARKS or e["score"] < pool.MIN_SCORE:
             continue
         r = rows.get(sym) or {}
+        # NO PRE-MARKET TRADE, NOT IN PLAY INTO THE OPEN (live, 13 Nov 04:03): IREN made
+        # the list on an old story and "day 5 of a big move" with nothing traded yet. The
+        # pool may still rank it (a story and a Day 3 clear its bar); this list waits for
+        # the name to trade.
+        if r.get("pm_close") is None:
+            continue
         last, ref = _num(r.get("pm_close")), _num(r.get("close"))
         move = (last / ref - 1.0) * 100.0 if last is not None and ref else None
         lv = levels(sym) or {}
@@ -485,7 +491,7 @@ def rank_evening(rows: Iterable[dict[str, Any]], *, ah_of: Callable[[dict[str, A
         if rep_words:
             why.append(rep_words)
         elif news_pts:
-            why.append(f"{str(story.get('tag') or 'major').lower()} news")
+            why.append(f"{str((story or {}).get('tag') or 'major').lower()} news")
         if tomorrow >= 2:
             why.append(f"tomorrow is day {tomorrow} of a {day_chg:+.0f}% move"
                        if n < 1 and day_chg is not None else f"tomorrow is day {tomorrow}")
@@ -507,6 +513,129 @@ def rank_evening(rows: Iterable[dict[str, Any]], *, ah_of: Callable[[dict[str, A
     return out[:limit]
 
 
+# ------------------------------------------------------------ the rest of the list
+
+
+def rest_of_list(rows: list[dict[str, Any]], engine: Iterable[dict[str, Any]], *,
+                 inplay: dict[str, dict[str, Any]], favs: frozenset[str]
+                 ) -> list[dict[str, Any]]:
+    """Every name the engine tracks that the phase's ranking left off, to go under it,
+    as the Setups table always showed the whole list (owner, 2026-11-13, at 04:13 ET:
+    "why are only 8 stocks showing?" — the pre-market had traded on eight names the
+    stream had seen, and the screener runs fifteen minutes behind). Ordered by the
+    pool's in-play read where it has one (`inplay`, pool rank entries by symbol), then
+    the engine's own order. Pure."""
+    have = {r["sym"] for r in rows}
+    rest = [e for e in engine if e.get("ok") and e.get("sym") not in have]
+
+    def key(e: dict[str, Any]) -> tuple[float, int]:
+        ip = inplay.get(str(e["sym"])) or {}
+        return (-float(ip.get("score") or 0.0), int((e.get("score") or {}).get("rank") or 999))
+
+    out = []
+    for e in sorted(rest, key=key):
+        ip = inplay.get(str(e["sym"])) or {}
+        lv = e.get("levels") or {}
+        out.append({
+            **_base(str(e["sym"]), name=e.get("name"), sector=e.get("sector"), favs=favs,
+                    tracked=frozenset({str(e["sym"])})),
+            "last": e.get("last"), "live": bool(e.get("live")), "chg": _chg_of(e),
+            "move": "day", "score": float(ip.get("score") or 0.0),
+            "score_max": pool.SCORE_MAX, "score_kind": "in play",
+            "why": [str(ip.get("reason") or "not in play yet")], "story": e.get("catalyst"),
+            "lean": (e.get("score") or {}).get("side"), "plan": None, "setup": None,
+            "levels": {k: lv.get(k) for k in ("pdh", "pdl", "pmh", "pml", "pdc")},
+            "gap_atr": ip.get("gap_atr"), "vol_pct": ip.get("vol_pct"), "rvol": e.get("rvol"),
+            "stage": e.get("stage"), "spark": e.get("spark"), "listed": True,
+        })
+    return out
+
+
+# ------------------------------------------------------------- the table's row
+
+def _inplay_score(t: dict[str, Any], side: str | None, base: dict[str, Any] | None
+                  ) -> dict[str, Any]:
+    """Before 10:00 the list ranks how in play a name is (0 to pool.SCORE_MAX); the
+    table's Score column reads 0 to 100, so the in-play read shows as its share of the
+    most, with the read itself as the one part (the score's hover)."""
+    pts = float(t.get("score") or 0.0)
+    mx = float(t.get("score_max") or pool.SCORE_MAX)
+    return {**(base or {}), "total": round(min(100.0, 100.0 * pts / mx)) if mx else 0,
+            "raw": round(pts, 1), "rank": t.get("rank"), "side": side, "gated": None,
+            "parts": [{"key": "inplay", "label": "In play", "pts": round(pts, 1),
+                       "max": round(mx), "note": " · ".join(t.get("why") or [])}]}
+
+
+def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
+             wide: dict[str, Any] | None) -> dict[str, Any]:
+    """The Setups table's row for one Today row (src/types/scanner.ts ScanRow), so the
+    list is drawn in the table the owner knows (2026-11-13: "i prefer the general style
+    of what it was before"). A name the engine tracks is its own row, with the score
+    shown as the phase ranks it (in play before 10:00, the setup score after). A name it
+    does not track yet is built from the wide read: levels, the move, the pre-market,
+    the story, and the plan as the setup. Pure."""
+    if eng is not None and eng.get("ok"):
+        row = dict(eng)
+        if phase == "session":
+            row["score"] = {**(eng.get("score") or {}), "rank": t.get("rank")}
+        else:
+            side = (eng.get("score") or {}).get("side") or t.get("lean")
+            row["score"] = _inplay_score(t, side, eng.get("score"))
+        row["catalyst"] = eng.get("catalyst") or t.get("story")
+        row["today"] = {k: t.get(k) for k in ("rank", "why", "new", "status", "move")}
+        # For the Today bar's Filters (market cap): the engine's row does not carry it.
+        row["market_cap"] = t.get("cap") or (wide or {}).get("cap")
+        return row
+    w = wide or {}
+    lv = t.get("levels") or {}
+    last = t.get("last")
+    pdh, pdl, pmh, pml = lv.get("pdh"), lv.get("pdl"), lv.get("pmh"), lv.get("pml")
+
+    def over(x: Any) -> bool:
+        return isinstance(last, (int, float)) and isinstance(x, (int, float)) and last > x
+
+    def under(x: Any) -> bool:
+        return isinstance(last, (int, float)) and isinstance(x, (int, float)) and last < x
+
+    up = int(over(pdh)) + int(over(pmh))
+    dn = int(under(pdl)) + int(under(pml))
+    lean = t.get("lean")
+    trig = ((t.get("plan") or {}).get(lean) if lean else None) or {}
+    pre_like = phase in ("pre", "after", "overnight")
+    move = t.get("chg")
+    if phase == "open" or t.get("move") == "day":
+        chg, ext = move, None
+    else:
+        chg, ext = _num(w.get("chg")), move
+    vol_pct = t.get("vol_pct")
+    pm_vol = _num(w.get("pm_vol")) if phase == "pre" else None
+    return {
+        "sym": t["sym"], "name": t.get("name"), "sector": t.get("sector"), "sector_rs": None,
+        "ok": True, "error": None, "age_min": None, "promoted": None,
+        "last": last, "prev_close": lv.get("pdc"), "chg_pct": chg, "ext_pct": ext,
+        "volume": _num(w.get("vol")) if t.get("move") == "day" else None,
+        "rvol": t.get("rvol"), "atr_d": _num(w.get("atr")), "atr_b": None,
+        "rs": {"SPY": None, "QQQ": None}, "rs_1h": {"SPY": None, "QQQ": None},
+        "levels": {"pdh": pdh, "pdl": pdl, "pdc": lv.get("pdc"), "pmh": pmh, "pml": pml,
+                   "pm_done": not pre_like, "vwap": None, "wave_hi": None, "wave_lo": None,
+                   "ema8": None, "day_hi": None, "day_lo": None, "open": None},
+        "progress": {"pdh": None, "pdl": None, "pmh": None, "pml": None},
+        "broken": {"pdh": over(pdh), "pdl": under(pdl), "pmh": over(pmh), "pml": under(pml)},
+        "lvl_state": up if up else -dn, "trend": 1 if up == 2 else -1 if dn == 2 else 0,
+        "range_used": None,
+        "setup": {"side": lean, "state": "forming", "level": trig.get("level"), "entry": None,
+                  "note": ""},
+        "signals": [], "score": _inplay_score(t, lean, None), "flags": [], "earnings": None,
+        "news": [], "filings": [], "options": None, "adv": _num(w.get("avg")),
+        "premkt": ({"volume": pm_vol, "pct_adv": vol_pct, "high": pmh, "low": pml,
+                    "last": last, "asof": None, "source": "screener"}
+                   if phase == "pre" else None),
+        "catalyst": t.get("story"), "stage": t.get("stage"), "spark": t.get("spark"),
+        "tracked": False, "market_cap": t.get("cap") or _num(w.get("cap")),
+        "today": {k: t.get(k) for k in ("rank", "why", "new", "status", "move")},
+    }
+
+
 # ------------------------------------------------------------------- the payload
 
 
@@ -514,7 +643,10 @@ def mark_new(rows: list[dict[str, Any]], seen: dict[str, float], now_ts: float,
              fresh: bool) -> None:
     """Mark the rows that came into the top ten in the last NEW_MIN minutes, and keep
     `seen` (symbol → when first seen there) for the phase. On the phase's first read
-    (`fresh`) nothing is new: everything is. In place."""
+    with rows (`fresh`, or nothing seen yet) nothing is new: everything is. (Live, 13 Nov:
+    the pre-market's first read at 04:00 had no rows, and the first names at 04:03 were
+    all stamped new.) In place."""
+    fresh = fresh or not seen
     for i, r in enumerate(rows):
         if i >= 10:
             break
@@ -546,7 +678,7 @@ def log_line(got: dict[str, Any], now: datetime) -> dict[str, Any]:
         "at_et": now.astimezone(ET).strftime("%Y-%m-%d %H:%M"),
         "rows": [{k: r.get(k) for k in ("rank", "sym", "score", "score_kind", "lean", "chg",
                                          "last", "gap_atr", "vol_pct", "rvol", "stage", "fav",
-                                         "tracked", "group", "why")}
+                                         "tracked", "group", "why", "listed")}
                  for r in (got.get("rows") or [])[:MARKS_LOGGED]],
     }
 

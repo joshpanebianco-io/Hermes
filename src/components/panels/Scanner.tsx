@@ -9,7 +9,7 @@ import { ScanLog } from "@/components/panels/ScanLog";
 import { ScanBreakouts } from "@/components/panels/ScanBreakouts";
 import { ScanExtended } from "@/components/panels/ScanExtended";
 import { ScanDay23 } from "@/components/panels/ScanDay23";
-import { Choice, Chips, Glyph, Menu, Showing, StatCard, TickerFilter, gapOf } from "@/components/panels/ScanWide";
+import { Choice, Chips, Glyph, Menu, Showing, StatCard, capWord, gapOf, isNum, isStr } from "@/components/panels/ScanWide";
 import { ScanTable, sortValue, type ColSet, type SortKey } from "@/components/panels/ScanTable";
 import { ChartControls, useChartPrefs } from "@/components/panels/ScanChart";
 import { ScanMulti } from "@/components/panels/ScanMulti";
@@ -25,7 +25,7 @@ import { setAskFocus } from "@/lib/ask/open";
 import { openSearch, openTicker, useTicker } from "@/lib/ticker";
 import { stripViews, type ScanView } from "@/lib/tabs";
 import { useLegacyViews } from "@/lib/legacyViews";
-import { StocksToday } from "@/components/panels/StocksToday";
+import type { PhaseKey, TodayPayload, TodayPhase } from "@/types/today";
 import { BAND_LABEL, bandChip, curveOverride } from "@/lib/vix";
 import { VixPopover } from "@/components/vol/VixBands";
 import { etDay, useNextPrint } from "@/lib/nextPrint";
@@ -100,6 +100,9 @@ const PRESET: Record<SideFilter, (r: ScanRow, ctx: PresetCtx) => boolean> = {
     return hi != null && lo != null && pdh != null && pdl != null && hi <= pdh && lo >= pdl;
   },
   day23: (r) => (r.stage ?? 0) >= 2,
+  // An insider's open-market buy, or a sale not under a 10b5-1 plan, this month
+  // (server sources/insiders.py): context, like news (owner, 2026-11-13).
+  insiders: (r) => (r.insiders?.length ?? 0) > 0,
 };
 
 /*
@@ -111,7 +114,7 @@ const PRESET: Record<SideFilter, (r: ScanRow, ctx: PresetCtx) => boolean> = {
 const PRESET_NAME: ReadonlyArray<{ key: SideFilter; label: string; title?: string }> = [
   { key: "all", label: "All" },
   { key: "top10", label: `Top ${TOP_N}`, title: `The ${TOP_N} highest scores on the list right now, long and short together` },
-  { key: "pinned", label: "Pinned", title: "The names you starred" },
+  { key: "pinned", label: "Favourites", title: "The names you starred" },
   { key: "long", label: "Long" },
   { key: "short", label: "Short" },
   { key: "mag7", label: "MAG7", title: "The Magnificent Seven: Apple, Microsoft, Alphabet, Amazon, Nvidia, Meta, Tesla" },
@@ -120,11 +123,16 @@ const PRESET_NAME: ReadonlyArray<{ key: SideFilter; label: string; title?: strin
   { key: "outside", label: "Outside day", title: OUTSIDE_DAY_TITLE },
   { key: "inside", label: "Inside day", title: "Today's range so far inside the previous day's" },
   { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
+  {
+    key: "insiders",
+    label: "Insiders",
+    title: "An insider bought on the open market ($100k+), or sold $1M+ outside a pre-planned 10b5-1 plan, in the last 30 days (SEC Form 4s, for the names on Today and on the list)",
+  },
 ];
 const POLL_SEC = 20;
 const LIVE_POLL_SEC = 5;
 
-type SideFilter = "all" | "top10" | Side | "mag7" | "pinned" | "news" | "gaps" | "outside" | "inside" | "day23";
+type SideFilter = "all" | "top10" | Side | "mag7" | "pinned" | "news" | "gaps" | "outside" | "inside" | "day23" | "insiders";
 type Bench = "SPY" | "QQQ";
 
 /**
@@ -222,7 +230,7 @@ export function Scanner({
     "all",
     // "both" was the Both ranges chip, which is Outside day now, and "through" the
     // previous day's level alone: a browser that had either saved opens on All, once.
-    oneOf("all", "top10", "long", "short", "mag7", "pinned", "news", "gaps", "outside", "inside", "day23"),
+    oneOf("all", "top10", "long", "short", "mag7", "pinned", "news", "gaps", "outside", "inside", "day23", "insiders"),
   );
   // Multicharts: six charts of the list's ten highest scores, a view of its own since
   // 2026-11-13 (lib/tabs.ts). Which names hold which chart, and the one toolbar they
@@ -244,7 +252,6 @@ export function Scanner({
   // can undo, so there it reads in the engine's own order. The saved choice is kept, and
   // is the sort again on Options.
   const sortBy: SortKey = sort === "ivrv" && cols !== "options" ? "score" : sort;
-  const [find, setFind] = useState("");
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -260,8 +267,33 @@ export function Scanner({
       if (mine === seq.current) setFailed(e instanceof Error ? e.message : "request failed");
     }
   }, []);
+  /*
+   * TODAY IS THIS TABLE, IN TODAY'S ORDER (owner, 2026-11-13: "i prefer the general style
+   * of what it was before in terms of color etc"). The list is ranked for the hour it is
+   * (server today.py) and each of its rows comes as the Setups table's own (today.scan_row):
+   * the engine's row for a tracked name, one built from the wide read for the rest, the
+   * score the phase's (in play before 10:00, the setup score after). So the chips, the
+   * columns, the colours and the slide-out are the ones this table has always had.
+   */
+  const [today, setToday] = useState<TodayPayload | null>(null);
+  const todaySeq = useRef(0);
+  const loadToday = useCallback(async () => {
+    const mine = ++todaySeq.current;
+    try {
+      const r = await fetch("/api/scanner/today", { cache: "no-store" });
+      const next = (await r.json()) as TodayPayload & { offline?: unknown };
+      if (mine === todaySeq.current && !next.offline && next.phase) setToday(next);
+    } catch {
+      /* the engine's payload still carries the page; the next read tries again */
+    }
+  }, []);
+  const isToday = view === "today";
+  const refresh = useCallback(() => {
+    void load();
+    if (isToday) void loadToday();
+  }, [load, loadToday, isToday]);
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
-  usePinsChanged(load);
+  usePinsChanged(refresh);
 
   const live = data?.session === "rth";
   useEffect(() => {
@@ -269,14 +301,51 @@ export function Scanner({
     const id = setInterval(load, (live ? LIVE_POLL_SEC : POLL_SEC) * 1000);
     return () => clearInterval(id);
   }, [load, live]);
+  const todayPhase = today?.phase?.key ?? "overnight";
+  useEffect(() => {
+    if (!isToday) return;
+    void loadToday();
+    const id = setInterval(loadToday, TODAY_POLL_SEC[todayPhase] * 1000);
+    return () => clearInterval(id);
+  }, [isToday, loadToday, todayPhase]);
+
+  /*
+   * TODAY'S FILTERS, BESIDE COLUMNS (owner, 2026-11-13: "i cant see filters anymore? next
+   * to columns and how to trade this"). The Filters menu was on Breakouts, Extended hours
+   * and Day 2/3, which Today replaced; it is back here, the same menu, over Today's rows:
+   * market cap, relative volume and sector, all off by default. Relative volume is read
+   * from the open, as Breakouts read it: before the bell no name has one.
+   */
+  const [fCap, setFCap] = usePersisted<number>("today.cap", 0, isNum);
+  const [fRvol, setFRvol] = usePersisted<number>("today.rvol", 0, isNum);
+  const [fSector, setFSector] = usePersisted<string>("today.sector", "", isStr);
+  const rvolOn = data?.session === "rth" || data?.session === "post";
+
+  // The rows the table and its chips read: Today's in its order, else the engine's.
+  const listRows = useMemo<ScanRow[]>(() => {
+    if (!isToday) return data?.rows ?? [];
+    return (today?.rows ?? [])
+      .map((t) => t.row)
+      .filter(
+        (r) =>
+          (!fCap || (r.market_cap ?? 0) >= fCap) &&
+          (!fRvol || !rvolOn || (r.rvol ?? 0) >= fRvol) &&
+          (!fSector || r.sector === fSector),
+      );
+  }, [isToday, today?.rows, data?.rows, fCap, fRvol, fSector, rvolOn]);
+  const filterWord =
+    [fCap ? capWord(fCap) : null, fRvol ? `RVol ${fRvol}×+` : null, fSector || null].filter(Boolean).join(" · ") || "all";
 
   const pinned = useMemo<ReadonlySet<string>>(() => new Set(data?.pinned ?? []), [data?.pinned]);
-  const ctx = useMemo<PresetCtx>(() => ({ pinned, top: new Set(topScores(data?.rows ?? [])) }), [pinned, data?.rows]);
+  const ctx = useMemo<PresetCtx>(
+    () => ({ pinned, top: new Set(isToday ? listRows.slice(0, TOP_N).map((r) => r.sym) : topScores(data?.rows ?? [])) }),
+    [pinned, isToday, listRows, data?.rows],
+  );
 
   // The list as its chip and its sort leave it. The table narrows it further by what is
   // typed in the ticker box; the charts are drawn from its first ten as it stands here.
   const ranked = useMemo(() => {
-    const kept = (data?.rows ?? []).filter((r) => PRESET[sideF](r, ctx));
+    const kept = listRows.filter((r) => PRESET[sideF](r, ctx));
     if (sortBy === "score") return kept; // the engine's own order
     // Rows with no figure sink, whichever way the rest sorts. On the short
     // side the strongest is the most NEGATIVE, so the signed columns flip.
@@ -288,12 +357,13 @@ export function Scanner({
       if (kb == null) return -1;
       return flip ? ka - kb : kb - ka;
     });
-  }, [data, sideF, sortBy, bench, ctx]);
+  }, [listRows, sideF, sortBy, bench, ctx]);
 
-  const rows = useMemo(() => {
-    const typed = find.trim().toUpperCase();
-    return typed ? ranked.filter((r) => r.sym.includes(typed)) : ranked;
-  }, [ranked, find]);
+  // ONE SEARCH (owner, 2026-11-13: "we have two ticker / company search bars? which one
+  // should we get rid off"). The bar's ticker box narrowed this list by what was typed; the
+  // masthead's search (Ctrl K) finds any ticker and opens it, and the chips and Filters
+  // narrow the list. The box went; the list is the chips' and the filters'.
+  const rows = ranked;
 
   const charts = view === "multi";
   // The charts' ten: the ten highest scores on the whole list, best first, whatever
@@ -335,12 +405,12 @@ export function Scanner({
   const counts = useMemo(() => {
     const c: Partial<Record<SideFilter, number>> = {};
     for (const { key } of PRESET_NAME) {
-      const n = (data?.rows ?? []).filter((r) => PRESET[key](r, ctx)).length;
+      const n = listRows.filter((r) => PRESET[key](r, ctx)).length;
       // "Top 10 10" says the same thing twice; the count shows only when the list is short of ten.
       if (key !== "top10" || n < TOP_N) c[key] = n;
     }
     return c;
-  }, [data, ctx]);
+  }, [listRows, ctx]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -356,14 +426,14 @@ export function Scanner({
             title={
               data && !data.offline
                 ? [
-                    "Edit the pinned list",
+                    "Edit your favourites",
                     data.trading_day ? `Levels for ${dayName(data.trading_day)}` : null,
                     `${data.rows.filter((r) => r.ok).length} of ${data.watchlist.length} names read, ${age(data.age_min)} ago`,
                     data.status?.error ?? null,
                   ]
                     .filter(Boolean)
                     .join("\n")
-                : "Edit the pinned list"
+                : "Edit your favourites"
             }
             {...segItem(editing, { className: "border border-ring-2" })}
           >
@@ -400,9 +470,7 @@ export function Scanner({
 
       {/* The page sits in one framed card under the band, as in the screenshots. */}
       <div className="qt-frame mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[6px] border border-ring">
-      {view === "today" ? (
-        <StocksToday onPlan={() => onView("plan")} />
-      ) : view === "breakouts" ? (
+      {view === "breakouts" ? (
         <ScanBreakouts onTrackChanged={load} />
       ) : view === "extended" ? (
         <ScanExtended onTrackChanged={load} onDay23={() => onView("day23")} />
@@ -417,7 +485,9 @@ export function Scanner({
           {/* The row sums up the table, so it is the Setups view's alone. Over the charts
               its height would be theirs (on a 1920 screen it is a sixth of what two rows of
               them have). */}
-          {view === "setups" && data && !data.offline && <SetupStats data={data} later={later} now={now} />}
+          {(view === "setups" || isToday) && data && !data.offline && (
+            <SetupStats data={isToday ? { ...data, rows: listRows } : data} later={later} now={now} phase={isToday ? (today?.phase ?? null) : null} />
+          )}
           {/*
             * ONE BAR UNDER THE BAND, AND WHAT IT HOLDS IS THE VIEW'S. Setups: the chips and
             * the table's tools. The Signal log: a line of words. Multicharts: the charts'
@@ -453,7 +523,6 @@ export function Scanner({
           <div className="qt-bar flex shrink-0 flex-wrap items-center gap-2 border-b border-ring px-4 py-2">
             <Chips items={PRESET_NAME} on={sideF} set={setSideF} counts={counts} />
             <div className="ml-auto flex items-center gap-2">
-              <TickerFilter value={find} onChange={setFind} />
               {/*
                 * HOW TO TRADE THIS TAPE IS A BUTTON AMONG THE BAR'S BUTTONS (owner,
                 * 2026-11-11: "i dont like the 'How to trade this' text just being
@@ -475,12 +544,30 @@ export function Scanner({
                   </ul>
                 </Menu>
               )}
+              {isToday && (
+                <Menu label={<>Filters · <span className="fig">{filterWord}</span></>}>
+                  <Choice label="Market cap" options={TODAY_CAPS} value={fCap} set={setFCap} />
+                  <Choice label="Relative volume (from the open)" options={TODAY_RVOLS} value={fRvol} set={setFRvol} />
+                  <Choice label="Sector" options={TODAY_SECTORS} value={fSector} set={setFSector} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFCap(0);
+                      setFRvol(0);
+                      setFSector("");
+                    }}
+                    {...segItem(false, { className: "self-start border border-ring-2" })}
+                  >
+                    Reset
+                  </button>
+                </Menu>
+              )}
               <Menu label={<>Columns ·<span className="fig">{COL_WORD[cols]}</span></>} width={260}>
                 <Choice label="Columns" options={COL_CHOICES} value={cols} set={setCols} />
                 <Choice label="Relative strength against" options={BENCH_CHOICES} value={bench} set={setBench} />
                 <p className="text-[11px] leading-[1.4] text-ink-3">Overview is what matters, Levels every column the Pine&apos;s scanner has, Options the chain. The score always uses SPY.</p>
               </Menu>
-              <Showing shown={rows.length} total={data?.watchlist.length ?? null} word="on the list" />
+              <Showing shown={rows.length} total={isToday ? (today?.rows.length ?? null) : (data?.watchlist.length ?? null)} word="on the list" />
             </div>
           </div>
           )}
@@ -520,12 +607,14 @@ export function Scanner({
                 setSel(s);
                 openTicker(s);
               }} />
-            ) : !data ? (
+            ) : !data || (isToday && !today && !data.offline) ? (
               <TableSkeleton />
             ) : rows.length === 0 ? (
               <p className="px-6 py-10 text-center text-[12px] text-ink-3">
                 {data.offline
                   ? "Nothing to rank until the collector answers."
+                  : isToday
+                  ? (today?.note ?? (listRows.length ? "Nothing on this side right now." : TODAY_EMPTY[todayPhase]))
                   : data.rows.length === 0
                   ? "No names scanned yet — the collector fetches the watchlist a third at a time, so the first full pass takes about a minute and a half."
                   : "Nothing on this side right now."}
@@ -542,7 +631,7 @@ export function Scanner({
                 selected={ticker ?? selected?.sym ?? null}
                 onPick={pick}
                 pinned={pinned}
-                onPinned={load}
+                onPinned={refresh}
               />
             )}
           </div>
@@ -553,6 +642,33 @@ export function Scanner({
       </div>
     </div>
   );
+}
+
+/** Today's Filters menu: the choices Breakouts' had. */
+const TODAY_CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
+const TODAY_RVOLS = [0, 1, 1.5, 2, 5].map((value) => ({ value, label: value ? `${value}×+` : "Any" }));
+const TODAY_SECTORS = ["", "XLK", "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLB", "XLRE", "XLU"].map((value) => ({
+  value,
+  label: value || "All",
+}));
+
+/** How often Today is read again: a phase that moves by the second, read often. */
+const TODAY_POLL_SEC: Record<PhaseKey, number> = { session: 10, open: 10, pre: 15, after: 30, overnight: 60 };
+const TODAY_EMPTY: Record<PhaseKey, string> = {
+  after: "Nothing has moved enough since the close to make the list yet.",
+  overnight: "Nothing moved enough this evening to make the list.",
+  pre: "Nothing is in play yet this morning. Names arrive as the pre-market trades.",
+  open: "The pre-market's names arrive here at the bell.",
+  session: "The engine has read no names yet.",
+};
+
+/** "in 48m", "in 5h 34m", "in 2d": when the next phase begins. */
+function untilWord(min: number): string {
+  if (min < 1) return "now";
+  if (min < 90) return `in ${Math.round(min)}m`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return h < 24 ? `in ${h}h${m ? ` ${m}m` : ""}` : `in ${Math.round(h / 24)}d`;
 }
 
 const COL_WORD: Record<ColSet, string> = { overview: "Overview", ranked: "Levels", options: "Options" };
@@ -618,11 +734,10 @@ function Masthead({
             type="button"
             onClick={openSearch}
             title="Find any ticker or company (Ctrl+K)"
-            className="hit flex h-[30px] w-[clamp(170px,17vw,320px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
+            className="hit flex h-[28px] w-[clamp(150px,11vw,220px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
           >
             <Glyph name="search" size={13} />
             <span className="min-w-0 flex-1 truncate text-left">Search ticker or company…</span>
-            <span className="fig shrink-0 rounded-[3px] border border-ring-2 px-1.5 text-[10px]">Ctrl K</span>
           </button>
         </span>
         {data && !data.offline && (
@@ -675,7 +790,18 @@ const SESSION_WORD: Record<ScannerPayload["session"], string> = {
  * with a record kept on futures sessions and none against these stocks' signals, so on
  * this page it was another desk's figure. It lives on the Futures tab.
  */
-function SetupStats({ data, later, now }: { data: ScannerPayload; later: CalendarRow | null; now: number | null }) {
+function SetupStats({
+  data,
+  later,
+  now,
+  phase = null,
+}: {
+  data: ScannerPayload;
+  later: CalendarRow | null;
+  now: number | null;
+  /** Today's phase (the Today view): what the list is ranked for, as the row's first card. */
+  phase?: TodayPhase | null;
+}) {
   const rows = data.rows.filter((r) => r.ok);
   const longs = rows.filter((r) => r.score.side === "long");
   const shorts = rows.filter((r) => r.score.side === "short");
@@ -708,6 +834,17 @@ function SetupStats({ data, later, now }: { data: ScannerPayload; later: Calenda
   return (
     <div className="qt-stats shrink-0 border-b border-ring">
       <div className="qt-stats-row flex flex-wrap">
+        {phase && (
+          <StatCard
+            glyph="clock"
+            tint="setup"
+            value={phase.label}
+            hue="text-desk-macro"
+            label={phase.key === "session" ? "Ranked by setup" : "Ranked by in play"}
+            title={`${phase.title}${phase.key === "after" || phase.key === "overnight" ? `, for ${dayName(phase.day)}` : ""}.\nAfter hours 16:00–20:00 · overnight to 04:00 · pre-market 04:00–09:30 · the open 09:30–10:00 · session 10:00–16:00`}
+            sub={`${phase.next_label} ${untilWord(phase.ends_in_min)}`}
+          />
+        )}
         <StatCard glyph="up" tint="up" value={longs.length} hue="text-call-fig" label="Bullish signals" sub={`${longs.filter((r) => r.broken.pdh).length} breaking PDH`} />
         <StatCard glyph="down" tint="down" value={shorts.length} hue="text-put-fig" label="Bearish signals" sub={`${shorts.filter((r) => r.broken.pdl).length} breaking PDL`} />
         {topRvol?.rvol != null || topPm?.premkt?.pct_adv == null ? (

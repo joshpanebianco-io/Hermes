@@ -82,7 +82,10 @@ export interface SectorRow {
 export interface BreadthAll {
   basis: "pre" | "rth" | "post" | "last";
   floor: number;
+  /** The names counted: before the bell, only those that have traded in the pre-market. */
   names: number;
+  /** Every name at the floor, whatever it has done today (2026-11-13). */
+  of?: number;
   advancers: number;
   decliners: number;
   buckets: Array<{ label: string; n: number; side: "up" | "down" }>;

@@ -1213,6 +1213,10 @@ class UniverseStore:
             **self._head(basis, now),
             "floor": floor,
             "names": len(moves),
+            # Every name at the floor: before the bell `names` is only those that have
+            # traded in the pre-market, and a page saying "414 stocks" read as if the scan
+            # had shrunk (owner, 2026-11-13).
+            "of": sum(1 for r in self.rows if (r["cap"] or 0) >= floor),
             "advancers": sum(1 for _, m in moves if m > 0),
             "decliners": sum(1 for _, m in moves if m < 0),
             "buckets": buckets,

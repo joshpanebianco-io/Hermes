@@ -43,8 +43,16 @@ export function openSearch(): void {
   window.dispatchEvent(new Event(OPEN_SEARCH_EVENT));
 }
 
-/** Add a name to the pinned list, or take it off. Null on success, or why not. */
+/** Always on the list, and nobody's favourite (server sources/scanner.BENCHMARKS). */
+const BENCHMARKS = new Set(["SPY", "QQQ", "IWM"]);
+
+/**
+ * Add a name to the favourites, or take it off. Null on success, or why not. The
+ * last favourite can go (owner, 2026-11-13: "reset it so nothing is favourited"):
+ * the benchmarks keep the list, and the store, from ever being empty.
+ */
 export async function togglePin(sym: string): Promise<string | null> {
+  if (BENCHMARKS.has(sym)) return `${sym} is a benchmark: always on the list, never a favourite`;
   try {
     const got = (await (await fetch("/api/scanner/watchlist", { cache: "no-store" })).json()) as {
       symbols?: string[];
@@ -52,7 +60,6 @@ export async function togglePin(sym: string): Promise<string | null> {
     };
     if (!got.symbols) return got.error ?? "could not read the list";
     const has = got.symbols.includes(sym);
-    if (has && got.symbols.length === 1) return "the list cannot be empty";
     const next = has ? got.symbols.filter((s) => s !== sym) : [...got.symbols, sym];
     const r = await fetch("/api/scanner/watchlist", {
       method: "POST",

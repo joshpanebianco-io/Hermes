@@ -38,11 +38,10 @@ export function SectorsBoard({ prices }: { prices?: React.ReactNode }) {
               type="button"
               onClick={openSearch}
               title="Find any ticker or company (Ctrl+K)"
-              className="hit flex h-[30px] w-[clamp(170px,17vw,320px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
+              className="hit flex h-[28px] w-[clamp(150px,11vw,220px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
             >
               <Glyph name="search" size={13} />
               <span className="min-w-0 flex-1 truncate text-left">Search ticker or company…</span>
-              <span className="fig shrink-0 rounded-[3px] border border-ring-2 px-1.5 text-[10px]">Ctrl K</span>
             </button>
           </span>
         </div>

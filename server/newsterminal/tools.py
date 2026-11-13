@@ -193,8 +193,8 @@ PANELS: dict[str, str] = {
     "sector_peers": "Macro, stocks · the watchlist's sector peers reporting this week",
     "catalysts": "Futures, Brief · the brief's catalyst list: data, the Fed, auctions and "
                  "bellwether earnings, twelve hours back to three days out",
-    "pool": "Stocks · the pinned list, the pool behind it, today's promotions and why, the "
-            "names in play that missed, and the options expiry rule",
+    "pool": "Stocks · the favourites (the starred names), the pool behind them, today's "
+            "promotions and why, the names in play that missed, and the options expiry rule",
     "signal_log": "Stocks · the latest signals the engine saw, each with its outcome in R so "
                   "far (sym narrows it to one name)",
     "record": "Stocks · the signal record over twenty sessions by kind, side and score band: "
@@ -344,14 +344,16 @@ SPEC: list[dict[str, Any]] = [
           _params({"desk": {"type": "string", "enum": ["futures", "stocks"]},
                    "book": _BOOK}, ["desk"])),
     _tool("note",
-          "A stored note: the latest futures brief or Game plan, or one by id, with when it "
-          "was written and how old it is. A brief's reads are per book; name one to get "
-          "just its read.",
+          "A stored note: the latest futures brief or the latest Market overview (kind "
+          "\"plan\": the stocks desk's note, a per-name game plan until 2026-11-13 and the "
+          "AI market overview since), or one by id, with when it was written and how old it "
+          "is. A brief's reads are per book; name one to get just its read.",
           _params({"kind": {"type": "string", "enum": ["brief", "plan"]},
                    "id": {**_STR, "description": "A note id like 20261029-093225; omit for "
                                                  "the latest"},
                    "book": _BOOK,
-                   "sym": {**_STR, "description": "On a plan, one name's plan"}}, ["kind"])),
+                   "sym": {**_STR, "description": "On an older game plan, one name's plan"}},
+                  ["kind"])),
     _tool("panel",
           "Any other panel on any tab, as the page shows it — with the tools above, the whole "
           "terminal. Call it with no name for the list. Names: "
@@ -1103,7 +1105,7 @@ def _verdict_text(v: Any) -> str | None:
     if state == "inplay":
         return f"in play {v.get('score')} but not on the list ({v.get('reason')}): track it"
     if state in ("pinned", "hand", "tracked"):
-        return {"pinned": "pinned", "hand": "tracked by hand", "tracked": "on the list"}[state]
+        return {"pinned": "a favourite", "hand": "tracked by hand", "tracked": "on the list"}[state]
     return None
 
 

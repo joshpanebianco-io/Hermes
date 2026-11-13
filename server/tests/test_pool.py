@@ -229,7 +229,7 @@ def ranked(n: int, score: float = 10.0) -> list[dict[str, Any]]:
 
 
 def test_promote_pre_marks_leave_room_for_the_open() -> None:
-    pinned = [f"P{i}" for i in range(31)]  # nine slots
+    pinned = [f"P{i}" for i in range(28)]  # with the three benchmarks, nine slots
     got = pool.promote(ranked(30), pinned, [], "08:00")
     assert [g["symbol"] for g in got] == ["S00", "S01", "S02", "S03", "S04"]  # 9 − 4
     post = pool.promote(ranked(30), pinned, got, "10:00")
@@ -245,7 +245,7 @@ def test_promote_excludes_pinned_benchmarks_and_the_quiet() -> None:
 
 
 def test_promote_post_open_never_drops_and_respects_the_cap() -> None:
-    pinned = [f"P{i}" for i in range(38)]  # two slots
+    pinned = [f"P{i}" for i in range(35)]  # with the three benchmarks, two slots
     cur = [{"symbol": "OLD", "score": 4.0, "gap_atr": 0.5, "reason": ""}]
     assert [g["symbol"] for g in pool.promote(ranked(5), pinned, cur, "10:00")] == ["OLD", "S00"]
     full = [f"P{i}" for i in range(40)]
@@ -376,15 +376,17 @@ def test_scan_store_watchlist_is_pinned_plus_todays_promotions(tmp_path: Any) ->
     s = scan_src.ScanStore(str(tmp_path / "wl.json"))
     s.set_watchlist(["AAPL", "NVDA"])
     now = et(2026, 10, 23, 9, 0)
+    bench = list(scan_src.BENCHMARKS)
     assert s.set_promoted(date(2026, 10, 23), ["KO", "AAPL", "SNDK"], {"SNDK": "XLK"})
     assert s.pinned() == ["AAPL", "NVDA"]
-    assert s.watchlist(now) == ["AAPL", "NVDA", "KO", "SNDK"]  # a pinned name is not listed twice
+    # the benchmarks always head the list (2026-11-13); a favourite is not listed twice
+    assert s.watchlist(now) == [*bench, "AAPL", "NVDA", "KO", "SNDK"]
     assert s.pool_sectors == {"SNDK": "XLK"}
     # at 20:00 the levels are Monday's, and Friday's promotions are not on the list
-    assert s.watchlist(et(2026, 10, 23, 20, 0)) == ["AAPL", "NVDA"]
-    # the cap holds: thirty-nine pinned leaves one slot
-    s.set_watchlist([f"A{i}" for i in range(39)])
-    assert s.watchlist(now) == [f"A{i}" for i in range(39)] + ["KO"]
+    assert s.watchlist(et(2026, 10, 23, 20, 0)) == [*bench, "AAPL", "NVDA"]
+    # the cap holds: the benchmarks and thirty-six favourites leave one slot
+    s.set_watchlist([f"A{i}" for i in range(36)])
+    assert s.watchlist(now) == [*bench, *[f"A{i}" for i in range(36)], "KO"]
     assert not s.set_promoted(date(2026, 10, 23), ["KO", "AAPL", "SNDK"], {})  # unchanged
 
 

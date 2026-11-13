@@ -256,9 +256,9 @@ function PlanCard({ d, onWire, toScanner }: { d: DashboardPayload; onWire: () =>
         sub="Playbook for the session"
         right={
           <span className="flex shrink-0 items-center gap-4">
-            {/* The written plan, name by name: the Analysis tab's stocks half until
-                2026-11-11, now the Scanner's last view and one click from here. */}
-            <Go onClick={() => toScanner("plan")}>Written plan</Go>
+            {/* The written note: the Analysis tab's stocks half until 2026-11-11, then
+                the Stocks tab's Game plan, and its Market overview since 2026-11-13. */}
+            <Go onClick={() => toScanner("plan")}>Market overview</Go>
             <Go onClick={onWire}>Open the wire</Go>
           </span>
         }
@@ -327,7 +327,17 @@ function BreadthCard({ d }: { d: DashboardPayload }) {
       <Head
         title="Breadth"
         sub="Advancers against decliners, by the size of the move"
-        right={d.breadth ? <span className="fig shrink-0 text-[11px] whitespace-nowrap text-ink-3">{d.breadth.names.toLocaleString()} stocks at $2bn+</span> : undefined}
+        right={
+          d.breadth ? (
+            // Before the bell the count is the names that have traded pre-market, of all at
+            // $2bn+: "414 stocks" alone read as if the scan had shrunk (owner, 2026-11-13).
+            <span className="fig shrink-0 text-[11px] whitespace-nowrap text-ink-3">
+              {d.breadth.basis === "pre" && d.breadth.of
+                ? `${d.breadth.names.toLocaleString()} of ${d.breadth.of.toLocaleString()} at $2bn+ traded pre-market`
+                : `${d.breadth.names.toLocaleString()} stocks at $2bn+`}
+            </span>
+          ) : undefined
+        }
       />
       {/* Centred in whatever height the row gives it: the bars are a fixed 92px tall. */}
       <div className="flex min-w-0 flex-1 flex-col justify-center">
@@ -516,8 +526,10 @@ function InPlay({ d, onAll }: { d: DashInPlay | null; onAll: () => void }) {
 /** The engine's verdict on an In play row, as the wide tables' tags say it; Track where it is one click away. */
 function Engine({ v, sym }: { v: DashInPlayRow["verdict"]; sym: string }) {
   if (!v) return <span className="text-ink-4">—</span>;
-  if (v.state === "promoted") return <Tag tone="warn" title={`On today's list from the pool at ${v.mark} ET — the engine scores it at the open`}>Pool {v.mark}</Tag>;
-  if (v.state === "pinned") return <Tag tone="flat" title="Pinned: always on the list">Pinned</Tag>;
+  // No "Pool 06:00" (owner, 2026-11-13, the Pool tag removed): a name the app put on the
+  // list itself is on the list, as one tracked by hand is.
+  if (v.state === "promoted") return <Tag tone="flat" title={`On today's list since ${v.mark} ET`}>On the list</Tag>;
+  if (v.state === "pinned") return <Tag tone="flat" title="One of your favourites">Favourite</Tag>;
   if (v.state === "hand" || v.state === "tracked") return <Tag tone="flat" title="On today's list">On the list</Tag>;
   if (v.state === "inplay")
     return (

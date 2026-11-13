@@ -49,6 +49,7 @@ minutes) and an HTTP 429 pauses the whole fetcher for two minutes.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -66,6 +67,7 @@ from ..frame import frame_of
 from ..holidays import is_trading_day
 from ..http import CACHE, SourceStatus, clean_text, feed_body, fetch, json_body, rss_items
 from ..scanscore import avg_day
+from .insiders import InsiderBook, form4_refs, line_of
 from .quotes import SPARK
 from .wire import gnews
 
@@ -107,6 +109,13 @@ DEFAULT_WATCHLIST = [
 ]
 # Always fetched: RS is measured against SPY and QQQ, and the tape reads IWM.
 BENCHMARKS = ("SPY", "QQQ", "IWM")
+#: The Magnificent Seven, tracked always (owner, 2026-11-13: "why is MAG 7 only showing
+#: 3... it should be showing the MAG 7"). They were all favourites, so the Stocks tab's
+#: MAG7 chip had seven rows; with the favourites cleared it had the ones in play that
+#: morning. Unlike the benchmarks they may still be starred as favourites.
+MAG7 = ("AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA")
+#: What is on the list whatever the favourites and the pool say, first.
+CORE = (*BENCHMARKS, *MAG7)
 MAX_SYMBOLS = 40
 _SYM = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,9}$")
 
@@ -129,7 +138,18 @@ NEWS_PER_TICK = 3
 #: game plan generated just after a restart was otherwise written blind.
 NEWS_PER_TICK_COLD = 10
 SEC_SEC = 1800.0
-SEC_PER_TICK = 2
+#: Four a minute since 2026-11-13, when the Today list's names joined the list's own
+#: (`sec_extra`): about seventy names, each read every half hour (SEC_SEC). The SEC
+#: allows ten requests a second.
+SEC_PER_TICK = 4
+#: Form 4 documents read a tick (a minute): the SEC asks for under ten requests a second,
+#: and a month's backlog for the list is a few hundred.
+FORM4_PER_TICK = 8
+
+
+def _form4_body(body: bytes) -> str | None:
+    head = body[:4000].decode("utf-8", errors="replace")
+    return None if "<ownershipDocument" in head else "not a Form 4"
 FILING_DAYS = 3
 BACKOFF_BASE = 30.0
 BACKOFF_MAX = 15 * 60.0
@@ -559,9 +579,13 @@ class ScanStore:
     thread changes, so it alone sits behind a lock.
     """
 
-    def __init__(self, watchlist_path: str = WATCHLIST_FILE) -> None:
+    def __init__(self, watchlist_path: str = WATCHLIST_FILE,
+                 core: Iterable[str] = BENCHMARKS) -> None:
         self._lock = threading.Lock()
         self._path = watchlist_path
+        #: On the list first, whatever the favourites and the pool say: the
+        #: benchmarks, and in the collector the MAG 7 too (CORE).
+        self.core: tuple[str, ...] = tuple(core)
         self._watch = load_watchlist(watchlist_path)
         #: Today's promotions from the pool (sources/pool.py): the day they are
         #: for, the names, and the sector the pool gave each. Behind the lock
@@ -581,6 +605,11 @@ class ScanStore:
         self.news_at: dict[str, float] = {}
         self.filings: dict[str, list[dict[str, Any]]] = {}
         self.filings_at: dict[str, float] = {}
+        #: Each name's Form 4s of the last month, and the ones read (sources/insiders.py).
+        self.form4_refs: dict[str, list[dict[str, Any]]] = {}
+        self.insider_book = InsiderBook()
+        #: More names for the SEC job to read, set by the collector (`tick_sec`).
+        self.sec_extra: Callable[[], Iterable[str]] | None = None
         self.ciks: dict[str, int] = {}
         self.sec_names: dict[str, str] = {}
         #: Per-symbol failures in a row and when it may be tried again (epoch).
@@ -637,26 +666,33 @@ class ScanStore:
     # ---- watchlist ----------------------------------------------------------
 
     def pinned(self) -> list[str]:
-        """The owner's list — what the editor edits and the file holds."""
+        """The owner's FAVOURITES — what the editor edits and the stars show.
+
+        THE BENCHMARKS ARE NOT FAVOURITES (owner, 2026-11-13: "change pinned name to
+        favourites and lets reset it so nothing is favourited"). SPY, QQQ and IWM are
+        on the list always (`watchlist` puts them first: the masthead, the regime, the
+        Today list and the market overview read their rows), so a list with nothing
+        favourited is the three of them, and none of them is anyone's favourite."""
         with self._lock:
-            return list(self._watch)
+            return [s for s in self._watch if s not in BENCHMARKS]
 
     def watchlist(self, now: datetime | None = None) -> list[str]:
-        """What the jobs fetch: the pinned names, then today's promotions from
-        the pool, inside MAX_SYMBOLS. Promotions for another day are not
-        today's — the scanner's day rolls at 20:00 (scan.clock_at) and the
-        list rolls with it, whether or not the pool has ticked since."""
+        """What the jobs fetch: the core (the benchmarks and the MAG 7), the
+        favourites, then today's promotions from the pool, inside MAX_SYMBOLS.
+        Promotions for another day are not today's — the scanner's day rolls at 20:00
+        (scan.clock_at) and the list rolls with it, whether or not the pool has ticked
+        since."""
         td = scan.clock_at(now or datetime.now(UTC)).trading_day
         with self._lock:
-            pinned = list(self._watch)
+            favs = [s for s in self._watch if s not in self.core]
+            if self._promoted_day == td and self._favs is not None:
+                # The favourites the pool chose for today (pool.FAV_SLOTS); the other
+                # favourites sit the day out (2026-11-13, the Today list).
+                keep = set(self._favs)
+                favs = [s for s in favs if s in keep]
+            pinned = list(self.core) + favs
             if self._promoted_day != td:
                 return pinned
-            if self._favs is not None:
-                # The favourites the pool chose for today (pool.FAV_SLOTS) and the
-                # benchmarks; the other pins sit the day out (2026-11-13, the Today list).
-                keep = set(self._favs)
-                pinned = [s for s in pinned if s in BENCHMARKS or s in keep]
-                pinned += [b for b in BENCHMARKS if b not in pinned]
             room = max(0, MAX_SYMBOLS - len(pinned))
             return pinned + [s for s in self._promoted if s not in pinned][:room]
 
@@ -679,10 +715,20 @@ class ScanStore:
         return before != (day, syms, fav_l)
 
     def set_watchlist(self, symbols: Iterable[Any]) -> tuple[list[str], list[str]]:
-        ok, bad = save_watchlist(symbols, self._path)
+        """Replace the favourites; the benchmarks stay at the head of the stored list.
+
+        NOTHING FAVOURITED IS A LIST (2026-11-13). An empty list was refused and kept
+        the old one, so the favourites could never be cleared; now it clears them. A
+        list in which every entry was invalid is still refused: that is a typo, not a
+        wish for no favourites. Answers (the favourites saved, the entries rejected)."""
+        ok, bad = clean_watchlist(symbols)
+        if not ok and bad:
+            return self.pinned(), bad
+        favs = [s for s in ok if s not in BENCHMARKS][: MAX_SYMBOLS - len(BENCHMARKS)]
+        saved, _ = save_watchlist([*BENCHMARKS, *favs], self._path)
         with self._lock:
-            self._watch = ok
-        return ok, bad
+            self._watch = saved
+        return [s for s in saved if s not in BENCHMARKS], bad
 
     def symbols(self) -> list[str]:
         w = self.watchlist()
@@ -1274,6 +1320,13 @@ class ScanStore:
         t = time.time()
         err = None if self.ciks else self._load_ciks()
         names = [s for s in self.watchlist() if s not in BENCHMARKS]
+        # And the names in play today that the list does not track (the collector's
+        # `sec_extra`: the Today list, the pool's top): their insider trades are context
+        # on the Today rows whether or not the engine tracks them (2026-11-13, after the
+        # favourites were cleared and the Insiders chip fell from 6 to 0).
+        if self.sec_extra is not None:
+            with contextlib.suppress(Exception):
+                names += [s for s in self.sec_extra() if s not in names and s not in BENCHMARKS]
         due = sorted((s for s in names if t - self.filings_at.get(s, 0.0) >= SEC_SEC),
                      key=lambda s: self.filings_at.get(s, 0.0))
         today = datetime.now(scan.ET).date()
@@ -1290,9 +1343,23 @@ class ScanStore:
                 err = err or f"{sym}: {r.error}"
                 continue
             try:
-                self.filings[sym] = parse_filings(r.json(), cik, today)
+                doc = r.json()
+                self.filings[sym] = parse_filings(doc, cik, today)
+                # The same list's Form 4s, for the insider trades (sources/insiders.py).
+                self.form4_refs[sym] = form4_refs(doc, cik, today)
             except ValueError as e:
                 err = err or f"{sym}: unparseable: {e}"
+        # A few of the Form 4s not read yet, newest first: each is read once and kept.
+        book = self.insider_book
+        pending = [ref for s in names for ref in book.wanted(self.form4_refs.get(s) or [])]
+        pending.sort(key=lambda ref: ref["filed"], reverse=True)
+        for ref in pending[:FORM4_PER_TICK]:
+            got = fetch(ref["xml"], ttl_sec=0.0, ua=UA, timeout=20, stale_ok=False, store=False,
+                        validate=_form4_body)
+            body = got.body.decode("utf-8", errors="replace") if got.ok and got.body else None
+            self.insider_book.take(ref, body)
+        if pending:
+            self.insider_book.save(today)
         st.items = sum(len(self.filings.get(s) or []) for s in names)
         st.ok = bool(self.ciks)
         st.source = "live" if st.ok else "unavailable"
@@ -1301,4 +1368,14 @@ class ScanStore:
         st.error = err
         if st.ok:
             st.last_ok_utc = datetime.now(UTC).isoformat()
+        left = len(pending) - min(len(pending), FORM4_PER_TICK)
+        if left:
+            st.notes.append(f"{left} Form 4s still to read")
         return st
+
+    def insiders(self, sym: str, today: date | None = None) -> list[dict[str, Any]]:
+        """The name's insider trades worth a line over the last month (sources/insiders.py),
+        newest first, each with its line in words: the trades in its own stock, from the
+        book, so a restart or a name leaving the list does not hide them."""
+        today = today or datetime.now(scan.ET).date()
+        return [{**t, "text": line_of(t)} for t in self.insider_book.trades_of(sym, today)]

@@ -299,9 +299,10 @@ export function rowTags(o: {
   inside?: boolean;
   news?: boolean;
   stage?: number | null;
-  pool?: string | null;
   /** The engine's verdict on the name today (the wide tables); pinned and tracked show their star and dot instead. */
   verdict?: Verdict | null;
+  /** The month's newest insider trade worth a line (Form 4s), and how many there were. */
+  insider?: { side: "buy" | "sell"; text: string; n: number } | null;
 }): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   if (o.pd === "above") out.push(<Tag key="pd" tone="up">Above PDH</Tag>);
@@ -311,15 +312,22 @@ export function rowTags(o: {
   if (o.inside) out.push(<Tag key="in" tone="flat" title="The day's range sits inside the previous day's">Inside day</Tag>);
   if (o.news) out.push(<Tag key="news" tone="news">News</Tag>);
   if ((o.stage ?? 0) >= 2) out.push(<Tag key="day" tone="flat" title={`Day ${o.stage} of a multi-day move`}>Day {o.stage}</Tag>);
-  if (o.pool) out.push(<Tag key="pool" tone="warn" title={o.pool}>Pool</Tag>);
-  const v = o.verdict;
-  if (v?.state === "promoted") {
+  if (o.insider) {
     out.push(
-      <Tag key="verdict" tone="warn" title={`On today's list from the pool at ${v.mark} ET — ${v.reason ?? ""}: the engine scores it at the open`}>
-        Pool {v.mark}
+      <Tag
+        key="insider"
+        tone={o.insider.side === "buy" ? "up" : "down"}
+        title={`${o.insider.text}${o.insider.n > 1 ? `\n+${o.insider.n - 1} more this month` : ""}\nFrom the SEC's Form 4s: open-market buys of $100k+, sales of $1M+ outside a 10b5-1 plan. Context, not part of the score.`}
+      >
+        {o.insider.side === "buy" ? "Insider buy" : "Insider sale"}
       </Tag>,
     );
-  } else if (v?.state === "inplay") {
+  }
+  // NO POOL TAG (owner, 2026-11-13: "what does the POOL tag even mean?" → removed). It
+  // said the app had put the name on the list by itself at a mark; with the favourites
+  // cleared that was nearly every row, so it told the reader nothing.
+  const v = o.verdict;
+  if (v?.state === "inplay") {
     out.push(
       <Tag key="verdict" tone="flat" title={`${v.reason ?? ""} — in play (${v.score}) but not on today's list: track it to have the engine score it at the open`}>
         In play {v.score != null ? Math.round(v.score) : ""}
@@ -339,7 +347,7 @@ export function Star({ sym, pinned, onDone }: { sym: string; pinned: boolean; on
     <button
       type="button"
       aria-pressed={on}
-      title={why ?? (on ? "Pinned: always on the list. Click to unpin." : "Pin: keep this name on the list for good")}
+      title={why ?? (on ? "A favourite. Click to take it off your favourites." : "Add to your favourites")}
       onClick={(e) => {
         e.stopPropagation();
         setWish(!on);

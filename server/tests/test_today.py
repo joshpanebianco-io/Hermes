@@ -241,7 +241,97 @@ def test_the_scanner_tracks_the_benchmarks_todays_favourites_and_the_pool(tmp_pa
     # After it: the benchmarks, the chosen favourites, then the pool's.
     s.set_promoted(td, ["NEW"], {}, ["CCC"])
     assert s.watchlist(now) == ["SPY", "QQQ", "IWM", "CCC", "NEW"]
-    assert s.tracked_favourites() == ["CCC"] and s.pinned()[3:] == ["AAA", "BBB", "CCC"]
+    # The benchmarks are on the list and are nobody's favourite (2026-11-13).
+    assert s.tracked_favourites() == ["CCC"] and s.pinned() == ["AAA", "BBB", "CCC"]
+
+
+def test_the_mag_7_is_always_on_the_list_and_the_pool_counts_it(tmp_path: Any) -> None:
+    """Owner, 2026-11-13: "why is MAG 7 only showing 3... it should be showing the MAG 7".
+    With no favourites the MAG7 chip had the three in play that morning; the collector's
+    store keeps all seven on the list (scanner.CORE), a starred one takes no favourite's
+    slot, and the pool leaves them the room."""
+    s = scan_src.ScanStore(str(tmp_path / "wl.json"), core=scan_src.CORE)
+    s.set_watchlist([])
+    now = et(2026, 11, 13, 9, 0)
+    assert s.watchlist(now) == list(scan_src.CORE)
+    s.set_watchlist(["NVDA", "AAA"])            # a starred MAG 7 name is listed once
+    assert s.pinned() == ["NVDA", "AAA"] and s.watchlist(now) == [*scan_src.CORE, "AAA"]
+    assert pool.choose_favourites([], ["NVDA", "AAA"], core=scan_src.CORE) == ["AAA"]
+    ranked = [{"symbol": f"S{i:02d}", "score": 10.0 - i * 0.1, "gap_atr": 1.0, "reason": "x"}
+              for i in range(40)]
+    ranked.insert(0, {"symbol": "TSLA", "score": 20.0, "gap_atr": 2.0, "reason": "x"})
+    got = pool.promote(ranked, [], [], "10:00", core=scan_src.CORE)
+    assert "TSLA" not in {g["symbol"] for g in got}
+    assert len(got) == scan_src.MAX_SYMBOLS - len(scan_src.CORE)
+
+
+def test_favourites_can_be_cleared_and_the_benchmarks_stay(tmp_path: Any) -> None:
+    """Owner, 2026-11-13: "lets reset it so nothing is favourited". An empty list
+    clears the favourites (it used to be refused and keep the old list); the
+    benchmarks stay on the list, first, and a list of nothing but typos is still
+    refused."""
+    path = str(tmp_path / "wl.json")
+    s = scan_src.ScanStore(path)
+    s.set_watchlist(["SPY", "AAA", "BBB"])
+    assert s.pinned() == ["AAA", "BBB"]
+    assert s.set_watchlist([]) == ([], [])
+    assert s.pinned() == []
+    now = et(2026, 11, 13, 9, 0)
+    assert s.watchlist(now) == ["SPY", "QQQ", "IWM"]
+    # It survives a restart as nothing favourited, not as the default list.
+    assert scan_src.ScanStore(path).pinned() == []
+    # Typos alone keep what was there.
+    s.set_watchlist(["CCC"])
+    assert s.set_watchlist(["not a ticker!"]) == (["CCC"], ["NOT A TICKER!"])
+    assert s.pinned() == ["CCC"]
+
+
+# ---- the rest of the list ----------------------------------------------------------
+
+
+def test_the_rest_of_the_tracked_list_goes_under_the_ranking() -> None:
+    ranked = [{"sym": "MSFT"}]
+    engine = [{"sym": "MSFT", "ok": True, "score": {"rank": 1}},
+              {"sym": "AAPL", "ok": True, "score": {"rank": 2, "side": "long"}, "last": 101.0,
+               "levels": {"pdc": 100.0}},
+              {"sym": "NVDA", "ok": True, "score": {"rank": 3}},
+              {"sym": "BAD", "ok": False}]
+    inplay = {"NVDA": {"score": 3.1, "reason": "gap 0.30 ATR"}}
+    got = today.rest_of_list(ranked, engine, inplay=inplay, favs=frozenset({"AAPL"}))
+    # Not the ranked one again, not a row the engine could not read; the more in play first.
+    assert [r["sym"] for r in got] == ["NVDA", "AAPL"]
+    assert got[0]["why"] == ["gap 0.30 ATR"] and got[1]["why"] == ["not in play yet"]
+    assert got[1]["fav"] and got[1]["tracked"] and got[1]["chg"] == pytest.approx(1.0)
+
+
+# ---- the Setups table's row --------------------------------------------------------
+
+
+def test_every_today_row_is_drawn_as_the_setups_tables_row() -> None:
+    t = {"sym": "MSFT", "rank": 1, "name": "Microsoft", "sector": "XLK", "last": 520.1,
+         "chg": -2.7, "move": "pre", "score": 13.6, "score_max": pool.SCORE_MAX,
+         "why": ["gap ▼ 0.91 ATR", "below PDL"], "story": {"title": "x"}, "lean": "short",
+         "plan": today.plan_of(520.1, 535.0, 521.0, 522.0, 515.0), "levels":
+         {"pdh": 535.0, "pdl": 521.0, "pmh": 522.0, "pml": 515.0, "pdc": 534.6},
+         "vol_pct": 0.9, "rvol": None, "stage": None, "spark": [1.0, 2.0], "new": False}
+    wide = {"chg": 1.2, "pm_vol": 2e5, "avg": 2.4e7, "atr": 9.0, "vol": 3e7}
+    row = today.scan_row(t, None, "pre", wide)
+    # The shape the table reads, with nothing the engine alone knows invented.
+    assert row["ok"] and row["rs"] == {"SPY": None, "QQQ": None} and row["signals"] == []
+    assert (row["chg_pct"], row["ext_pct"]) == (1.2, -2.7)   # the last session, then pre
+    assert row["broken"]["pdl"] and not row["broken"]["pdh"] and row["lvl_state"] == -1
+    assert row["setup"] == {"side": "short", "state": "forming", "level": "PDL", "entry": None,
+                            "note": ""}
+    assert row["premkt"]["pct_adv"] == 0.9 and not row["levels"]["pm_done"]
+    # The score is the in-play read, as its share of the most, with the reasons as its part.
+    assert row["score"]["total"] == round(100 * 13.6 / pool.SCORE_MAX)
+    assert row["score"]["parts"][0]["note"] == "gap ▼ 0.91 ATR · below PDL"
+    # A tracked name is the engine's own row; before 10:00 its score is the phase's.
+    eng = {"sym": "MSFT", "ok": True, "score": {"total": 34, "side": "short", "parts": []},
+           "setup": {"state": "forming"}, "catalyst": None}
+    got = today.scan_row(t, eng, "pre", wide)
+    assert got["setup"] == {"state": "forming"} and got["score"]["raw"] == 13.6
+    assert today.scan_row(t, eng, "session", wide)["score"]["total"] == 34
 
 
 # ---- new names and the record ------------------------------------------------------
@@ -259,6 +349,22 @@ def test_a_name_new_to_the_top_ten_is_marked_for_a_quarter_hour() -> None:
     rows = [{"sym": "C"}]
     today.mark_new(rows, seen, t0 + 60 + today.NEW_MIN * 60 + 1, fresh=False)
     assert not rows[0]["new"]
+    # A phase whose first read had no rows: its first names are not new either.
+    empty: dict[str, float] = {}
+    today.mark_new([], empty, t0, fresh=True)
+    first = [{"sym": "MSFT"}, {"sym": "BABA"}]
+    today.mark_new(first, empty, t0 + 180, fresh=False)
+    assert not any(r["new"] for r in first)
+
+
+def test_a_name_with_no_pre_market_trade_is_not_on_the_pre_market_list() -> None:
+    ranked = [{"symbol": "IREN", "score": 5.0, "gap_atr": None, "day": 5},
+              {"symbol": "MSFT", "score": 13.7, "gap_atr": 0.97}]
+    rows = {"IREN": {"symbol": "IREN", "close": 40.0, "pm_close": None, "pm_stale": True},
+            "MSFT": {"symbol": "MSFT", "close": 535.0, "pm_close": 520.0}}
+    got = today.rank_pre(ranked, rows, levels=lambda s: {}, catalyst=lambda s: None,
+                         favs=frozenset(), tracked=frozenset())
+    assert [r["sym"] for r in got] == ["MSFT"]
 
 
 def test_a_phases_list_is_written_down_with_what_ranked_it(tmp_path: Any) -> None:

@@ -506,12 +506,15 @@ export function GenerateButton({
   enabled,
   busyTitle,
   idleTitle,
+  label = "Generate",
 }: {
   onClick: () => void;
   busy: boolean;
   enabled: boolean;
   busyTitle: string;
   idleTitle: string;
+  /** The word at rest: the Market view says "Write again" over a note it already holds. */
+  label?: string;
 }) {
   return (
     <button
@@ -526,7 +529,7 @@ export function GenerateButton({
         {/* Odd-sized, so the star's centre is a whole pixel. */}
         <path d="M5.5 0l1.3 4.2L11 5.5 6.8 6.8 5.5 11 4.2 6.8 0 5.5l4.2-1.3z" />
       </svg>
-      {busy ? "Reading…" : "Generate"}
+      {busy ? "Reading…" : label}
     </button>
   );
 }

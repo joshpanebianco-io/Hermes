@@ -334,6 +334,10 @@ def routed(monkeypatch: Any, tmp_path: Any) -> None:
     monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))
     monkeypatch.setattr(COLLECTOR, "scanner_payload", _scan)
     monkeypatch.setattr(COLLECTOR, "snapshot", _snap)
+    # The route writes the market overview since 2026-11-13 (overview.py), which also
+    # reads the Today list and the stories.
+    monkeypatch.setattr(COLLECTOR, "today", lambda: {"rows": []})
+    monkeypatch.setattr(COLLECTOR, "top_stories", lambda: [])
     monkeypatch.setattr(rp, "_post", lambda payload, key, timeout=0: _answer(GOOD))
 
 
@@ -357,11 +361,13 @@ def test_routes_generate_read_and_delete(routed: None) -> None:
     assert body["job"]["state"] in ("running", "done") and body["job"]["top"] == 4
     body = _settled(f"/api/plan/job/{body['job']['id']}")
     assert body["job"]["state"] == "done" and body["latest"]["ok"] is True
+    assert body["latest"]["kind"] == "overview" and body["job"]["kind"] == "overview"
     pid = body["latest"]["id"]
     assert pid == body["job"]["id"]
     code, feed = _asgi("GET", "/api/plan")
     assert feed["job"] is None
     assert code == 200 and feed["history"][0]["id"] == pid and feed["latest"]["id"] == pid
+    assert feed["history"][0]["kind"] == "overview"
     code, one = _asgi("GET", f"/api/plan/{pid}")
     assert code == 200 and one["latest"]["plan"]["headline"] == GOOD["headline"]
     code, gone = _asgi("DELETE", f"/api/plan/{pid}")

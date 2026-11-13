@@ -89,7 +89,7 @@ export interface DashboardPayload {
     /** False when the economic calendar is not loading. Absent from an older collector. */
     calendar_ok?: boolean | null;
   };
-  breadth: Pick<BreadthAll, "basis" | "floor" | "names" | "advancers" | "decliners" | "buckets"> | null;
+  breadth: Pick<BreadthAll, "basis" | "floor" | "names" | "of" | "advancers" | "decliners" | "buckets"> | null;
   top: DashRow[];
   /** The pool's rank with the engine's verdict; null until the pool has been read. */
   inplay: DashInPlay | null;

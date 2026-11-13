@@ -180,11 +180,10 @@ export function TickerDrawer() {
           type="button"
           onClick={openSearch}
           title="Find any ticker or company (Ctrl+K)"
-          className="hit mx-auto flex h-[28px] w-[clamp(160px,20%,300px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
+          className="hit mx-auto flex h-[26px] w-[clamp(150px,16%,220px)] items-center gap-2 rounded-[4px] border border-ring-2 px-2.5 text-[12px] whitespace-nowrap text-ink-3"
         >
           <Glyph name="search" size={12} />
           <span className="min-w-0 flex-1 truncate text-left">Search ticker or company…</span>
-          <span className="fig shrink-0 rounded-[3px] border border-ring-2 px-1.5 text-[10px]">Ctrl K</span>
         </button>
 
         <div className="flex items-center gap-2">
@@ -195,7 +194,7 @@ export function TickerDrawer() {
             // Not until the name has been read: the star showed ☆ for every name while
             // it loaded, and a click in that half second on a pinned one unpinned it.
             disabled={!data}
-            title={!data ? "Reading the name…" : data.pinned ? "Pinned: always on the list. Click to unpin." : "Pin: keep this name on the list for good"}
+            title={!data ? "Reading the name…" : data.pinned ? "A favourite. Click to take it off your favourites." : "Add to your favourites"}
             aria-pressed={data?.pinned ?? false}
             {...segItem(data?.pinned ?? false, { className: "border border-ring-2 disabled:opacity-40" })}
           >

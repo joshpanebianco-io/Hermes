@@ -1,9 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import type { Plan, PlanDriver, PlanFacts, PlanFlow, PlanFlowStrike, PlanItem, PlanMacro, PlanName, PlanRegime } from "@/types/plan";
+import { useEffect, useState } from "react";
+import type {
+  Overview,
+  OverviewFacts,
+  OverviewIndex,
+  OverviewPick,
+  OverviewSector,
+  Plan,
+  PlanDriver,
+  PlanFacts,
+  PlanFlow,
+  PlanFlowStrike,
+  PlanItem,
+  PlanMacro,
+  PlanName,
+  PlanRegime,
+} from "@/types/plan";
 import type { Conviction, Print } from "@/types/market";
-import { PLAN_TOPS } from "@/types/plan";
+import { isOverview } from "@/types/plan";
 import type { PlanController } from "@/lib/useStockPlan";
 import { Module } from "@/components/ui/Module";
 import { PastList } from "@/components/panels/PastList";
@@ -13,7 +28,6 @@ import { Failed, GenerateButton, NoKey, Offline, Working } from "@/components/pa
 import { useQuiet } from "@/components/state/UiMode";
 import { ConvictionBar, SplitBar, biasWord, gradeText, readFigure, leanText, readText, sideText, stateText, voteGlyph, votesTip } from "@/components/market/shared";
 import { bp, compact, dir, num, pct } from "@/lib/format";
-import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { NoteAge } from "@/components/ui/NoteAge";
 import { VixPopover } from "@/components/vol/VixBands";
@@ -34,6 +48,14 @@ const STATE_WORD: Record<string, string> = {
 const stateWord = (s: string) => STATE_WORD[s] ?? s;
 
 /**
+ * THE MARKET VIEW (owner, 2026-11-13). The strip's "Game plan" became "Market":
+ * a market overview written before the open (server overview.py, `OverviewView`
+ * below) — the indexes against their levels, the sectors, the macro, the stories
+ * that matter, the risks and what it means for the Today list — written by
+ * itself at 09:00 ET and again on the button. The per-name plans it replaced
+ * still open from the history, drawn by `PlanView` as they always were; what
+ * follows is that view's account.
+ *
  * The Game plan — the stocks desk's pre-open brief (owner instruction,
  * 2026-10-13: "do everything you recommend" — the review's NY game plan built
  * from the scanner's top names).
@@ -62,13 +84,16 @@ const stateWord = (s: string) => STATE_WORD[s] ?? s;
  * remembered between visits — every plan starts closed.
  */
 
+/** The overview's lines under the clock while it is written (overview.STAGES). */
 const STAGES = [
-  "Reading the scanner's top names",
-  "Placing price against PDH and PMH",
-  "Reading the option chains",
-  "Weighing the prints and the tape",
-  "Writing the plans",
+  "Reading the indexes against their levels",
+  "Reading the sectors and the macro tape",
+  "Picking the stories that matter",
+  "Writing the overview",
 ] as const;
+
+/** How often an open Market view asks whether the 09:00 write has started (useStockPlan.poll). */
+const POLL_MS = 60_000;
 
 const sideHue = (s: "long" | "short" | null) =>
   s === "long" ? "var(--call-fig)" : s === "short" ? "var(--put-fig)" : "var(--ink-3)";
@@ -81,8 +106,6 @@ const SESSION: Record<PlanFacts["session"], string> = {
 };
 
 export function StockPlan({
-  top,
-  setTop,
   feed,
   busy,
   viewing,
@@ -92,13 +115,25 @@ export function StockPlan({
   discardMany,
   discardAll,
   retry,
+  poll,
   startedAt,
 }: PlanController) {
   const [showDigest, setShowDigest] = useState(false);
   const plan = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
-  /** A loader is what the card holds (the first fetch, or a plan being written): stood in the middle of it. */
+  /** A loader is what the card holds (the first fetch, or a note being written): stood in the middle of it. */
   const waiting = !feed || (enabled && busy);
+  const overview = isOverview(plan);
+
+  // The 09:00 write reaches a page left open (useStockPlan.poll): a minute between
+  // asks, only while the view is shown, the tab is in front and nothing is being written.
+  useEffect(() => {
+    if (busy) return;
+    const id = window.setInterval(() => {
+      if (!document.hidden) poll();
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [busy, poll]);
 
   return (
     <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
@@ -106,34 +141,31 @@ export function StockPlan({
           whatever it holds: the brief's arrangement, and its reasons (panels/Report). */}
       <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
         <Module
-          title="Game plan"
+          title="Market"
           large
-          sub={plan ? [plan.et_label, plan.facts ? SESSION[plan.facts.session] : null].filter(Boolean).join(" · ") : "the New York session, from the scanner"}
+          sub={
+            plan
+              ? [plan.et_label, overview ? (plan.auto ? "written at 09:00" : null) : "game plan", plan.facts ? SESSION[plan.facts.session] : null]
+                  .filter(Boolean)
+                  .join(" · ")
+              : "the market before the open"
+          }
           className="xl:grow"
           bodyClassName={cn("px-0 py-0", waiting && "flex flex-col justify-center")}
           error={
             feed?.offline && enabled
-              ? `Collector unreachable — ${feed.offline.reason}. Showing the plan this page already holds.`
+              ? `Collector unreachable — ${feed.offline.reason}. Showing the overview this page already holds.`
               : null
           }
           right={
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10.5px] text-ink-3 qt:text-[11.5px]">Names</span>
-              <div className="seg" title="How many of the scanner's top-ranked names the plan covers, both sides">
-                {PLAN_TOPS.map((n) => (
-                  <button key={n} type="button" onClick={() => setTop(n)} {...segItem(top === n, { className: "text-[11px] leading-[17px]" })}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <GenerateButton
-                onClick={generate}
-                busy={busy}
-                enabled={enabled}
-                busyTitle="Reading the scanner and writing the plan — usually one to three minutes"
-                idleTitle={`Write a plan for the scanner's top ${top} names as they stand now`}
-              />
-            </div>
+            <GenerateButton
+              onClick={generate}
+              busy={busy}
+              enabled={enabled}
+              label={overview ? "Write again" : "Generate"}
+              busyTitle="Reading the market and writing the overview — usually one to three minutes"
+              idleTitle="Write the market overview from the tape as it stands now. It also writes itself at 09:00 ET on a trading day."
+            />
           }
         >
           {feed?.offline && !enabled ? (
@@ -141,43 +173,49 @@ export function StockPlan({
               reason={feed.offline.reason}
               api={feed.offline.api}
               onRetry={retry}
-              what="Plans"
+              what="Overviews"
               title={/predates/.test(feed.offline.reason) ? "Collector needs a restart." : undefined}
             />
           ) : !feed ? (
             <PlanSkeleton />
           ) : !enabled ? (
-            <NoKey model={feed.config?.model} what="game plan" />
+            <NoKey model={feed.config?.model} what="market overview" />
           ) : busy ? (
-            <Working startedAt={startedAt} model={feed.config?.model} stages={STAGES} noun="plan" />
+            <Working startedAt={startedAt} model={feed.config?.model} stages={STAGES} noun="overview" />
           ) : !plan ? (
             <p className="px-4 py-10 text-center text-[11.5px] leading-relaxed text-ink-3">
-              No game plan yet — press <span className="fig text-flip">Generate</span>. It reads the scanner&apos;s
-              top {top} names, their levels and option chains, the tape and today&apos;s prints, and writes a plan
-              for each.
+              No market overview yet. It writes itself at 09:00 ET on a trading day, or press{" "}
+              <span className="fig text-flip">Generate</span>. It reads SPY, QQQ and IWM against their levels, the
+              sectors, the day&apos;s prints and the Fed, the stories leading the tape and the top of the Today list.
             </p>
           ) : plan.error ? (
-            <Failed error={plan.error} raw={plan.raw} noun="plan" />
-          ) : plan.plan && plan.facts ? (
+            <Failed error={plan.error} raw={plan.raw} noun={overview ? "overview" : "plan"} />
+          ) : isOverview(plan) && plan.plan && plan.facts ? (
+            <>
+              <NoteAge createdUtc={plan.created_utc} what="overview" />
+              <OverviewView p={plan} />
+              <Provenance p={plan} showDigest={showDigest} onDigest={() => setShowDigest((v) => !v)} />
+            </>
+          ) : !isOverview(plan) && plan.plan && plan.facts ? (
             <>
               <NoteAge createdUtc={plan.created_utc} what="plan" />
               <PlanView p={plan} />
               <Provenance p={plan} showDigest={showDigest} onDigest={() => setShowDigest((v) => !v)} />
             </>
           ) : (
-            <Failed error="The stored plan has no body." raw={plan.raw} noun="plan" />
+            <Failed error="The stored note has no body." raw={plan.raw} noun={overview ? "overview" : "plan"} />
           )}
         </Module>
       </div>
 
       <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
         <PastList
-          title="Past plans"
-          noun="plan"
+          title="Past overviews"
+          noun="overview"
           items={feed ? (feed.history ?? []) : null}
           skeleton={<ListSkeleton />}
           current={viewing ?? plan?.id ?? null}
-          empty="Nothing yet. Plans are kept so each one can be read against how the session went."
+          empty="Nothing yet. Each overview is kept so it can be read against how the session went."
           onOpen={open}
           onDiscard={discard}
           onDiscardMany={discardMany}
@@ -187,7 +225,7 @@ export function StockPlan({
               <span className="flex w-full items-baseline gap-2">
                 <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
                 <span className="fig ml-auto shrink-0 text-[10px] text-ink-3">
-                  {h.n} {h.n === 1 ? "name" : "names"}
+                  {h.kind === "overview" ? (h.auto ? "09:00" : null) : `game plan · ${h.n} ${h.n === 1 ? "name" : "names"}`}
                 </span>
               </span>
               {h.headline && <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-2">{h.headline}</span>}
@@ -221,25 +259,7 @@ function PlanView({ p }: { p: Plan }) {
         <span className="fig text-[11.5px] text-ink-3">{f.as_of}</span>
       </header>
 
-      {f.partial.length > 0 && (
-        <div className="mt-3 border-l-[3px] border-warn bg-warn/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2">
-          <strong className="font-semibold text-warn">Partial data.</strong>
-          {f.partial.map((x) => (
-            <span key={x} className="block">
-              {x}
-            </span>
-          ))}
-        </div>
-      )}
-      {p.unverified && p.unverified.length > 0 && (
-        <div className="mt-3 border-l-[3px] border-put-fig bg-put-fig/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2">
-          <strong className="font-semibold text-put-fig">Unverified figures.</strong> The model printed{" "}
-          {p.unverified.length === 1 ? "a number" : "numbers"} the scanner&apos;s facts do not contain —{" "}
-          <span className="fig text-ink">{p.unverified.join(", ")}</span>. Read the sentences carrying{" "}
-          {p.unverified.length === 1 ? "it" : "them"} as unchecked; the tables beside each plan are the
-          collector&apos;s and are exact.
-        </div>
-      )}
+      <Banners partial={f.partial} unverified={p.unverified} />
 
       <p className="mt-5 max-w-[840px] text-[18px] leading-[1.5] text-ink">{b.headline}</p>
       {b.market && <p className="mt-2 max-w-[840px] text-[13.5px] leading-[1.6] text-ink-2">{b.market}</p>}
@@ -358,6 +378,297 @@ function PlanView({ p }: { p: Plan }) {
   );
 }
 
+/** What the note is missing, and any figure the model wrote that its facts do not carry. */
+function Banners({ partial, unverified }: { partial: string[]; unverified?: string[] }) {
+  return (
+    <>
+      {partial.length > 0 && (
+        <div className="mt-3 border-l-[3px] border-warn bg-warn/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2">
+          <strong className="font-semibold text-warn">Partial data.</strong>
+          {partial.map((x) => (
+            <span key={x} className="block">
+              {x}
+            </span>
+          ))}
+        </div>
+      )}
+      {unverified && unverified.length > 0 && (
+        <div className="mt-3 border-l-[3px] border-put-fig bg-put-fig/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2">
+          <strong className="font-semibold text-put-fig">Unverified figures.</strong> The model printed{" "}
+          {unverified.length === 1 ? "a number" : "numbers"} the collector&apos;s facts do not contain —{" "}
+          <span className="fig text-ink">{unverified.join(", ")}</span>. Read the sentences carrying{" "}
+          {unverified.length === 1 ? "it" : "them"} as unchecked; the tables are the collector&apos;s and are exact.
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------ the market overview */
+
+/**
+ * The Market view (owner, 2026-11-13): the market the Today list trades in, in
+ * the Game plan's own grammar — sections under a rule, the model's prose first
+ * and the collector's tables under it. The read (the indexes against their
+ * levels and the weather), the sectors, the macro, the stories that matter, the
+ * risks, and what it means for the list.
+ */
+function OverviewView({ p }: { p: Overview }) {
+  const quiet = useQuiet();
+  const f = p.facts;
+  const b = p.plan!;
+  const risks = [...(b.events ?? []), ...b.risks];
+  const s = f.sectors;
+  const hasSectors = s.leaders.length + s.laggards.length + s.themes_up.length + s.themes_down.length > 0;
+
+  return (
+    <article className={cn("qt-noscale w-full px-5 pt-4 pb-6", quiet && "px-3 pt-2 pb-8")}>
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-ring pb-3">
+        <h1 className="text-[21px] leading-tight font-semibold text-ink">
+          {dayName(f.trading_day)} <span className="font-normal text-ink-3">market overview</span>
+        </h1>
+        <span className="fig text-[11.5px] text-ink-3">{f.as_of}</span>
+      </header>
+
+      <Banners partial={f.partial} unverified={p.unverified} />
+
+      <p className="mt-5 max-w-[840px] text-[18px] leading-[1.5] text-ink">{b.headline}</p>
+
+      <Section title="The read">
+        <Prose text={b.read} />
+        {f.index.length > 0 && <IndexTable rows={f.index} />}
+        <Regime r={f.regime} />
+        <RegimeContext f={f} />
+        <WideBreadth w={f.wide_breadth} />
+      </Section>
+
+      {(b.sectors || hasSectors) && (
+        <Section title="Sectors">
+          <Prose text={b.sectors} />
+          {hasSectors && <SectorBoard s={s} />}
+        </Section>
+      )}
+
+      <Section title="Macro today">
+        <Prose text={b.macro} />
+        {f.macro && f.macro.moves.length > 0 && <MacroMoves m={f.macro} className="mt-4" />}
+        {f.prints && f.prints.length > 0 && (
+          <ul className="mt-4 grid gap-x-10 lg:grid-cols-2">
+            {printReleases(f.prints).map(({ lead: c, subs }) => (
+              <PrintItem key={`${c.et}-${c.title}`} c={c} subs={subs} />
+            ))}
+          </ul>
+        )}
+        {b.timing.length > 0 && (
+          <div className="mt-4">
+            <p className="qt-cap mb-1.5 text-[10.5px] text-ink-3">The clock</p>
+            <Bullets items={b.timing} />
+          </div>
+        )}
+      </Section>
+
+      {b.news.length > 0 && (
+        <Section title="News that matters">
+          <ul className="flex flex-col">
+            {b.news.map((n) => (
+              <PickItem key={n.id} n={n} />
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {risks.length > 0 && (
+        <Section title="Risks">
+          <Bullets items={risks} />
+        </Section>
+      )}
+
+      <Section title="For today's list">
+        <Prose text={b.focus} />
+        {f.today.rows.length > 0 && <TodayTop t={f.today} />}
+      </Section>
+    </article>
+  );
+}
+
+function Prose({ text }: { text: string }) {
+  if (!text) return null;
+  return <p className="max-w-[840px] text-[13.5px] leading-[1.6] text-ink-2">{text}</p>;
+}
+
+/** SPY, QQQ and IWM against their own levels — the collector's, as the plan's Facts table draws a name's. */
+function IndexTable({ rows }: { rows: OverviewIndex[] }) {
+  return (
+    <table className="mt-4 w-full border-collapse text-[12px]">
+      <thead>
+        <tr className="border-b border-ring">
+          {["", "Last", "Move", "PDH · PDL", "PMH · PML", "Where", "10m 200 EMA"].map((h) => (
+            <th key={h} className="qt-cap py-[5px] pr-3 text-left align-baseline text-[10px] font-normal text-ink-3">
+              {h}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((x) => {
+          const mv = x.ext_pct ?? x.chg_pct;
+          return (
+            <tr key={x.sym} className="border-b border-ring/60 last:border-b-0" title={x.daily ?? undefined}>
+              <td className="py-[5px] pr-3 align-baseline font-semibold text-ink">{x.sym}</td>
+              <td className="fig py-[5px] pr-3 align-baseline text-ink">{num(x.last)}</td>
+              <td className="fig py-[5px] pr-3 align-baseline">
+                <span className={dir(mv)}>{pct(mv)}</span>
+                {x.ext_pct != null && <span className="qt-cap ml-1 text-[9px] text-ink-3">ext</span>}
+              </td>
+              <td className="fig py-[5px] pr-3 align-baseline">
+                <span style={{ color: "var(--call-fig)" }}>{num(x.levels.pdh)}</span> ·{" "}
+                <span style={{ color: "var(--put-fig)" }}>{num(x.levels.pdl)}</span>
+              </td>
+              <td className="fig py-[5px] pr-3 align-baseline">
+                <span style={{ color: "var(--call-fig)" }}>{num(x.levels.pmh)}</span> ·{" "}
+                <span style={{ color: "var(--put-fig)" }}>{num(x.levels.pml)}</span>
+              </td>
+              <td className="py-[5px] pr-3 align-baseline text-ink-2">{x.where ?? "—"}</td>
+              <td className="py-[5px] align-baseline text-ink-2">{x.ema200_10m ?? "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** Every US stock at $2bn+, up against down — before the bell, those that have traded. */
+function WideBreadth({ w }: { w: OverviewFacts["wide_breadth"] }) {
+  if (!w || w.advancers == null || w.decliners == null) return null;
+  const total = w.advancers + w.decliners;
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-ring py-3 text-[12px]">
+      <span className="qt-cap text-[10.5px] text-ink-3">$2bn+ stocks</span>
+      <span className="fig text-call-fig">{w.advancers.toLocaleString("en-US")} up</span>
+      <span className="fig text-put-fig">{w.decliners.toLocaleString("en-US")} down</span>
+      {total > 0 && (
+        <SplitBar
+          className="w-[160px] self-center"
+          total={total}
+          parts={[
+            { n: w.advancers, cls: "bg-call-fig" },
+            { n: w.decliners, cls: "bg-put-fig" },
+          ]}
+        />
+      )}
+      <span className="text-ink-3">
+        {w.basis === "pre-market" && w.traded != null && w.of != null
+          ? `${w.traded.toLocaleString("en-US")} of ${w.of.toLocaleString("en-US")} traded pre-market`
+          : `in ${w.basis}`}
+      </span>
+    </div>
+  );
+}
+
+/** The funds ahead of SPY and behind it, sectors then themes, each with the names moving in it. */
+function SectorBoard({ s }: { s: OverviewFacts["sectors"] }) {
+  return (
+    <div className="mt-4">
+      <div className="grid gap-x-10 gap-y-4 lg:grid-cols-2">
+        <SectorList title="Ahead of SPY" rows={s.leaders} />
+        <SectorList title="Behind SPY" rows={s.laggards} />
+        {(s.themes_up.length > 0 || s.themes_down.length > 0) && (
+          <>
+            <SectorList title="Themes ahead" rows={s.themes_up} />
+            <SectorList title="Themes behind" rows={s.themes_down} />
+          </>
+        )}
+      </div>
+      <p className="mt-2.5 text-[11px] text-ink-3">
+        The funds&apos; moves are {s.basis}; the names under them are {s.names_basis}. Hover a fund for the drivers it answers to.
+      </p>
+    </div>
+  );
+}
+
+function SectorList({ title, rows }: { title: string; rows: OverviewSector[] }) {
+  return (
+    <div className="min-w-0">
+      <p className="qt-cap mb-1 text-[10.5px] text-ink-3">{title}</p>
+      {rows.length === 0 ? (
+        <p className="text-[12px] text-ink-3">None.</p>
+      ) : (
+        <ul className="flex flex-col">
+          {rows.map((x) => (
+            <li
+              key={x.key}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 border-b border-ring/60 py-[5px] text-[12.5px] last:border-b-0"
+              title={x.drivers.length ? x.drivers.join("\n") : "No macro driver in the table for this fund"}
+            >
+              <span className="min-w-0 truncate">
+                <span className="fig font-semibold text-ink">{x.key}</span> <span className="text-ink-2">{x.label}</span>
+                {x.names && x.names.length > 0 && <span className="fig ml-2 text-[11px] text-ink-3">{x.names.join(" · ")}</span>}
+              </span>
+              <span className="fig shrink-0">
+                <span className={dir(x.rs_day)}>{x.rs_day == null ? "—" : `${x.rs_day >= 0 ? "+" : ""}${x.rs_day.toFixed(2)}`}</span>{" "}
+                <span className="text-[11px] text-ink-3">vs SPY · {pct(x.day_pct)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** One story the model picked: the collector's title and link, and the model's one line on why. */
+function PickItem({ n }: { n: OverviewPick }) {
+  return (
+    <li className="border-b border-ring/60 py-[7px] last:border-b-0">
+      <span className="flex items-baseline gap-2.5 text-[12.5px]">
+        <span aria-hidden className={cn("h-[5px] w-[5px] shrink-0 translate-y-[-2px]", n.wire ? "bg-err" : "bg-flip")} />
+        <span className="min-w-0 flex-1 text-ink">
+          {n.url ? (
+            <a href={n.url} target="_blank" rel="noreferrer noopener" className="hover:underline">
+              {n.title}
+            </a>
+          ) : (
+            n.title
+          )}
+        </span>
+        {n.syms.length > 0 && <span className="fig shrink-0 text-[11px] text-ink-2">{n.syms.join(" ")}</span>}
+        <span className="qt-cap shrink-0 text-[9.5px] text-ink-3">
+          {n.publisher}
+          {n.tag ? ` · ${n.tag}` : ""}
+        </span>
+        {n.age_min != null && <span className="fig shrink-0 text-[10.5px] text-ink-3">{ageText(n.age_min)}</span>}
+      </span>
+      <span className="mt-0.5 block pl-[15px] text-[12.5px] leading-[1.5] text-ink-2">{n.why}</span>
+    </li>
+  );
+}
+
+/** The top of the Today list as it stood when the overview was written. */
+function TodayTop({ t }: { t: OverviewFacts["today"] }) {
+  return (
+    <div className="mt-4">
+      <p className="qt-cap mb-1 text-[10.5px] text-ink-3">Top of Today{t.phase ? ` · ${t.phase}` : ""}</p>
+      <ul className="flex flex-col">
+        {t.rows.map((r) => (
+          <li
+            key={r.sym}
+            className="grid grid-cols-[86px_64px_minmax(0,1fr)] items-baseline gap-3 border-b border-ring/60 py-[5px] text-[12.5px] last:border-b-0"
+            title={r.story?.title || undefined}
+          >
+            <span className="flex items-center gap-1.5 self-center font-semibold text-ink">
+              <TickerLogo sym={r.sym} size={14} />
+              {r.sym}
+            </span>
+            <span className={cn("fig", dir(r.chg_pct))}>{pct(r.chg_pct)}</span>
+            <span className="min-w-0 truncate text-ink-2">{r.why.join(" · ")}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function Regime({ r }: { r: PlanRegime }) {
   return (
     <div className="mt-6 grid grid-cols-2 border-y border-ring md:grid-cols-4 md:divide-x md:divide-ring">
@@ -439,7 +750,7 @@ function Cell({ label, title, children }: { label: string; title?: string; child
  * collector stood them when the plan was written. Each cell shows only when
  * the plan carries it; a plan from before 2026-10-14 shows none of them.
  */
-function RegimeContext({ f }: { f: PlanFacts }) {
+function RegimeContext({ f }: { f: Omit<PlanFacts, "names"> }) {
   const b = f.breadth;
   const fuel = (f.fuel ?? []).filter((x) => x.sym === "SPY" || x.sym === "QQQ");
   const gamma = f.gamma ?? [];
@@ -1089,21 +1400,26 @@ function Driver({ d }: { d: PlanDriver }) {
  * read from, and the market's high-impact headlines — so a plan's "Macro:"
  * line can be checked against the tape it cites.
  */
+/** The day's macro moves in one row — the 10-year, the dollar, crude, gold, bitcoin. */
+function MacroMoves({ m, className }: { m: PlanMacro; className?: string }) {
+  return (
+    <div className={cn("flex flex-wrap gap-x-7 gap-y-2", className)}>
+      {m.moves.map((x) => (
+        <div key={x.key} className="flex items-baseline gap-2">
+          <span className="qt-cap text-[10.5px] text-ink-3">{x.label}</span>
+          <span className={cn("fig text-[13px]", x.closed ? "text-ink-3" : x.move > 0 ? "up" : x.move < 0 ? "down" : "text-ink-2")}>{x.text}</span>
+          {x.closed && <span className="text-[10px] text-ink-3">at its close</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MacroToday({ m }: { m: PlanMacro }) {
   return (
     <section className="mt-7 border-t border-ring pt-5" aria-label="Macro today">
       <h3 className="qt-cap mb-3 text-[11.5px] text-ink-3">Macro today</h3>
-      {m.moves.length > 0 && (
-        <div className="flex flex-wrap gap-x-7 gap-y-2">
-          {m.moves.map((x) => (
-            <div key={x.key} className="flex items-baseline gap-2">
-              <span className="qt-cap text-[10.5px] text-ink-3">{x.label}</span>
-              <span className={cn("fig text-[13px]", x.closed ? "text-ink-3" : x.move > 0 ? "up" : x.move < 0 ? "down" : "text-ink-2")}>{x.text}</span>
-              {x.closed && <span className="text-[10px] text-ink-3">at its close</span>}
-            </div>
-          ))}
-        </div>
-      )}
+      {m.moves.length > 0 && <MacroMoves m={m} />}
       {m.headlines.length > 0 && (
         <ul className="mt-3 flex flex-col">
           {m.headlines.map((h) => (
@@ -1179,7 +1495,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Provenance({ p, showDigest, onDigest }: { p: Plan; showDigest: boolean; onDigest: () => void }) {
+function Provenance({ p, showDigest, onDigest }: { p: Plan | Overview; showDigest: boolean; onDigest: () => void }) {
   return (
     <>
       <div className="mx-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ring pt-3 pb-3 text-[11px] text-ink-3">
@@ -1187,7 +1503,13 @@ function Provenance({ p, showDigest, onDigest }: { p: Plan; showDigest: boolean;
         <span aria-hidden>·</span>
         <span className="fig">{p.et_label}</span>
         <span aria-hidden>·</span>
-        <span className="fig">{p.facts.names.length} names</span>
+        <span className="fig">{isOverview(p) ? `${p.facts.stories.length} stories read` : `${p.facts.names.length} names`}</span>
+        {isOverview(p) && p.auto && (
+          <>
+            <span aria-hidden>·</span>
+            <span>written by the 09:00 clock</span>
+          </>
+        )}
         {p.usage?.total_tokens && (
           <>
             <span aria-hidden>·</span>
@@ -1215,11 +1537,11 @@ function Provenance({ p, showDigest, onDigest }: { p: Plan; showDigest: boolean;
 
 /** While the last plan is fetched: the helm, in the space the plan takes. */
 function PlanSkeleton() {
-  return <HelmLoader label="Loading the game plan" size={48} minHeight={320} />;
+  return <HelmLoader label="Loading the market overview" size={48} minHeight={320} />;
 }
 
 function ListSkeleton() {
-  return <HelmLoader label="Loading past plans" size={28} minHeight={160} />;
+  return <HelmLoader label="Loading past overviews" size={28} minHeight={160} />;
 }
 
 /** A strike as the chain prints it: 340, 347.5 — not 340.00. */

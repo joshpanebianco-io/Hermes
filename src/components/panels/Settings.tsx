@@ -11,7 +11,6 @@ import {
   matchPreset,
   themeVars,
 } from "@/lib/theme";
-import { Module } from "@/components/ui/Module";
 import { UI_CLASSES, UI_COOKIE, uiClass, type UiMode } from "@/lib/ui";
 import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
 import { segItem } from "@/lib/seg";
@@ -149,18 +148,28 @@ export function Settings({
           ))}
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2 qt:p-0">
-      <div className="qt-stack mx-auto flex w-full max-w-[1040px] min-w-0 flex-col gap-2">
+      {/*
+        * ONE CARD UNDER THE BAND, TO THE FOOT OF THE PAGE (owner, 2026-11-13: "for settings
+        * can we make it one whole card that takes up the res tof the area in the middle?
+        * looks yuck right now"). It was two or three narrow cards stacked in a 1040px
+        * column with bare ground under them and either side. The frame and the sheet are
+        * the Scanner's and the Sectors page's: under Luminous the band and the sheet join
+        * into one card (globals.css, "the band under the header is the top of the card
+        * below it"), and the sections are parts of it, parted by a rule, not cards of their own.
+        */}
+      <div className="qt-frame mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[6px] border border-ring">
+      <div className="qt-sheet min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[1160px] min-w-0 flex-col px-4 py-2 qt:px-8 qt:py-3">
         {section === "interface" && (
-          <Module title="Interface" sub="the chassis the terminal is drawn in" bodyClassName="px-0 py-0">
+          <Part title="Interface" sub="the chassis the terminal is drawn in">
             {UIS.map((o) => (
               <Choice key={o.key} label={o.label} hint={o.hint} on={ui === o.key} onPick={() => setUi(o.key)} />
             ))}
-          </Module>
+          </Part>
         )}
         {/* The Stocks tab's old views, for a week while Today settles (lib/legacyViews.ts). */}
         {section === "interface" && (
-          <Module title="Stocks views" sub="Today replaced Setups, Breakouts, Extended hours and Day 2/3 on 13 Nov" bodyClassName="px-0 py-0">
+          <Part title="Stocks views" sub="Today replaced Setups, Breakouts, Extended hours and Day 2/3 on 13 Nov">
             <Choice
               label="Today, Charts and Record"
               hint="One list that changes with the time of day: the evening's movers, then what is in play into the open, then the open's triggers, then the session's setups"
@@ -173,16 +182,15 @@ export function Settings({
               on={legacyViews}
               onPick={() => setLegacyViews(true)}
             />
-          </Module>
+          </Part>
         )}
 
         {section === "alerts" && <Alerts />}
 
         {section === "presets" && (
-        <Module
+        <Part
           title="Presets"
           sub={active ? active.name : "custom"}
-          bodyClassName="px-0 py-0"
           right={
             <button
               type="button"
@@ -193,7 +201,7 @@ export function Settings({
             </button>
           }
         >
-          <div className="grid grid-cols-2 gap-px bg-ring/40 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-ring/60 bg-ring/40 sm:grid-cols-3">
             {PRESETS.map((p) => {
               const on = active?.id === p.id;
               return (
@@ -219,11 +227,39 @@ export function Settings({
               );
             })}
           </div>
-        </Module>
+        </Part>
         )}
       </div>
       </div>
+      </div>
     </main>
+  );
+}
+
+/**
+ * One section of the Settings card: its title and what it is for, then its rows. Not a
+ * card of its own (a Module is): the sections are parts of the one card, parted by a rule.
+ */
+function Part({
+  title,
+  sub,
+  right,
+  children,
+}: {
+  title: string;
+  sub?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border-b border-ring/60 py-4 last:border-b-0" aria-label={title}>
+      <div className="mb-2 flex items-baseline gap-2 px-1">
+        <h2 className="module-title">{title}</h2>
+        {sub && <span className="truncate text-[11.5px] text-ink-3 qt:text-[12.5px]">{sub}</span>}
+        {right && <div className="ml-auto flex items-center gap-2">{right}</div>}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -286,7 +322,7 @@ function Alerts() {
   const hint = "min-w-0 flex-1 text-[9.5px] text-ink-3 qt:text-[11.5px]";
 
   return (
-    <Module title="Alerts" sub="the scanner's signals, raised on every tab" bodyClassName="px-0 py-0">
+    <Part title="Alerts" sub="the scanner's signals, raised on every tab">
       <div className={row}>
         <span className={label}>Alerts</span>
         <span className="seg">
@@ -365,7 +401,7 @@ function Alerts() {
           In a background tab Chrome checks about once a minute, so an alert can trail its bar by up to a minute
         </span>
       </div>
-    </Module>
+    </Part>
   );
 }
 
@@ -407,10 +443,9 @@ function Choice({
       onClick={onPick}
       disabled={disabled}
       aria-pressed={on}
-      className={cn(
-        "hit flex w-full items-center gap-2 border-b border-ring/40 px-3 py-1.5 text-left last:border-b-0 disabled:pointer-events-none disabled:opacity-50",
-        on && "bg-ink/[0.06]",
-      )}
+      // NO LIT BOX ON THE CHOSEN ROW (owner, 2026-11-13: "remove the hihglighted box from
+      // the setting selected in interface"): the filled mark with its tick says which.
+      className="hit flex w-full items-center gap-3 border-b border-ring/40 px-3 py-2 text-left last:border-b-0 disabled:pointer-events-none disabled:opacity-50"
     >
       {/* A FILLED MARK WITH A TICK, NOT A BRIGHTER OUTLINE (design review, 2026-11-11):
           the chosen row's box was the same empty square with a lighter edge, and read
@@ -428,8 +463,10 @@ function Choice({
           </svg>
         )}
       </span>
-      <span className={cn("w-[70px] shrink-0 text-[11px] qt:text-[12.5px]", on ? "text-ink" : "text-ink-2")}>{label}</span>
-      <span className="min-w-0 flex-1 truncate text-[9.5px] text-ink-4 qt:text-[11.5px] qt:text-ink-3">{hint}</span>
+      {/* 170px: "Luminous Glass" and "Today, Charts and Record" broke over two and three
+          lines in the 70px the column was. The hint wraps rather than ending in "Lu…". */}
+      <span className={cn("w-[170px] shrink-0 text-[11px] qt:text-[12.5px]", on ? "text-ink" : "text-ink-2")}>{label}</span>
+      <span className="min-w-0 flex-1 text-[9.5px] text-ink-4 qt:text-[11.5px] qt:text-ink-3">{hint}</span>
     </button>
   );
 }

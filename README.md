@@ -125,9 +125,13 @@ meant 2.7x a normal range over a year; the gap's direction told nothing), so the
 pre-market lists rank how in play a name is and show both triggers, the gap's side as a lean,
 never a call. The open's first half hour reached +1R on 39% of signals against 52% from
 10:00, so the open orders names by what has happened to them rather than by a setup score.
-Every row says why it is there, carries its story and its plan, and marks a name new to the
-top ten in the last quarter hour. The strip is **Today**, **Charts** (six live charts of the
-best names) and **Record** (the signal log); the **Game plan** is a button on Today. **The
+**Today is drawn in the Setups table below** (its columns, chips and colours; the owner
+kept that look), in Today's order: the names in play first, then the rest of the tracked
+list. The phase is the stat row's first card, and before 10:00 the Score column is how in
+play a name is, as a share of the most it can score, with the reasons in its hover. A name
+the engine does not track yet is drawn from the wide read until the pool takes it. The
+strip is **Today**, **Charts** (six live charts of the best names), **Record** (the signal
+log) and **Market** (the AI market overview). **The
 pinned names are favourites**: each morning the fifteen most in play are tracked with SPY,
 QQQ and IWM, and the pool's picks (06:00, 07:00, 08:00, 09:00, 09:25, then 10:00) fill the
 rest of the forty, so the market's best can reach the list; a favourite not tracked today
@@ -280,7 +284,13 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
 - **What the chart does not show** — each name's headlines (Yahoo's per-ticker
   feed, tagged rating / earnings / filing), its next or latest earnings with BMO /
   AMC and the surprise, and its SEC filings from the last three days (8-K items,
-  offerings, 10-Q / 10-K) straight from EDGAR.
+  offerings, 10-Q / 10-K) straight from EDGAR. **Insider trades as context
+  (2026-11-13):** from each name's Form 4s, the last month's open-market buys of $100k+
+  and sales of $1M+ that were not pre-planned under a 10b5-1 plan (awards, option
+  exercises, tax withholding and gifts are left out). The newest shows as an *Insider
+  buy* or *Insider sale* tag on the row and a flag in the slide-out ("CEO … bought $1.2M
+  at $41.20 on 10 Nov"), the **Insiders** chip lists the names that have one, and none of
+  it is part of the score.
 - **The slide-out, for any ticker** — click a row in any table, or press **Ctrl+K**
   and type any US ticker or company (the search shows what it knows as you type: the
   wide scan's stocks from $300m up, and the funds the terminal reads, SPY, QQQ, the
@@ -529,42 +539,42 @@ single names every ten, one request every ten seconds at most):
 
   ![What the options figures mean](docs/media/options-read.png)
 
-### Scanner → Game plan — the plan, written from the scanner's facts
+### Stocks → Market — the market overview, written before the open
 ![Game plan](docs/media/plan.png)
+*(The picture is the Game plan this view replaced; a new one is owed.)*
 
-The Scanner's last view (the stocks half of the Analysis tab until 2026-11-11), one
-click from the Dashboard's game plan card (*Written plan*). A pre-open plan for the
-New York session, generated on demand: pick how many names
-(4 / 6 / 8 / 10) and press **Generate**. The collector reads the live scanner into
-`facts` — levels, relative strength, the setup, each name's option chain, the tape
-count, the weather and today's prints — and the page shows the stages as they run:
-*reading the scanner's top names · placing price against PDH and PMH · reading the
-option chains · weighing the prints and the tape · writing the plans*. The same
-model chain as the futures brief (OpenRouter, free models first, falling through on
-failure) then writes only the words. Since 2026-10-27 the generation is a **job** on
-the collector that the page polls, so a free model that takes five minutes never
-times the page out; a reload mid-way finds the job still running, and a second
-press joins it rather than paying for a second model call.
+The strip's last view, next to Record, and one click from the Dashboard's game plan
+card (*Market overview*). Until 2026-11-13 it was the **Game plan**, a plan per name;
+the Today list already ranks the names and the Setups table carries their levels, so
+the per-name plans gave way to the market they trade in. **It writes itself at 09:00
+ET on a trading day** (`overview.auto_due`: once anything has been written since 09:00
+it stands; a refusal gets one more try five minutes later), and **Write again** writes
+a fresh one from the tape as it stands. An open page asks once a minute, so the 09:00
+write lands without a reload.
 
-- **The lead** — one line on the tape and what it allows: the count, the cap on
-  conviction, and the setups worth taking. Under it the regime in a paragraph, then
-  the facts as cards: VIX, the implied SPY day, the index lean, the tape, breadth,
-  fuel, gamma and the flip, the next FOMC, macro today and the prints that matter.
-- **Per name, last and closed:** the plans come after everything that describes the
-  session, one closed row each — the side, the name, the conviction (never above
-  the tape's cap) and the plan cut to one line — and a click opens the card: the
-  plan in full, the trigger, the invalidation, the first target, **how to express
-  it in options** (long or spread from implied vs realised, which expiry, earnings
-  inside it), why — each reason naming its layer — and the scanner's facts beside it.
-- **The facts beside the prose are the server's**, printed from the scanner, never
-  from the model; a plan for a name that is not in the facts is dropped, and every
-  number in the prose is checked against the data — any it cannot find is listed in
-  an Unverified banner (the same guard as the futures brief).
-- Also: the clock (prints, the open, lunch, the close) and the risks, read before
-  the plans; the names to leave alone and on watch, after them.
-- **Past plans** are kept to judge against the day, with the facts they were written
-  from; select several and delete those, or every one. A plan written for a session
-  that has passed says so in red at the top — its levels and prices are not today's.
+- **The headline**, then **The read**: where SPY, QQQ and IWM sit against the previous
+  day's range and the pre-market high and low (a table), VIX and its band, the tape
+  count, breadth across the sector funds and across every US stock at $2bn+, fuel,
+  gamma and the next FOMC (the Game plan's own cards).
+- **Sectors**: the sector and theme funds ahead of SPY and behind it, the biggest names
+  moving in each, and what drives them; a fund's hover lists the macro drivers it
+  answers to and today's verdict. Before the bell the funds' moves are the last
+  session's and the names under them the pre-market's, and the page says so.
+- **Macro today**: the prints and their times, the Fed, the 10-year, the dollar, crude,
+  gold and bitcoin, the prints read against consensus, and the day's clock.
+- **News that matters**: three to five stories the model picks from the wire's
+  high-impact headlines and the stock stories leading the tape, each with one line on
+  why. A pick can only be a story it was shown, and its title and link are the
+  collector's.
+- **Risks** (the calendar's releases are the server's, the rest the model's) and **For
+  today's list**: the side and sectors to favour, and the top of Today as it stood.
+- **The tables are the collector's and the sentences the model's**, the same contract
+  as the futures brief: every number in the prose is checked against what the model
+  was shown, one re-ask, and anything left is listed in an Unverified banner. The
+  model chain, the time budget and the job the page polls are the Game plan's
+  (`stockplan.ask_chain`); overviews are kept in the plans folder with `kind:
+  "overview"`, so **Past overviews** also holds the game plans before them, which still
+  open as they were (`PlanView`).
 
 ### What the engine computes and what a model writes
 
@@ -574,7 +584,7 @@ press joins it rather than paying for a second model call.
 | **Scanner** | levels, breaks, the setup state and entry, the score and its parts, the daily frame, the catalyst's direction, the signal log | nothing |
 | **Options** | implied against realised, the straddles, liquidity, skew, flow, the earnings number, the contract and its R | nothing |
 | **Every click-through** | the read of each figure for this name's trade, from stated rules | nothing |
-| **Scanner → Game plan** | the facts: every card and every number beside the prose | the plan — lead, regime, per-name plans, what to leave alone, the clock, the risks |
+| **Stocks → Market** | the facts: the index levels, every card, the sector tables, the stories it may pick, the clock and the release risks | the overview — the headline, the read, the sectors, the macro, why each picked story matters, the risks, what it means for the list |
 | **Hermes** | the live digest the answer must quote | the answer, every figure in it checked |
 | **Hermes AI** | the glance it opens on, and every tool's answer — a scanner row, a ladder, the wire, the calendar, bars, a desk's digest, the latest note | the answer, every figure in it checked against what it was shown or fetched |
 
@@ -1025,9 +1035,9 @@ tab. If no model in its chain will work through tools, it answers from the diges
   why? is breadth confirming the move? how should VIX shape my stops today?* — and on
   the futures side the ladder, the gamma regime and the term structure. On the Scanner
   with a name selected: *explain its setup · what would trigger and invalidate it ·
-  which contract fits it and why · why does it rank where it does.* On the Scanner's
-  Game plan view: *summarise the game plan · which name has the best context · what
-  would change the plan at the open · explain the conviction cap* — and on Futures'
+  which contract fits it and why · why does it rank where it does.* On the Stocks
+  tab's Market view: *summarise the market overview · which sector has the best story
+  behind it · what would change the read at the open · which names on Today fit the read* — and on Futures'
   Brief view, the brief in three lines and what would make today's calls wrong.
 - **Every figure in an answer is checked** against the data the model was shown; any
   it cannot find is named under the answer, shown and marked rather than passed off.
@@ -1180,7 +1190,7 @@ the whole board is keyboard-free by design — it is meant to be *read*.
 | TradingView (public news flow) | US company stories tagged by ticker → the Catalyst column, with one per-name read for the top of the wide scan | 2 min in session, 15 min otherwise; per name 15 min |
 | Yahoo Finance (per-ticker RSS) | Each watchlist name's headlines | 10 min a name |
 | Cboe (delayed option chains) | Each watchlist name's chain → IV, the straddle's expected move, skew, liquidity, the suggested contracts; a daily IV log for IV rank | 5 min SPY/QQQ/IWM, 10 min singles, in session; hourly otherwise |
-| SEC EDGAR | Each watchlist name's filings from the last three days | 30 min a name |
+| SEC EDGAR | Each watchlist name's filings from the last three days, and its Form 4s from the last month (each read once and kept) | 30 min a name; up to 8 Form 4s a minute |
 | A companion options-analytics service | The seven dealer-gamma levels per book, over HTTP | 30 s |
 | OpenRouter | The futures session note, the stocks game plan and Hermes's answers (configurable models, fallback chain) | on demand |
 

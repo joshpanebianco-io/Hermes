@@ -122,7 +122,7 @@ export function describeTool(name: string, args: Record<string, unknown>): strin
     case "digest":
       return `Reading the ${s("desk") || "futures"} digest`;
     case "note":
-      return `Reading the latest ${s("kind") === "plan" ? "game plan" : "brief"}`;
+      return `Reading the latest ${s("kind") === "plan" ? "market overview" : "brief"}`;
     default:
       return `Reading ${name}`;
   }

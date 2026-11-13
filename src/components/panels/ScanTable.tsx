@@ -109,6 +109,10 @@ export function ScanTable({
               <Th title="The most important story of the last day, not the newest">
                 <Head label="News" hint="most important first" />
               </Th>
+              {/* Score left of RS (owner, 2026-11-13: "can we move score to the left of rs"). */}
+              <Th k="score" {...th} className="w-[104px]">
+                <Head label="Score" hint="setup, 0–100" />
+              </Th>
               <Th
                 k="rs"
                 {...th}
@@ -120,6 +124,7 @@ export function ScanTable({
               <Th
                 k="rvol"
                 {...th}
+                className="pl-10"
                 title={
                   before
                     ? "No time-of-day figure exists before the bell, so this is the pre-market's volume as a share of an average day: the figure the pre-open rank reads, from 0.25% to 4%. Relative volume starts at the open."
@@ -143,7 +148,7 @@ export function ScanTable({
               <Th k="gap" {...th} right title={GAP_TIP}>
                 <Head label="Gap" hint="open vs prev close" right />
               </Th>
-              <Th>
+              <Th className="pl-6">
                 <Head label="PM range" hint="locks at 09:30" />
               </Th>
               <Th>
@@ -157,9 +162,6 @@ export function ScanTable({
               </Th>
               <Th title="Where the trade is right now, the entry, and today's latest signal">
                 <Head label="Setup" hint="entry · latest signal" />
-              </Th>
-              <Th k="score" {...th} className="w-[104px]">
-                <Head label="Score" hint="setup, 0–100" />
               </Th>
             </>
           ) : cols === "ranked" ? (
@@ -388,7 +390,7 @@ function Row({
           <button
             type="button"
             aria-pressed={pinned}
-            title={pinned ? "Pinned: always on the list. Click to unpin." : "Pin: keep this name on the list for good"}
+            title={pinned ? "A favourite. Click to take it off your favourites." : "Add to your favourites"}
             onClick={(e) => {
               e.stopPropagation();
               void togglePin(r.sym).then(onPinned);
@@ -405,14 +407,6 @@ function Row({
             {r.sym}
           </span>
           {r.sector && <span className="qt-cap text-[9.5px] text-ink-3">{r.sector}</span>}
-          {r.promoted && (
-            <span
-              className="qt-cap text-[9.5px] text-flip-fig"
-              title={`From the pool at ${r.promoted.mark} ET — ${r.promoted.reason}`}
-            >
-              pool
-            </span>
-          )}
           {(r.stage ?? 0) >= 2 && (
             <span className="qt-cap text-[9.5px] text-ink-2" title={`Day ${r.stage} of a multi-day move`}>
               day {r.stage}
@@ -605,7 +599,7 @@ function OverviewRow({
             inside,
             news: r.catalyst != null,
             stage: r.stage,
-            pool: r.promoted ? `From the pool at ${r.promoted.mark} ET — ${r.promoted.reason}` : null,
+            insider: r.insiders?.length ? { side: r.insiders[0].side, text: r.insiders[0].text, n: r.insiders.length } : null,
           })}
           pinned={pinned}
           onPinned={onPinned}
@@ -622,13 +616,16 @@ function OverviewRow({
           <span className="text-[12px] text-ink-3">—</span>
         )}
       </td>
+      <td className={TD}>
+        <ScoreTier v={r.score.total} title={`${r.score.total} of 100 — a heuristic rank, not a probability${recordTip(r.record)}`} />
+      </td>
       <td className={cn(TD, "text-right")}>
         <Tick
           value={rs == null ? "—" : `${rs >= 0 ? "+" : ""}${rs.toFixed(2)}`}
           className={cn("fig text-[12.5px]", rs == null ? "text-ink-3" : rs >= 0.05 ? "up" : rs <= -0.05 ? "down" : "text-ink-2")}
         />
       </td>
-      <td className={TD}>
+      <td className={cn(TD, "pl-10")}>
         <RvolCell r={r} />
       </td>
       <td className={cn(TD, "fig text-right leading-[1.3]")}>
@@ -644,7 +641,7 @@ function OverviewRow({
       <td className={cn(TD, "text-right")}>
         <GapCell r={r} />
       </td>
-      <td className={TD}>
+      <td className={cn(TD, "pl-6")}>
         <RangeCell state={pmState} hi={L.pmh} lo={L.pml} hiName="PMH" loName="PML" none="Forms from 04:00" />
       </td>
       <td className={TD}>
@@ -680,9 +677,6 @@ function OverviewRow({
             </span>
           )}
         </p>
-      </td>
-      <td className={TD}>
-        <ScoreTier v={r.score.total} title={`${r.score.total} of 100 — a heuristic rank, not a probability${recordTip(r.record)}`} />
       </td>
     </tr>
   );
@@ -992,6 +986,9 @@ function flagShort(kind: ScanRow["flags"][number]["kind"], text: string): string
     case "frame":
       // "Long into a daily downtrend: …" → "Vs daily": the setup is against the daily trend.
       return "Vs daily";
+    case "insider":
+      // "Insider buy: CEO … bought $1.2M at …" → "Insider buy".
+      return /^insider sale/i.test(text) ? "Insider sale" : "Insider buy";
     case "catalyst":
       // 'Against: Reuters: "Jefferies downgrades …" (2h)' → "Against: Jefferies downgrades".
       return `Against: ${(text.replace(/^Against:\s*/, "").replace(/^[^"]*"/, "").split(/[\s"]+/).slice(0, 2).join(" ")) || "news"}`.slice(0, 22);

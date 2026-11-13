@@ -1,4 +1,4 @@
-import type { Catalyst } from "@/types/scanner";
+import type { Catalyst, ScanRow } from "@/types/scanner";
 
 /** GET /api/scanner/today — the Stocks tab's one list (server today.py). */
 
@@ -68,6 +68,9 @@ export interface TodayRow {
   group?: number;
   status?: string;
   spark?: number[] | null;
+  /** The row as the Setups table draws it (server today.scan_row): the engine's own for a
+   *  tracked name, built from the wide read for the rest; its score is the phase's. */
+  row: ScanRow;
 }
 
 export interface TodayPayload {

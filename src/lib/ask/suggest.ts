@@ -14,7 +14,7 @@ export const GREETING =
  * count that can be wrong on the first frame.
  */
 export const HERMES_INTRO =
-  "Reads the whole terminal, live: both desks' boards, every scanner name, the latest brief and the latest game plan. Every figure it quotes is checked against that data.";
+  "Reads the whole terminal, live: both desks' boards, every scanner name, the latest brief and the latest market overview. Every figure it quotes is checked against that data.";
 
 /**
  * The tab's openers — three from each desk, questions a reader sits down
@@ -24,7 +24,7 @@ export const HERMES_SUGGESTIONS = [
   "What matters most going into New York tonight?",
   "Which scanner names are closest to a break?",
   "Run down yesterday's earnings and the reactions",
-  "Does the brief agree with the game plan?",
+  "Does the brief agree with the market overview?",
   "Explain the vol term structure right now",
   "How should VIX shape my stops today?",
 ];
@@ -95,10 +95,10 @@ export function suggestionsFor(tab: string, sym: string | null): string[] {
           ];
     case "plan":
       return [
-        "Summarise the game plan",
-        "Which name has the best context behind it?",
-        "What would change the plan at the open?",
-        "Explain the conviction cap",
+        "Summarise the market overview",
+        "Which sector has the best story behind it?",
+        "What would change the read at the open?",
+        "Which names on Today fit the read?",
       ];
     case "hermes":
       return HERMES_SUGGESTIONS.slice(0, 4);

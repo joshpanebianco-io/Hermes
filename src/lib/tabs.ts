@@ -99,7 +99,7 @@ export const TAB_KEYS: readonly Tab[] = TABS.map((t) => t.key);
  * now", each ranked its own way. Today is one list that changes what it ranks by with
  * the clock (server today.py): the evening's movers, the pre-market's names in play, the
  * open's triggers, the session's setups. The strip is Today, Charts (the Multicharts
- * view) and Record (the signal log); the Game plan is a button on Today. The four old
+ * view), Record (the signal log) and Market (the overview). The four old
  * views stay reachable for a week behind Settings → Interface (`group: "legacy"`,
  * lib/legacyViews.ts), then go. A browser that remembers one of them opens Today.
  */
@@ -107,8 +107,11 @@ export const SCAN_VIEWS = [
   { key: "today", label: "Today", group: "main", title: "The best stocks for the hour it is: the evening's movers, then what is in play into the open, then the open's triggers, then the session's setups" },
   { key: "multi", label: "Charts", group: "main", title: "Six live charts of the list's best names, three across and two down" },
   { key: "log", label: "Record", group: "main", title: "Every signal, and what it did afterwards" },
-  // The stocks half of what was the Analysis tab. A button on Today since 2026-11-13.
-  { key: "plan", label: "Game plan", group: "button", title: "The written pre-open game plan: the regime, and for each top name what to watch, the trigger and what makes it wrong" },
+  // The stocks half of what was the Analysis tab. Next to Record (owner, 2026-11-13: "can we
+  // move game plan next to Record?"); it was a button on Today for an hour. Later the same day
+  // the per-name plans gave way to a market overview, and the view was renamed Market (the
+  // key stays "plan": the routes, the store and Hermes's tab name are the plan's).
+  { key: "plan", label: "Market", group: "main", title: "The market overview, written at 09:00 ET: the indexes against their levels, the sectors, the macro, the news that matters and what it means for today's list" },
   { key: "setups", label: "Setups", group: "legacy", title: "The list, ranked: levels, signals, the score and the options" },
   { key: "breakouts", label: "Breakouts", group: "legacy", title: "Every US stock against its levels" },
   { key: "extended", label: "Extended hours", group: "legacy", title: "The pre-market and after-hours gappers" },
@@ -119,7 +122,7 @@ export type ScanView = (typeof SCAN_VIEWS)[number]["key"];
 
 export const SCAN_VIEW_KEYS: readonly ScanView[] = SCAN_VIEWS.map((v) => v.key);
 
-/** The views the strip and the sidebar list: the main three, and the old four while
+/** The views the strip and the sidebar list: the main four, and the old four while
  *  Settings keeps them. */
 export function stripViews(legacy: boolean): readonly (typeof SCAN_VIEWS)[number][] {
   return SCAN_VIEWS.filter((v) => v.group === "main" || (legacy && v.group === "legacy"));

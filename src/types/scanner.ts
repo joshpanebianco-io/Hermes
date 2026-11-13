@@ -146,8 +146,28 @@ export interface ScanFlag {
     | "halt"
     | "frame"
     | "short_interest"
-    | "catalyst";
+    | "catalyst"
+    | "insider";
   tone: "good" | "warn" | "info";
+  text: string;
+}
+
+/** An insider trade worth a line (server sources/insiders.py): an open-market buy of
+ *  $100k+, or a sale of $1M+ not under a 10b5-1 plan, from the SEC's Form 4s. */
+export interface InsiderTrade {
+  side: "buy" | "sell";
+  /** "CEO Doe Jane", "Director Smith John", "10% owner …". */
+  who: string;
+  value: number;
+  shares: number;
+  /** The average price across the filing's fills. */
+  price: number;
+  /** The trade's date, and the filing's. */
+  date: string;
+  filed: string;
+  /** The filing on the SEC's site. */
+  url: string;
+  /** "CEO Doe Jane bought $1.2M at $41.20 on 10 Nov". */
   text: string;
 }
 
@@ -172,6 +192,10 @@ export interface ScanRow {
   sym: string;
   name: string | null;
   sector: string | null;
+  /** Set on the Today list's rows (server today.scan_row), for its Filters menu. */
+  market_cap?: number | null;
+  /** The month's insider trades worth a line, newest first (Form 4s); context, never scored. */
+  insiders?: InsiderTrade[];
   sector_rs: number | null;
   ok: boolean;
   error: string | null;

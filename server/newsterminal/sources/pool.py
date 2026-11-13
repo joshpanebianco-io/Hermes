@@ -698,11 +698,15 @@ def next_mark(now: datetime, done: Iterable[str]) -> str | None:
 
 
 def choose_favourites(ranked: list[dict[str, Any]], pinned: Iterable[str],
-                      n: int | None = None) -> list[str]:
+                      n: int | None = None,
+                      core: Iterable[str] = BENCHMARKS) -> list[str]:
     """The `n` (FAV_SLOTS) pinned names, benchmarks aside, the engine tracks today: the
     most in play by the pool's rank, then the rest in the pinned order. Pure."""
     n = FAV_SLOTS if n is None else n
-    order = [s for s in pinned if s not in BENCHMARKS]
+    # The core (the benchmarks, and the MAG 7 in the collector) is tracked anyway: a
+    # starred MAG 7 name takes no slot.
+    skip = set(core)
+    order = [s for s in pinned if s not in skip]
     score = {r["symbol"]: float(r.get("score") or 0.0) for r in ranked}
     pos = {s: i for i, s in enumerate(order)}
     return sorted(order, key=lambda s: (-score.get(s, -1.0), pos[s]))[:n]
@@ -710,7 +714,8 @@ def choose_favourites(ranked: list[dict[str, Any]], pinned: Iterable[str],
 
 def promote(ranked: list[dict[str, Any]], pinned: Iterable[str], current: list[dict[str, Any]],
             mark: str, cap: int = MAX_SYMBOLS,
-            favs: list[str] | None = None) -> list[dict[str, Any]]:
+            favs: list[str] | None = None,
+            core: Iterable[str] = BENCHMARKS) -> list[dict[str, Any]]:
     """The promoted set after `mark` (module docstring). Pure.
 
     Pre-market marks return the fresh top names, leaving POST_OPEN_SLOTS of
@@ -719,8 +724,11 @@ def promote(ranked: list[dict[str, Any]], pinned: Iterable[str], current: list[d
     benchmarks and those leave; without, what the whole pinned list leaves.
     """
     pinned_l = list(pinned)
-    excluded = set(pinned_l) | set(BENCHMARKS)
-    used = len(pinned_l) if favs is None else len(BENCHMARKS) + len(favs)
+    core_s = set(core)
+    excluded = set(pinned_l) | core_s
+    # The core (the benchmarks and the MAG 7) is on the list whether `pinned` names it or
+    # not (scanner.ScanStore.watchlist, 2026-11-13), so it is counted either way.
+    used = len(set(pinned_l) | core_s) if favs is None else len(core_s | set(favs))
     slots = max(0, cap - used)
     cands = [r for r in ranked if r["score"] >= MIN_SCORE and r["symbol"] not in excluded]
     if mark != POST_MARK[1]:
@@ -815,6 +823,9 @@ class PoolStore:
         #: Names put on the list by hand from the wide scan, for today (`track`).
         #: Apart from `promoted`, which the marks replace whole.
         self.manual: list[dict[str, Any]] = []
+        #: On the list always, so never promoted and counted against the room: the
+        #: benchmarks, and in the collector the MAG 7 too (scanner.CORE, 2026-11-13).
+        self.core: tuple[str, ...] = tuple(BENCHMARKS)
         #: The fresh-major-story read (sources/tvnews.NewsStore.major).
         self.news: Callable[[str], str | None] | None = None
         #: The strong Day 2/3 tracks (momentum.strong), read once a tick.
@@ -930,8 +941,9 @@ class PoolStore:
                 if mark in labels:
                     # The favourites most in play this morning (FAV_SLOTS); from the
                     # 09:25 mark they hold for the day, as the promotions do.
-                    self.favs = choose_favourites(self.ranked, pinned)
-                new = promote(self.ranked, pinned, self.promoted, mark, favs=self.favs)
+                    self.favs = choose_favourites(self.ranked, pinned, core=self.core)
+                new = promote(self.ranked, pinned, self.promoted, mark, favs=self.favs,
+                              core=self.core)
                 was = {p["symbol"]: p for p in self.promoted}
                 self.promoted = [was.get(r["symbol"], {**r, "at": et, "mark": mark}) for r in new]
                 if mark in labels:
@@ -1087,7 +1099,7 @@ class PoolStore:
         promoted = [p for p in promoted if p["symbol"] not in pin]
         shown = {p["symbol"] for p in promoted}
         top = [r for r in self.ranked
-               if r["symbol"] not in pin and r["symbol"] not in BENCHMARKS][:TOP_N]
+               if r["symbol"] not in pin and r["symbol"] not in self.core][:TOP_N]
         return {
             "ok": bool(self.rows),
             "on": on,
@@ -1109,8 +1121,10 @@ class PoolStore:
             "day": self.day,
             "marks_done": marks,
             "next_mark": next_mark(now, marks),
-            "slots": max(0, MAX_SYMBOLS - (len(pin) if favs is None
-                                           else len(BENCHMARKS) + len(favs))),
+            # The core (the benchmarks and the MAG 7) is on the list whether the favourites
+            # name it or not (scanner.ScanStore.watchlist, 2026-11-13): counted either way.
+            "slots": max(0, MAX_SYMBOLS - (len(set(pin) | set(self.core)) if favs is None
+                                           else len(set(self.core) | set(favs)))),
             "post_open_slots": POST_OPEN_SLOTS,
             "favs": favs,
             "fav_slots": FAV_SLOTS,

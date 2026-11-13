@@ -165,7 +165,8 @@ class Collector:
             "history": {"books": {}}, "cot": {"books": {}}, "putcall": None,
             "themes": [], "breadth_all": None,
         }
-        self.scan = scan_src.ScanStore()
+        # The benchmarks and the MAG 7 are on the list always (scanner.CORE, 2026-11-13).
+        self.scan = scan_src.ScanStore(core=scan_src.CORE)
         # The bars job and the live job both rebuild the scanner block; one at a
         # time, so a build from older bars can never land after a newer one.
         self._scan_build_lock = threading.Lock()
@@ -220,6 +221,11 @@ class Collector:
         #: phase now showing (keyed by phase and day), and which phases' lists are logged.
         self._today_seen: dict[str, dict[str, float]] = {}
         self._today_logged: set[str] = set()
+        self._today_lock = threading.Lock()
+        #: The Today list's names as last drawn, for the SEC job's insider reads (`_sec_extra`).
+        self._today_syms: list[str] = []
+        self.scan.sec_extra = self._sec_extra
+        self.pool.core = self.scan.core
         self.pool.news = self.stock_news.major
         self.pool.stage = self._strong
         # Whether the pool's pre-market columns are today's, and today's pre-market range
@@ -791,6 +797,43 @@ class Collector:
         name = self.universe.industry_name(group)
         return self.breakouts(industry=name, **table) if name else None
 
+    def _with_insiders(self, r: dict[str, Any]) -> None:
+        """INSIDER TRADES, AS CONTEXT LIKE NEWS (owner, 2026-11-13; sources/insiders.py):
+        the month's open-market buys and discretionary sales in the row's own stock, and
+        the newest as a flag after any report or release flag, so the News column shows it
+        when the name has no story. Never part of the score."""
+        ins = self.scan.insiders(str(r.get("sym")))
+        r["insiders"] = ins[:5]
+        if not ins:
+            return
+        more = f" (+{len(ins) - 1} more this month)" if len(ins) > 1 else ""
+        flag = {"kind": "insider", "tone": "good" if ins[0]["side"] == "buy" else "warn",
+                "text": f"Insider {'buy' if ins[0]['side'] == 'buy' else 'sale'}: "
+                        f"{ins[0]['text']}{more}"}
+        flags = list(r.get("flags") or [])
+        at = sum(1 for f in flags if f.get("kind") in ("earnings", "event"))
+        r["flags"] = [*flags[:at], flag, *flags[at:]]
+
+    def _sec_extra(self) -> list[str]:
+        """The names the SEC job reads besides the tracked ones: the Today list as last
+        drawn, and the pool's top before any page has drawn it."""
+        pool_top = [str(e.get("symbol")) for e in list(self.pool.ranked)[:30] if e.get("symbol")]
+        return list(dict.fromkeys([*self._today_syms, *pool_top]))
+
+    def top_stories(self, tracked: frozenset[str] | None = None) -> list[dict[str, Any]]:
+        """The stock stories the Dashboard leads with, and the Market overview reads
+        (overview.py): the freshest major ones about a name this desk could act on."""
+        if tracked is None:
+            tracked = frozenset(self.scan.symbols())
+
+        def tradable(sym: str) -> bool:
+            # On the list, or at the pool's floor in the wide read: the names this desk
+            # could act on. The news flow is every US listing.
+            cap = (self.universe.raw(sym) or {}).get("cap")
+            return sym in tracked or (isinstance(cap, int | float) and cap >= pool_src.MIN_CAP)
+
+        return self.stock_news.top(keep=tradable)
+
     def dashboard(self) -> dict[str, Any]:
         """The Dashboard, off what the Scanner and Macro already hold."""
         pinned, tracked = frozenset(self.scan.pinned()), frozenset(self.scan.symbols())
@@ -805,14 +848,8 @@ class Collector:
             list(self.pool.ranked), view,
             verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked),
             price=price) if view.get("ok") else None
-        def tradable(sym: str) -> bool:
-            # On the list, or at the pool's floor in the wide read: the names this desk
-            # could act on. The news flow is every US listing.
-            cap = (self.universe.raw(sym) or {}).get("cap")
-            return sym in tracked or (isinstance(cap, int | float) and cap >= pool_src.MIN_CAP)
-
         return dash_mod.build(self.scanner_payload(), self.snapshot(), self.breakouts(),
-                              self.day23(), self.stock_news.top(keep=tradable),
+                              self.day23(), self.top_stories(tracked),
                               session_day=uni_src.cards_day(datetime.now(UTC)), inplay=inplay)
 
     # ---- the Today list (today.py) ----------------------------------------------
@@ -903,15 +940,16 @@ class Collector:
         favs = frozenset(s for s in pinned if s not in scan_src.BENCHMARKS)
         tracked = frozenset(self.scan.symbols())
         note: str | None = None
+        # The engine's rows as the Setups table draws them: every Today row is one
+        # (today.scan_row), so the list is drawn in that table.
+        payload = {str(r.get("sym")): r for r in self.scanner_payload().get("rows") or []}
         if phase.key == "session":
-            rows = today_mod.rank_session(self.scanner_payload().get("rows") or [],
-                                          favs=favs, tracked=tracked)
+            rows = today_mod.rank_session(list(payload.values()), favs=favs, tracked=tracked)
         elif phase.key in ("pre", "open"):
             engine = self._engine_rows()
             ctx = self._ctx()
             rows, note = self._today_pre(now, phase, favs, tracked, engine, ctx)
             if phase.key == "open":
-                payload = {str(r.get("sym")): r for r in self.scanner_payload().get("rows") or []}
 
                 def price(sym: str) -> tuple[float | None, bool]:
                     q = self.stream.quote(sym)
@@ -930,16 +968,33 @@ class Collector:
                     price=price)
         else:
             rows = self._today_evening(now, phase, favs, tracked)
+            if not self.universe.rows:
+                note = "The wide read is loading: about half a minute after a restart."
+        if phase.key != "session":
+            # The rest of the tracked list under the phase's ranking, as Setups showed it.
+            rows = rows + today_mod.rest_of_list(rows, payload.values(),
+                                                 inplay=dict(self.pool.by_sym), favs=favs)
         key = f"{phase.key}:{phase.day.isoformat()}"
-        fresh = key not in self._today_seen
-        if fresh:
-            self._today_seen = {key: {}}
-        today_mod.mark_new(rows, self._today_seen[key], now.timestamp(), fresh)
+        # One reader at a time past here: the pool's thread (the phase-end log) and a page
+        # read the list in the same second after a restart, and the second saw the phase's
+        # record made but not yet filled, so it stamped the whole top ten new.
+        with self._today_lock:
+            fresh = key not in self._today_seen
+            if fresh:
+                self._today_seen = {key: {}}
+            today_mod.mark_new(rows, self._today_seen[key], now.timestamp(), fresh)
         today_mod.numbered(rows)
         self.universe.want_sparks(r["sym"] for r in rows[:40])
+        self._today_syms = [r["sym"] for r in rows if not r.get("listed")][:40]
         for r in rows:
             if r.get("spark") is None:
                 r["spark"] = self.universe.spark(r["sym"])
+            r["row"] = today_mod.scan_row(r, payload.get(r["sym"]), phase.key,
+                                          self.universe.raw(r["sym"]))
+            # A name the engine does not track is drawn from the wide read, which has no
+            # insider trades; the book has them whether it is tracked or not.
+            if "insiders" not in r["row"]:
+                self._with_insiders(r["row"])
         return {"ok": True, "phase": phase.as_dict(now), "phases": [
                     {"key": k, "label": today_mod.LABELS[k]} for k in today_mod.PHASES],
                 "rows": rows, "note": note, "favs_tracked": self.scan.tracked_favourites(),
@@ -1514,6 +1569,7 @@ class Collector:
         for r in payload.get("rows") or []:
             r["stage"] = stages.get(r.get("sym"))
             r["spark"] = self.universe.spark(str(r.get("sym")))
+            self._with_insiders(r)
         # No session type here (owner, 2026-11-11): the Scanner's strip carried NQ's
         # trend-or-range lean for a day, and it is a futures read on a stocks page.
         # The snapshot's `daytype` still feeds the Futures tab and the Dashboard.

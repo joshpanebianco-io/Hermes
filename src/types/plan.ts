@@ -218,6 +218,8 @@ export interface PlanBody {
 
 export interface Plan {
   id: string;
+  /** Absent on the game plans; a market overview is an Overview, below. */
+  kind?: "plan";
   created_utc: string;
   et_label: string;
   model: string;
@@ -236,15 +238,117 @@ export interface Plan {
 export interface PlanStub {
   id: string;
   et_label: string;
+  created_utc?: string | null;
+  /** "overview" for a market overview (since 2026-11-13), "plan" for the game plans before it. */
+  kind?: "plan" | "overview";
+  /** Written by the collector's 09:00 ET clock rather than the button. */
+  auto?: boolean;
   headline: string | null;
   model: string;
   /** How many names it planned. */
   n: number;
 }
 
+/* ------------------------------------------------------------ the market overview */
+
+/**
+ * THE MARKET OVERVIEW (owner, 2026-11-13): the strip's Market view, which
+ * replaced the per-name game plan. The same two authors: `facts` are the
+ * collector's tables (the game plan's market blocks, the indexes against their
+ * levels, the sectors, the stories, the top of the Today list) and `plan` is the
+ * model's prose, each story it picks joined to the facts' own title and link.
+ */
+export interface OverviewIndex {
+  sym: string;
+  last: number | null;
+  chg_pct: number | null;
+  ext_pct: number | null;
+  levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pdc: number | null };
+  where: string | null;
+  ema200_10m: "above" | "below" | null;
+  daily: string | null;
+}
+
+export interface OverviewSector {
+  key: string;
+  label: string | null;
+  day_pct: number | null;
+  rs_day: number | null;
+  week_pct: number | null;
+  /** "WTI crude -2.10%: headwind (earnings move with the crude price)" — the textbook drivers and today's verdict. */
+  drivers: string[];
+  /** The biggest names moving with it: "NVDA +2.31%". */
+  names?: string[];
+}
+
+export interface OverviewStory {
+  id: string;
+  syms: string[];
+  tag: string;
+  title: string;
+  publisher: string;
+  url: string;
+  age_min: number | null;
+}
+
+export interface OverviewFacts extends Omit<PlanFacts, "names"> {
+  kind: "overview";
+  index: OverviewIndex[];
+  wide_breadth: { advancers: number | null; decliners: number | null; traded: number | null; of: number | null; basis: string } | null;
+  sectors: {
+    basis: string;
+    names_basis: string;
+    leaders: OverviewSector[];
+    laggards: OverviewSector[];
+    themes_up: OverviewSector[];
+    themes_down: OverviewSector[];
+  };
+  stories: OverviewStory[];
+  today: {
+    phase: string | null;
+    title: string | null;
+    rows: Array<{ sym: string; name: string | null; sector: string | null; chg_pct: number | null; lean: "long" | "short" | null; why: string[]; story: { title: string; tag: string | null } | null }>;
+  };
+}
+
+export interface OverviewPick {
+  id: string;
+  why: string;
+  title: string;
+  publisher: string;
+  syms: string[];
+  tag: string | null;
+  url: string;
+  age_min: number | null;
+  /** A market headline from the wire rather than a stock story. */
+  wire: boolean;
+}
+
+export interface OverviewBody {
+  headline: string;
+  read: string;
+  sectors: string;
+  macro: string;
+  news: OverviewPick[];
+  focus: string;
+  /** The day's clock and its release risks — the collector's, from the calendar. */
+  timing: string[];
+  events: string[];
+  risks: string[];
+}
+
+export interface Overview extends Omit<Plan, "facts" | "plan" | "kind"> {
+  kind: "overview";
+  auto?: boolean;
+  facts: OverviewFacts;
+  plan: OverviewBody | null;
+}
+
+export const isOverview = (x: Plan | Overview | null | undefined): x is Overview => x?.kind === "overview";
+
 export interface PlanFeed {
   config: { enabled: boolean; model: string };
-  latest: Plan | null;
+  latest: Plan | Overview | null;
   history: PlanStub[];
   /** Set by the route handler when the collector could not be reached. */
   offline?: { reason: string; api: string };

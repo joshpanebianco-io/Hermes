@@ -237,8 +237,8 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
             # card says so instead of "None scheduled".
             "calendar_ok": regime.get("calendar_ok"),
         },
-        "breadth": {k: wide.get(k) for k in ("basis", "floor", "names", "advancers", "decliners",
-                                             "buckets")} if wide else None,
+        "breadth": {k: wide.get(k) for k in ("basis", "floor", "names", "of", "advancers",
+                                             "decliners", "buckets")} if wide else None,
         "top": [_slim(r) for r in scored[:TOP_ROWS]],
         # In play took My list's place (2026-11-10): the pinned names were the same
         # list every day, and the pool's rank is who is moving across the market.

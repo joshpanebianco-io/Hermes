@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import threading
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -31,6 +32,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from . import ask as ask_mod
 from . import config, jobs, optcalc
+from . import overview as overview_mod
 from . import report as report_mod
 from . import stockplan as plan_mod
 from . import tools as tools_mod
@@ -41,9 +43,13 @@ from .sessions import session_state
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     COLLECTOR.start()
+    stop = threading.Event()
+    threading.Thread(target=_overview_clock, args=(stop,), name="overview-0900",
+                     daemon=True).start()
     try:
         yield
     finally:
+        stop.set()
         COLLECTOR.stop()
 
 
@@ -201,7 +207,7 @@ def _note_ids(ids: list[str] | None) -> list[str]:
 # report and one game plan at a time: a second press joins the running job.
 
 _REPORTS = jobs.Runner("report")
-_PLANS = jobs.Runner("game plan")
+_PLANS = jobs.Runner("market overview")
 
 
 def _report_feed() -> dict[str, Any]:
@@ -670,18 +676,64 @@ def ask_tool(body: ToolIn) -> dict[str, Any]:
     )
 
 
+def _start_overview(now: datetime, top: int = plan_mod.TOP_DEFAULT,
+                    auto: bool = False) -> dict[str, Any]:
+    """Start writing the market overview (overview.py) on the plans' runner, so the
+    page shows it being written whoever started it. The Today list and the stories
+    are read on the job's thread, not the request's."""
+    scan, snap = COLLECTOR.scanner_payload(), COLLECTOR.snapshot()
+    meta = {
+        "model": report_mod.DEFAULT_MODEL, "top": top, "kind": overview_mod.KIND, "auto": auto,
+        "et_label": now.astimezone(report_mod.ET).strftime("%a %d %b, %H:%M ET"),
+    }
+
+    def work() -> dict[str, Any]:
+        today: dict[str, Any] | None = None
+        stories: list[dict[str, Any]] | None = None
+        # Context, not the spine: an overview without the list or the stories is
+        # still the market's read, and says less.
+        with contextlib.suppress(Exception):
+            today = COLLECTOR.today()
+        with contextlib.suppress(Exception):
+            stories = COLLECTOR.top_stories()
+        return overview_mod.generate(scan, snap, today, stories, now=now, auto=auto)
+
+    return _PLANS.start(report_mod.note_id(now), meta, work)
+
+
 @app.post("/api/plan")
 def plan_generate(top: int = Query(plan_mod.TOP_DEFAULT, ge=plan_mod.TOP_MIN,
                                    le=plan_mod.TOP_MAX)) -> dict[str, Any]:
-    """Start writing a game plan for the top `top` scanner names against the
-    live state, and answer at once with the job (see report_generate)."""
-    scan, snap = COLLECTOR.scanner_payload(), COLLECTOR.snapshot()
-    now = datetime.now(UTC)
-    meta = {
-        "model": report_mod.DEFAULT_MODEL, "top": top,
-        "et_label": now.astimezone(report_mod.ET).strftime("%a %d %b, %H:%M ET"),
-    }
-    job = _PLANS.start(
-        report_mod.note_id(now), meta, lambda: plan_mod.generate(scan, snap, top=top, now=now)
-    )
+    """Start writing the market overview against the live state, and answer at once
+    with the job (see report_generate). Since 2026-11-13 the strip's Market view
+    writes the overview, not a plan per name; `top` is kept so an older page's
+    request still validates, and the overview does not read it."""
+    job = _start_overview(datetime.now(UTC), top=top)
     return {**_plan_feed(), "job": job}
+
+
+# The 09:00 ET overview (overview.auto_due): the clock's tries since 09:00, so a
+# model that refuses is given one more go and no more.
+_AUTO_TRIED: list[datetime] = []
+
+
+def _overview_clock(stop: threading.Event) -> None:
+    """Write the market overview by itself at 09:00 ET on a trading day. Waits for
+    the scanner to hold rows after a restart, and never starts while a press of
+    the button is already writing one. Never fatal."""
+    while not stop.wait(20.0):
+        try:
+            now = datetime.now(UTC)
+            if not overview_mod.auto_due(now, plan_mod.history(5), _AUTO_TRIED):
+                continue
+            if _PLANS.running() is not None:
+                continue
+            rows = COLLECTOR.scanner_payload().get("rows") or []
+            if not any(isinstance(r, dict) and r.get("ok") for r in rows):
+                continue
+            _AUTO_TRIED.append(now)
+            _start_overview(now, auto=True)
+            print(f"overview: the 09:00 write started at {now:%H:%M:%S} UTC", flush=True)
+        except Exception as e:  # noqa: BLE001 — a clock must not die on one bad tick
+            with contextlib.suppress(Exception):
+                print(f"overview: the 09:00 clock skipped a tick: {e!r}", flush=True)

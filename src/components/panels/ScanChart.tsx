@@ -1227,12 +1227,25 @@ export function ChartControls({
       </span>
     </div>
   );
+  /*
+   * VWAP'S OWN SETTINGS SIT UNDER IT (owner, 2026-11-13: "make the vwap deviations bands
+   * section looks like a subsection of vwap and not it's own"). The anchor and the bands
+   * were headed sections of their own, level with VWAP and the averages; they are VWAP's,
+   * so they hang from its switch on a rule, in sentence case, and fade while it is off.
+   */
   const vwap = (
-    <>
+    <div>
       <Choice label="VWAP" options={SHOW_CHOICES} value={vwapOn ? "on" : "off"} set={(v) => setLayer("vwap", v === "on")} />
-      {anchored && <Choice label="Anchored at" options={ANCHOR_CHOICES} value={anchor} set={setAnchor} />}
-      {hasBands && <Choice label="Deviation bands" options={BAND_CHOICES} value={bands} set={setBands} />}
-    </>
+      {(anchored || hasBands) && (
+        <div
+          className={cn("mt-2 ml-[5px] flex flex-col gap-2 border-l border-ring-2 pl-3", !vwapOn && "opacity-50")}
+          title={vwapOn ? undefined : "VWAP is off: these apply when it is on"}
+        >
+          {anchored && <SubChoice label="Anchored at" options={ANCHOR_CHOICES} value={anchor} set={setAnchor} />}
+          {hasBands && <SubChoice label="Deviation bands" options={BAND_CHOICES} value={bands} set={setBands} />}
+        </div>
+      )}
+    </div>
   );
   // On or off and nothing more: the levels and volume are switches.
   const switches = (
@@ -1285,6 +1298,32 @@ export function ChartControls({
         </p>
       </Menu>
     </>
+  );
+}
+
+/** A setting that belongs to the one above it (VWAP's anchor and bands): a quieter label, no caps. */
+function SubChoice<T extends string | number>({
+  label,
+  options,
+  value,
+  set,
+}: {
+  label: string;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  value: T;
+  set: (v: T) => void;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-[11px] text-ink-3">{label}</p>
+      <span className="seg flex-wrap">
+        {options.map((o) => (
+          <button key={String(o.value)} type="button" onClick={() => set(o.value)} {...segItem(value === o.value)}>
+            {o.label}
+          </button>
+        ))}
+      </span>
+    </div>
   );
 }
 

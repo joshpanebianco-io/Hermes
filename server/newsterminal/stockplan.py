@@ -38,7 +38,7 @@ import os
 import re
 import time
 import urllib.error
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -1482,7 +1482,8 @@ def unverified(b: dict[str, Any], seen: str) -> list[str]:
 
 
 def _reask(payload: dict[str, Any], key: str, content: str, bad: list[str],
-           facts: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+           sanitize: Callable[[Any], dict[str, Any] | None]
+           ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     """One corrective re-ask on the same model and mode → (plan, doc, outcome)."""
     retry = dict(payload)
     retry["messages"] = [*payload["messages"], {"role": "assistant", "content": content},
@@ -1494,7 +1495,7 @@ def _reask(payload: dict[str, Any], key: str, content: str, bad: list[str],
     except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError, TypeError) as e:
         return None, None, f"re-ask failed: {e}"
     obj = rp.extract_json(text if isinstance(text, str) else str(text))
-    fixed = sanitize_plan(obj, facts) if obj is not None else None
+    fixed = sanitize(obj) if obj is not None else None
     if fixed is None:
         return None, None, "re-ask did not return a plan"
     return fixed, doc, "re-asked"
@@ -1564,8 +1565,24 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             ),
         },
     ]
-    sch = schema(syms)
+    return ask_chain(base, messages, schema(syms), "game_plan", SKELETON, key=key,
+                     sanitize=lambda obj: sanitize_plan(obj, facts), verify=unverified,
+                     store=_store)
 
+
+def ask_chain(base: dict[str, Any], messages: list[dict[str, Any]], sch: dict[str, Any],
+              name: str, skeleton: str, *, key: str,
+              sanitize: Callable[[Any], dict[str, Any] | None],
+              verify: Callable[[dict[str, Any], str], list[str]],
+              store: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Ask the model chain for one note and keep the first answer that sanitises.
+
+    The game plan's loop, shared with the market overview (overview.py,
+    2026-11-13): each model with the strict schema, then each in plain JSON mode,
+    within the report's time budget; an answer whose numerals the model was not
+    shown gets one re-ask. `base` is the note's envelope (its `model` is where
+    the chain starts); the body lands in its `plan` field and `store` keeps it."""
+    model = str(base.get("model") or rp.DEFAULT_MODEL)
     attempts: list[dict[str, Any]] = []
     pairs = [(m, "schema") for m in rp.model_chain(model)]
     pairs += [(m, "json") for m in rp.model_chain(model)]
@@ -1587,7 +1604,7 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             "role": "user",
             "content": messages[-1]["content"]
             + "\n\nReturn ONLY a JSON object, no prose around it, exactly this shape:\n"
-            + SKELETON,
+            + skeleton,
         }
         payload: dict[str, Any] = {
             "model": candidate,
@@ -1605,7 +1622,7 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             "reasoning": rp.REASONING,
             "response_format": (
                 {"type": "json_schema",
-                 "json_schema": {"name": "game_plan", "strict": True, "schema": sch}}
+                 "json_schema": {"name": name, "strict": True, "schema": sch}}
                 if mode == "schema" else {"type": "json_object"}
             ),
         }
@@ -1660,7 +1677,7 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
                                       f"{len(content)} chars)"})
             base["raw"] = _ends(content)
             continue
-        plan = sanitize_plan(obj, facts)
+        plan = sanitize(obj)
         if plan is None:
             # Usually the whole answer did not parse and the extractor fell
             # through to an inner object — the finish reason and both ends of
@@ -1672,13 +1689,13 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             continue
 
         seen = user["content"]
-        bad = unverified(plan, seen)
+        bad = verify(plan, seen)
         if bad:
             note = f"unverified numerals: {', '.join(bad[:8])}"
             if (time.monotonic() - started) + rp._ATTEMPT_RESERVE <= rp.BUDGET_SEC:
-                fixed, doc2, outcome = _reask(payload, key, content, bad, facts)
+                fixed, doc2, outcome = _reask(payload, key, content, bad, sanitize)
                 if fixed is not None and doc2 is not None:
-                    bad2 = unverified(fixed, seen)
+                    bad2 = verify(fixed, seen)
                     outcome = ("ok after re-ask" if not bad2
                                else f"re-ask still unverified: {', '.join(bad2[:8])}")
                     if len(bad2) < len(bad):
@@ -1690,7 +1707,7 @@ def generate(scan: dict[str, Any], snap: dict[str, Any], top: int = TOP_DEFAULT,
             "ok": True, "plan": plan, "unverified": bad, "mode": mode, "model": candidate,
             "usage": doc.get("usage"), "attempts": attempts,
         })
-        _store(base)
+        store(base)
         return base
 
     base["attempts"] = attempts
@@ -1741,6 +1758,11 @@ def history(limit: int = 20) -> list[dict[str, Any]]:
         out.append({
             "id": d.get("id"),
             "et_label": d.get("et_label"),
+            "created_utc": d.get("created_utc"),
+            # "overview" for a market overview (overview.py, since 2026-11-13), which
+            # is kept beside the game plans before it; "plan" for those.
+            "kind": d.get("kind") or "plan",
+            "auto": bool(d.get("auto")),
             "headline": body.get("headline"),
             "model": d.get("model"),
             "n": len(body.get("plans") or []),

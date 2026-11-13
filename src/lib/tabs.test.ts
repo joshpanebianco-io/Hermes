@@ -20,11 +20,11 @@ test("the Scanner's views, once each, every one with a name and a hover", () => 
   for (const v of SCAN_VIEWS) assert.ok(v.label && v.title, v.key);
 });
 
-test("the strip is Today, Charts and Record; the old four only while Settings keeps them", () => {
-  assert.deepEqual(stripViews(false).map((v) => v.label), ["Today", "Charts", "Record"]);
-  assert.deepEqual(stripViews(true).map((v) => v.key), ["today", "multi", "log", "setups", "breakouts", "extended", "day23"]);
-  // The Game plan is a button on Today, not a tab, but a link to it still opens it.
-  assert.ok(!stripViews(true).some((v) => v.key === "plan"));
+test("the strip is Today, Charts, Record and Market; the old four only while Settings keeps them", () => {
+  assert.deepEqual(stripViews(false).map((v) => v.label), ["Today", "Charts", "Record", "Market"]);
+  assert.deepEqual(stripViews(true).map((v) => v.key), ["today", "multi", "log", "plan", "setups", "breakouts", "extended", "day23"]);
+  // Market (the Game plan's key, "plan") sits next to Record, and a link to it still opens it.
+  assert.equal(SCAN_VIEW_KEYS.indexOf("plan"), SCAN_VIEW_KEYS.indexOf("log") + 1);
   assert.deepEqual(resolveTab("plan"), { tab: "scanner", scan: "plan" });
   // A browser that remembers an old view opens Today once they are off.
   assert.equal(shownView("setups", false), "today");

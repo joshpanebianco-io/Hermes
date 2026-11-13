@@ -63,7 +63,7 @@ export function PinUndo() {
         <p className="min-w-0 text-[12.5px] text-ink-2">
           {state === "back" ? (
             <>
-              <span className="font-semibold text-ink">{u.sym}</span> is pinned again, where it was.
+              <span className="font-semibold text-ink">{u.sym}</span> is a favourite again, where it was.
             </>
           ) : state === "failed" ? (
             <>
@@ -71,7 +71,7 @@ export function PinUndo() {
             </>
           ) : (
             <>
-              <span className="font-semibold text-ink">{u.sym}</span> unpinned: it is off your list.
+              <span className="font-semibold text-ink">{u.sym}</span> is off your favourites.
             </>
           )}
         </p>

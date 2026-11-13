@@ -654,6 +654,14 @@ class UniverseStore:
             return None
         return not (pm_volume == ref[2] and pm_close == ref[3])
 
+    def ah_fresh(self, r: dict[str, Any]) -> bool:
+        """Are the after-hours columns this evening's, at any hour? False when they are
+        exactly what they were before today's late session began (`ah_ref`, taken on the
+        pre-market and session reads): the name has not traded after this close. The
+        Today list's evening reads it (today.rank_evening)."""
+        ref = self.ah_ref.get(r["sym"])
+        return ref is None or [r["ah_c"], r["ah_vol"]] != ref[:2]
+
     def ah_ok(self, r: dict[str, Any], basis: str) -> bool:
         if basis != "post":
             return True

@@ -195,8 +195,11 @@ def test_report_read() -> None:
 @pytest.mark.parametrize(
     ("instant", "done", "due", "nxt"),
     [
-        (et(2026, 10, 20, 7, 59), [], [], "08:00"),
-        (et(2026, 10, 20, 8, 0), [], ["08:00"], "09:00"),
+        # 06:00 and 07:00 since the Today list (2026-11-13): it ranks from 04:00.
+        (et(2026, 10, 20, 5, 59), [], [], "06:00"),
+        (et(2026, 10, 20, 6, 0), [], ["06:00"], "07:00"),
+        (et(2026, 10, 20, 7, 59), ["06:00", "07:00"], [], "08:00"),
+        (et(2026, 10, 20, 8, 0), ["06:00", "07:00"], ["08:00"], "09:00"),
         (et(2026, 10, 20, 9, 30), [], ["09:25"], "10:00"),
         (et(2026, 10, 20, 10, 5), ["08:00", "09:00", "09:25"], ["10:00"], None),
         (et(2026, 10, 20, 14, 0), [], ["09:25", "10:00"], None),
@@ -268,29 +271,32 @@ def test_store_reads_ranks_and_promotes_at_a_mark(monkeypatch: Any, tmp_path: An
     monkeypatch.setattr(pool, "fetch", fake)
     store = pool.PoolStore(str(tmp_path / "pool.json"))
     pinned = ["AAPL", "NVDA"]
-    # 07:50 Friday: a read and a rank, no mark yet
-    st, read, changed = store.tick(pinned, et(2026, 10, 23, 7, 50))
+    # 05:50 Friday: a read and a rank, no mark yet
+    st, read, changed = store.tick(pinned, et(2026, 10, 23, 5, 50))
     assert read and st.ok and st.items == 9 and not changed
     assert calls[0]["data"] and calls[0]["key"] == pool.CACHE_KEY
-    assert store.for_scan() == (date(2026, 10, 23), [], {})
-    # 07:52: inside the cadence, no second read
-    _st, read, _ = store.tick(pinned, et(2026, 10, 23, 7, 52))
+    assert store.for_scan() == (date(2026, 10, 23), [], {}, None)
+    # 05:52: inside the cadence, no second read
+    _st, read, _ = store.tick(pinned, et(2026, 10, 23, 5, 52))
     assert not read and len(calls) == 1
-    # 08:01: the mark — the pre-market rank, pinned names and the quiet excluded
-    st, read, changed = store.tick(pinned, et(2026, 10, 23, 8, 1))
+    # 06:01: the mark — the pre-market rank, pinned names and the quiet excluded
+    st, read, changed = store.tick(pinned, et(2026, 10, 23, 6, 1))
     assert read and changed
-    day, syms, sectors = store.for_scan()
+    day, syms, sectors, favs = store.for_scan()
     assert day == date(2026, 10, 23)
     assert syms == ["KO", "SNDK", "MU", "TSM", "SPCX", "NBIS"]  # ORCL 3.4 under the bar
+    # Both pins are tracked today (two of FAV_SLOTS), the more in play first.
+    assert sorted(favs or []) == ["AAPL", "NVDA"]
     rows = {r["symbol"]: r for r in pool.parse(fixture())[0]}
     assert sectors == {s: pool.TV_SECTOR[rows[s]["tv_sector"]] for s in syms
                        if rows[s]["tv_sector"] in pool.TV_SECTOR}
-    assert store.marks_done == ["08:00"]
-    assert st.notes[0] == "14 screened · 9 qualified · 6 promoted · marks 08:00"
-    v = store.view(pinned, et(2026, 10, 23, 8, 1))
-    assert v["on"] and v["slots"] == 38 and v["next_mark"] == "09:00" and v["basis"] == "pre"
+    assert store.marks_done == ["06:00"]
+    assert st.notes[0] == "14 screened · 9 qualified · 6 promoted · marks 06:00"
+    v = store.view(pinned, et(2026, 10, 23, 6, 1))
+    # The room: forty less the three benchmarks and the two favourites tracked today.
+    assert v["on"] and v["slots"] == 35 and v["next_mark"] == "07:00" and v["basis"] == "pre"
     assert [p["symbol"] for p in v["promoted"]] == syms
-    assert (v["promoted"][0]["mark"], v["promoted"][0]["at"]) == ("08:00", "08:01")
+    assert (v["promoted"][0]["mark"], v["promoted"][0]["at"]) == ("06:00", "06:01")
     assert [t["symbol"] for t in v["top"] if t["promoted"]] == syms
     assert "AAPL" not in [t["symbol"] for t in v["top"]]  # pinned names are never "not listed"
     # a restart keeps today's promotions
@@ -298,22 +304,26 @@ def test_store_reads_ranks_and_promotes_at_a_mark(monkeypatch: Any, tmp_path: An
     assert again.for_scan()[1] == syms
     # the next trading day rolls them off
     _st, _read, changed = again.tick(pinned, et(2026, 10, 26, 5, 0))
-    assert changed and again.for_scan() == (date(2026, 10, 26), [], {})
+    assert changed and again.for_scan() == (date(2026, 10, 26), [], {}, None)
 
 
 def test_store_post_open_mark_fills_and_then_holds(monkeypatch: Any, tmp_path: Any) -> None:
     body = json.dumps(fixture()).encode()
     monkeypatch.setattr(pool, "fetch", lambda url, **kw: _live(body))
     store = pool.PoolStore(str(tmp_path / "pool.json"))
-    pinned = [f"P{i}" for i in range(34)]  # six slots: two pre-market, four at 10:00
+    # Thirty-one favourites tracked and the three benchmarks: six slots, two pre-market
+    # and four at 10:00 (FAV_SLOTS is fifteen; raised here to pin the room down).
+    monkeypatch.setattr(pool, "FAV_SLOTS", 31)
+    pinned = [f"P{i}" for i in range(34)]
     store.tick(pinned, et(2026, 10, 23, 9, 26))
     assert store.for_scan()[1] == ["KO", "SNDK"]
+    assert store.for_scan()[3] == pinned[:31]  # none in play, so the pinned order
     store.tick(pinned, et(2026, 10, 23, 10, 1))
     # The day-basis rank at 10:00 on RVOL (2026-11-13): SPCX 6.1, TSM 5.7, MU 4.8 clear
     # MIN_SCORE; NVDA, flat on 0.76x, does not (9.3 when a whole average day was the
     # yardstick), so the fourth slot stays empty.
     assert store.for_scan()[1] == ["KO", "SNDK", "SPCX", "TSM", "MU"]
-    assert store.marks_done == ["08:00", "09:00", "09:25", "10:00"]
+    assert store.marks_done == ["06:00", "07:00", "08:00", "09:00", "09:25", "10:00"]
     kept = [dict(p) for p in store.promoted]
     # a later read changes nothing: the list holds until the day rolls
     store.tick(pinned, et(2026, 10, 23, 14, 0))
@@ -346,14 +356,15 @@ def test_switching_promotion_off_and_on(monkeypatch: Any, tmp_path: Any) -> None
     monkeypatch.setattr(pool, "fetch", lambda url, **kw: _live(body))
     store = pool.PoolStore(str(tmp_path / "pool.json"))
     store.tick([], et(2026, 10, 23, 9, 0))
-    assert store.for_scan()[1] and store.marks_done == ["08:00", "09:00"]
+    assert store.for_scan()[1] and store.marks_done == ["06:00", "07:00", "08:00", "09:00"]
     assert store.set_enabled(False)
     assert store.for_scan()[1] == [] and not store.view([])["on"]
     assert not store.set_enabled(False)
     # back on: the next tick reads at once, inside the cadence, and re-runs today's latest mark
     assert store.set_enabled(True)
     _st, read, changed = store.tick([], et(2026, 10, 23, 9, 1))
-    assert read and changed and store.marks_done == ["08:00", "09:00"] and store.for_scan()[1]
+    assert read and changed and store.marks_done == ["06:00", "07:00", "08:00", "09:00"]
+    assert store.for_scan()[1]
     # and it survives a restart
     assert pool.PoolStore(str(tmp_path / "pool.json")).enabled
 
@@ -423,7 +434,7 @@ def test_track_puts_a_name_on_todays_list_ahead_of_the_marks(tmp_path: Any) -> N
     s.day = "2026-11-09"
     s.promoted = [{"symbol": "AAA", "score": 9.0, "reason": "gap", "at": "08:00", "mark": "08:00"}]
     assert s.track("ZZZ", "Zed", "XLK", "11:40", room=3) is None
-    assert s.for_scan() == (date(2026, 11, 9), ["ZZZ", "AAA"], {"ZZZ": "XLK"})
+    assert s.for_scan() == (date(2026, 11, 9), ["ZZZ", "AAA"], {"ZZZ": "XLK"}, None)
     # Tracking it again changes nothing.
     assert s.track("ZZZ", "Zed", "XLK", "11:41", room=3) is None
     assert s.for_scan()[1] == ["ZZZ", "AAA"]

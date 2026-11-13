@@ -199,6 +199,11 @@ PANELS: dict[str, str] = {
                   "far (sym narrows it to one name)",
     "record": "Stocks · the signal record over twenty sessions by kind, side and score band: "
               "count, +1R rate, R held to the close with the stop kept, median best and worst",
+    "today_list": "Stocks, Today · the one list for the hour it is: after hours the movers "
+                  "since the close and the day's big ones, overnight the prep for the next "
+                  "session, pre-market what is in play into the open, at the open (09:30 to "
+                  "10:00) those names by what the bell has done, in the session the setups "
+                  "by score; each name with why it is there, its story and its plan",
     "breakouts": "Stocks, Breakouts · the wide scan, every US stock at $2bn+ against its "
                  "levels: names through both the pre-market and previous-day ranges, relative "
                  "volume, the gap, each name's most important story (fifteen minutes delayed "
@@ -1373,6 +1378,24 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
         if not isinstance(st, dict):
             return {**head, "error": "the record is not readable here"}
         body = {"record": st}
+    elif name == "today_list":
+        got = need("today")
+        if not isinstance(got, dict) or not got.get("phase"):
+            return {**head, "error": "the Today list is not readable here"}
+        ph = got["phase"]
+        body = {
+            "phase": ph.get("label"), "what_it_ranks": ph.get("title"),
+            "for_session": ph.get("day"), "next": f"{ph.get('next_label')} in "
+                                                 f"{ph.get('ends_in_min')} min",
+            "note": got.get("note"),
+            "rows": [{k: r.get(k) for k in ("rank", "sym", "name", "last", "chg", "move",
+                                             "score", "score_max", "score_kind", "lean",
+                                             "why", "status", "fav", "tracked", "new")}
+                     | {"story": (r.get("story") or {}).get("title"),
+                        "plan": r.get("plan"),
+                        "setup": (r.get("setup") or {}).get("note")}
+                     for r in (got.get("rows") or [])[:25]],
+        }
     elif name == "breakouts":
         got = need("breakouts")
         if not isinstance(got, dict):

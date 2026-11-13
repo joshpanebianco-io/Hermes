@@ -478,6 +478,12 @@ def scanner_extended(
     return COLLECTOR.extended(session=session, cap=cap, vol=vol, chip=chip)
 
 
+@app.get("/api/scanner/today")
+def scanner_today() -> dict[str, Any]:
+    """The Stocks tab's Today list: the phase it is and the names ranked for it."""
+    return COLLECTOR.today()
+
+
 @app.get("/api/scanner/day23")
 def scanner_day23(
     move: float = Query(20.0, ge=0),
@@ -647,6 +653,7 @@ def ask_tool(body: ToolIn) -> dict[str, Any]:
         plan=lambda i: plan_mod.load(i) if i else plan_mod.latest(),
         more={
             "watchlist": COLLECTOR.watchlist_payload,
+            "today": COLLECTOR.today,
             "breakouts": COLLECTOR.breakouts,
             "extended_pre": lambda: COLLECTOR.extended(session="pre"),
             "extended_post": lambda: COLLECTOR.extended(session="post"),

@@ -108,7 +108,34 @@ breaks its **pre-market** or **previous-day** high (low), and the trade is the
 **retest** of that level — or of **VWAP / the 8 EMA wave** when price has run too
 far from the level for it to come back.
 
-The tab has six views in a strip: **Setups**, the ranked list this section describes;
+**Today, one list for the hour it is (2026-11-13).** The tab opens on **Today**: the best
+stocks for the time of day, re-read on its own and ranked by what each phase can actually
+know (server `today.py`):
+
+| Phase (ET) | The list | Ranked by |
+|---|---|---|
+| After hours, 16:00–20:00 | moving after the close, and the day's big movers | the move in daily ATRs, volume against normal, a story or a report, tomorrow's Day 2 |
+| Overnight, 20:00–04:00 and shut days | the prep for the next session | the same, with the reports due before the open |
+| Pre-market, 04:00–09:30 | in play going into the open | the pool's own rank on live prices: gap in ATRs, pre-market volume against an average day, a report or a story, already through a level, Day 2/3 |
+| The open, 09:30–10:00 | the pre-market's names, by what the bell has done | entry live, through a level, not triggered, failed; then their in-play score |
+| Session, 10:00–16:00 | the best trades now | the engine's setup score below, unchanged |
+
+Before the bell a move's size can be read and its direction cannot (a gap of 3+ daily ATRs
+meant 2.7x a normal range over a year; the gap's direction told nothing), so the evening and
+pre-market lists rank how in play a name is and show both triggers, the gap's side as a lean,
+never a call. The open's first half hour reached +1R on 39% of signals against 52% from
+10:00, so the open orders names by what has happened to them rather than by a setup score.
+Every row says why it is there, carries its story and its plan, and marks a name new to the
+top ten in the last quarter hour. The strip is **Today**, **Charts** (six live charts of the
+best names) and **Record** (the signal log); the **Game plan** is a button on Today. **The
+pinned names are favourites**: each morning the fifteen most in play are tracked with SPY,
+QQQ and IWM, and the pool's picks (06:00, 07:00, 08:00, 09:00, 09:25, then 10:00) fill the
+rest of the forty, so the market's best can reach the list; a favourite not tracked today
+stays pinned. Each phase's list is written to `cache/today_marks.jsonl` near its end, so its
+rank can be held to what the names did next. The older views below (Setups, Breakouts,
+Extended hours, Day 2/3) are shown only while Settings → Interface keeps them, for a week.
+
+The tab had six views in a strip: **Setups**, the ranked list this section describes;
 **Breakouts**, **Extended hours** and **Day 2/3**, the wide scan read three ways; **Index**,
 the tape; and the **Signal log**. (**Sectors**, the wide scan's fourth reading, is a tab of
 its own since 2026-11-10 — below.) Setups opens on **Overview**, the short list of what matters (the

@@ -42,11 +42,13 @@ import {
   deskOf,
   isDesk,
   pageTitle,
+  shownView,
   tabLabel,
   type Desk,
   type ScanView,
   type Tab,
 } from "@/lib/tabs";
+import { useLegacyViews } from "@/lib/legacyViews";
 import { useNow } from "@/lib/useNow";
 import { shareUnchanged } from "@/lib/share";
 
@@ -215,7 +217,11 @@ export function Terminal({
    * open a view by name and the question to Hermes is labelled with it. The Scanner's
    * own strip reads and writes the same value.
    */
-  const [scanView, setScanView] = usePersisted<ScanView>("scan.view", "setups", oneOf(...SCAN_VIEW_KEYS));
+  const [savedScanView, setScanView] = usePersisted<ScanView>("scan.view", "today", oneOf(...SCAN_VIEW_KEYS));
+  // An old view (Setups, Breakouts, Extended hours, Day 2/3) opens only while Settings
+  // keeps them; otherwise the remembered one opens Today (lib/tabs.ts shownView).
+  const legacyViews = useLegacyViews();
+  const scanView = shownView(savedScanView, legacyViews);
   // The Futures section's view: the overview, a book, or the brief.
   const [futView, setFutView] = usePersisted<FutView>("fut.view", "overview", oneOf(...FUT_VIEW_KEYS));
   useEffect(() => {

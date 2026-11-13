@@ -23,7 +23,9 @@ import { cn } from "@/lib/cn";
 import { oneOf, persist, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
 import { openSearch, openTicker, useTicker } from "@/lib/ticker";
-import { SCAN_VIEWS, type ScanView } from "@/lib/tabs";
+import { stripViews, type ScanView } from "@/lib/tabs";
+import { useLegacyViews } from "@/lib/legacyViews";
+import { StocksToday } from "@/components/panels/StocksToday";
 import { BAND_LABEL, bandChip, curveOverride } from "@/lib/vix";
 import { VixPopover } from "@/components/vol/VixBands";
 import { etDay, useNextPrint } from "@/lib/nextPrint";
@@ -209,8 +211,8 @@ export function Scanner({
       setSel(s.toUpperCase());
       // Written straight through: the Terminal reads the remembered view after this
       // runs, and must find this one rather than put the last view back.
-      persist("scan.view", "setups");
-      onView("setups");
+      persist("scan.view", "today");
+      onView("today");
       openTicker(s);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -398,7 +400,9 @@ export function Scanner({
 
       {/* The page sits in one framed card under the band, as in the screenshots. */}
       <div className="qt-frame mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[6px] border border-ring">
-      {view === "breakouts" ? (
+      {view === "today" ? (
+        <StocksToday onPlan={() => onView("plan")} />
+      ) : view === "breakouts" ? (
         <ScanBreakouts onTrackChanged={load} />
       ) : view === "extended" ? (
         <ScanExtended onTrackChanged={load} onDay23={() => onView("day23")} />
@@ -512,8 +516,8 @@ export function Scanner({
           <div className="qt-sheet min-h-0 flex-1 overflow-auto">
             {view === "log" ? (
               <ScanLog onPick={(s) => {
+                // The name opens over the record, which stays where it was read.
                 setSel(s);
-                onView("setups");
                 openTicker(s);
               }} />
             ) : !data ? (
@@ -592,6 +596,7 @@ function Masthead({
   const ok = data?.rows.filter((r) => r.ok).length ?? 0;
   const total = data?.watchlist.length ?? 0;
   const fromPool = data?.pool?.promoted.length ?? 0;
+  const legacy = useLegacyViews();
   return (
     <div className="qt-mast flex min-h-[44px] shrink-0 flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 qt:px-4">
       <div className="contents">
@@ -599,7 +604,7 @@ function Masthead({
             lit pills the filter chips under them are (globals.css, "a page's views are
             tabs, not pills"). */}
         <span className="seg seg-tabs shrink-0" role="tablist" aria-label="Stocks views">
-          {SCAN_VIEWS.map((v) => (
+          {stripViews(legacy).map((v) => (
             <button key={v.key} type="button" role="tab" aria-selected={view === v.key} title={v.title} onClick={() => onView(v.key)} {...segItem(view === v.key)}>
               {v.label}
             </button>

@@ -90,30 +90,50 @@ export const TAB_KEYS: readonly Tab[] = TABS.map((t) => t.key);
  * breadth is the Dashboard's card, the VIX's curve and the put/call ratios are on
  * Futures. What it alone drew (the three against their levels as a table, dealer gamma
  * in ETF prices, the index options, the fuel) Hermes still reads: the collector serves
- * all of it and `/api/market` is polled as before. A browser that remembers the view
- * opens Setups.
+ * all of it and `/api/market` is polled as before.
+ *
+ * ONE LIST SINCE 2026-11-13: TODAY (owner: "we really need to overhaul the whole stocks
+ * scanner section ... instead we have set ups that just change and display the best
+ * options for a given period"; then "yes go ahead with everything proposed"). Setups,
+ * Breakouts, Extended hours and Day 2/3 were four answers to "what should I look at
+ * now", each ranked its own way. Today is one list that changes what it ranks by with
+ * the clock (server today.py): the evening's movers, the pre-market's names in play, the
+ * open's triggers, the session's setups. The strip is Today, Charts (the Multicharts
+ * view) and Record (the signal log); the Game plan is a button on Today. The four old
+ * views stay reachable for a week behind Settings → Interface (`group: "legacy"`,
+ * lib/legacyViews.ts), then go. A browser that remembers one of them opens Today.
  */
 export const SCAN_VIEWS = [
-  { key: "setups", label: "Setups", title: "The list, ranked: levels, signals, the score and the options" },
-  { key: "breakouts", label: "Breakouts", title: "Every US stock against its levels" },
-  { key: "extended", label: "Extended hours", title: "The pre-market and after-hours gappers" },
-  { key: "day23", label: "Day 2/3", title: "The big movers, and whether they are still moving" },
-  { key: "log", label: "Signal log", title: "Every signal, and what it did afterwards" },
-  // The stocks half of what was the Analysis tab, as Brief is the Futures section's last view.
-  { key: "plan", label: "Game plan", title: "The written pre-open game plan: the regime, and for each top name what to watch, the trigger and what makes it wrong" },
-  // A VIEW OF ITS OWN, AFTER GAME PLAN (owner, 2026-11-13: "on quiet and luminous layout,
-  // the multicharts should be up the top next to gameplan and on sidebar it should be
-  // under neath gameplan"). It was a button at the end of the Setups chips for a day,
-  // one of that bar's choices: the chips or the charts. It never was a filter of the
-  // table, it is another way to look at the ten best names, which is what a view is.
-  // This list is both rows, the band's tabs and the sidebar's, so one entry puts it in
-  // both places.
-  { key: "multi", label: "Multicharts", title: "Six live charts from the ten highest scores, three across and two down" },
+  { key: "today", label: "Today", group: "main", title: "The best stocks for the hour it is: the evening's movers, then what is in play into the open, then the open's triggers, then the session's setups" },
+  { key: "multi", label: "Charts", group: "main", title: "Six live charts of the list's best names, three across and two down" },
+  { key: "log", label: "Record", group: "main", title: "Every signal, and what it did afterwards" },
+  // The stocks half of what was the Analysis tab. A button on Today since 2026-11-13.
+  { key: "plan", label: "Game plan", group: "button", title: "The written pre-open game plan: the regime, and for each top name what to watch, the trigger and what makes it wrong" },
+  { key: "setups", label: "Setups", group: "legacy", title: "The list, ranked: levels, signals, the score and the options" },
+  { key: "breakouts", label: "Breakouts", group: "legacy", title: "Every US stock against its levels" },
+  { key: "extended", label: "Extended hours", group: "legacy", title: "The pre-market and after-hours gappers" },
+  { key: "day23", label: "Day 2/3", group: "legacy", title: "The big movers, and whether they are still moving" },
 ] as const;
 
 export type ScanView = (typeof SCAN_VIEWS)[number]["key"];
 
 export const SCAN_VIEW_KEYS: readonly ScanView[] = SCAN_VIEWS.map((v) => v.key);
+
+/** The views the strip and the sidebar list: the main three, and the old four while
+ *  Settings keeps them. */
+export function stripViews(legacy: boolean): readonly (typeof SCAN_VIEWS)[number][] {
+  return SCAN_VIEWS.filter((v) => v.group === "main" || (legacy && v.group === "legacy"));
+}
+
+/** A view that is only shown while Settings keeps the old ones. */
+export function isLegacyView(v: ScanView): boolean {
+  return SCAN_VIEWS.find((x) => x.key === v)?.group === "legacy";
+}
+
+/** The view to open: a remembered old view opens Today once the old ones are off. */
+export function shownView(v: ScanView, legacy: boolean): ScanView {
+  return !legacy && isLegacyView(v) ? "today" : v;
+}
 
 export function isTab(v: unknown): v is Tab {
   return typeof v === "string" && (TAB_KEYS as readonly string[]).includes(v);

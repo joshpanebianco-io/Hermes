@@ -220,10 +220,22 @@ SCORE_MAX = (W_GAP + EXTRA) + (W_PMVOL + EXTRA) + max(W_REPORT, W_NEWS) + W_OUTS
     W_DAY2, W_DAY3)
 
 # ---- the marks and the clock ------------------------------------------------
+# 06:00 AND 07:00 SINCE THE TODAY LIST (2026-11-13; today.py): the Stocks tab ranks the
+# pre-market from 04:00, and a name it puts at the top needs its bars and levels read
+# before the last hour, not from 08:00.
 PRE_MARKS: tuple[tuple[int, str], ...] = (
-    (8 * 60, "08:00"), (9 * 60, "09:00"), (9 * 60 + 25, "09:25"))
+    (6 * 60, "06:00"), (7 * 60, "07:00"), (8 * 60, "08:00"), (9 * 60, "09:00"),
+    (9 * 60 + 25, "09:25"))
 POST_MARK: tuple[int, str] = (10 * 60, "10:00")
 POST_OPEN_SLOTS = 4
+#: THE PINNED NAMES ARE FAVOURITES SINCE 2026-11-13 (owner: "yes go ahead with everything
+#: proposed", the Today list). The engine reads MAX_SYMBOLS names; with 34 pinned the
+#: pool had six slots, two of them before the bell, so the market's best could not get
+#: on the list. Now at each pre-market mark the FAV_SLOTS favourites most in play (the
+#: pool's rank, then the pinned order) are tracked for the day, the benchmarks always,
+#: and the rest of the room is the pool's. A favourite not tracked today is still
+#: pinned, and comes back the day it is in play.
+FAV_SLOTS = 15
 TICK_SEC = 20.0
 ACTIVE_SEC = 300.0
 IDLE_SEC = 1800.0
@@ -685,16 +697,31 @@ def next_mark(now: datetime, done: Iterable[str]) -> str | None:
     return None
 
 
+def choose_favourites(ranked: list[dict[str, Any]], pinned: Iterable[str],
+                      n: int | None = None) -> list[str]:
+    """The `n` (FAV_SLOTS) pinned names, benchmarks aside, the engine tracks today: the
+    most in play by the pool's rank, then the rest in the pinned order. Pure."""
+    n = FAV_SLOTS if n is None else n
+    order = [s for s in pinned if s not in BENCHMARKS]
+    score = {r["symbol"]: float(r.get("score") or 0.0) for r in ranked}
+    pos = {s: i for i, s in enumerate(order)}
+    return sorted(order, key=lambda s: (-score.get(s, -1.0), pos[s]))[:n]
+
+
 def promote(ranked: list[dict[str, Any]], pinned: Iterable[str], current: list[dict[str, Any]],
-            mark: str, cap: int = MAX_SYMBOLS) -> list[dict[str, Any]]:
+            mark: str, cap: int = MAX_SYMBOLS,
+            favs: list[str] | None = None) -> list[dict[str, Any]]:
     """The promoted set after `mark` (module docstring). Pure.
 
     Pre-market marks return the fresh top names, leaving POST_OPEN_SLOTS of
-    the room free; the post-open mark keeps `current` and fills the rest.
+    the room free; the post-open mark keeps `current` and fills the rest. With
+    `favs` (the favourites tracked today, `choose_favourites`) the room is what the
+    benchmarks and those leave; without, what the whole pinned list leaves.
     """
     pinned_l = list(pinned)
     excluded = set(pinned_l) | set(BENCHMARKS)
-    slots = max(0, cap - len(pinned_l))
+    used = len(pinned_l) if favs is None else len(BENCHMARKS) + len(favs)
+    slots = max(0, cap - used)
     cands = [r for r in ranked if r["score"] >= MIN_SCORE and r["symbol"] not in excluded]
     if mark != POST_MARK[1]:
         return cands[: max(0, slots - POST_OPEN_SLOTS)]
@@ -777,6 +804,14 @@ class PoolStore:
         self.day: str | None = None
         self.promoted: list[dict[str, Any]] = []
         self.marks_done: list[str] = []
+        #: The favourites tracked today (FAV_SLOTS), chosen at each pre-market mark and
+        #: held from 09:25; None until the day's first mark, when every pin is tracked.
+        self.favs: list[str] | None = None
+        #: The rank as the last pre-market read left it, for the open (today.rank_open):
+        #: after 09:30 the reads are the day's, and the open orders the pre-market's names.
+        self.ranked_pre: list[dict[str, Any]] = []
+        self.rows_pre: list[dict[str, Any]] = []
+        self.pre_day: str | None = None
         #: Names put on the list by hand from the wide scan, for today (`track`).
         #: Apart from `promoted`, which the marks replace whole.
         self.manual: list[dict[str, Any]] = []
@@ -808,6 +843,8 @@ class PoolStore:
         self.marks_done = [str(m) for m in (d.get("marks_done") or [])]
         self.manual = [p for p in (d.get("manual") or [])
                        if isinstance(p, dict) and p.get("symbol")]
+        favs = d.get("favs")
+        self.favs = [str(s) for s in favs] if isinstance(favs, list) else None
 
     def _save(self) -> None:
         tmp = self._path + ".tmp"
@@ -816,15 +853,16 @@ class PoolStore:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"enabled": self.enabled, "day": self.day, "promoted": self.promoted,
                            "marks_done": self.marks_done, "manual": self.manual,
-                           "saved_utc": datetime.now(UTC).isoformat()}, f)
+                           "favs": self.favs, "saved_utc": datetime.now(UTC).isoformat()}, f)
             os.replace(tmp, self._path)
         except OSError:
             pass
 
     # ---- what the scanner takes ---------------------------------------------
 
-    def for_scan(self) -> tuple[date | None, list[str], dict[str, str]]:
-        """(the day the promotions are for, their symbols, their sectors)."""
+    def for_scan(self) -> tuple[date | None, list[str], dict[str, str], list[str] | None]:
+        """(the day the promotions are for, their symbols, their sectors, the favourites
+        tracked that day or None while every pin is)."""
         with self._lock:
             day = date.fromisoformat(self.day) if self.day else None
             # By hand first: a name someone asked for keeps its slot over the marks'.
@@ -833,7 +871,8 @@ class PoolStore:
                            if p["symbol"] not in hand] if self.enabled else hand
             sectors = {p["symbol"]: p["sector"] for p in (*self.manual, *self.promoted)
                        if p.get("sector")}
-        return day, syms, sectors
+            favs = list(self.favs) if self.enabled and self.favs is not None else None
+        return day, syms, sectors, favs
 
     def track(self, sym: str, name: str | None, sector: str | None, at: str,
               room: int) -> str | None:
@@ -859,6 +898,7 @@ class PoolStore:
             self.enabled = on
             self.promoted = []
             self.marks_done = []
+            self.favs = None
             self.force = on
             self._save()
         return True
@@ -870,11 +910,12 @@ class PoolStore:
         with self._lock:
             if self.day == trading_day.isoformat():
                 return False
-            had = bool(self.promoted or self.manual)
+            had = bool(self.promoted or self.manual or self.favs is not None)
             self.day = trading_day.isoformat()
             self.promoted = []
             self.manual = []
             self.marks_done = []
+            self.favs = None
             self._save()
         return had
 
@@ -886,7 +927,11 @@ class PoolStore:
             if not self.enabled:
                 return False
             for mark in marks_due(now, self.marks_done):
-                new = promote(self.ranked, pinned, self.promoted, mark)
+                if mark in labels:
+                    # The favourites most in play this morning (FAV_SLOTS); from the
+                    # 09:25 mark they hold for the day, as the promotions do.
+                    self.favs = choose_favourites(self.ranked, pinned)
+                new = promote(self.ranked, pinned, self.promoted, mark, favs=self.favs)
                 was = {p["symbol"]: p for p in self.promoted}
                 self.promoted = [was.get(r["symbol"], {**r, "at": et, "mark": mark}) for r in new]
                 if mark in labels:
@@ -981,6 +1026,9 @@ class PoolStore:
                     self.basis = basis_for(clock)
                     self.ranked = rank(self.rows, clock, self.news, strong, self.pm_range)
                     self.by_sym = {x["symbol"]: x for x in self.ranked}
+                    if self.basis == "pre":
+                        self.ranked_pre, self.rows_pre = self.ranked, self.rows
+                        self.pre_day = clock.trading_day.isoformat()
                     self.error = r.error if r.source == "stale" else None
                     fresh = r.source == "live" or (r.age_min or 0.0) <= FRESH_MIN
                     if fresh:
@@ -1035,6 +1083,7 @@ class PoolStore:
             have = {p["symbol"] for p in hand}
             promoted = hand + [dict(p) for p in self.promoted if p["symbol"] not in have]
             marks = list(self.marks_done)
+            favs = list(self.favs) if self.enabled and self.favs is not None else None
         promoted = [p for p in promoted if p["symbol"] not in pin]
         shown = {p["symbol"] for p in promoted}
         top = [r for r in self.ranked
@@ -1060,6 +1109,9 @@ class PoolStore:
             "day": self.day,
             "marks_done": marks,
             "next_mark": next_mark(now, marks),
-            "slots": max(0, MAX_SYMBOLS - len(pin)),
+            "slots": max(0, MAX_SYMBOLS - (len(pin) if favs is None
+                                           else len(BENCHMARKS) + len(favs))),
             "post_open_slots": POST_OPEN_SLOTS,
+            "favs": favs,
+            "fav_slots": FAV_SLOTS,
         }

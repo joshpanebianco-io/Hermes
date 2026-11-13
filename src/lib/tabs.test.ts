@@ -1,7 +1,7 @@
 // node --experimental-strip-types --test src/lib/tabs.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SCAN_VIEWS, SCAN_VIEW_KEYS, TAB_KEYS, askTab, deskOf, pageTitle, resolveTab, tabLabel } from "./tabs.ts";
+import { SCAN_VIEWS, SCAN_VIEW_KEYS, TAB_KEYS, askTab, deskOf, isLegacyView, pageTitle, resolveTab, shownView, stripViews, tabLabel } from "./tabs.ts";
 import { UI_CLASSES, parseUi, uiClass } from "./ui.ts";
 
 test("the bar's pages, in bar order", () => {
@@ -16,16 +16,28 @@ test("the bar's pages, in bar order", () => {
 });
 
 test("the Scanner's views, once each, every one with a name and a hover", () => {
-  assert.deepEqual(SCAN_VIEW_KEYS, ["setups", "breakouts", "extended", "day23", "log", "plan", "multi"]);
+  assert.deepEqual(SCAN_VIEW_KEYS, ["today", "multi", "log", "plan", "setups", "breakouts", "extended", "day23"]);
   for (const v of SCAN_VIEWS) assert.ok(v.label && v.title, v.key);
 });
 
-test("Multicharts is a view, the one after Game plan: beside it in the band, under it in the sidebar", () => {
-  // The band's tabs and the sidebar's rows are both this list in this order.
-  assert.equal(SCAN_VIEW_KEYS.indexOf("multi"), SCAN_VIEW_KEYS.indexOf("plan") + 1);
-  assert.equal(SCAN_VIEWS.find((v) => v.key === "multi")?.label, "Multicharts");
+test("the strip is Today, Charts and Record; the old four only while Settings keeps them", () => {
+  assert.deepEqual(stripViews(false).map((v) => v.label), ["Today", "Charts", "Record"]);
+  assert.deepEqual(stripViews(true).map((v) => v.key), ["today", "multi", "log", "setups", "breakouts", "extended", "day23"]);
+  // The Game plan is a button on Today, not a tab, but a link to it still opens it.
+  assert.ok(!stripViews(true).some((v) => v.key === "plan"));
+  assert.deepEqual(resolveTab("plan"), { tab: "scanner", scan: "plan" });
+  // A browser that remembers an old view opens Today once they are off.
+  assert.equal(shownView("setups", false), "today");
+  assert.equal(shownView("setups", true), "setups");
+  assert.equal(shownView("multi", false), "multi");
+  assert.ok(isLegacyView("day23") && !isLegacyView("today"));
+});
+
+test("Charts is the Multicharts view: the list's best names drawn another way", () => {
+  assert.equal(SCAN_VIEWS.find((v) => v.key === "multi")?.label, "Charts");
   // It is the scanner's own list drawn another way: Hermes is asked as the scanner.
   assert.equal(askTab("scanner", "multi"), "scanner");
+  assert.equal(askTab("scanner", "today"), "scanner");
 });
 
 test("the Index view is gone: no view is named it, and the Stocks page asks Hermes as the scanner", () => {

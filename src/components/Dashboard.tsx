@@ -159,7 +159,7 @@ export function Dashboard({
       </div>
       <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[minmax(0,5fr)_minmax(0,3.7fr)_minmax(0,3.6fr)] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
-        <TopSetups rows={data.top} onAll={() => toScanner("setups", { "scan.side": "all" })} />
+        <TopSetups rows={data.top} onAll={() => toScanner("today", { "today.side": "all" })} />
         <InPlay d={data.inplay} onAll={() => toScanner("extended")} />
         <StockNews stories={data.stories} live={data.news_live} />
       </div>
@@ -393,7 +393,7 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
     // sidebar open) the table was wider than the card and the score, the one figure the
     // card is ranked by, was cut off its right edge. The small chart gives way there.
     <section className={cn(CARD, "@container flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Top setups" sub="The scanner's own rank" right={<Go onClick={onAll}>View all setups</Go>} />
+      <Head title="Top setups" sub="The scanner's own rank" right={<Go onClick={onAll}>Open the Today list</Go>} />
       <div className="shrink-0">
         <Chips items={TOP_CHIPS} on={chip} set={setChip} counts={counts} />
       </div>

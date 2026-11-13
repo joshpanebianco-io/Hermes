@@ -16,6 +16,7 @@ import { UI_CLASSES, UI_COOKIE, uiClass, type UiMode } from "@/lib/ui";
 import { DEFAULT_ALERTS, TEST_ALERT, setAlertPrefs, useAlertPrefs, type AlertKind } from "@/lib/alerts";
 import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { setLegacyViews, useLegacyViews } from "@/lib/legacyViews";
 import { cn } from "@/lib/cn";
 
 /**
@@ -93,6 +94,7 @@ export function Settings({
     oneOf(...SECTIONS.map((s) => s.key)),
   );
   const active = matchPreset(theme);
+  const legacyViews = useLegacyViews();
 
   const set = useCallback(
     (next: ThemeChoice) => {
@@ -154,6 +156,23 @@ export function Settings({
             {UIS.map((o) => (
               <Choice key={o.key} label={o.label} hint={o.hint} on={ui === o.key} onPick={() => setUi(o.key)} />
             ))}
+          </Module>
+        )}
+        {/* The Stocks tab's old views, for a week while Today settles (lib/legacyViews.ts). */}
+        {section === "interface" && (
+          <Module title="Stocks views" sub="Today replaced Setups, Breakouts, Extended hours and Day 2/3 on 13 Nov" bodyClassName="px-0 py-0">
+            <Choice
+              label="Today, Charts and Record"
+              hint="One list that changes with the time of day: the evening's movers, then what is in play into the open, then the open's triggers, then the session's setups"
+              on={!legacyViews}
+              onPick={() => setLegacyViews(false)}
+            />
+            <Choice
+              label="Also the old four"
+              hint="Setups, Breakouts, Extended hours and Day 2/3 back in the strip beside Today, for this week only"
+              on={legacyViews}
+              onPick={() => setLegacyViews(true)}
+            />
           </Module>
         )}
 

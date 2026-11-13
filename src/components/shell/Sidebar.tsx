@@ -4,7 +4,8 @@ import { Mark } from "@/components/shell/Header";
 import { AssetIcon } from "@/components/ui/AssetIcon";
 import { cn } from "@/lib/cn";
 import { FUT_NAME, FUT_VIEWS, isFutBook, type FutView } from "@/lib/futures";
-import { SCAN_VIEWS, type ScanView, type Tab } from "@/lib/tabs";
+import { stripViews, type ScanView, type Tab } from "@/lib/tabs";
+import { useLegacyViews } from "@/lib/legacyViews";
 import { isBool, usePersisted } from "@/lib/usePersisted";
 
 /**
@@ -130,6 +131,7 @@ const ICON = {
 } as const;
 
 const SCAN_ICON: Record<ScanView, React.ReactNode> = {
+  today: ICON.setups,
   setups: ICON.setups,
   breakouts: ICON.breakouts,
   extended: ICON.extended,
@@ -157,6 +159,7 @@ export function Sidebar({
   onFut: (v: FutView) => void;
 }) {
   const [folded, setFolded] = usePersisted<boolean>("side.folded", false, isBool);
+  const legacy = useLegacyViews();
 
   const groups: Array<{ label: string; items: Item[] }> = [
     {
@@ -165,7 +168,9 @@ export function Sidebar({
     },
     {
       label: "Stocks",
-      items: SCAN_VIEWS.map((v) => ({ key: `scan-${v.key}`, label: v.label, title: v.title, icon: SCAN_ICON[v.key], on: tab === "scanner" && scanView === v.key, go: () => onScan(v.key) })),
+      // The same views as the band's strip (lib/tabs.ts stripViews): Today, Charts and
+      // Record, and the four old ones while Settings keeps them.
+      items: stripViews(legacy).map((v) => ({ key: `scan-${v.key}`, label: v.label, title: v.title, icon: SCAN_ICON[v.key], on: tab === "scanner" && scanView === v.key, go: () => onScan(v.key) })),
     },
     {
       label: "Market",

@@ -232,7 +232,7 @@ class MomentumStore:
         return out
 
     def strong(self, today: date, session_on: bool, min_move: float = DEFAULT_MOVE,
-               cap: float = DEFAULT_CAP) -> dict[str, dict[str, Any]]:
+               cap: float = DEFAULT_CAP, min_stage: int = 2) -> dict[str, dict[str, Any]]:
         """{sym: {stage, move, side}} for the tracks past the table's own defaults, on
         Day 2 or later: what the pool's rank reads (sources/pool.in_play), so a name
         coiling after a 20% day is promoted onto the list without being tracked by hand.
@@ -243,7 +243,7 @@ class MomentumStore:
                       if abs(t["move"]) >= min_move and (t.get("cap") or 0) >= cap]
         for t in tracks:
             s = self.stage(t, today, session_on)
-            if s >= 2 and (t["sym"] not in out or s < out[t["sym"]]["stage"]):
+            if s >= min_stage and (t["sym"] not in out or s < out[t["sym"]]["stage"]):
                 out[t["sym"]] = {"stage": s, "move": t["move"], "side": t["side"]}
         return out
 

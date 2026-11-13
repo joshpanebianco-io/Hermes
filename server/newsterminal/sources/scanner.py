@@ -568,6 +568,8 @@ class ScanStore:
         #: with the pinned list; `watchlist()` is the union the jobs fetch.
         self._promoted: list[str] = []
         self._promoted_day: date | None = None
+        #: The favourites the pool chose for `_promoted_day` (pool.FAV_SLOTS), or None.
+        self._favs: list[str] | None = None
         self.pool_sectors: dict[str, str] = {}
         self.bars: dict[str, list[scan.Bar]] = {}
         self.meta: dict[str, dict[str, Any]] = {}
@@ -649,18 +651,32 @@ class ScanStore:
             pinned = list(self._watch)
             if self._promoted_day != td:
                 return pinned
+            if self._favs is not None:
+                # The favourites the pool chose for today (pool.FAV_SLOTS) and the
+                # benchmarks; the other pins sit the day out (2026-11-13, the Today list).
+                keep = set(self._favs)
+                pinned = [s for s in pinned if s in BENCHMARKS or s in keep]
+                pinned += [b for b in BENCHMARKS if b not in pinned]
             room = max(0, MAX_SYMBOLS - len(pinned))
             return pinned + [s for s in self._promoted if s not in pinned][:room]
 
-    def set_promoted(self, day: date | None, symbols: Iterable[str],
-                     sectors: dict[str, str] | None = None) -> bool:
-        """Replace the promotions. True when they changed."""
-        syms = [s for s in symbols if _SYM.match(s)]
+    def tracked_favourites(self) -> list[str] | None:
+        """The pins tracked today, or None while every pin is."""
         with self._lock:
-            before = (self._promoted_day, list(self._promoted))
-            self._promoted, self._promoted_day = syms, day
+            return list(self._favs) if self._favs is not None else None
+
+    def set_promoted(self, day: date | None, symbols: Iterable[str],
+                     sectors: dict[str, str] | None = None,
+                     favs: Iterable[str] | None = None) -> bool:
+        """Replace the promotions, and the favourites tracked that day (None: every pin).
+        True when they changed."""
+        syms = [s for s in symbols if _SYM.match(s)]
+        fav_l = [s for s in favs if _SYM.match(s)] if favs is not None else None
+        with self._lock:
+            before = (self._promoted_day, list(self._promoted), self._favs)
+            self._promoted, self._promoted_day, self._favs = syms, day, fav_l
             self.pool_sectors = dict(sectors or {})
-        return before != (day, syms)
+        return before != (day, syms, fav_l)
 
     def set_watchlist(self, symbols: Iterable[Any]) -> tuple[list[str], list[str]]:
         ok, bad = save_watchlist(symbols, self._path)

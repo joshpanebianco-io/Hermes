@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 import threading
 import time
@@ -64,6 +65,7 @@ from . import futures as fut_mod
 from . import momentum as mom_mod
 from . import report as report_mod
 from . import scan as scan_mod
+from . import today as today_mod
 from .config import BROWSER_UA
 from .expiry import state as expiry_state
 from .holidays import early_close, is_trading_day, prev_trading_day
@@ -214,6 +216,10 @@ class Collector:
         self.scan.pm_hint = self._pm_range
         self.holdings = hold_src.HoldingsStore()
         self.momentum = mom_mod.MomentumStore()
+        #: The Today list (today.py): when each name first reached the top ten of the
+        #: phase now showing (keyed by phase and day), and which phases' lists are logged.
+        self._today_seen: dict[str, dict[str, float]] = {}
+        self._today_logged: set[str] = set()
         self.pool.news = self.stock_news.major
         self.pool.stage = self._strong
         # Whether the pool's pre-market columns are today's, and today's pre-market range
@@ -502,7 +508,12 @@ class Collector:
         self._commit("ranges", data if st.ok else None, st)
 
     def _do_earnings(self) -> None:
-        rows, st = earn_src.collect(keep=frozenset(self.scan.watchlist()))
+        # Every $2bn+ name the wide scan holds is kept as well as the list (2026-11-13):
+        # the Today list's evening reads who reports before the next open, whatever its
+        # size. The panel still shows $50bn and up; the rest are `watch_only`.
+        wide = frozenset(r["sym"] for r in self.universe.rows
+                         if (r.get("cap") or 0) >= pool_src.MIN_CAP)
+        rows, st = earn_src.collect(keep=frozenset(self.scan.watchlist()) | wide)
         # The panel is about what moves an index; the scanner wants its own
         # names whatever their size. One fetch, two readers.
         if st.ok:
@@ -804,6 +815,154 @@ class Collector:
                               self.day23(), self.stock_news.top(keep=tradable),
                               session_day=uni_src.cards_day(datetime.now(UTC)), inplay=inplay)
 
+    # ---- the Today list (today.py) ----------------------------------------------
+
+    def _engine_rows(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            rows = (self._state.get("scanner") or {}).get("rows") or {}
+        return {str(s): r for s, r in rows.items() if isinstance(r, dict)}
+
+    def _today_levels(self, sym: str, engine: dict[str, dict[str, Any]], ctx: uni_src.Ctx,
+                      now: datetime) -> dict[str, Any]:
+        """A name's levels for its plan: the engine's where it is tracked (official
+        PDH/PDL, the widened pre-market range), else the wide read's."""
+        r = engine.get(sym)
+        if r and r.get("ok"):
+            lv = r.get("levels") or {}
+            return {k: lv.get(k) for k in ("pdh", "pdl", "pmh", "pml", "pdc", "vwap")}
+        e = self.universe.read_one(sym, ctx, now) or {}
+        return {k: e.get(k) for k in ("pdh", "pdl", "pmh", "pml", "pdc")}
+
+    def _today_pre(self, now: datetime, phase: today_mod.Phase, favs: frozenset[str],
+                   tracked: frozenset[str], engine: dict[str, dict[str, Any]],
+                   ctx: uni_src.Ctx) -> tuple[list[dict[str, Any]], str | None]:
+        """The pre-market list: the pool's in-play rank on live prices. At the open, the
+        same as the last pre-market read left it (pool.ranked_pre)."""
+        clock = scan_mod.clock_at(now)
+        if phase.key == "pre":
+            if self.pool.basis != "pre":
+                return [], "The pool's first pre-market read lands a few minutes after 04:00."
+            rows = today_mod.live_premarket(self.pool.rows, self.stream.quote, now.timestamp())
+            rclock = clock
+        else:
+            if self.pool.pre_day != clock.trading_day.isoformat():
+                return [], "No pre-market read was held for this morning."
+            rows = self.pool.rows_pre
+            d = clock.trading_day
+            rclock = scan_mod.clock_at(datetime(d.year, d.month, d.day, 9, 29, tzinfo=ET))
+        ranked = pool_src.rank(rows, rclock, self.stock_news.major, self._strong(), self._pm_range)
+        by = {str(r.get("symbol")): r for r in rows}
+        return today_mod.rank_pre(
+            ranked, by, levels=lambda s: self._today_levels(s, engine, ctx, now),
+            catalyst=self._catalyst, favs=favs, tracked=tracked), None
+
+    def _today_evening(self, now: datetime, phase: today_mod.Phase, favs: frozenset[str],
+                       tracked: frozenset[str]) -> list[dict[str, Any]]:
+        """The evening and overnight list from the wide read (today.rank_evening)."""
+        basis = uni_src.basis_at(now)
+        t = now.timestamp()
+        quote = self.stream.quote
+
+        def ah_of(r: dict[str, Any]) -> dict[str, Any] | None:
+            # This evening's after-hours figures, or None: before the delayed read has
+            # seen the late session the columns are the last one's.
+            if basis not in ("post", "last") or not self.universe.ah_fresh(r):
+                return None
+            q = quote(r["sym"]) if basis == "post" else None
+            close = r.get("close")
+            if (q and q.get("session") == "post" and close
+                    and t - float(q.get("at") or 0.0) <= today_mod.LIVE_SEC):
+                p = float(q["price"])
+                return {"last": p, "chg": (p / close - 1.0) * 100.0, "vol": r.get("ah_vol")}
+            if r.get("ah_c") is None or r.get("ah_chg") is None:
+                return None
+            return {"last": r["ah_c"], "chg": r["ah_chg"], "vol": r.get("ah_vol")}
+
+        session_day = prev_trading_day(phase.day)
+        with self._lock:
+            cal = list(self._state.get("scan_earn") or [])
+        reports: dict[str, dict[str, Any]] = {}
+        for e in cal:
+            sym = e.get("symbol")
+            if sym and ((e.get("date") == session_day.isoformat() and e.get("when") == "after")
+                        or (e.get("date") == phase.day.isoformat() and e.get("when") == "pre")):
+                reports[str(sym)] = e
+        stage = {s: int(v["stage"]) for s, v in self.momentum.strong(
+            now.astimezone(ET).date(), basis != "last", min_stage=1).items()}
+        return today_mod.rank_evening(
+            list(self.universe.rows), ah_of=ah_of, catalyst=self._catalyst, stage=stage,
+            reports=reports, session_day=session_day, next_day=phase.day, favs=favs,
+            tracked=tracked)
+
+    def today(self, now: datetime | None = None) -> dict[str, Any]:
+        """The Stocks tab's Today list: the phase it is, and the names ranked for it
+        (today.py says what each phase ranks by)."""
+        now = now or datetime.now(UTC)
+        phase = today_mod.phase_at(now)
+        pinned = self.scan.pinned()
+        favs = frozenset(s for s in pinned if s not in scan_src.BENCHMARKS)
+        tracked = frozenset(self.scan.symbols())
+        note: str | None = None
+        if phase.key == "session":
+            rows = today_mod.rank_session(self.scanner_payload().get("rows") or [],
+                                          favs=favs, tracked=tracked)
+        elif phase.key in ("pre", "open"):
+            engine = self._engine_rows()
+            ctx = self._ctx()
+            rows, note = self._today_pre(now, phase, favs, tracked, engine, ctx)
+            if phase.key == "open":
+                payload = {str(r.get("sym")): r for r in self.scanner_payload().get("rows") or []}
+
+                def price(sym: str) -> tuple[float | None, bool]:
+                    q = self.stream.quote(sym)
+                    if (q and isinstance(q.get("price"), int | float) and q.get("session") == "rth"
+                            and now.timestamp() - float(q.get("at") or 0.0) <= today_mod.LIVE_SEC):
+                        return float(q["price"]), True
+                    r = payload.get(sym) or {}
+                    if isinstance(r.get("last"), int | float):
+                        return float(r["last"]), bool(r.get("live"))
+                    w = self.universe.read_one(sym, ctx, now) or {}
+                    return (float(w["last"]) if isinstance(w.get("last"), int | float) else None,
+                            False)
+
+                rows = today_mod.rank_open(
+                    rows, engine=payload, wide=lambda s: self.universe.read_one(s, ctx, now),
+                    price=price)
+        else:
+            rows = self._today_evening(now, phase, favs, tracked)
+        key = f"{phase.key}:{phase.day.isoformat()}"
+        fresh = key not in self._today_seen
+        if fresh:
+            self._today_seen = {key: {}}
+        today_mod.mark_new(rows, self._today_seen[key], now.timestamp(), fresh)
+        today_mod.numbered(rows)
+        self.universe.want_sparks(r["sym"] for r in rows[:40])
+        for r in rows:
+            if r.get("spark") is None:
+                r["spark"] = self.universe.spark(r["sym"])
+        return {"ok": True, "phase": phase.as_dict(now), "phases": [
+                    {"key": k, "label": today_mod.LABELS[k]} for k in today_mod.PHASES],
+                "rows": rows, "note": note, "favs_tracked": self.scan.tracked_favourites(),
+                "updated_utc": now.isoformat()}
+
+    def _today_log(self, now: datetime | None = None) -> None:
+        """Each phase's list as it stood near its end, one line in cache/today_marks.jsonl,
+        so the phases' ranks can be held to what the names then did (as the pool's marks
+        are). Never fatal."""
+        now = now or datetime.now(UTC)
+        phase = today_mod.phase_at(now)
+        left = (phase.ends - now).total_seconds() / 60.0
+        key = f"{phase.key}:{phase.day.isoformat()}"
+        if left > today_mod.LOG_BEFORE_END_MIN or key in self._today_logged:
+            return
+        self._today_logged.add(key)
+        try:
+            got = self.today(now)
+            today_mod.log_list(os.path.join(config.CACHE_DIR, today_mod.MARKS_NAME), got, now)
+        except Exception as e:  # noqa: BLE001 — a log line must never stop the pool's job
+            with contextlib.suppress(Exception):
+                print(f"today: the {phase.key} list was not logged: {e}", flush=True)
+
     def day23(self, min_move: float = mom_mod.DEFAULT_MOVE, cap: float = mom_mod.DEFAULT_CAP,
               chip: str = "all") -> dict[str, Any]:
         now = datetime.now(UTC)
@@ -909,11 +1068,13 @@ class Collector:
         # to meet a mark on time and reads every five minutes at most.
         if read:
             self._commit("pool", self.pool.view(self.scan.pinned()), st)
+        self._today_log()
 
     def _apply_promotions(self) -> bool:
-        """The pool's promotions into the scanner's list. True when it changed."""
-        day, syms, sectors = self.pool.for_scan()
-        return self.scan.set_promoted(day, syms, sectors)
+        """The pool's promotions, and today's tracked favourites, into the scanner's
+        list. True when it changed."""
+        day, syms, sectors, favs = self.pool.for_scan()
+        return self.scan.set_promoted(day, syms, sectors, favs)
 
     def set_promotion(self, on: bool) -> None:
         """Switch the pool's promotion (API thread). Off takes today's promoted

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReportAsset, ReportFeed, ReportSession } from "@/types/terminal";
 import { NO_SERVER, followJob } from "./jobs";
-import { oneOf, usePersisted } from "./usePersisted";
 
 /**
  * The report tab's state, owned above the tab switch.
@@ -45,16 +44,23 @@ function land(prev: ReportFeed | null, next: ReportFeed): ReportFeed {
   return { ...prev, offline: next.offline };
 }
 
+/*
+ * TWO TABS WRITE THROUGH THIS SINCE 2026-11-16: the Futures tab's Market Report view (one
+ * book, any session) and the Stocks tab's (SPY, QQQ and IWM, New York). Each view owns
+ * what it is about and which session it is for, and names both when it writes; the
+ * feed, the job being followed and the history are one, because the collector writes
+ * one report at a time and keeps them in one store. `writing` says what the running job
+ * is about, so a view can tell its own generation from the other's.
+ */
 export interface ReportController {
-  pick: ReportSession | "auto";
-  setPick: (v: ReportSession | "auto") => void;
-  book: ReportAsset;
-  setBook: (v: ReportAsset) => void;
   feed: ReportFeed | null;
   busy: boolean;
+  /** What the report being written is about, while one is. */
+  writing: ReportAsset | null;
   /** The stored report being viewed, when it is not simply the latest. */
   viewing: string | null;
-  generate: () => void;
+  /** Write a report about `asset` for `session`. */
+  generate: (session: ReportSession, asset: ReportAsset) => void;
   open: (id: string) => void;
   /** Delete one stored report. Permanent — the panel asks first. */
   discard: (id: string) => void;
@@ -78,16 +84,7 @@ export function useReport(initial: ReportFeed | null): ReportController {
   const [busy, setBusy] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
-  const [pick, setPick] = usePersisted<ReportSession | "auto">(
-    "report.session",
-    "auto",
-    oneOf("auto", "asia", "london", "ny"),
-  );
-  const [book, setBook] = usePersisted<ReportAsset>(
-    "report.asset",
-    "all",
-    oneOf("all", "NQ", "ES", "GC"),
-  );
+  const [writing, setWriting] = useState<ReportAsset | null>(null);
   const seq = useRef(0);
   const openSeq = useRef(0);
   /** The job being followed, so a feed that carries it is not followed twice. */
@@ -134,17 +131,19 @@ export function useReport(initial: ReportFeed | null): ReportController {
         setFeed((prev) => prev && { ...prev, job: null, offline: { reason: NO_SERVER, api: "" } });
       }
       setBusy(false);
+      setWriting(null);
       setStartedAt(null);
     })();
   }, []);
 
-  const generate = useCallback(() => {
+  const generate = useCallback((session: ReportSession, asset: ReportAsset) => {
     setBusy(true);
+    setWriting(asset);
     setStartedAt(Date.now());
     setViewing(null);
     const mine = ++seq.current;
     void (async () => {
-      const next = await fetch(`/api/report?session=${pick}&asset=${book}`, {
+      const next = await fetch(`/api/report?session=${session}&asset=${asset}`, {
         method: "POST",
         cache: "no-store",
       })
@@ -154,15 +153,18 @@ export function useReport(initial: ReportFeed | null): ReportController {
       if (next?.job) {
         // Started — or joined, if one was already being written. The feed it
         // rode in on is the old note plus the job; the note comes by following.
+        // A joined job is about what IT was asked for, which may be the other tab's.
+        if (next.job.asset) setWriting(next.job.asset);
         follow(next.job.id, mine);
         setFeed((prev) => land(prev, next));
         return;
       }
       setFeed((prev) => (next ? land(prev, next) : prev && { ...prev, offline: { reason: NO_SERVER, api: "" } }));
       setBusy(false);
+      setWriting(null);
       setStartedAt(null);
     })();
-  }, [pick, book, follow]);
+  }, [follow]);
 
   /*
    * A page that loaded, refreshed or was retried while a report was being
@@ -174,6 +176,7 @@ export function useReport(initial: ReportFeed | null): ReportController {
   useEffect(() => {
     if (!job || job.state !== "running" || following.current === job.id) return;
     setBusy(true);
+    setWriting(job.asset ?? null);
     setStartedAt(Date.parse(job.started_utc ?? "") || Date.now());
     setViewing(null);
     follow(job.id, ++seq.current);
@@ -261,7 +264,7 @@ export function useReport(initial: ReportFeed | null): ReportController {
   const retry = useCallback(() => void refresh(), [refresh]);
 
   return {
-    pick, setPick, book, setBook, feed, busy, viewing, generate, open,
+    feed, busy, writing, viewing, generate, open,
     discard, discardMany, discardAll, retry, startedAt,
   };
 }

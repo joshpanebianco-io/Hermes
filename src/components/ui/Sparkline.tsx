@@ -24,6 +24,8 @@ export function Sparkline({
   className,
   width = 64,
   height = 18,
+  tone = "side",
+  fluid = false,
 }: {
   data: number[];
   /** Yesterday's close. Draws the reference rule when it is inside the range. */
@@ -31,9 +33,22 @@ export function Sparkline({
   className?: string;
   width?: number;
   height?: number;
+  /**
+   * "ink" draws the line in a neutral grey: for a series whose rise is not a side
+   * (the VIX, a yield, the dollar), where green for up would say the wrong thing.
+   */
+  tone?: "side" | "ink";
+  /**
+   * `width` is the most it draws at: in a row short of room it gives way, down to 24px,
+   * instead of running past the row's edge (the Macro board's two columns on the Sidebar
+   * interface, 2026-11-15: the line ran 21px into the next column). The line is squeezed
+   * sideways only; its stroke and the dot on its last print keep their size.
+   */
+  fluid?: boolean;
 }) {
+  const give = fluid ? "min-w-[24px] shrink" : "shrink-0";
   if (!data || data.length < 2) {
-    return <div style={{ width, height }} className={cn("shrink-0", className)} aria-hidden />;
+    return <div style={{ width, height }} className={cn(give, className)} aria-hidden />;
   }
 
   const lo = Math.min(...data, prev ?? Infinity);
@@ -51,7 +66,7 @@ export function Sparkline({
   // not the direction of the final tick, which flickers.
   const base = prev ?? data[0];
   const up = data[data.length - 1] >= base;
-  const stroke = up ? "var(--call)" : "var(--put)";
+  const stroke = tone === "ink" ? "var(--ink-3)" : up ? "var(--call)" : "var(--put)";
 
   const ry = prev !== null && prev !== undefined && prev >= lo && prev <= hi ? y(prev) : null;
 
@@ -60,7 +75,8 @@ export function Sparkline({
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
-      className={cn("shrink-0 overflow-visible", className)}
+      preserveAspectRatio={fluid ? "none" : undefined}
+      className={cn("overflow-visible", give, className)}
       aria-hidden
     >
       {ry !== null && (
@@ -73,10 +89,22 @@ export function Sparkline({
           strokeWidth={0.5}
           strokeDasharray="2 2"
           opacity={0.6}
+          vectorEffect={fluid ? "non-scaling-stroke" : undefined}
         />
       )}
-      <path d={d} fill="none" stroke={stroke} strokeWidth={1.2} strokeLinejoin="round" />
-      <circle cx={x(data.length - 1)} cy={y(data[data.length - 1])} r={1.5} fill={stroke} />
+      <path d={d} fill="none" stroke={stroke} strokeWidth={1.2} strokeLinejoin="round" vectorEffect={fluid ? "non-scaling-stroke" : undefined} />
+      {fluid ? (
+        // A point with a round cap: a circle would be squeezed to an oval with the line.
+        <path
+          d={`M${x(data.length - 1).toFixed(1)},${y(data[data.length - 1]).toFixed(1)}h0`}
+          stroke={stroke}
+          strokeWidth={3}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : (
+        <circle cx={x(data.length - 1)} cy={y(data[data.length - 1])} r={1.5} fill={stroke} />
+      )}
     </svg>
   );
 }

@@ -41,10 +41,21 @@ session on one page), **Macro** (what is happening and what is scheduled), **Fut
 (everything about NQ, ES, GC, silver and crude: an overview of the five and a view per
 contract with its chart, levels, session ranges, volume profile and gamma), **Scanner**
 (with the written game plan as its last view; an **Index** view of SPY, QQQ and IWM's
-own structure sat beside it until 2026-11-13), **Sectors**, **Hermes AI** and **Settings**. Each desk's written note
-lives in its own section: the futures brief is **Futures → Brief**, the stocks game
-plan **Scanner → Game plan** (an Analysis tab held both behind a switch until
-2026-11-11; its links still land on the right one).
+own structure sat beside it until 2026-11-13), **Sectors**, **Hermes AI** and **Settings**.
+Since 2026-11-16 the written report is a **Market Report** view of two tabs: **Futures →
+Market Report** (after CL: one book, NQ, ES, GC, SIL or CL, for Asia, London or New York)
+and **Stocks → Market Report** (after Charts: SPY, QQQ and IWM together for New York, read
+through the Stocks tape count, each fund against its own PDH/PDL/PMH/PML). A futures
+contract's live read is its Bias card, whose click slides the engine's driver board out
+from the right. Old `/?tab=report` and `/?tab=analysis` links open the Futures view,
+`/?tab=plan` the Stocks one.
+Before that the written reports had one page, **Market Report**, right of Futures (2026-11-15):
+two rows of pills choose what a report is about (Indexes, Gold, Silver, Oil) and which
+session it is for (Asia, London, New York). Before that the futures brief was **Futures →
+Brief**, and before 2026-11-11 an Analysis tab held it beside the stocks note behind a
+switch; every old link lands on the new page. The stocks note (the AI market overview,
+**Stocks → Market** until the same day) has no page: it writes itself at 09:00 ET and is
+read on the Dashboard's Market overview card.
 
 Every part of it is built the same way, and this section walks them in order: the
 engine computes a figure, the figure opens a read of what it means for this trade,
@@ -132,9 +143,9 @@ kept that look), in Today's order: the names in play first, then the rest of the
 list. The phase is the stat row's first card, and before 10:00 the Score column is how in
 play a name is, as a share of the most it can score, with the reasons in its hover. A name
 the engine does not track yet is drawn from the wide read until the pool takes it. The
-strip is **Scanner**, **Charts** (six live charts of the best names) and **Market** (the AI
-market overview); the Record view went on 2026-11-13, and the signal log it showed is still
-kept by the collector. **The
+strip is **Scanner** and **Charts** (six live charts from the Scanner's first ten); **Market**, the AI
+market overview, was a third view until 2026-11-15; it is read on the Dashboard's card now. The
+Record view went on 2026-11-13, and the signal log it showed is still kept by the collector. **The
 pinned names are favourites**: each morning the fifteen most in play are tracked with SPY,
 QQQ and IWM, and the pool's picks (06:00, 07:00, 08:00, 09:00, 09:25, then 10:00) fill the
 rest of the forty, so the market's best can reach the list; a favourite not tracked today
@@ -180,6 +191,20 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   ATR is with extended hours shown, fourteen thin pre-market bars set the 09:30 buffer
   (a third of the session's own on a quiet morning) after the 04:00 bar's overnight gap
   had swelled it, so the opening bars read extended and a near-miss retest missed.
+- **Long or short is the levels'** — a name above PDH or PMH is a long, one below PDL
+  or PML a short. Inside them it leans, in the session, to the nearer of the two
+  triggers (the lowest high over price, the highest low under it), with no side in the
+  middle fifth between them; before the bell it leans to its own gap from the previous
+  close, a tenth of a daily ATR or more, and overnight to the last session and after
+  hours together (nothing tested said which way a name would open, so that one is
+  chosen to read as the row does). Until 15 Nov 2026 the lean
+  was relative strength against SPY. Over eleven sessions (about a hundred names a
+  session) that lean pointed against the market on 91% of reads whenever SPY had moved
+  a quarter of an ATR, because a name inside its levels has barely moved, and it named
+  the level that broke first 50.5% of the time; the nearer trigger named it 77%, and
+  81% with the middle fifth left out, on every one of the eleven days and for longs and
+  shorts alike. Relative strength is still a part of the score; it no longer picks the
+  side.
 - **The levels are the official day's** — PDH, PDL and the open come from the daily
   bar wherever it reaches further than the 5-minute bars, which leave out the opening
   cross and the first prints after the bell. Measured on 440 name-sessions (forty
@@ -200,10 +225,12 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   entry price and how far it sits from price in ten-minute ATRs (*PDH 515.18 · 2.0 ATR
   below*).
 - **The daily frame** — a year of daily bars per name: above or below the 20, 50
-  and 200-day, the distance from the 52-week high, last week's range. A sixth score
-  part (with the daily trend, between the averages, or against it), and a flag when
-  a setup runs against it: a PDH break inside a downtrend is not the same trade as
-  one at new highs.
+  and 200-day, the distance from the 52-week high, last week's range. Context and a
+  flag, not points: a setup that runs against the daily trend is flagged ("Vs daily"),
+  because a PDH break inside a downtrend is not the same trade as one at new highs.
+  It was a score part worth 6 until 15 Nov 2026, when the owner dropped every trend
+  read from the scoring. The 8 EMA wave is another thing and stays: it is where the
+  entry is.
 - **Short interest** — the share of the float sold short and the days to cover,
   from FINRA via Yahoo; a short on a name past 15% carries a squeeze flag, a long
   the fuel.
@@ -227,13 +254,15 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
 
   ![The VIX bands](docs/media/vix-bands.png)
 - **A ranked list, not a black box** — every score is a sum of named parts
-  (entry location 25 · structure 20 · relative strength 20, in full only on a live
+  (the entry 25, all or nothing: a setup with an entry to take or to wait for earns
+  it, a failed break, the wrong side of VWAP and no setup earn none · structure 20 ·
+  relative strength 10, in full only on a live
   entry — a retest, a pullback, near VWAP or the 8 EMA — and at most 5 anywhere else ·
   market 20 · relative volume 8, or before the bell (and until the first RVOL after
-  it) the gap and the pre-market volume · the daily frame 6 · the catalyst 20, less
+  it) the gap and the pre-market volume · the catalyst 20, less
   penalties for a spent daily range, a print inside 30 minutes, an after-the-close
   report today, a failed break, a signal still live from the first thirty minutes or
-  the last hour, options too wide to trade, or a catalyst against the side), each
+  the last hour, options too wide to trade, or an offering filed against a long), each
   listed with the points it earned. The score shows capped at 100; **the list is
   ranked on the uncapped sum**, so a penalty counts at the top, and in the regular
   session **a name under 1.0× RVOL is kept out of the top ten** (the row says so).
@@ -250,19 +279,62 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   signals, entry location and market alignment carried the edge, strong RS failed only
   where the entry was extended, and RVOL said how far a name would still move but not
   which way. In-sample, so a better starting point rather than a measured one.
-  The **catalyst** reads direction, never a count, and pays by what the news is: a
+  **The entry is a gate, not a grade** (2026-11-14): on 501 signals over seventeen
+  sessions the part told a setup with an entry from one without (58% against 25%
+  reaching +1R, ahead on 10 days of 11) and nothing among the first, so a valid setup
+  earns all of it wherever price is and the rest of the score ranks the stock and the
+  tape. `tools/fit_score.py` now reads every part again on the valid entries alone.
+  **The list is for stocks that trend, and is judged on that** (2026-11-14): the record
+  was read again on +2R reached and R held, not +1R, and `tools/fit_score.py` leads
+  with that table. Two things moved on it. **News is fuel and the price picks the
+  side**: at a valid entry the catalyst was the stock's own part most tied to how far
+  a trade ran, and a story read as against the trade reached +1R as often as one read
+  as with it (67% and 65%, against 49% with no news), so a story now earns its grade
+  for whichever side the setup is on and what its words say is a flag on the row
+  ("Headline reads against the long"), where it used to cost ten, six or three. And
+  **relative strength is 10, down from 20**: the fourth read to find nothing in it for
+  how far a trade runs. Replayed on one set of weights, the top third of each day's
+  list beat the bottom third at +2R by 4.8 points before and 11.2 after, and the top
+  five held +0.64 R for +0.49, on both halves of the days; in-sample, seventeen
+  sessions, and the retest signals alone do not confirm it, so it is read again on
+  the signals logged from 2026-11-16.
+  **A short is a long turned upside down, and is tested as one** (2026-11-14: "trending
+  means ... both to the upside or downside"). Every part is scored against the setup's
+  side: below the previous day's low and the pre-market low, weak against SPY, a
+  falling tape with the VIX rising, a lagging sector, under the 20 and 50-day. The
+  proof is a mirror: each name's real bars turned over (every high a low, the same
+  sizes and volume) must give the same setup, the same signals at the same bars, the
+  same score part by part and the same outcome on the other side. Run on 131 names at
+  69 instants over three sessions (9,039 rows, 27,117 scores) the engine held
+  everywhere; `tests/test_both_sides.py` keeps it so. What the audit did find, and
+  fixed: bad news that read no direction where its good twin read one (a failed trial,
+  an index removal, a lost contract), so it earned nothing until the tape spoke; a
+  target touched to the cent filed as missed, because the feed's prices are single
+  precision; and two lines with words for one side only (the tape's "divergence", the
+  daily frame's 52-week high, which now names the nearer extreme). By design an
+  offering or a bankruptcy filing costs a long and pays a short. The record by side is
+  another matter and is printed apart by `tools/fit_score.py`: on seventeen sessions
+  the score ranked the longs that ran and did not rank the shorts.
+  The **catalyst** pays by what the news is, never by a count: a
   report's surprise, guidance, an FDA readout, a deal, an offering, an index change, a
   short seller's report or the name's own move with its reason earn the full twenty;
   an upgrade or downgrade, a buyback, a split or an executive leaving twelve; a
-  price-target tweak three; a law firm's notice or a routine dividend nothing. With the
-  side it earns; against it, major news costs ten and a note six, and the headline is
-  quoted on the row. **Which way** is the name's own stated move first ("Palantir Stock
-  Falls Despite Earnings Beat" is bearish), then the event's words read in the name's
-  own clause (another company's miss later in the headline is not this one's), and
-  **the tape has the last word**: where the name has moved half a daily ATR or more
-  against SPY since the previous close, a story whose words point the other way is set
-  aside, and a major story whose words give no direction ("Reports Q3 Results") takes
-  the tape's. The news counted is everything **since the previous session's close**
+  price-target tweak three; a law firm's notice or a routine dividend nothing. A
+  filing keeps its side: an offering filed against a long costs six where no story
+  outweighs it. **Which way a story reads** is the name's own stated move first
+  ("Palantir Stock Falls Despite Earnings Beat" is bearish), then the event's words
+  read in the name's own clause (another company's miss later in the headline is not
+  this one's), and **the tape has the last word**: where the name has moved half a
+  daily ATR or more against SPY since the previous close, words that point the other
+  way are overruled (the story still pays, and reads no way), and a major story whose
+  words give no direction ("Reports Q3 Results") takes the tape's. A story that says
+  no way while the tape is quiet earns nothing: there the price has not picked a side
+  either. **Two things are shown and logged and never scored**, so the record can say
+  whether they should be: the **previous session's major story** (a flag on the row:
+  today would be its second day), and **the model's read of today's major story**
+  (`newsread.py`): how big it is, big or ordinary, in one line, from the headline, the
+  feed's summary and the report's figures, read once a story on the same free models
+  as the briefs, a few stories a request and a capped number a day. The news counted is everything **since the previous session's close**
   (weekends and holidays skipped, so Monday counts Friday evening's report). A story counts
   only when its headline leads with the company — GOOGL's feed carried "AMD Stock Rises
   On Google Cloud Deal, Wall Street Upgrade", which is AMD's news — and a headline that
@@ -303,7 +375,16 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   anything: until 2026-11-11 Enter opened a slide-out for whatever had been typed, and
   "SPY" found Spyre Therapeutics and not the fund), and the name opens over the page: a large
   [Lightweight Charts](https://www.tradingview.com/lightweight-charts/) chart with
-  PDH / PDL (solid) and PMH / PML (dashed) as the Pine draws them, the 8 EMA wave
+  PDH / PDL (solid) and PMH / PML (dashed) as the Pine draws them: **one named set,
+  the levels of the day the last bar is in** (2026-11-14), each line from that day's
+  04:00 on to the right edge, and the day before it kept as plain lines over its own
+  candles. So on a weekend the chart shows Friday under Friday's levels (Thursday's
+  range and Friday's pre-market), as TradingView does, until Monday's first bar. It
+  had drawn the trading day's, which rolls at 20:00: every night and all weekend "PDH"
+  and "PDL" sat on the last session's own high and low and there was no PMH or PML.
+  The chart opens on the previous session's pre-market, so the candles behind its PMH
+  and PML are on it. The row beside the chart still plans the next session against
+  the trading day's levels. Then the 8 EMA wave
   tinted by the level state, VWAP, the ten-minute 200 EMA, volume, the signals where
   they fired and extended hours shaded, on 1m, 3m, 5m, 10m, 30m, 1h and daily bars,
   with drag to pan and scroll to zoom. What it draws is picked from two menus and
@@ -542,12 +623,15 @@ single names every ten, one request every ten seconds at most):
 
   ![What the options figures mean](docs/media/options-read.png)
 
-### Stocks → Market — the market overview, written before the open
+### The market overview, written before the open
 ![Game plan](docs/media/plan.png)
-*(The picture is the Game plan this view replaced; a new one is owed.)*
+*(The picture is the Game plan the overview replaced; a new one is owed.)*
 
-The strip's last view, next to Record, and one click from the Dashboard's game plan
-card (*Market overview*). Until 2026-11-13 it was the **Game plan**, a plan per name;
+Read on the Dashboard's **Market overview** card: its headline, what it means for
+today's list and its risks. Its full text has had no page since 2026-11-15: it was the
+Stocks strip's Market view, then for an afternoon a card of the Market Report page, and
+the owner had it taken off because the Stocks tab already shows what it restates.
+Hermes still reads the whole of it. Until 2026-11-13 it was the **Game plan**, a plan per name;
 the Scanner already ranks the names and the Setups table carries their levels, so
 the per-name plans gave way to the market they trade in. **It writes itself at 09:00
 ET on a trading day** (`overview.auto_due`: once anything has been written since 09:00
@@ -600,29 +684,80 @@ NQ, ES, GC, silver (SIL) and WTI crude (CL) across Asia, London and New York: th
 stocks desk (above).
 
 ### The Futures section
-**Overview** has the five side by side: price, the bias, the gamma regime, the implied
-day and how much of it is used, the nearest level each way and the next release that
-reaches each book, with what moves them today, the news that reaches the books (each
-story marked with the books it reaches), the vol curve, the book and the sessions under
-them. **NQ**, **ES**, **GC**, **SIL** and **CL** are one
-contract each: a row of figures; the news that reaches that contract (the Fed, US data
+The page opens on NQ. There is no Overview since 2026-11-14 (the owner: "lets remove
+it completely"): the five side by side were each a cut-down copy of that contract's own
+row of figures, over the calendar and the news again, and stood between the page and
+the chart it was opened for. With it went the only places the Session type card, the
+vol curve, "The book" board and the Sessions panel were drawn; their data is still
+served and Hermes still reads it. **NQ**, **ES**, **GC**, **SIL** and **CL** are one
+contract each: a row of six cards (price; Bias on its scale; Gamma; **Session type**,
+whether New York is more likely to trend or range, with the count behind the call and
+every condition that holds today on a click; **Levels**, the day's state against the
+chart's own PDH, PDL, PMH and PML in the Stocks chips' words: Outside Day, Through
+PDH / PDL, Inside Day, or Back Inside after a break that did not hold; and **Next
+release**, the next US release scored 4 or more that reaches the contract, or one named
+for the commodity, with its country); the news that reaches that contract (the Fed, US data
 and yields for the indices and the metals, the dollar for the metals and crude, the
 megacaps, AI and chips for the Nasdaq, oil and the Gulf for crude, and nothing from
 another country's central bank), session ranges, volume profile and gamma, all on that
 book; and on the right, where the Scanner's slide-out opens, its chart with
-the overnight's high and low, the prior regular session's, the gamma flip and walls, the
-settle and the opening range drawn, each 18:00 reopen marked with a hairline (nothing shaded:
+the prior regular session's high and low (PDH / PDL) and the pre-market's (PMH / PML:
+04:00 to 09:30 ET, as on a stock, since 2026-11-14; it had been the whole overnight off
+the ladder and was blank whenever the ladder was), one set, for the last futures day on
+the chart, the gamma flip and walls drawn, each 18:00 reopen marked with a hairline (nothing shaded:
 on a future the overnight is part of the day), and VWAP with up to three standard-deviation
 bands, anchored at 18:00, the London open, 09:30 (built to the 16:00 close, then held) or the
-week, from the menu beside the layers. **Brief** is the written brief. Silver and crude have the levels,
-ranges, profile, gamma and an implied day (from VXSLV and OVX); the driver-board bias
-and the brief are NQ, ES and GC for now.
+week, from the menu beside the layers. There is no Brief view since 2026-11-15: the written
+report is the Market Report view after CL (since 2026-11-16). **Silver and crude are scored and written about
+like the other three** since the same day: each book weighs only the families it has a
+read in, shared out to a hundred (gold and silver have no risk-appetite or participation
+family, crude no participation). Silver reads rates and the dollar as gold does, with
+gold itself and copper beside them; crude reads the dollar, the products (gasoline and
+heating oil), credit and copper as demand, the weekly inventories (a build is short, a
+draw long) and the day's US growth prints, and neither the 10-year nor the VIX. The
+weights are a judgement, not a fit to outcomes. The trend-or-range record is still NQ,
+ES and gold only.
 
 ### The Wire
 ![The wire](docs/media/wire.png)
 
-~40 RSS and query feeds (Reuters, AP, Bloomberg, WSJ, FT, CNBC, Nikkei Asia, SCMP,
-Japan Times, the ECB, the Bank of England, the RBA and more), merged into one tape:
+Forty-five RSS and query feeds, merged into one tape: the newsrooms (Reuters and AP
+through Google News' index of their sites, Bloomberg, WSJ, FT, CNBC, MarketWatch, the
+NYT, Nikkei Asia, SCMP, the Japan Times, the BBC, DW, Al Jazeera, the Guardian, ABC), the
+central banks in their own words (the Fed, the ECB, the Bank of England, the RBA, the
+Bank of Japan) and, since 2026-11-15, **the statistical agencies' own release feeds**
+(the BEA, the Census Bureau, the EIA): the release itself at the minute it lands, with
+the agency's sentence and figure as the summary. Each official feed is cut to the
+releases this desk reads; the BEA also publishes the outdoor recreation account.
+
+The same day three feeds went, when the owner asked for the most reputable source for
+each thing: ZeroHedge (commentary under a pseudonym), Investing.com (its stories that
+day were insider-filing notices for companies nobody trades here) and Yahoo Finance's
+index headlines (syndicated stock-picking columns). A Google News search result is kept
+only from a list of newsrooms, which no longer includes Yahoo Finance, Investing.com,
+Forbes, Business Insider, Benzinga, TheStreet or TradingView.
+
+And five came, from the outlets already trusted: **Bloomberg Technology** and
+**Bloomberg Politics**, **WSJ Business**, **FT Companies** and **CNBC Earnings**. The
+tape was strong on markets, the economy and the world and thin on companies, which is
+where a stock's story comes from. Thirty feeds of the top outlets were run through the
+wire's own filters against that day's tape; these added reporting of their own. Left
+out, with the reason: Bloomberg Business (TV round-ups), Fox Business (five low-impact
+stories in a day and a half, the rest personal finance), Investor's Business Daily
+(stock-picking lists), Barron's and Reuters Business through Google (section and quote
+pages), and the sections that only repeated what the tape already carried.
+
+**Stock news names its source.** A name's own stories come from TradingView's flow,
+which names the provider on each (Dow Jones, Reuters, the companies' own releases,
+Seeking Alpha's news desk, Benzinga, TradingView's own summaries of filings and
+ratings), from Yahoo's per-ticker feed, and from any wire story that names the company.
+Yahoo's RSS names no author: four stories in five read "Yahoo Finance" whoever wrote
+them, and those were a quarter of what scored. Since 2026-11-15 the same stories are
+read from Yahoo's search answer, which names the outlet on every one, so a story from a
+site that reports nothing of its own (Motley Fool, Zacks, Simply Wall St, 24/7 Wall
+St, TIKR, Trefis, GuruFocus, Insider Monkey, Stocktwits, TipRanks and the like) is held
+under no name and never scored, wherever it is hosted. What Yahoo carries from
+Barron's, MT Newswires and the companies themselves still counts.
 
 - **Desk classification** — every headline lands on a desk: `markets`, `companies`,
   `macro`, `policy`, `geopolitics`, `energy`. Title-only classification, because
@@ -664,8 +799,11 @@ credit, the VIX and its curve, today's inflation prints, and the index heavyweig
 own prints — what the names that just reported have added to the index since they
 traded, past a quarter of a percentage point, is a direction), **positioning** says how
 far a move runs (dealer gamma and spot against the flip), **structure** says
-whether the tape accepts it (prior value, the last session's range, the daily
-frame, the daily 200 EMA, the ten-minute 200 EMA, breadth and the index leaders). A macro lean the structure rejects is named
+whether the tape accepts it (prior value, the last session's range, breadth and the
+index leaders). **No trend read votes**: the daily frame, the daily 200 EMA and the
+ten-minute 200 EMA were three rows of the board until 15 Nov 2026, when the owner
+dropped them from the bias (a moving average is price, late, and the board already
+reads price where it is, against the prior session's value and range). A macro lean the structure rejects is named
 as a **conflict**, which lowers conviction rather than picking a side. **Event risk**
 — the high-impact geopolitics, policy and energy stories since the last cash close,
 grouped by story and tagged with the channels each reaches (oil, rates, semis) — is a
@@ -678,30 +816,54 @@ percentile of the year), Cboe's daily **put/call** ratios, and OpEx week. The
 thresholds are the stocks desk's own where one exists, and the futures brief is
 handed the score and may not be more confident than it.
 
-**The score counts only what can vote, and weighs it by session.** A read whose
-market is shut or whose input is missing leaves the sum, where a flat read stays, and
-the cell says how much of the session's weight is live. Reads that are one idea share
-one voice: each family scores its own net, and the families add up by these weights,
-which are a judgement rather than a fit to outcomes:
+**The score is over the whole of the session's weight.** A read whose market is shut
+or whose input is missing is on neither side, and a family with nothing live counts as
+no lean: its weight still counts, so the less of the board is live the nearer the score
+sits to zero (since 15 Nov 2026; until then the sum was over the live weight alone, and
+two reads of eleven that agreed read -100). The hover says how much of the session's
+weight is live. Reads that are one idea share one voice: each family scores its own
+net, and the families add up by these weights, which are a judgement rather than a fit
+to outcomes:
 
 | Family | Asia | London | NY pre-open | NY live |
 |---|---|---|---|---|
-| Intraday structure (value, last session, 10m trend) | 40 | 35 | 15 | 25 |
-| Daily trend (daily frame, daily 200) | 20 | 15 | 10 | 5 |
-| Rates & dollar (10Y, DXY, silver on gold) | 15 | 25 | 20 | 15 |
-| Risk appetite (VIX, its curve, credit) | 5 | 5 | 15 | 15 |
-| Catalysts (inflation prints, heavyweight prints) | 15 | 15 | 25 | 10 |
-| Positioning (dealer gamma) | 5 | 5 | 15 | 20 |
-| Participation (sectors, index leaders) | 0 | 0 | 0 | 10 |
+| Intraday structure (prior value, the last session's range) | 53 | 44 | 20 | 33 |
+| Rates & dollar (10Y, DXY, silver on gold) | 20 | 31 | 27 | 21 |
+| Risk appetite (VIX, its curve, credit) | 7 | 6 | 20 | 20 |
+| Catalysts (inflation prints, heavyweight prints) | 20 | 19 | 33 | 13 |
+| Participation (sectors, index leaders) | 0 | 0 | 0 | 13 |
+
+They are not round because two families have left the score and each time the share
+went back to the rest in proportion, so no family's standing against another changed:
+dealer gamma on 12 Nov 2026 (a regime, not a side: it still says how far a move runs)
+and the daily trend on 15 Nov 2026, with the ten-minute 200 EMA that sat in structure.
+Gold, silver and crude weigh only the families they have a read in, shared out to a
+hundred the same way.
 
 The stocks desk's tape reads the same way over its own families: index levels 35, risk
 appetite 35 and rates & dollar 30 before the open; index levels 35, participation 30,
 risk appetite 20 and rates & dollar 15 in the session. Strong is 50 or more with at
 least 60% of the weight live, moderate 30, weak 10, and under that there is no lean.
 A conflict takes a notch off the grade. On the tape, a lean with under half the weight
-able to vote is weak at most and is printed with its count: overnight only SPY and QQQ
-against their levels can vote, and "Long +100, moderate" on those two reads of eleven
-now reads *Long · 2 of 11 reads · weak*, with plans capped at three.
+able to vote is weak at most: overnight only SPY and QQQ against their levels can vote,
+which is 35% of the weight, so those two reads of eleven agreeing is +35 and a weak
+lean with plans capped at three.
+
+**The bias is drawn on a scale** (15 Nov 2026) wherever a card states it: the Bias card
+on each Futures contract, the Tape card on the Stocks Scanner, Market bias on the
+Dashboard and the head of the driver board. Bearish is the left end (-100), bullish the
+right (+100), neutral the middle; the bar runs from the middle to a mark at the score,
+and two short ticks stand at -50 and +50, where a lean is graded strong. The cards used
+to print a count beside the score ("6 of 14 reads live · 68% of Asia's weight"); the
+count is on the hover and in the board the card opens. Every card draws the one solid
+mark: a read on few inputs sits near the middle because the score is over the whole
+weight, so nothing is drawn differently for it.
+The Stocks tape card and a futures contract's bias card are one drawing, with the scale
+the same length on both, so the same score sits in the same place. The tape card stands
+second on the Scanner's row, right of the card that says which hour the list is ranked
+for. The VIX is the masthead's figure and no card of that row (it was the tape card's
+third line, then for a day a card beside it): a click on it in the masthead opens its
+bands.
 
 ### Session ranges, volume profile & dealer gamma
 ![Levels](docs/media/levels.png)
@@ -757,17 +919,18 @@ trended; a quiet night after a range day trended once in 114 on NQ, once in 129 
 ES). Gold's New York box almost never trends by this rule (10 of 573), because gold
 does its moving overnight; its rows show the counts and rarely a call.
 
-The lean is on the pages as counts, never as a probability. The Futures Overview's
-**Session type** card gives each book a row: the call — *Range day likely*, *Trend day
+The lean is read as counts, never as a probability. It is on no page since the Futures
+Overview went on 2026-11-14 (the Scanner's strip and the Dashboard dropped it earlier);
+the brief's digest and Hermes still carry it. The Overview's
+**Session type** card gave each book a row: the call — *Range day likely*, *Trend day
 more possible*, *Mixed record* or *No lean* — the night so far in the book's own ATR
 and yesterday's shape, and under it the conditions that carry the call with their
 counts (*quiet night (0.31 ATR so far): 2 trend days in 142, 108 range*); a click opens
 every condition that holds today with its count, which of them vote, and the base rate.
 A condition votes only with fifty sessions behind it and a lift worth the name (range
 ten points over the base rate, trend one and a half times it); the call is the side the
-votes agree on. After the close the row says what the day was. Each book's overview
-card carries the same line, the Dashboard's game plan carries it for NQ and ES, the
-brief's digest carries it as `session_type_lean`, and Hermes reads it as the
+votes agree on. After the close the row said what the day was. The
+brief's digest carries the lean as `session_type_lean`, and Hermes reads it as the
 `session_type` panel. The Scanner's strip showed it for a day and no longer does: it
 is a read of the futures' night, and that page is stocks and options. The record behind it is the backfill's sessions plus
 the live log's own: since 2026-11-10 the collector writes one card per book at 09:25 ET
@@ -847,7 +1010,11 @@ its own record as it goes.
   number itself. Once a print lands it carries its **read** — hot (the stronger
   economy), cold or in line — and the chip opens what that means for NQ, ES and GC,
   by theme: a hot CPI through the discount rate, a hot payrolls through the Fed, in
-  the server's words, the same ones the driver board counts.
+  the server's words, the same ones the driver board counts. **A US row tagged BLS,
+  CENSUS, BEA or EIA carries the agency's own figure**, not only the calendar feed's
+  copy of it (the table under *What it gathers* lists which releases); the tag turns
+  amber and reads `≠ FEED` where the feed had printed something else, and the hover
+  says what. A row with no tag is the feed's alone.
 - **Fed & Treasury** — one diary of scheduled US rates risk: FOMC meetings, the Beige
   Book, governor speeches and testimony from the Board's own calendar, merged
   chronologically with **coupon auction supply** (3Y/10Y/30Y, reopenings named what
@@ -860,47 +1027,76 @@ its own record as it goes.
 ### The AI session read
 ![Session report](docs/media/report.png)
 
-**Futures → Brief** generates a **pre-session brief** on demand: pick the session (Asia /
-London / New York / auto-by-clock) and the book (NQ / ES / GC / all three). The
+**Market Report** (a view of Futures and of Stocks since 2026-11-16: Futures writes one
+book for any session, Stocks writes SPY, QQQ and IWM together for New York, with one market
+bias from the Stocks tape and each fund's own levels) generates a **pre-session brief** on
+demand. As the page was built on 2026-11-15: pick what it is about
+(Indexes, which is NQ and ES with QQQ and SPY; Gold; Silver; or Oil) and the session
+(Asia / London / New York; the one the clock says is next is lit). The page shows the
+newest report kept for that pair. The
 collector computes every table on the page from the live snapshot, then an LLM (via
 OpenRouter, with a model-and-mode fallback chain) writes the read around them — as a
 job the page polls, like the game plan, so no request is ever as long as the
-generation. Top to bottom:
+generation.
 
-- **Partial data** — which sources were down when it was written, so a missing level
-  is a stated gap rather than a silent one.
-- **Thesis and calls** — the one idea of the day, then a card per book: the call at
-  the open with its conviction, the rest-of-day lean, the price that makes it
-  wrong, and the **catalyst** it rests on — a heavyweight's print or an event since
-  the close, cited by id from the facts below.
-- **Snapshot** — the books, the dollar, the 10Y (and the real yield for gold), vol,
-  oil and the yen, with week and month context; the model flags the rows to watch.
-- **Levels** — a ladder per book in price order: gamma flip and walls, the
-  expected-move band (GEXYGEN's own, or a one-day 1σ from VXN / VIX / GVZ when it is
-  down), the overnight or handover range, prior-RTH high / low / POC and settle, each
-  measured from last.
-- **Dealer gamma** — regime, the flip's distance in percent and in expected moves,
-  the walls.
-- **Heavyweights & event risk** — one row per big index weight, any name whose move
-  alone is worth a tenth of a percentage point of the index, and any name that just
-  reported: weight, move, its contribution in percentage points, the print and the
-  one headline that explains it; under them the
-  high-impact geopolitics, policy and energy stories since the last cash close. The
-  driver board votes the prints and damps conviction under the events (above), so a
-  megacap's miss lowers the board's ceiling before the model has to notice the join
-  itself.
-- **Catalysts** — data, the Fed (with what each FOMC has priced), long-end auctions
-  and bellwether earnings, from twelve hours back to three days out; the model notes
-  the ones that matter.
-- **The read** — per book: the regime, the macro transmission as a chain of causes,
-  the open, the invalidation, the rest of day, what flips it, and drivers tagged
-  bear / bull / mixed / neutral.
-- **Rotation** — six equity ratios (or GDX/GLD and gold/silver) with five-day
-  direction, the megacaps' moves, and the model's read of the tape.
-- **Headlines that move price** — picked from the wire by id and tagged with the books
-  they move.
-- **Past calls** — every prior brief kept with its full digest and tables attached, so
-  any call can be audited against exactly the data it saw.
+**A report is short, and set as a market report** (since 2026-11-15, when the owner
+asked for reports that are concise and say what actually moves the market, and then for
+one that "looks like a professional market report"). A real Indexes report had run to
+1,850 words with the same facts in nine places; the same subject now comes back at
+about 280, in about a minute. It is one sheet:
+
+- **A masthead** — what it is about, the session, the date and hour it was written,
+  and whether the session had opened.
+- **Summary** — one or two sentences, 40 words at most: the single force driving the
+  books in this session and the figure or level that decides it.
+- **A section per book** — the call (the side as the big word, a conviction of 1 to 5
+  capped by the driver board, and at 3 against its lean) beside **the engine's own
+  score for that book on the bias scale** every bias card draws: the word is the
+  model's call, the slider is the board's. Under it, **what is driving the bias**: a
+  row for every factor the bias weighs in that session, heaviest first (volume profile
+  & structure, macro, risk appetite, news & data, participation), and geopolitics &
+  events last, which is no side and lowers the ceiling. A row's tag and its share of
+  the score are the engine's, so they cannot disagree with the slider; the comment
+  beside it, 20 words at most, is the model's, and a row it left bare shows the
+  engine's own reads. Then the **plan**, one line naming the level that has to hold
+  or break and where that carries, **wrong if**, and the **key levels** on one line:
+  the prior session's high and low, its value area and point of control, the handover
+  range (only one that follows the last complete session) and the last price.
+- **Calendar** — up to three things on the clock, the most important first, each a
+  row of the calendar with what is priced and what a miss or a beat does.
+- **Risks** — up to three that are not already in the call.
+- A line at the foot saying whose figures are whose: the scores, weights and levels
+  are the engine's, the comments the model's, and the weights a judgement.
+
+**Neither dealer gamma nor a moving average is in a report.** The bias weighs neither,
+so the model is not shown them (`report.report_view`) and the page has no gamma card,
+no walls among the levels and no trend row; both are still on the Futures page. One
+**More** row opens the rest: the **snapshot**, the whole **calendar** (data, the Fed,
+long-end auctions and bellwether earnings, from twelve hours back to three days out),
+**rotation** and the headlines picked. **Partial data** heads the summary when a source
+was down, so a missing level is a stated gap. The index heavyweights and the event risk
+since the close are in what the model reads and in the driver board's votes, so a
+megacap's miss lowers the board's ceiling before the model has to notice the join. A
+report written earlier on 2026-11-15 keeps the short brief's cards, and one from before
+then the longer layout.
+
+What keeps it short is checked, not asked for. An answer with a part over its limit
+(with a quarter of slack), one comment under two factors of the same book, or a comment
+said again as a risk is sent back **once**, in the same re-ask as an unverified figure, and the second
+answer is kept only if it is better, figures first. A row id written into a sentence is
+taken out, and so is what a model leaves on one: a list mark in front, its own word
+count behind, the row's tag repeated at the start of its comment, and a calendar row
+listed only to say it is not in play. The figures the model is shown are tidied first (`report.shown`): two places
+for a percentage or anything of 10 and over, four for an exchange rate, and a ladder's
+levels at the ladder's own decimals, so a level in the prose is the level in the table.
+The words written are counted under the report.
+
+A report stored before then has the longer shape (a read per book with a regime, a
+chain of causes and drivers tagged bear / bull / mixed / neutral, and a note on every
+table) and still opens in the layout it was written for.
+
+- **Past reports** — every prior report kept with its full digest and tables attached,
+  so any call can be audited against exactly the data it saw.
 
 The design principle throughout: **the engine computes, the model narrates.**
 
@@ -1038,10 +1234,8 @@ tab. If no model in its chain will work through tools, it answers from the diges
   why? is breadth confirming the move? how should VIX shape my stops today?* — and on
   the futures side the ladder, the gamma regime and the term structure. On the Scanner
   with a name selected: *explain its setup · what would trigger and invalidate it ·
-  which contract fits it and why · why does it rank where it does.* On the Stocks
-  tab's Market view: *summarise the market overview · which sector has the best story
-  behind it · what would change the read at the open · which names on Today fit the read* — and on Futures'
-  Brief view, the brief in three lines and what would make today's calls wrong.
+  which contract fits it and why · why does it rank where it does.* On the Market
+  Report page: the brief in three lines and what would make today's calls wrong.
 - **Every figure in an answer is checked** against the data the model was shown; any
   it cannot find is named under the answer, shown and marked rather than passed off.
 - The thread survives closing the panel, and which model answered, and how long it
@@ -1181,6 +1375,7 @@ the whole board is keyboard-free by design — it is meant to be *read*.
 | Yahoo Finance (chart) | 5-minute OHLCV bars for NQ/ES/GC → session ranges & volume profiles | 1–5 min |
 | Publisher RSS + query feeds | ~40 feeds across six desks, region-tagged | 2 min |
 | Nasdaq | Economic calendar (consensus/actual/previous), the earnings calendar and each watchlist name's pre-market volume. **When Nasdaq refuses** (it did from 05:49 ET on 10 Nov 2026, and the desk went through a CPI day with no CPI on its calendar) **TradingView stands in**: its economic calendar for the releases, each title put into the names Nasdaq uses so the tiers, themes and release families still read it, with the Fed Board's own speeches added because it lists none; and its screener for the earnings list (the report's date, before or after the bell, the EPS and the estimate; its EPS can differ from Nasdaq's). The status row says which is in use, Nasdaq is asked again every half hour and takes over when it answers, the pre-market volume, high and low fall back to the wide read's (stocks only: SPY, QQQ and IWM are not in that read, so they have no stand-in) and the pre-market source then counts as live on the status rail with a note saying whose figures they are, red only when neither answers, and with neither the calendar keeps its schedule for two days marked stale and a page with no calendar says "Calendar feed down", never "None scheduled" | 10 min |
+| BLS, Census Bureau, BEA, EIA (the agencies themselves) | **The agency's own figure for the US releases it publishes where a program can read**, on the calendar row it is the print of (`sources/official.py`, 2026-11-15). BLS, from its public data API: CPI and PPI (headline and core, on the month and the year), nonfarm and private payrolls, the unemployment rate, average hourly earnings, job openings; a percentage change is worked from the published index to one place, as the BLS states it. Census, from its Economic Briefing Room feed: retail sales, durable goods and factory orders, housing starts, new home sales, construction spending, business and wholesale inventories, the goods trade balance. BEA, from its release feed: GDP, personal income and spending, the trade balance. EIA, from its weekly tables: crude, gasoline and distillate stocks, natural gas storage. The agency's figure **fills** a row the calendar feed has not filled and **replaces** a feed's figure it disagrees with (what the feed said stays on the hover); a row both agree on is tagged with the agency's name. A figure joins a row only when it is that print's and not the last one's: the reference month the release reports, the day the agency published it, or the week the table ends. Not available this way, so still the calendar feed's alone: jobless claims, the PCE price index, industrial production, and every private survey (ISM, Michigan, Conference Board, ADP) | each agency asked when its copy ages out (BLS six hours, the rest fifteen minutes), and every one to five minutes while one of its releases is due |
 | U.S. Treasury (yields) & fed funds futures | The curve, spreads, and the ZQ strip | 30 min |
 | Federal Reserve (`calendar.json`) | FOMC dates, speeches, testimony, Beige Book | 1 h |
 | TreasuryDirect | Upcoming coupon auctions | 6 h |

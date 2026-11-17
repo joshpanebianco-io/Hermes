@@ -2,15 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { setAskFocus } from "@/lib/ask/open";
-import type { CalendarRow } from "@/types/terminal";
-import type { DashOverview, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
+import type { CalendarRow, Terminal as TerminalData } from "@/types/terminal";
+import { DASH_BOOKS, futuresBrief, nextEvent, sessionStrip, weightsWord } from "@/lib/futDash";
+import { DAY_TYPED, FUT_NAME, QUOTE_KEY, type FutView } from "@/lib/futures";
+import { CALL_HUE } from "@/lib/daytype";
+import { wholeScore } from "@/lib/biasScale";
+import type { DashReportCard, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
 import { BreadthBars } from "@/components/panels/Breadth";
 import { setupLabel } from "@/components/panels/ScanDetail";
 import { CARD, CatalystCell, Chips, Spark, TD, TH, ageWord, dayName, rowProps } from "@/components/panels/ScanWide";
 import { PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { SectorGlyph } from "@/components/ui/SectorGlyph";
-import { scoreText } from "@/lib/bias";
+import { biasInk, biasLabel, scoreText } from "@/lib/bias";
+import { BiasScale } from "@/components/ui/BiasScale";
 import { cn } from "@/lib/cn";
 import { dir, inMin, num, pct } from "@/lib/format";
 import { heatMax, heatStyle } from "@/lib/heat";
@@ -46,7 +51,7 @@ const TOP_CHIPS: ReadonlyArray<{ key: TopChip; label: string }> = [
   { key: "all", label: "All" },
   { key: "long", label: "Long" },
   { key: "short", label: "Short" },
-  { key: "news", label: "Has news" },
+  { key: "news", label: "Has News" },
 ];
 const TOP_TEST: Record<TopChip, (r: DashRow) => boolean> = {
   all: () => true,
@@ -60,10 +65,13 @@ export function Dashboard({
   onOpen,
   onScan,
   prices = null,
+  futures = null,
 }: {
   calendar: CalendarRow[];
   onOpen: (t: Tab) => void;
   onScan: (v: ScanView) => void;
+  /** The Futures card's data, the Terminal's poll, and where a row opens (FuturesCard). */
+  futures?: { data: TerminalData; onBook: (v: FutView) => void } | null;
   /**
    * The row of prices across the top (owner, 2026-11-10: move the header's figures to
    * "there appropriate places"). Built by the Terminal, which holds the quotes. Since
@@ -152,15 +160,26 @@ export function Dashboard({
         * Breadth was the right half of the plan, a chart sharing a card with a list of
         * words. Two columns with breadth under them on a narrower window.
         */}
-      <div className="grid shrink-0 gap-3 lum:gap-[var(--lum-gap)] lg:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)]">
-        <ReadCard d={data} later={later} now={now} prices={prices} />
-        <PlanCard d={data} onWire={() => onOpen("terminal")} toScanner={toScanner} />
+      {/* FOUR SINCE 2026-11-16: the Futures card is the fourth (owner: "a futures card
+          whcih also says what session it is", "like a bias kind of card and quick brief
+          sumamry"). Four across from 2200px (the owner's main screen), two by two under it. */}
+      {/* THREE AGAIN SINCE 2026-11-16 (owner: "the pre market card is a bit redundant or
+          could be merged into the today game plan one", then "do waht you recommend
+          best"): the read card's prices, its VIX sentence, its counts and its calendar
+          are the game plan's head and foot; its sentence on the leaders and breadth was
+          the plan's focus lines and the Breadth card again. */}
+      {/* Three across from 1280px, as the row under it is: the owner's 1920 screens had
+          the four-card rule's two-by-two, which left Futures alone beside a hole. Under
+          1280 the game plan and Breadth share a row and Futures takes the next whole. */}
+      <div className="grid shrink-0 gap-3 lum:gap-[var(--lum-gap)] lg:grid-cols-2 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.15fr)]">
+        <PlanCard d={data} later={later} now={now} prices={prices} onWire={() => onOpen("terminal")} toScanner={toScanner} />
         <BreadthCard d={data} />
+        {futures && <FuturesCard {...futures} />}
       </div>
       <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[minmax(0,5fr)_minmax(0,3.7fr)_minmax(0,3.6fr)] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
         <TopSetups rows={data.top} onAll={() => toScanner("today", { "today.side": "all" })} />
-        <MarketCard o={data.overview ?? null} tradingDay={data.trading_day} onOpen={() => toScanner("plan")} />
+        <ReportCard r={data.report ?? null} tradingDay={data.trading_day} onOpen={() => toScanner("report")} />
         <StockNews stories={data.stories} live={data.news_live} />
       </div>
       <Rotation d={data} onHeat={() => toSectors()} onSector={(k) => toSectors({ "sec.mode": "cards", "sec.sel": k })} />
@@ -201,7 +220,118 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function ReadCard({ d, later, now, prices }: { d: DashboardPayload; later: CalendarRow | null; now: number | null; prices?: React.ReactNode }) {
+/**
+ * The futures at a glance (owner, 2026-11-16, of two mocks: prices, bias and session
+ * type, the top row's fourth card, with "a quick brief summary"): the session strip,
+ * two sentences the engine writes from the driver board (lib/futDash), then a row a
+ * contract with its price, its bias on the scale and, for NQ, ES and gold, whether New
+ * York is set up to trend or range. A row opens that contract on the Futures tab. All of
+ * it is the Terminal's poll, so it moves with the Futures tab, not with this page's.
+ */
+function FuturesCard({ data, onBook }: { data: TerminalData; onBook: (v: FutView) => void }) {
+  const books = data.drivers?.books ?? {};
+  const boxes = data.clock?.boxes ?? [];
+  const strip = data.clock ? sessionStrip(boxes, data.clock.et_time) : [];
+  const ev = nextEvent(boxes);
+  const leans = Object.fromEntries(DASH_BOOKS.map((k) => [k, data.daytype?.books?.[k]?.lean ?? null]));
+  const brief = futuresBrief(books, leans, (b) => wholeScore(b) ?? b.score);
+  const anyBook = DASH_BOOKS.map((k) => books[k]).find(Boolean);
+  const phase = data.clock?.phase.label;
+  return (
+    <section className={cn(CARD, "flex flex-col gap-2.5 lg:col-span-2 xl:col-span-1")}>
+      <Head
+        title="Futures"
+        sub={[phase, ev ? `${ev.label} ${ev.next} in ${inMin(ev.min)}` : null].filter(Boolean).join(" · ") || undefined}
+        right={<Go onClick={() => onBook("report")}>Market report</Go>}
+      />
+      {/* The four boxes of the futures day: done, trading now, still to come. */}
+      <div className="-mx-4 flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-ring/60 px-4 py-2 text-[11.5px]">
+        {strip.map((b) => (
+          <span key={b.key} className={cn("flex items-center gap-1.5 whitespace-nowrap", b.state === "now" ? "font-semibold text-ink" : b.state === "done" ? "text-ink-3" : "text-ink-2")}>
+            {b.state === "now" ? (
+              <span aria-hidden className="h-[7px] w-[7px] rounded-full bg-desk-policy" />
+            ) : b.state === "done" ? (
+              <span aria-hidden className="text-[10px]">✓</span>
+            ) : null}
+            {b.label}
+            <span className="fig font-normal text-ink-3">{b.state === "now" ? `to ${b.at}` : b.state === "next" ? b.at : ""}</span>
+          </span>
+        ))}
+      </div>
+      <div className="space-y-1 text-[13px] leading-[1.45] text-ink-2">
+        {brief.map((s) => (
+          <p key={s}>{s}</p>
+        ))}
+      </div>
+      <div className="-mx-1.5">
+        {/* Captions (owner, 2026-11-16: "why are the nq and es both the same amount of bias
+            points but nq says no lean and es says trend say mor eposisble"): the last column
+            is the session-type record (will New York trend or range), not a second bias. */}
+        <div aria-hidden className="qt-cap grid grid-cols-[34px_minmax(0,1fr)_minmax(0,1fr)_64px_minmax(0,1.1fr)] gap-x-2.5 px-1.5 pb-0.5 text-[9.5px] text-ink-3">
+          <span />
+          <span>Price</span>
+          <span className="col-span-2">Bias · which way</span>
+          <span>Session type · trend or range</span>
+        </div>
+        {DASH_BOOKS.map((k) => {
+          const b = books[k];
+          const q = (data.quotes ?? []).find((x) => x.key === QUOTE_KEY[k]);
+          const s = b ? (wholeScore(b) ?? b.score) : null;
+          const tone = b?.bias === "long" ? "text-call-fig" : b?.bias === "short" ? "text-put-fig" : "text-ink-3";
+          const lean = leans[k];
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => onBook(k)}
+              title={`Open ${k} · ${FUT_NAME[k]} on the Futures tab`}
+              className="hit grid w-full grid-cols-[34px_minmax(0,1fr)_minmax(0,1fr)_64px_minmax(0,1.1fr)] items-center gap-x-2.5 rounded-[4px] px-1.5 py-[5px] text-left text-[12px]"
+            >
+              <span className="fig font-semibold text-ink">{k}</span>
+              <span className="fig truncate text-ink">
+                {num(q?.last)} <span className={cn("ml-1", dir(q?.pct))}>{pct(q?.pct)}</span>
+              </span>
+              <span className={cn("fig truncate", tone)}>
+                {b ? (b.bias === "long" ? "▲ Long" : b.bias === "short" ? "▼ Short" : "No lean") : "—"}
+                {s != null && ` ${scoreText(s)}`}
+              </span>
+              <BiasScale score={s} side={b?.bias ?? null} className="w-[64px]" />
+              <span className={cn("truncate text-[11.5px]", lean ? CALL_HUE[lean.call as keyof typeof CALL_HUE] : "text-ink-3")} title={DAY_TYPED.has(k) ? "Will New York trend or range: the record's counts for a day like this one" : "No trend-or-range record is kept for this contract"}>
+                {DAY_TYPED.has(k) ? (lean?.word ?? "Not read yet") : "—"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="fig mt-auto text-[11px] text-ink-3">
+        Bias weighed for {weightsWord(anyBook?.weight_label)} · CME prices about 10 min behind · click a row for its contract
+      </p>
+    </section>
+  );
+}
+
+/**
+ * The game plan, with the read folded in (2026-11-16): the four prices and the read's
+ * sentence on the tape and the VIX at its head, the bias, the focus and the setups in
+ * the middle, and the read's counts, the session's reports and the next release at its
+ * foot. The read's second sentence (who leads, and breadth) was the focus lines and the
+ * Breadth card again, so it is not printed.
+ */
+function PlanCard({
+  d,
+  later,
+  now,
+  prices,
+  onWire,
+  toScanner,
+}: {
+  d: DashboardPayload;
+  later: CalendarRow | null;
+  now: number | null;
+  prices?: React.ReactNode;
+  onWire: () => void;
+  toScanner: (view: ScanView, also?: Record<string, unknown>) => void;
+}) {
   const by = (w: "pre" | "after" | "unspecified") => d.read.reports.filter((r) => r.when === w).map((r) => r.sym);
   const reports = (["pre", "after", "unspecified"] as const)
     .filter((w) => by(w).length)
@@ -215,81 +345,60 @@ function ReadCard({ d, later, now, prices }: { d: DashboardPayload; later: Calen
       : d.plan.calendar_ok === false
         ? "Calendar feed down — the next release is unknown"
         : "None scheduled";
-  return (
-    <section className={cn(CARD, "flex flex-col gap-2.5")}>
-      <Head title={d.read.title} sub={`Levels for ${dayName(d.trading_day)}`} />
-      {/* SPY, QQQ, IWM and VIX: what the sentences under them are about, ruled off as
-          the card's own figures. The edges run to the card's (its 16px of padding). */}
-      {prices && (
-        <div aria-label="Prices" className="-mx-4 border-y border-ring/60 px-4 py-2.5">
-          {prices}
-        </div>
-      )}
-      <div className="space-y-1.5 text-[13px] leading-[1.45] text-ink-2">
-        {d.read.lines.map((l) => (
-          <p key={l}>{l}</p>
-        ))}
-      </div>
-      <p className="fig text-[11px] text-ink-3">{d.read.foot}</p>
-      <dl className="mt-auto space-y-1 border-t border-ring/60 pt-2 text-[12px]">
-        <div className="flex gap-3">
-          <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Reports</dt>
-          <dd className="min-w-0 text-ink-2">{reports || "None on the calendar"}</dd>
-        </div>
-        <div className="flex gap-3">
-          <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Next</dt>
-          <dd className="min-w-0 text-ink-2">{next}</dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
-function PlanCard({ d, onWire, toScanner }: { d: DashboardPayload; onWire: () => void; toScanner: (view: ScanView, also?: Record<string, unknown>) => void }) {
   const b = d.plan.bias;
   const hue = b.side === "long" ? "text-call-fig" : b.side === "short" ? "text-put-fig" : "text-ink-3";
   const tip = b.live != null && b.total != null ? `${b.live} of ${b.total} reads live${b.cap != null ? ` · plans capped at ${b.cap}` : ""}` : undefined;
   return (
     <section className={cn(CARD, "flex flex-col gap-3")}>
       <Head
-        title="Today's game plan"
-        sub="Playbook for the session"
+        title="Today's RTH game plan"
+        sub={`${d.read.title} · levels for ${dayName(d.trading_day)}`}
         right={
           <span className="flex shrink-0 items-center gap-4">
-            {/* The written note: the Analysis tab's stocks half until 2026-11-11, then
-                the Stocks tab's Game plan, and its Market overview since 2026-11-13. */}
-            <Go onClick={() => toScanner("plan")}>Market overview</Go>
+            {/* The written note for this desk: the Stocks tab's Market Report view since
+                2026-11-16 (SPY, QQQ and IWM for New York); the page it opened that morning
+                left the bar, then became a view on each desk. */}
+            <Go onClick={() => toScanner("report")}>Market report</Go>
             <Go onClick={onWire}>Open the wire</Go>
           </span>
         }
       />
-      {/* Two short columns, so the card is as tall as the read beside it and not taller.
-          The counts' column is as wide as its longest line, which then never wraps; the
-          sectors and themes take the rest and wrap as they need to. */}
+      {/* SPY, QQQ, IWM and VIX, ruled off as the card's own figures; the edges run to the
+          card's (its 16px of padding). Outside the session a fund shows its pre-market or
+          after-hours trade (lib/quoteExt). */}
+      {prices && (
+        <div aria-label="Prices" className="-mx-4 border-y border-ring/60 px-4 py-2.5">
+          {prices}
+        </div>
+      )}
+      {/* The read's first sentence: the tape's lean and what the VIX band says to do. */}
+      {d.read.lines[0] && <p className="text-[13px] leading-[1.45] text-ink-2">{d.read.lines[0]}</p>}
+      {/* Two short columns. The counts' column is as wide as its longest line, which then
+          never wraps; the sectors and themes take the rest and wrap as they need to. */}
       <div className="grid flex-1 content-start gap-x-8 gap-y-2.5 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="space-y-2.5">
           <Field label="Market bias">
             <span title={tip} className={cn("inline-flex items-baseline gap-1.5 rounded-[3px] border border-ring-2 px-2 py-0.5 text-[13px] font-semibold", hue)}>
               {b.side === "long" ? "▲ Long" : b.side === "short" ? "▼ Short" : "– No lean"}
-              {b.thin && b.live != null && b.total != null ? (
-                // A thin read: the count, where a bare "+100" would read as the tape agreeing.
-                <span className="fig text-[11.5px] font-normal text-ink-3">
-                  {b.live} of {b.total} reads
-                </span>
-              ) : (
-                b.score != null && <span className="fig">{scoreText(b.score)}</span>
-              )}
+              {/* The scale the Stocks tape card and the Futures bias cards draw (ui/BiasScale).
+                  The score is over the whole weight (2026-11-15), so a read on two inputs of
+                  eleven sits near the middle with its figure: no ring and no "thin". The
+                  count is on the hover. */}
+              {b.score != null && <BiasScale score={b.score} side={b.side} className="w-[104px] self-center" />}
+              {b.score != null && <span className="fig">{scoreText(b.score)}</span>}
               {b.grade && b.grade !== "none" && <span className="qt-cap text-[10px] font-normal text-ink-3">{b.grade}</span>}
             </span>
           </Field>
           {/* No session type here (owner, 2026-11-12: "get the NQ specific stuff out of
               dashboard since we have a specific futures tab"): will New York trend or
               range is a read on NQ and ES, and it is the Futures overview's card. */}
-          <Field label="Focus sectors">
-            <FocusLine rows={d.plan.focus} none="No sector ahead of SPY" />
+          {/* Before the bell these are the funds' pre-market moves against SPY's (server
+              dashboard.pre_market_rows, 2026-11-16), as the Sectors cards are. */}
+          <Field label={d.sectors_basis === "pre" ? "Focus sectors · pre-market" : "Focus sectors"}>
+            <FocusLine rows={d.plan.focus} none={d.sectors_basis === "pre" ? "No sector ahead of SPY in the pre-market" : "No sector ahead of SPY"} />
           </Field>
-          <Field label="Focus themes">
-            <FocusLine rows={d.plan.themes} none="No theme ahead of SPY" />
+          <Field label={d.sectors_basis === "pre" ? "Focus themes · pre-market" : "Focus themes"}>
+            <FocusLine rows={d.plan.themes} none={d.sectors_basis === "pre" ? "No theme ahead of SPY in the pre-market" : "No theme ahead of SPY"} />
           </Field>
         </div>
         <div>
@@ -313,6 +422,20 @@ function PlanCard({ d, onWire, toScanner }: { d: DashboardPayload; onWire: () =>
           </Field>
         </div>
       </div>
+      <dl className="mt-auto space-y-1 border-t border-ring/60 pt-2 text-[12px]">
+        <div className="flex gap-3">
+          <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Today</dt>
+          <dd className="fig min-w-0 text-[11.5px] text-ink-2">{d.read.foot}</dd>
+        </div>
+        <div className="flex gap-3">
+          <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Reports</dt>
+          <dd className="min-w-0 text-ink-2">{reports || "None on the calendar"}</dd>
+        </div>
+        <div className="flex gap-3">
+          <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Next</dt>
+          <dd className="min-w-0 text-ink-2">{next}</dd>
+        </div>
+      </dl>
     </section>
   );
 }
@@ -457,33 +580,52 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
  * tab's Market view), cut to its headline, what it means for the list and three risks.
  * Its news and its sectors are left to the Stock news and Rotation cards beside it.
  */
-function MarketCard({ o, tradingDay, onOpen }: { o: DashOverview | null; tradingDay: string; onOpen: () => void }) {
-  // The overview is the session's when it was written for the day the page is reading.
-  const current = o != null && o.trading_day === tradingDay;
-  const sub = !o ? "the AI read of the market, written at 09:00 ET" : current ? `written ${o.auto ? "at 09:00 ET" : (o.et_label.split(", ")[1] ?? o.et_label)}` : `from ${o.et_label}`;
+/**
+ * The Stocks Market Report, in the Market overview card's place (2026-11-16, owner: "do
+ * waht you recommend best"). The overview card read a note written at 22:23 ET on a
+ * Saturday about the Monday after, still arguing from the ten-minute 200 EMA. This is the
+ * newest report on SPY, QQQ and IWM (server report.latest_card), written by itself at
+ * 09:00 ET on a trading day and on Generate: its summary, each fund's call and its risks.
+ * The market's bias is the game plan's, live, above it, so the card does not repeat it.
+ */
+function ReportCard({ r, tradingDay, onOpen }: { r: DashReportCard | null; tradingDay: string; onOpen: () => void }) {
+  const current = r != null && (r.created_et ?? "").slice(0, 10) === tradingDay;
+  const when = r ? (current ? (r.et_label.split(", ")[1] ?? r.et_label) : r.et_label) : "";
+  const sub = !r ? "SPY · QQQ · IWM for New York, written at 09:00 ET" : `SPY · QQQ · IWM · New York · written ${when}${r.auto ? " by itself" : ""}`;
   return (
     <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Market overview" sub={sub} right={<Go onClick={onOpen}>Open the Market overview</Go>} />
-      {!o ? (
-        <p className="py-8 text-center text-[12px] text-ink-3">No overview yet. It writes itself at 09:00 ET on a trading day, or from the Market view&apos;s button.</p>
+      <Head title="Market report" sub={sub} right={<Go onClick={onOpen}>Open report</Go>} />
+      {!r ? (
+        <p className="py-8 text-center text-[12px] text-ink-3">
+          No report yet. It writes itself at 09:00 ET on a trading day, or press Generate on the Stocks tab&apos;s Market Report.
+        </p>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto pr-1">
-          {!current && <p className="mb-2 text-[11px] text-ink-3">The next is written at 09:00 ET.</p>}
-          <p className="text-[14px] leading-[1.45] font-semibold text-ink">{o.headline}</p>
-          {o.focus && (
-            <div className="mt-3">
-              <p className="qt-cap mb-1 text-[10px] text-ink-3">For today&apos;s list</p>
-              <p className="text-[12.5px] leading-[1.5] text-ink-2">{o.focus}</p>
+          {!current && <p className="mb-2 text-[11px] text-ink-3">From an earlier day: the next writes itself at 09:00 ET.</p>}
+          <p className="text-[14px] leading-[1.45] font-semibold text-ink">{r.thesis}</p>
+          {r.calls.length > 0 && (
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {r.calls.map((c) => (
+                <div key={c.book} className="min-w-0 rounded-[4px] border border-ring/60 px-2.5 py-1.5">
+                  <p className="fig text-[11px] text-ink-3">{c.book}</p>
+                  <p className="truncate text-[13.5px] leading-tight font-semibold" style={{ color: biasInk(c.open_bias) }}>
+                    {biasLabel(c.open_bias)}
+                  </p>
+                  <p className="fig mt-0.5 text-[10.5px] text-ink-3" title="The model's conviction, capped by the Stocks tape's">
+                    conviction {c.conviction}/5
+                  </p>
+                </div>
+              ))}
             </div>
           )}
-          {o.risks.length > 0 && (
+          {r.risks.length > 0 && (
             <div className="mt-3">
               <p className="qt-cap mb-1 text-[10px] text-ink-3">Risks</p>
               <ul className="flex flex-col gap-1">
-                {o.risks.map((r) => (
-                  <li key={r} className="flex gap-2 text-[12px] leading-[1.45] text-ink-2">
+                {r.risks.map((x) => (
+                  <li key={x} className="flex gap-2 text-[12px] leading-[1.45] text-ink-2">
                     <span aria-hidden className="mt-[7px] h-[4px] w-[4px] shrink-0 rounded-[1px] bg-ink-4" />
-                    {r}
+                    {x}
                   </li>
                 ))}
               </ul>
@@ -544,7 +686,15 @@ function Rotation({ d, onHeat, onSector }: { d: DashboardPayload; onHeat: () => 
   const max = heatMax(d.rotation.map((s) => s.day_pct));
   return (
     <section className={cn(CARD, "shrink-0")}>
-      <Head title="Sector rotation" sub="Where money is moving, and the stocks pushing each sector" right={<Go onClick={onHeat}>View heat map</Go>} />
+      <Head
+        title="Sector rotation"
+        sub={
+          d.sectors_basis === "pre"
+            ? "Where money is moving before the bell: each fund's pre-market move, and the stocks pushing each sector"
+            : "Where money is moving, and the stocks pushing each sector"
+        }
+        right={<Go onClick={onHeat}>View heat map</Go>}
+      />
       <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 min-[106.25rem]:grid-cols-11">
         {d.rotation.map((s) => (
           <button key={s.key} type="button" onClick={() => onSector(s.key)} title={`Open ${s.label} on the heat map`} style={heatStyle(s.day_pct, max)} className="hit min-w-0 rounded-[4px] border border-ring px-2.5 py-2 text-left">

@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Catalyst, RangeState, ScanRow, Verdict } from "@/types/scanner";
+import type { Catalyst, NewsRead, RangeState, ScanRow, Verdict } from "@/types/scanner";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { Popover } from "@/components/ui/Popover";
+import { BiasScale } from "@/components/ui/BiasScale";
+import { scoreText } from "@/lib/bias";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
@@ -96,9 +98,32 @@ export function ageWord(min: number): string {
   return `${Math.round(min / 1440)}d`;
 }
 
-/** The name's most important story: its kind, the headline, how old. Two lines at most. */
-export function CatalystCell({ c, width = 380 }: { c: Catalyst | null | undefined; width?: number }) {
+/** "Big: raised the year's outlook to $4.10 a share", for a hover; empty with nothing to say. */
+export function readWord(read: NewsRead | null | undefined): string {
+  if (!read || (read.size === "unclear" && !read.line)) return "";
+  const size = read.size === "big" ? "Big" : read.size === "ordinary" ? "Ordinary" : "Unclear";
+  return read.line ? `${size}: ${read.line}` : size;
+}
+
+/** A headline as a key: lower case, letters and digits (the server's newsread.norm). */
+const storyKey = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 80);
+
+/**
+ * The name's most important story: its kind, the headline, how old. Two lines at most.
+ * `read` is the model's read of the story the score counted (types NewsRead): its line
+ * in the hover, and a "Big" chip beside the kind when it read the news as big. Context
+ * only, so it is a chip and a hover and never a third line.
+ *
+ * THE CHIP IS ONLY FOR THE STORY SHOWN. The story the score counted is not always the
+ * one this cell leads with (the first time it ran, Nvidia's cell led with "Shares Drop
+ * Again" and the read was of "US Congress widens Nvidia probe"): a chip beside a
+ * headline says that headline is big, so for another story the hover names which.
+ */
+export function CatalystCell({ c, width = 380, read }: { c: Catalyst | null | undefined; width?: number; read?: NewsRead | null }) {
   if (!c) return <span className="text-[12px] text-ink-3">—</span>;
+  const same = !!read?.headline && storyKey(read.headline) === storyKey(c.title);
+  const word = readWord(read);
+  const said = word && !same && read?.headline ? `${word} (of "${read.headline}")` : word;
   return (
     <a
       href={c.url}
@@ -107,10 +132,13 @@ export function CatalystCell({ c, width = 380 }: { c: Catalyst | null | undefine
       onClick={(e) => e.stopPropagation()}
       className="hit block"
       style={{ maxWidth: width }}
-      title={`${c.title}\n${c.provider} · ${ageWord(c.age_min)} ago`}
+      title={`${c.title}\n${c.provider} · ${ageWord(c.age_min)} ago${said ? `\nModel's read, context only · ${said}` : ""}`}
     >
       <span className={cn("line-clamp-2 text-[12px] leading-[1.35]", c.tier === 1 ? "text-ink" : "text-ink-2")}>
         <span className={cn("qt-cap mr-1.5 inline-block rounded-[2px] border px-1 align-[1px] text-[9.5px] leading-[14px]", tagHue(c))}>{c.tag}</span>
+        {same && read?.size === "big" && (
+          <span className="qt-cap mr-1.5 inline-block rounded-[2px] border border-ring-2 px-1 align-[1px] text-[9.5px] leading-[14px] text-ink">Big</span>
+        )}
         {c.title}
       </span>
     </a>
@@ -255,6 +283,15 @@ const GLYPHS: Record<string, React.ReactNode> = {
     </>
   ),
   tape: <path d="M3 12h18M3 6h18M3 18h12" />,
+  // A print between the level above it and the level below.
+  levels: (
+    <>
+      <path d="M3 6h18M3 18h18" />
+      <circle cx="12" cy="12" r="2" />
+    </>
+  ),
+  // A session between two rails: will it run out of them, or stay.
+  session: <path d="M3 5h18M3 19h18M4 15l4-6 4 6 4-6 4 6" />,
   // Several charts side by side.
   grid: (
     <>
@@ -593,6 +630,97 @@ export function StatCard({
     </div>
   );
 }
+
+/**
+ * A bias, as the contents of a stat card: its mark, the side with the score, what it is
+ * and how strong, and the scale.
+ *
+ * ONE DRAWING FOR THE STOCKS TAPE AND A FUTURES BOOK (owner, 2026-11-15: "why does the
+ * scale on stock and futures look different though?"). The first build put each scale
+ * where that card's count had been: under the words on the Futures card, squeezed beside
+ * them on the Stocks one, narrower and with no ends, because the Tape card's third line
+ * was the VIX. The same job is the same design on every page, so both cards draw this,
+ * and the VIX has a card of its own beside the tape (Scanner.tsx).
+ *
+ * A READ ON FEW INPUTS IS DRAWN AS ANY OTHER (owner, 2026-11-15, of the ring it was: "i
+ * dont understand why the market bias on stocks has a black dot circle"). The score is
+ * over the whole weight, so it sits near the middle by itself and prints its figure
+ * (lib/biasScale). The card around it is the caller's: a futures book's opens the driver
+ * board, the tape's carries its reads on the hover.
+ */
+export function BiasStat({
+  what,
+  side,
+  score,
+  grade,
+  scaleTitle,
+}: {
+  /** What is being read: "Bias" on a futures book, "Tape" on the stocks desk. */
+  what: string;
+  side: "long" | "short" | null | undefined;
+  /** -100 to +100, over the whole weight (lib/biasScale wholeScore). */
+  score: number | null | undefined;
+  grade?: string | null;
+  /** The count the scale replaced, for its hover. */
+  scaleTitle?: string;
+}) {
+  const tone = side === "long" ? "text-call-fig" : side === "short" ? "text-put-fig" : "text-ink-2";
+  return (
+    <>
+      <span className={cn("flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[5px] border border-ring-2 bg-surface-2", tone)}>
+        <Glyph name="tape" />
+      </span>
+      {/* The column takes the card's width, so the scale under the words has it too. */}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className={cn("fig text-[16px] leading-none whitespace-nowrap", tone)}>
+          {side === "long" ? (
+            <>
+              <Arrow up /> Long
+            </>
+          ) : side === "short" ? (
+            <>
+              <Arrow up={false} /> Short
+            </>
+          ) : (
+            "No lean"
+          )}
+          {score != null && ` ${scoreText(score)}`}
+        </span>
+        <span className="qt-cap mt-[5px] text-[9.5px] leading-none text-ink-2">
+          {what}
+          {grade ? ` · ${grade}` : ""}
+        </span>
+        {/* ONE LENGTH ON EVERY PAGE, so the same score is the same place: the Stocks row has
+            eight cards and a futures contract's seven, and a scale that filled its card
+            was 151px on one and 179 on the other. The length is the most the narrower card
+            holds: 184 on a wide window (the Stocks card has 186 on the 2560 screen under
+            the Sidebar interface), 160 below it (162 on a 1920 screen). */}
+        <BiasScale score={score} side={side} ends className="mt-[3px] w-[160px] max-w-full min-[2200px]:w-[184px]" title={scaleTitle} />
+      </span>
+    </>
+  );
+}
+
+/**
+ * The up or down arrow beside a card's figure, a little smaller than the figure.
+ *
+ * SMALLER THAN THE WORD IT STANDS BY (owner, 2026-11-15: "can we slightly reduce the
+ * sizze of the arrows eg on the tape card or levels card"). In the figure font the
+ * triangle is drawn nearly a full em wide, half as wide again as a letter, so at the
+ * figure's own size it outweighed "Short" and "Outside Day". It is set at 0.72 of the
+ * size it sits in and lifted to the middle of the letters, where a triangle that small
+ * would otherwise sit on the baseline. It takes the colour of the text round it.
+ */
+export function Arrow({ up }: { up: boolean }) {
+  return (
+    <span aria-hidden className="relative -top-[0.07em] inline-block text-[0.72em] leading-none">
+      {up ? "▲" : "▼"}
+    </span>
+  );
+}
+
+/** A stat card's box, for a card that draws its own contents (BiasStat). */
+export const STAT_BOX = "qt-stat flex min-w-[190px] flex-1 items-center gap-3 border-r border-ring px-4 py-[7px] last:border-r-0";
 
 /** How many rows, out of how many looked at. */
 export function Showing({ shown, total, word }: { shown: number; total?: number | null; word: string }) {

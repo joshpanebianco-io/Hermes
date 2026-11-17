@@ -29,6 +29,7 @@ import { cn } from "@/lib/cn";
 import { OUTSIDE_DAY_TITLE } from "@/lib/outsideDay";
 import { compact, dir, num, pct } from "@/lib/format";
 import { heatMax, heatStyle } from "@/lib/heat";
+import { cardNote, cardPct, cardRs, phaseLine, showsPre } from "@/lib/sectorPhase";
 import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
@@ -67,10 +68,10 @@ const SPANS: ReadonlyArray<{ key: HeatSpan; label: string; word: string }> = [
 const CHIPS: ReadonlyArray<{ key: BreakoutChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
   // The collector's `both`: an outside day, as on Breakouts (lib/outsideDay).
-  { key: "both", label: "Outside day", title: OUTSIDE_DAY_TITLE },
-  { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
+  { key: "both", label: "Outside Day", title: OUTSIDE_DAY_TITLE },
+  { key: "news", label: "Has News", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened 2% or more away from the previous close" },
-  { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range" },
+  { key: "inside", label: "Inside Day", title: "The whole session inside the previous day's range" },
   { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
 ];
 const CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
@@ -131,7 +132,10 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
   usePinsChanged(loadTable);
 
-  const on = heat?.ok ? heat.basis !== "last" : false;
+  // Quick while anything is moving: the screener's hours, and the funds' own pre-market
+  // from 04:00, a quarter hour before the screener reaches it.
+  const phase = heat?.ok ? heat.cards_phase : undefined;
+  const on = heat?.ok ? heat.basis !== "last" || phase === "pre" : false;
   useEffect(() => {
     void loadHeat();
     const id = setInterval(loadHeat, on ? 20_000 : 60_000);
@@ -143,8 +147,12 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     return () => clearInterval(id);
   }, [loadTable, on]);
 
-  const pctOf = useCallback((c: HeatCard) => c[`${span}_pct` as const], [span]);
-  const rsOf = useCallback((c: HeatCard) => c[`rs_${span}` as const], [span]);
+  // Before the bell a card's 1D is the fund's pre-market move (lib/sectorPhase): the
+  // ranking, the tint and the SPY bar all follow it.
+  const pctOf = useCallback((c: HeatCard) => cardPct(c, phase, span), [phase, span]);
+  const rsOf = useCallback((c: HeatCard) => cardRs(c, phase, span), [phase, span]);
+  const lastDay = heat?.ok ? heat.cards_day : "";
+  const noteOf = useCallback((c: HeatCard) => cardNote(c, phase, span, lastDay), [phase, span, lastDay]);
   const { top, themes, tint, barMax } = useMemo(() => {
     const cards = heat?.cards ?? [];
     const best = (a: HeatCard, b: HeatCard) => (pctOf(b) ?? -Infinity) - (pctOf(a) ?? -Infinity);
@@ -166,8 +174,13 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     );
   }
 
-  const spy = heat.spy[span];
-  const spanWord = SPANS.find((s) => s.key === span)?.word ?? "the day";
+  const pre = showsPre(phase, span);
+  const spy = pre ? (heat.spy.ext ?? null) : heat.spy[span];
+  const spanWord = pre ? "the pre-market" : (SPANS.find((s) => s.key === span)?.word ?? "the day");
+  const countsWord = heat.counts_pre && span === "day" ? "in the pre-market (the names that have traded)" : "";
+  // The industries' medians are the stocks' own: the pre-market's once the screener has
+  // reached it, so their SPY is the pre-market's then too.
+  const spyInd = heat.counts_pre && span === "day" ? (heat.spy.ext ?? null) : heat.spy[span];
   const pick = (k: string) => setSel(sel === k ? "" : k);
   const cardOf = (k: string) => heat.cards.find((c) => c.key === k) ?? null;
   const selCard = sel && !sel.startsWith("i:") ? cardOf(sel) : null;
@@ -175,7 +188,6 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
   const parentCard = parent ? cardOf(parent) : null;
   // Regional banks rank with the sectors but are still a theme under Financials.
   const kids = parent ? [...top, ...themes].filter((c) => c.kind === "theme" && c.parent === parent) : [];
-  const global = themes.filter((t) => t.parent === null);
   const sectorStrip = top.filter((c) => c.kind === "sector");
   const leader = top[0];
   const listNote =
@@ -214,26 +226,33 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
             </button>
           ))}
         </span>
-        <p className="fig ml-auto text-[11px] text-ink-3" title="Until the open, the cards read the last regular session, as the ETFs do; the table below reads the pre-market">
-          Cards read {dayName(heat.cards_day)} · {delayedLine(heat.read_age_min, heat.delayed_min)}
+        <p
+          className="fig ml-auto text-[11px] text-ink-3"
+          title={
+            "Before the bell each card's 1D is the fund's pre-market move against the last close, and its stocks' counts are their own pre-market moves; " +
+            "after the close the day is the session's and the after-hours move sits beside it. The funds are read each minute outside the session; 1W and 1M are to the last close. " +
+            "The stocks come off the screener, which runs fifteen minutes behind."
+          }
+        >
+          {phaseLine(heat, dayName)} · stocks {delayedLine(heat.read_age_min, heat.delayed_min)}
         </p>
       </div>
 
       <div className="px-4">
         {mode === "cards" ? (
           <div className={GRID}>
-            {leader && <TopMover c={leader} span={span} word={spanWord} pctOf={pctOf} rsOf={rsOf} tint={tint} on={sel === leader.key} onPick={pick} />}
+            {leader && <TopMover c={leader} span={span} word={spanWord} pctOf={pctOf} rsOf={rsOf} noteOf={noteOf} countsWord={countsWord} tint={tint} on={sel === leader.key} onPick={pick} />}
             {top.slice(1).map((c, i) => (
-              <Card key={c.key} c={c} rank={i + 2} span={span} pctOf={pctOf} rsOf={rsOf} tint={tint} barMax={barMax} on={sel === c.key} onPick={pick} />
+              <Card key={c.key} c={c} rank={i + 2} span={span} pctOf={pctOf} rsOf={rsOf} noteOf={noteOf} countsWord={countsWord} tint={tint} barMax={barMax} on={sel === c.key} onPick={pick} />
             ))}
             {themes.map((c) => (
-              <Card key={c.key} c={c} span={span} pctOf={pctOf} rsOf={rsOf} tint={tint} barMax={barMax} on={sel === c.key} onPick={pick} />
+              <Card key={c.key} c={c} span={span} pctOf={pctOf} rsOf={rsOf} noteOf={noteOf} countsWord={countsWord} tint={tint} barMax={barMax} on={sel === c.key} onPick={pick} />
             ))}
           </div>
         ) : (
           <div className={GRID}>
             {inds.map((g) => (
-              <IndustryCard key={g.key} g={g} span={span} spy={spy} tint={heatMax(inds.map((i) => i[span].median))} barMax={heatMax(inds.map((i) => (i[span].median == null || spy == null ? null : (i[span].median as number) - spy)))} on={sel === `i:${g.key}`} onPick={() => pick(`i:${g.key}`)} />
+              <IndustryCard key={g.key} g={g} span={span} spy={spyInd} tint={heatMax(inds.map((i) => i[span].median))} barMax={heatMax(inds.map((i) => (i[span].median == null || spyInd == null ? null : (i[span].median as number) - spyInd)))} on={sel === `i:${g.key}`} onPick={() => pick(`i:${g.key}`)} />
             ))}
           </div>
         )}
@@ -261,17 +280,11 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
             </button>
           ))}
         </span>
-        {global.length > 0 && (
-          <Menu label={<>Global{selCard && selCard.parent === null && selCard.kind === "theme" ? ` · ${selCard.key}` : ""} ▾</>} width={240}>
-            <span className="seg flex-col items-stretch">
-              {global.map((c) => (
-                <button key={c.key} type="button" onClick={() => setSel(c.key)} {...segItem(sel === c.key)}>
-                  {c.key} · {c.label} <span className={cn("fig ml-1", dir(pctOf(c)))}>{pct(pctOf(c))}</span>
-                </button>
-              ))}
-            </span>
-          </Menu>
-        )}
+        {/* NO "GLOBAL" MENU HERE (owner, 2026-11-15: "why do we have a random drop down that
+            says global and then when you click it has options for china internet and china
+            large cap only?"). It held the two themes with no sector to sit under, KWEB and
+            FXI. Both are cards in the grid above, and a card filters this table as the menu
+            did: the card lights, and the note under this bar says whose list it is. */}
         <div className="ml-auto flex items-center gap-2">
           {table?.ok && <span className="fig text-[11px] text-ink-3">{table.shown === table.matched ? table.shown : `${table.shown} of ${table.matched}`} showing · {table.scanned.toLocaleString()} scanned</span>}
           <Menu label={<>Filters · <span className="fig">{summary}</span></>}>
@@ -442,14 +455,18 @@ interface CardBase {
   span: HeatSpan;
   pctOf: (c: HeatCard) => number | null;
   rsOf: (c: HeatCard) => number | null;
+  /** The small line beside the figure outside the session (lib/sectorPhase cardNote). */
+  noteOf: (c: HeatCard) => { text: string; title: string } | null;
+  /** What the up/down counts are of, when it is not the span's ordinary move. */
+  countsWord: string;
   tint: number;
   on: boolean;
   onPick: (key: string) => void;
 }
 
-function Counts({ up, down }: { up: number; down: number }) {
+function Counts({ up, down, word = "" }: { up: number; down: number; word?: string }) {
   return (
-    <span className="fig text-[10.5px] whitespace-nowrap" title="Its stocks at $2bn+ that rose and fell">
+    <span className="fig text-[10.5px] whitespace-nowrap" title={`Its stocks at $2bn+ that rose and fell${word ? ` ${word}` : ""}`}>
       <span className="up">{up}↑</span> <span className="down">{down}↓</span>
     </span>
   );
@@ -467,31 +484,34 @@ function SpyBar({ v, max }: { v: number | null; max: number }) {
   );
 }
 
-function Card({ c, rank, span, pctOf, rsOf, tint, barMax, on, onPick }: CardBase & { c: HeatCard; rank?: number; barMax: number }) {
+function Card({ c, rank, span, pctOf, rsOf, noteOf, countsWord, tint, barMax, on, onPick }: CardBase & { c: HeatCard; rank?: number; barMax: number }) {
   const p = pctOf(c);
+  const note = noteOf(c);
   return (
-    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} style={heatStyle(p, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")}>
+    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={note?.title} style={heatStyle(p, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")}>
       <p className="flex items-center gap-2">
         <SectorGlyph fund={c.key} size={15} className="block shrink-0 text-ink-2" />
         <span className="fig text-[13px] font-semibold text-ink">{c.key}</span>
         <span className={cn("fig text-[13px]", dir(p))}>{pct(p)}</span>
-        {rank != null && <span className="fig ml-auto text-[10.5px] text-ink-3">#{rank}</span>}
+        {note?.text && <span className="fig truncate text-[10.5px] text-ink-3">{note.text}</span>}
+        {rank != null && <span className="fig ml-auto shrink-0 text-[10.5px] text-ink-3">#{rank}</span>}
       </p>
       <p className="mt-0.5 flex items-baseline justify-between gap-2">
         <span className="truncate text-[11.5px] text-ink-3">{c.label}</span>
-        {c.names > 0 && <Counts up={c[span].up} down={c[span].down} />}
+        {c.names > 0 && <Counts up={c[span].up} down={c[span].down} word={countsWord} />}
       </p>
       <SpyBar v={rsOf(c)} max={barMax} />
     </button>
   );
 }
 
-function TopMover({ c, span, word, pctOf, rsOf, tint, on, onPick }: CardBase & { c: HeatCard; word: string }) {
+function TopMover({ c, span, word, pctOf, rsOf, noteOf, countsWord, tint, on, onPick }: CardBase & { c: HeatCard; word: string }) {
   const p = pctOf(c);
+  const note = noteOf(c);
   const read = c[span];
   const led = read.leaders.map((x) => `${x.sym} ${x.chg >= 0 ? "+" : ""}${x.chg.toFixed(1)}%`).join(", ");
   return (
-    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} style={heatStyle(p, tint)} className={cn(CARD_BOX, "col-span-2 row-span-2 flex flex-col justify-between px-4 py-3", on ? "border-ink-3" : "border-ring")}>
+    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={note?.title} style={heatStyle(p, tint)} className={cn(CARD_BOX, "col-span-2 row-span-2 flex flex-col justify-between px-4 py-3", on ? "border-ink-3" : "border-ring")}>
       <div>
         <p className="qt-cap text-[10px] text-ink-3">Top mover</p>
         <p className="mt-1 flex items-center justify-between gap-3">
@@ -502,13 +522,16 @@ function TopMover({ c, span, word, pctOf, rsOf, tint, on, onPick }: CardBase & {
           <span className={cn("fig text-[22px] leading-none", dir(p))}>{pct(p)}</span>
         </p>
         <p className="mt-1 flex items-baseline justify-between gap-3 text-[12.5px]">
-          <span className="text-ink-2">{c.label}</span>
+          <span className="text-ink-2">
+            {c.label}
+            {note?.text && <span className="fig ml-2 text-[11px] text-ink-3">{note.text}</span>}
+          </span>
           <span className={cn("fig text-[12px]", dir(rsOf(c)))}>{pct(rsOf(c))} vs SPY</span>
         </p>
       </div>
       <p className="mt-2 text-[12px] leading-[1.4] text-ink-3">
         Leads the board over {word}
-        {c.names > 0 ? `: ${read.up} of its ${c.names} stocks at $2bn+ rose, ${read.down} fell.` : "."}
+        {c.names > 0 ? `: ${read.up} of its ${c.names} stocks at $2bn+ rose, ${read.down} fell${countsWord ? ` ${countsWord}` : ""}.` : "."}
         {led ? ` Led by ${led}.` : ""}
       </p>
     </button>

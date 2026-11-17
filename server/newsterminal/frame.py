@@ -148,9 +148,19 @@ def read(frame: dict[str, Any] | None, last: float | None) -> dict[str, Any] | N
             bits.append(f"Below the {names(under)}")
         else:
             bits.append(f"Above the {names(over)}, below the {names(under)}")
-    if hi_pct is not None:
-        bits.append("at a 52-week high" if hi_pct >= 0
-                    else f"{abs(hi_pct):.1f}% under the 52-week high")
+    # THE NEARER EXTREME, WHICHEVER IT IS (the both-sides audit, 2026-11-14). The line
+    # named the 52-week high only, so a name breaking down at its lows read "33.8% under
+    # the 52-week high" and never "at a 52-week low": the sentence a short is read by had
+    # no words. In the upper half of the year's range it is said against the high, in the
+    # lower half against the low.
+    if lo_pct is not None and lo_pct <= 0:
+        bits.append("at a 52-week low")
+    elif hi_pct is not None and hi_pct >= 0:
+        bits.append("at a 52-week high")
+    elif hi is not None and lo is not None and hi > lo and (last - lo) / (hi - lo) < 0.5:
+        bits.append(f"{lo_pct:.1f}% over the 52-week low")
+    elif hi_pct is not None:
+        bits.append(f"{abs(hi_pct):.1f}% under the 52-week high")
     if pw:
         bits.append(f"{pw} last week's range")
     return {

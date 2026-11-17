@@ -67,14 +67,14 @@ import { usePinsChanged } from "@/lib/usePinsChanged";
  */
 const CHIPS: ReadonlyArray<{ key: BreakoutChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
+  { key: "news", label: "Has News", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened 2% or more away from the previous close" },
   // `both` is an OUTSIDE DAY (owner, 2026-11-13: above both highs or below both lows).
   // It read "Both ranges" and the chip after it, the previous day's level alone, was
   // the one called "Outside day". The keys are what the collector knows them by.
-  { key: "both", label: "Outside day", title: OUTSIDE_DAY_TITLE },
+  { key: "both", label: "Outside Day", title: OUTSIDE_DAY_TITLE },
   { key: "through", label: "Through PDH/PDL", title: THROUGH_DAY_TITLE },
-  { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range" },
+  { key: "inside", label: "Inside Day", title: "The whole session inside the previous day's range" },
 ];
 const CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
 const VOLS = [0, 1e5, 5e5, 1e6, 5e6].map((value) => ({ value, label: volWord(value) }));

@@ -189,21 +189,22 @@ def test_the_brief_carries_the_blocks_and_keeps_only_cited_ids() -> None:
     assert "heavyweights" in digest and "event_risk" in digest
     brief = report.sanitize_brief({
         "thesis": "t",
-        "calls": [{"book": "NQ", "open_bias": "bearish", "conviction": 4, "rest_of_day": "r",
-                   "rest_of_day_bias": "bearish", "wrong_if": "w",
-                   "why": ["Macro: x", "Structure: y"],
-                   # The first live note wrote the ids into the sentence too
-                   # (2026-10-30 02:46 ET); the tail is cut, the ids stay in their field.
-                   "catalyst": "Alphabet's miss, $2.12 against $2.94, is 0.37 points of the "
-                               "index. catalyst_ids: w4, e9.",
-                   "catalyst_ids": ["w4", "e9", 7]}],
-        "reads": [{"book": "NQ", "regime": "r", "chain": [], "at_open": "a", "wrong_if": "w",
-                   "rest_of_day": "d", "flips": [], "drivers": []}],
+        "calls": [{"book": "NQ", "open_bias": "bearish", "conviction": 4, "wrong_if": "w",
+                   # The heavyweight's print is the comment on News & data (the report's
+                   # rows, 2026-11-15): the call's own `catalyst` sentence and its ids
+                   # went with the long shape. A comment for a row the page does not
+                   # have (the trend family left the bias the same day) is dropped.
+                   "factors": [
+                       {"key": "catalysts", "line": "Alphabet's miss, $2.12 against $2.94, "
+                                                    "is 0.37 points of the index."},
+                       {"key": "daily", "line": "Below the 200-day."}],
+                   "plan": "p", "catalyst": "x", "catalyst_ids": ["w4", "e9", 7]}],
     }, facts)
     assert brief is not None
     call = brief["calls"][0]
-    assert call["catalyst"] == "Alphabet's miss, $2.12 against $2.94, is 0.37 points of the index."
-    assert call["catalyst_ids"] == ["w4"]
+    assert set(call) == {"book", "open_bias", "conviction", "factors", "plan", "wrong_if"}
+    assert call["factors"] == [{"key": "catalysts", "line": (
+        "Alphabet's miss, $2.12 against $2.94, is 0.37 points of the index.")}]
 
 
 def test_an_untimed_print_is_placed_after_the_close() -> None:

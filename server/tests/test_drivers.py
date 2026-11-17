@@ -72,8 +72,11 @@ def test_nq_board_counts_the_votes_and_names_the_conflict() -> None:
     assert "negative is not bearish" in v["gamma"]["note"]
     assert v["value"]["vote"] == "short" and v["value"]["value"] == "below (VAL 30,100)"
     assert v["session"]["vote"] == "short" and "Asia's low is taken out" in v["session"]["note"]
-    assert v["frame"]["vote"] == "short"
-    assert v["frame"]["value"] == "Above the 200-day, below the 20 and 50-day"
+    # No trend row (owner, 2026-11-15: "i think we drop ema's from the bias and scoring of
+    # stocks", and the plain daily read with them): the daily frame, the 200-day EMA and
+    # the ten-minute 200 EMA are not built, so nothing on the board argues from an average.
+    assert not {"frame", "daily200", "trend10m"} & set(v)
+    assert "daily" not in {f["key"] for f in nq["families"]}
     assert v["sectors"]["vote"] == "neutral" and v["leaders"]["vote"] == "neutral"
     assert nq["bias"] == "short" and nq["grade"] == "strong"
     assert nq["macro_lean"] == "short" and nq["structure_lean"] == "short"
@@ -109,7 +112,7 @@ def test_cash_reads_are_neutral_outside_us_hours_and_say_so() -> None:
 
 def test_conflict_lowers_the_read_to_the_levels() -> None:
     snap = _snap()
-    # Structure long: above prior value, above Asia's high, above the averages.
+    # Structure long: above prior value and above Asia's high.
     snap["quotes"][0]["last"] = 31_000.0
     snap["profiles"]["assets"]["NQ"]["last"] = 31_000.0
     snap["gex"]["assets"]["NQ"]["spot"] = 31_000.0

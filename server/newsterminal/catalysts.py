@@ -130,6 +130,11 @@ _PR = re.compile(
     r"\bannounces? participation\b|\bupcoming (?:investor )?(?:conferences?|events?)\b|"
     r"\bto (?:hold|host|webcast) .{0,50}\b(?:conference call|earnings call|webcast)\b|"
     r"\b(?:sets|announces|schedules) (?:the )?(?:date|timing) (?:for|of)\b|"
+    # "Ciena Announces Reporting Date and Web Broadcast for Fiscal Fourth Quarter and
+    # Year-End 2026 Results" was a major Earnings story by its "Results" the day the
+    # companies' own releases became the larger part of what scores (2026-11-15).
+    r"\bannounces? (?:the )?(?:reporting|earnings|release|results?) dates?\b|"
+    r"\b(?:webcast|web broadcast)\b.{0,60}\b(?:results|earnings)\b|"
     # "Onfolio Holdings Sets Third Quarter 2026 Earnings Call for November 17, 2026, at
     # 8:00 a.m. ET" was a major Earnings story on the Dashboard.
     r"\b(?:sets|schedules)\b.{0,60}\b(?:earnings|results|conference) (?:call|release|date)\b|"
@@ -271,12 +276,18 @@ _UP_FIRM = re.compile(r"\b[Uu]pgrad\w*\s+(?:by|from|at)\s+[A-Z]")
 
 def analyst_upgrade(title: str) -> bool:
     """Is this headline an analyst raising a rating, and not a product getting better?
-    Pure."""
+    Pure.
+
+    AND THE REASON A STOCK MOVED (the both-sides audit, 2026-11-14): "Acme Tumbles 6% on
+    Downgrade" was an analyst's note by its word, and "Acme Rallies 6% on Upgrade" was
+    not, because no firm, rating or "stock" is named in it: the fall graded notable and
+    the rally major. After a price move's "on", "after" or "following", an upgrade is an
+    analyst's, as a downgrade always is (`_UP_REASON`)."""
     t = title or ""
     if not _UPGRADE.search(t) or _UP_PRODUCT.search(t):
         return False
     return bool(_UP_PASSIVE.search(t) or _UP_RATED.search(t) or _UP_SAYS.search(t)
-                or _UP_FIRM.search(t))
+                or _UP_FIRM.search(t) or _UP_REASON.search(t))
 _GUIDE = re.compile(
     r"(rais|cut|lower|hik|slash|lift|withdraw|reaffirm|boost|trim)\w* .{0,40}"
     r"(guidance|outlook|forecast)|(guidance|outlook|forecast) (cut|raise|hike|lowered|slashed)",
@@ -312,7 +323,11 @@ _FDA = re.compile(
 # Buy Nvidia" must stay one. A company agreeing, planning or bidding to buy, or "to buy"
 # a named company for a price.
 _DEAL = re.compile(
-    r"\bacqui(?:re|res|red|ring|sitions?)\b|\bmergers?\b|\bmerges?\b|\btakeover\b|\bbuyout\b|"
+    # A blank-cheque company is NAMED for what it means to do: "Sizzle Acquisition
+    # Corp. II 3Q 2026: Net income $1.37M — 10-Q Summary" was a major Deal by its name.
+    r"\bacqui(?:re|res|red|ring)\b|"
+    r"\bacquisitions?\b(?!\s+(?:corp|corporation|co|company|inc|holdings|partners|ltd)\b)|"
+    r"\bmergers?\b|\bmerges?\b|\btakeover\b|\bbuyout\b|"
     r"\btake[- ]private\b|definitive agreement|"
     r"\b(?:agrees?|agreed|plans?|set|nears?|in talks|offers?|bids?|moves?|seeks?|looks?)\s+to\s+"
     r"(?:buy|acquire|purchase)\b|"
@@ -400,15 +415,40 @@ _DONE = re.compile(
 # ---- a move, and which way ---------------------------------------------------------
 # THE VERB NAMES THE DIRECTION. Explicit forms, not stems: "surg\w*" is also surgery,
 # "tank\w*" a tanker, "zoom" and "rocket" are companies.
+#
+# THE WORDS THAT ARE A PRICE MOVE ONLY IN A PRICE'S COMPANY, ADDED IN PAIRS (the both-sides
+# audit, 2026-11-14: nine up-words and nine down-words the reader did not know, so "Acme
+# Stock Declines 7% After Earnings" and "Advances 7%" read no move either way). "Declines"
+# is also declines to comment, "advances" a drug into a trial, "dips" into reserves,
+# "retreats" from a market, "sheds" jobs and "adds" stores, which is why they were left
+# out. They count where what follows makes them a price: a percent or points (`_PX_PCT`),
+# or for the verbs that are seldom anything else a reason's word as well (`_PX_NEXT`).
+# Never "as": "Acme Advances as Leader in AI". The two-word forms need no company. A word
+# is added with its twin, and tests/test_both_sides.py holds each pair.
+_PX_QUAL = (r"(?:(?:nearly|almost|about|over|more than|around|roughly|another|as much as|"
+            r"up to|some)\s+)?")
+_PX_PCT = rf"(?=\s+{_PX_QUAL}\d[\d.,]*\s?(?:%|percent\b|points?\b)(?!\s+of\b))"
+_PX_NEXT = (rf"(?=\s+{_PX_QUAL}\d[\d.,]*\s?(?:%|percent\b|points?\b)(?!\s+of\b)|"
+            r"\s+(?:sharply|again|further|back|on|after|following|amid|despite)\b)")
 _UP = (r"soars?|soared|soaring|surges?|surged|surging|jumps?|jumped|jumping|"
        r"rall(?:y|ies|ied|ying)|climbs?|climbed|climbing|ris(?:e|es|en|ing)|rose|gains?|"
        r"gained|gaining|spikes?|spiked|spiking|pops|popped|rocketed|rocketing|"
-       r"skyrockets?|skyrocketed|skyrocketing|leaps?|leapt|leaped|leaping")
+       r"skyrockets?|skyrocketed|skyrocketing|leaps?|leapt|leaped|leaping|"
+       r"mov(?:es|ed|ing) higher|trad(?:es|ed|ing) higher|head(?:s|ed|ing) higher|"
+       r"edg(?:es|ed|ing) (?:higher|up)|tick(?:s|ed|ing) (?:higher|up)|"
+       r"inch(?:es|ed|ing) (?:higher|up)|shoots? up|shot up|"
+       rf"(?:advances?|advanced|advancing|rebounds?|rebounded|rebounding|bounces?|bounced|"
+       rf"bouncing){_PX_NEXT}|(?:adds?|added){_PX_PCT}")
 _DOWN = (r"plunges?|plunged|plunging|sinks?|sank|sunk|sinking|tumbles?|tumbled|tumbling|"
          r"slumps?|slumped|slumping|crash|crashes|crashed|crashing|drops?|dropped|dropping|"
          r"fall|falls|fell|falling|slides?|slid|sliding|dives?|dove|diving|tanks?|tanked|"
          r"tanking|plummets?|plummeted|plummeting|nosedives?|nosedived|slips?|slipped|"
-         r"slipping|craters?|cratered|cratering|skids?|skidded|sell[- ]?off|sells off|sold off")
+         r"slipping|craters?|cratered|cratering|skids?|skidded|sell[- ]?off|sells off|sold off|"
+         r"mov(?:es|ed|ing) lower|trad(?:es|ed|ing) lower|head(?:s|ed|ing) lower|"
+         r"edg(?:es|ed|ing) (?:lower|down)|tick(?:s|ed|ing) (?:lower|down)|"
+         r"inch(?:es|ed|ing) (?:lower|down)|"
+         rf"(?:declines?|declined|declining|dips?|dipped|dipping|retreats?|retreated|"
+         rf"retreating){_PX_NEXT}|(?:sheds?|loses?|lost|collapses?|collapsed){_PX_PCT}")
 #: A VERB THAT IS NOT A PRICE MOVE (2026-11-13): "Intel Drops Plans for Ohio Fab" and
 #: "Apple Drops Price of iPhone" read as the stock falling and cost a long three.
 _NOT_PRICE = (r"(?!\s+(?:plans?|bids?|offers?|lawsuits?|suits?|claims?|deals?|charges?|prices?|"
@@ -419,6 +459,10 @@ _NOT_PRICE = (r"(?!\s+(?:plans?|bids?|offers?|lawsuits?|suits?|claims?|deals?|ch
               # on the Roundtable 100" cost Apple's short ten).
               r"(?!\s+\d+\s+(?:places?|spots?|positions?|ranks?|notches)\b)")
 _MOVE = re.compile(rf"\b(?:{_UP}|{_DOWN})\b{_NOT_PRICE}", re.I)
+#: An upgrade given as the reason for a price move (`analyst_upgrade`).
+_UP_REASON = re.compile(
+    rf"\b(?:{_UP}|{_DOWN})\b[^.;]{{0,40}}\b(?:on|after|following|amid)\b[^.;]{{0,30}}\bupgrad",
+    re.I)
 #: What makes a move a story: the move and why. "Axon Stock Plunges as Delayed Drone
 #: Deals Hit Revenue" says why; "five chip stocks skyrocket, what you need to know" does not.
 #: WHEN IS NOT WHY (audit, 2026-11-11): "Why AMD shares are rallying on Tuesday?" and
@@ -457,10 +501,21 @@ _RECAP = re.compile(
 _KEPT = 32768
 
 
+#: MICROSOFT'S OUTLOOK IS A MAIL APP, NOT GUIDANCE (2026-11-14, live on the day's list:
+#: "Microsoft Says Outage Disrupting Outlook Is Improving" was held as a major Earnings
+#: story, because a report's words include "outlook"). Beside an outage, mail, an inbox,
+#: a login or the suite it ships in, the word is the product and is read as one.
+_OUTLOOK = re.compile(r"\boutlook\b", re.I)
+_OUTLOOK_APP = re.compile(
+    r"\b(?:outages?|e-?mails?|inbox(?:es)?|log-?ins?|sign-?ins?|microsoft 365|office 365)\b", re.I)
+
+
 @lru_cache(maxsize=_KEPT)
 def grade(title: str) -> Grade:
     """A headline → its tag and tier. Pure. The order of the checks is the rule."""
     t = title or ""
+    if _OUTLOOK.search(t) and _OUTLOOK_APP.search(t):
+        t = _OUTLOOK.sub("its mail app", t)
     if _NOISE.search(t):
         return Grade("Notice", NOISE)
     talk = _talk(t)
@@ -934,6 +989,41 @@ NOT_NEWS = frozenset({"Notice", "Filler", "PR", "Preview", "Opinion", "List", "R
 #: Coinpedia's rewrite was Nvidia's ten-point catalyst that morning). Lower case.
 REWRITERS = frozenset({"binance news", "coinpedia", "cryptonews", "brave new coin",
                        "crypto briefing"})
+#: SITES THAT REPORT NOTHING OF THEIR OWN (owner, 2026-11-15: "the most reputable
+#: sources as possible"). A screen, a stock-picking column, a social feed's chatter or
+#: a templated "deep dive" on a report a wire filed hours before: "APP Stock Surges 51%
+#: After Q3 Earnings: Is it Still a Buy?" (Zacks), "HIMS Stock Slides Overnight: Retail
+#: Bets On Peptides Comeback" (Stocktwits). Counted that day on the 12,199 stories
+#: held: 827 came from these, 270 of the 4,123 graded major or notable, and each of
+#: those was a second telling of an event Dow Jones, Reuters or the company's own
+#: release had already filed. A story from one of them is held under no name. Seeking
+#: Alpha's news desk and Benzinga stay: they are often the first to file an analyst's
+#: action, which the score reads. Lower case.
+#:
+#: AND THE ONES YAHOO HOSTS UNDER ITS OWN NAME (the same day, later). The per-ticker
+#: feed now names the outlet behind each story (sources/scanner YAHOO_SEARCH), and the
+#: sample read there added the sites this list did not have: TIKR, Trefis, TipRanks
+#: (screens and price-target pages), Moneywise, Kiplinger and GOBankingRates (personal
+#: finance), InvestorPlace, and TheStreet and Investing.com, which left the wire's
+#: list of newsrooms that morning. Compared as `outlet_key` writes them, so "The
+#: Motley Fool", "GuruFocus.com" and "24/7 Wall St." are the entries here.
+SECOND_HAND = frozenset({
+    "stocktwits", "gurufocus", "zacks", "marketbeat", "stock story", "invezz", "motley fool",
+    "insider monkey", "simply wall st", "24/7 wall st", "investopedia",
+    "tikr", "trefis", "tipranks", "moneywise", "kiplinger", "gobankingrates", "investorplace",
+    "thestreet", "investing", "zacks investment research", "cryptoprowl", "beincrypto",
+    # Yahoo's own personal-finance desk (credit cards, mortgages), seen under Amazon.
+    "yahoo personal finance",
+})
+_OUTLET_TAIL = re.compile(r"(?:\.com|\.)$")
+
+
+def outlet_key(publisher: str) -> str:
+    """An outlet's name as the lists above hold it: lower case, no leading "the", no
+    trailing ".com" or full stop. Pure."""
+    p = " ".join((publisher or "").lower().split())
+    p = p.removeprefix("the ")
+    return _OUTLET_TAIL.sub("", p).strip()
 
 
 def story(title: str, sym: str = "", names: Sequence[str] = (),
@@ -963,14 +1053,14 @@ def story(title: str, sym: str = "", names: Sequence[str] = (),
     """
     # Kept by its arguments (see `grade`): the names as a tuple, the publisher as it is
     # compared, so one headline under one name is one entry however it is asked.
-    return _story(title or "", sym, tuple(names), (publisher or "").strip().lower(), bool(strict))
+    return _story(title or "", sym, tuple(names), outlet_key(publisher), bool(strict))
 
 
 @lru_cache(maxsize=2 * _KEPT)
 def _story(title: str, sym: str, names: tuple[str, ...], publisher: str,
            strict: bool) -> Grade | None:
     """`story`, on arguments that can be a key: `publisher` already lower case."""
-    if publisher in REWRITERS:
+    if publisher in REWRITERS or publisher in SECOND_HAND:
         return None
     # Asked outright, not left to the grade: a template that is also a List by its
     # words ("Here's Why Oracle (ORCL) Fell More Than Broader Market") would otherwise
@@ -1007,7 +1097,7 @@ def _story(title: str, sym: str, names: tuple[str, ...], publisher: str,
 #: signals ran further (the module docstring), and inside each day the catalyst was
 #: worth more held R than RS, which has 25 points. A judgement on that, not a fit.
 TIER_POINTS = {MAJOR: 20, NOTABLE: 12, MINOR: 3, NOISE: 0}
-#: What a headline against the side costs. Major news against the trade costs 10
-#: (it was 6, the same as an analyst's note); the rest are as they were, since the
-#: record on news against a trade is mixed.
-TIER_PENALTY = {MAJOR: -10, NOTABLE: -6, MINOR: -3, NOISE: 0}
+#: A headline that read against the side used to cost -10 / -6 / -3 (TIER_PENALTY). It
+#: earns its grade either way since 2026-11-14 (scanscore.W_CATALYST): on the record a
+#: story read as against the trade did as well as one read as with it, so what the
+#: words say is a flag on the row and the price picks the side.

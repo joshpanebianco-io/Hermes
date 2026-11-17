@@ -4,11 +4,10 @@ import { memo, useMemo } from "react";
 import type { Terminal as TerminalData } from "@/types/terminal";
 import { Wire } from "@/components/panels/Wire";
 import { Board } from "@/components/panels/Board";
-import { Rates } from "@/components/panels/Rates";
+import { Rates, type TenLive } from "@/components/panels/Rates";
 import { Calendar } from "@/components/panels/Calendar";
 import { Earnings } from "@/components/panels/Earnings";
 import { Movers } from "@/components/panels/Movers";
-import { Fed } from "@/components/panels/Fed";
 import type { MarketFeed } from "@/lib/useMarket";
 import { useWatchlistEarnings } from "@/lib/useWatchlistEarnings";
 import { boardReady } from "@/lib/ready";
@@ -25,9 +24,22 @@ import { ageStep } from "@/lib/format";
  *
  * LEFT: the index movers (which names carried the index), then Earnings (owner,
  * 2026-11-13: "move the earnings card to the left and under index movers"), with the
- * Scanner's names marked, then Rates & policy, the curve and the Fed path.
+ * Scanner's names marked, then the macro board. Earnings is the card that gives: it takes
+ * the room the other two leave and scrolls inside it, so the whole board is on screen.
  *
- * RIGHT: the calendar, then the macro board under it, then the Fed & Treasury diary.
+ * RIGHT: the calendar, then Rates & policy, the curve and the Fed path, under it.
+ *
+ * THE BOARD AND RATES & POLICY CHANGED PLACES (owner, 2026-11-15: "switch rate and policy
+ * with macro board"). What is said further down of the board sitting under the calendar
+ * is how it stood from 2026-11-14 until then.
+ *
+ * THE FED & TREASURY DIARY IS IN THE CALENDAR (owner, 2026-11-14, of an audit of these
+ * cards: "do what you recommend"). It was the third card here, a screen below the fold
+ * under a 1,567px board, and its speakers were already calendar rows. Its decisions,
+ * minutes, Beige Books and coupon auctions are rows of the calendar now (lib/schedule),
+ * the calendar reaches a week ahead instead of three days and takes the room the board
+ * leaves, and the board draws in two columns on a wide card. Hermes still reads the
+ * diary and the auctions through its own panels.
  *
  * THREE PANELS WENT, AND THE BOARD CAME UP (owner, 2026-11-14, after a review of the
  * page: "yes do that"). Each repeated another panel on the same page:
@@ -67,7 +79,6 @@ const MRates = memo(Rates);
 const MCalendar = memo(Calendar);
 const MEarnings = memo(Earnings);
 const MMovers = memo(Movers);
-const MFed = memo(Fed);
 
 const NONE: never[] = [];
 const EMPTY = {} as Record<string, never>;
@@ -93,6 +104,34 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
     return [...base, ...add].sort((a, b) => a.date.localeCompare(b.date) || (b.market_cap ?? 0) - (a.market_cap ?? 0));
   }, [data.earnings, extra]);
 
+  // GOLD LEADS METALS & AGS (owner, 2026-11-14: "i dont see gold in the metals and
+  // ags?"). The collector files the gold future with the books (group "core", which
+  // this board does not draw: it is the Futures tab's), so silver, copper and platinum
+  // were listed here and gold was not. It is the same GC row, drawn again at the head
+  // of the metals. A copy made here, not a second row in the collector: one fetch,
+  // one price, and nothing else that reads the books sees gold twice.
+  const boardQuotes = useMemo(() => {
+    const all = data.quotes ?? NONE;
+    const gc = all.find((q) => q.key === "GC");
+    const at = all.findIndex((q) => q.group === "metals");
+    if (!gc || at < 0) return all;
+    return [...all.slice(0, at), { ...gc, group: "metals" as const }, ...all.slice(at)];
+  }, [data.quotes]);
+
+  // The 10Y for the Rates card's first line, WHILE THE DRIVER BOARD SAYS IT IS LIVE
+  // (drivers._yields: the cash 10Y trading, no bond holiday). Outside that the card
+  // falls back to the Treasury's last close with its day. Primitives, so the memoised
+  // card redraws when the figure changes and not on every poll.
+  const tenQ = (data.quotes ?? NONE).find((q) => q.key === "US10Y");
+  const tenV = data.drivers?.books?.NQ?.votes?.find((v) => v.key === "yields");
+  const tenLast = tenV?.live && tenQ ? tenQ.last : null;
+  const tenChg = tenV?.live && tenQ ? tenQ.chg : null;
+  const tenVote = tenV?.vote ?? "neutral";
+  const ten = useMemo<TenLive | null>(
+    () => (tenLast != null && tenChg != null ? { last: tenLast, chgBp: Math.round(tenChg * 1000) / 10, vote: tenVote } : null),
+    [tenLast, tenChg, tenVote],
+  );
+
   // Waiting is a card where the board will be (ui/HelmLoader PageLoader), inset as the
   // board's cards are under Luminous; Quiet gives the wait no paint or inset.
   if (!boardReady(data, SOURCES, feed)) {
@@ -105,14 +144,25 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
 
   // New York's box: the cash figures on this page are the last session's outside it.
   const cashOpen = data.clock?.boxes?.some((b) => b.key === "ny" && b.open) ?? true;
+  // The session is over: from the 16:00 ET close to midnight, and through a weekend.
+  // The Earnings card then lists what is coming above what has been traded.
+  const afterClose = !cashOpen && (data.clock?.weekend === true || Number.parseInt(data.clock?.et_time ?? "", 10) >= 16);
+
+  // A source showing its last good copy says why in its status even while it is ok
+  // (the holdings file behind Index movers, 37 hours old on 2026-11-14 with live
+  // prices on top): the age chip's hover carries it, so a red age names its cause.
+  const why = (k: string) => (st[k]?.ok && st[k]?.error ? st[k].error : null);
 
   return (
     <main className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(300px,1fr)_minmax(420px,1.35fr)_minmax(320px,1.1fr)] xl:overflow-hidden">
       {/* ---- left: what the market is doing ------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <MMovers indices={data.constituents?.indices ?? EMPTY} cashOpen={cashOpen} ageMin={age("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
-        <MEarnings rows={earnings} watch={watch} today={data.expiry?.today ?? ""} ageMin={age("earnings")} error={st.earnings?.ok === false ? st.earnings.error : null} />
-        <MRates rates={data.rates} pm={data.policy_meetings} ageMin={age("rates")} error={st.rates?.ok === false ? st.rates.error : null} />
+        <MMovers indices={data.constituents?.indices ?? EMPTY} cashOpen={cashOpen} ageMin={age("constituents")} ageNote={why("constituents")} error={st.constituents?.ok === false ? st.constituents.error : null} />
+        <MEarnings rows={earnings} watch={watch} today={data.expiry?.today ?? ""} afterClose={afterClose} ageMin={age("earnings")} error={st.earnings?.ok === false ? st.earnings.error : null} />
+        {/* The board and Rates & policy changed places (owner, 2026-11-15: "switch rate and
+            policy with macro board"): prices sit with the movers on the left, the Fed's path
+            with the calendar it is priced off on the right. */}
+        <MBoard title="Macro board" twoUp quotes={boardQuotes} groups={MACRO_GROUPS} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
       </div>
 
       {/* ---- middle: the wire -------------------------------------------- */}
@@ -122,15 +172,17 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
 
       {/* ---- right: what is scheduled ------------------------------------ */}
       <div className="qt-col flex min-h-0 min-w-0 flex-col gap-2 xl:overflow-y-auto">
-        <MCalendar rows={data.calendar ?? NONE} holidays={data.holidays ?? NONE} ageMin={age("calendar")} error={st.calendar?.ok === false ? st.calendar.error : null} />
-        <MBoard title="Macro board" quotes={data.quotes ?? NONE} groups={MACRO_GROUPS} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
-        <MFed
-          rows={data.fed ?? NONE}
+        <MCalendar
+          rows={data.calendar ?? NONE}
+          fed={data.fed ?? NONE}
           auctions={data.auctions ?? NONE}
-          today={data.expiry?.today ?? ""}
-          ageMin={raw.fed == null ? age("auctions") : raw.auctions == null ? age("fed") : (ageStep(Math.max(raw.fed, raw.auctions)) ?? undefined)}
-          error={st.fed?.ok === false ? st.fed.error : st.auctions?.ok === false ? st.auctions.error : null}
+          holidays={data.holidays ?? NONE}
+          ageMin={age("calendar")}
+          // The diary and the auctions are rows of this card now: if either source is
+          // down, this is the card that says so.
+          error={st.calendar?.ok === false ? st.calendar.error : st.fed?.ok === false ? `Fed diary: ${st.fed.error}` : st.auctions?.ok === false ? `Treasury auctions: ${st.auctions.error}` : null}
         />
+        <MRates rates={data.rates} pm={data.policy_meetings} ten={ten} ageMin={age("rates")} error={st.rates?.ok === false ? st.rates.error : null} />
       </div>
     </main>
   );

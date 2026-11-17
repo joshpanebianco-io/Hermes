@@ -67,9 +67,9 @@ export function suggestionsFor(tab: string, sym: string | null): string[] {
       ];
     case "report":
       return [
-        "Summarise the latest brief in three lines",
+        "Summarise the latest report in three lines",
         "What would make today's calls wrong?",
-        "Explain the gamma read in plain words",
+        "Which factor carries the bias right now?",
         "Which catalyst is the biggest risk this session?",
       ];
     case "market":

@@ -67,6 +67,7 @@ from ..frame import frame_of
 from ..holidays import is_trading_day
 from ..http import CACHE, SourceStatus, clean_text, feed_body, fetch, json_body, rss_items
 from ..scanscore import avg_day
+from .earnhist import parse_edgar
 from .insiders import InsiderBook, form4_refs, line_of
 from .quotes import SPARK
 from .wire import gnews
@@ -131,6 +132,44 @@ CLOSED_SEC = 900.0
 MAX_PER_TICK = 5
 DAILY_TTL = 6 * 3600.0
 DAILY_PER_TICK = 3
+#: WHO WROTE IT (owner, 2026-11-15: "i just want to make sure we have quality sources
+#: for the stock related news ... the ones that we use to determine if a stock is likely
+#: to trend", then "do what you recommend"). The per-ticker RSS names no author: a
+#: story Yahoo hosts for a partner arrives with a finance.yahoo.com link, so four in
+#: five read "Yahoo Finance" whoever wrote them. Counted that day over the 84 names:
+#: 27% of the stories that scored were these, and for 25 of the 46 names with a scoring
+#: story the strongest one was. Yahoo's search answer for the same ticker names the
+#: outlet on every story (and the tickers it is filed under): of 156 sampled, about
+#: 115 were stock-picking and screen sites (Zacks, 24/7 Wall St, TIKR, Motley Fool,
+#: Trefis, Simply Wall St, GuruFocus, Insider Monkey), 11 Barron's, 8 MT Newswires,
+#: 4 the company's own release. So the rows are read from the search answer, each
+#: with its outlet, and catalysts.SECOND_HAND can then do to Yahoo's what it does to
+#: every other feed's. The RSS is still read for the sentence it carries under a
+#: headline (newsread.py), and is the rows only when the search does not answer.
+YAHOO_SEARCH = ("https://query2.finance.yahoo.com/v1/finance/search?q={sym}"
+                "&quotesCount=0&newsCount=40&enableFuzzyQuery=false")
+#: A story filed under more tickers than this is a list, not a name's story: the rule
+#: the wide scan's flow has (tvnews.MAX_RELATED).
+SEARCH_MAX_RELATED = 3
+#: ONE COMPANY, SEVERAL TICKERS. Yahoo files every Alphabet story under GOOG and its
+#: own "GOOGN", never GOOGL: on the first live pass (2026-11-15) not one of GOOGL's 36
+#: stories was "its own" by the ticker rule, so the name fell back to the RSS and its
+#: stories carried no outlet. A story under a share class of the name is the name's.
+SHARE_CLASSES: dict[str, frozenset[str]] = {
+    "GOOGL": frozenset({"GOOG", "GOOGN"}), "GOOG": frozenset({"GOOGL", "GOOGN"}),
+    "BRK-B": frozenset({"BRK-A"}), "BRK-A": frozenset({"BRK-B"}),
+    "FOXA": frozenset({"FOX"}), "FOX": frozenset({"FOXA"}),
+    "NWSA": frozenset({"NWS"}), "NWS": frozenset({"NWSA"}),
+}
+#: Yahoo's spelling of an outlet → the one the terminal prints.
+OUTLETS: dict[str, str] = {
+    "barrons.com": "Barron's", "barron's": "Barron's",
+    "investor's business daily": "IBD", "business wire": "BusinessWire",
+    "the wall street journal": "WSJ", "associated press finance": "AP",
+    "24/7 wall st.": "24/7 Wall St", "simply wall st.": "Simply Wall St",
+    "gurufocus.com": "GuruFocus", "the motley fool": "Motley Fool",
+    "investing.com": "Investing.com", "thestreet.com": "TheStreet",
+}
 NEWS_SEC = 600.0
 NEWS_PER_TICK = 3
 #: After a restart, names never read get a catch-up of this many a tick, so the
@@ -523,13 +562,93 @@ def parse_news(xml: str, publisher: str = "Yahoo Finance") -> list[dict[str, Any
         when = _when(r["date"])
         if publisher != "Google News":
             pub = publisher_of(r["link"], publisher)
-        out.append({
+        row: dict[str, Any] = {
             "title": title,
             "url": r["link"],
             "publisher": pub,
             "utc": when.astimezone(UTC).isoformat() if when else None,
             "ts": when.timestamp() if when else None,
+        }
+        # The feed's sentence or two, kept for the model's read of a major story
+        # (newsread.py). It never reaches a row: scanscore.news_for copies what it names.
+        # A Google News "summary" is markup listing other outlets, as on the wire.
+        summary = (r.get("summary") or "").strip()
+        if publisher != "Google News" and len(summary) >= 40 and summary != title:
+            row["summary"] = summary[:320]
+        out.append(row)
+    return out
+
+
+def outlet(name: Any) -> str:
+    """An outlet as Yahoo spells it, in the terminal's spelling. Pure."""
+    raw = " ".join(str(name or "").split())
+    return OUTLETS.get(raw.lower(), raw) or "Yahoo Finance"
+
+
+def _link_key(url: Any) -> str:
+    """A story's address without what a feed appends to it ("?.tsrc=rss")."""
+    return str(url or "").split("?", 1)[0].rstrip("/").lower()
+
+
+def search_ok(body: bytes) -> str | None:
+    """A search answer that carries stories. Yahoo now and then answers 200 with an
+    empty list for a name it had forty stories for a minute before (AMZN, twice on
+    2026-11-15): kept as an answer, that empty list was the name's news for nine
+    minutes. Refused here, it is never written over the last good copy and the name
+    is asked again."""
+    bad = json_body(body)
+    if bad:
+        return bad
+    try:
+        doc = json.loads(body)
+    except ValueError as e:
+        return f"not JSON: {e}"
+    return None if isinstance(doc, dict) and doc.get("news") else "no stories in the answer"
+
+
+def parse_search(doc: Any, sym: str) -> list[dict[str, Any]]:
+    """Yahoo's search answer for a ticker → headline rows, each with the outlet that
+    wrote it. Pure.
+
+    Left out: a video, a story filed under more than SEARCH_MAX_RELATED tickers (a
+    list), and a story Yahoo files under other tickers and not this one, which is
+    another company's ("StoneCo Ltd. (STNE) Q3 Earnings Lag Estimates" stood under BZ
+    on the RSS, which says nothing of whose a story is).
+    """
+    own = _yahoo(sym).upper()
+    mine = {own} | SHARE_CLASSES.get(own, frozenset())
+    out: list[dict[str, Any]] = []
+    for n in (doc or {}).get("news") or [] if isinstance(doc, dict) else []:
+        if not isinstance(n, dict) or str(n.get("type") or "STORY").upper() != "STORY":
+            continue
+        title = mend(str(n.get("title") or "").strip())
+        link = str(n.get("link") or "")
+        if not title or not link:
+            continue
+        tickers = {str(x).upper() for x in n.get("relatedTickers") or []}
+        # Counted as companies, not tickers: a share class of this one is this one.
+        if tickers and (not tickers & mine or len(tickers - mine) >= SEARCH_MAX_RELATED):
+            continue
+        ts = n.get("providerPublishTime")
+        when = (datetime.fromtimestamp(float(ts), UTC)
+                if isinstance(ts, int | float) and not isinstance(ts, bool) else None)
+        out.append({
+            "title": title, "url": link, "publisher": outlet(n.get("publisher")),
+            "utc": when.isoformat() if when else None,
+            "ts": when.timestamp() if when else None,
         })
+    return out
+
+
+def with_summaries(named: list[dict[str, Any]], rss: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows that name their outlet, each with the sentence the RSS carries under
+    the same story (matched by its address, else its headline). Pure."""
+    by_link = {_link_key(r.get("url")): r.get("summary") for r in rss if r.get("summary")}
+    by_title = {str(r.get("title")): r.get("summary") for r in rss if r.get("summary")}
+    out: list[dict[str, Any]] = []
+    for r in named:
+        summary = by_link.get(_link_key(r.get("url"))) or by_title.get(str(r.get("title")))
+        out.append({**r, "summary": summary} if summary else r)
     return out
 
 
@@ -608,6 +727,8 @@ class ScanStore:
         #: Each name's Form 4s of the last month, and the ones read (sources/insiders.py).
         self.form4_refs: dict[str, list[dict[str, Any]]] = {}
         self.insider_book = InsiderBook()
+        #: Each name's results releases, from the same read (sources/earnhist.parse_edgar).
+        self.reports: dict[str, list[dict[str, Any]]] = {}
         #: More names for the SEC job to read, set by the collector (`tick_sec`).
         self.sec_extra: Callable[[], Iterable[str]] | None = None
         self.ciks: dict[str, int] = {}
@@ -1261,12 +1382,26 @@ class ScanStore:
         due = sorted((s for s in names if t - self.news_at.get(s, 0.0) >= NEWS_SEC),
                      key=lambda s: self.news_at.get(s, 0.0))
         errors: list[str] = []
+        unnamed: list[str] = []
         cold = sum(1 for s in due if s not in self.news_at)
         for sym in due[:max(NEWS_PER_TICK, min(cold, NEWS_PER_TICK_COLD))]:
             r = fetch(YAHOO_RSS.format(sym=urllib.parse.quote(_yahoo(sym))),
                       key=f"scannews_{sym}", ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15,
                       stale_max_sec=6 * 3600.0, validate=feed_body)
             items = parse_news(_decode(r.body)) if r.ok else []
+            # The same ticker's stories with the outlet that wrote each (YAHOO_SEARCH):
+            # those are the rows, and the RSS is left to supply its sentence.
+            j = fetch(YAHOO_SEARCH.format(sym=urllib.parse.quote(_yahoo(sym))),
+                      key=f"scansearch_{sym}", ttl_sec=NEWS_SEC - 60, ua=BROWSER_UA, timeout=15,
+                      stale_max_sec=6 * 3600.0, validate=search_ok)
+            named: list[dict[str, Any]] = []
+            if j.ok:
+                with contextlib.suppress(ValueError):
+                    named = parse_search(j.json(), sym)
+            if named:
+                items = with_summaries(named, items)
+            elif items:
+                unnamed.append(sym)
             if not items:
                 q = (ALIASES.get(sym) or [sym])[0]
                 g = fetch(gnews(f'"{q}" stock', when="3d"), key=f"scangnews_{sym}",
@@ -1284,6 +1419,11 @@ class ScanStore:
                 it["kind"] = None
             self.news[sym] = items
             self.news_at[sym] = t
+            # A name read without its outlets is asked again in two minutes, not ten:
+            # after a restart the first ten names go out at once, and Yahoo's search
+            # turned two of them away (GOOGL and META, 2026-11-15).
+            if sym in unnamed:
+                self.news_at[sym] = t - NEWS_SEC + 120.0
         st.items = sum(1 for s in names if self.news.get(s))
         # A tick with nothing due, or names that simply have no headlines, is
         # healthy; only a tick whose fetches FAILED is not.
@@ -1293,6 +1433,11 @@ class ScanStore:
         st.age_min = max(ages) if ages else None
         if errors:
             st.error = errors[0]
+        if unnamed:
+            # Said, not silent: these names' stories are the RSS's this pass, with no
+            # outlet on the ones Yahoo hosts, so the set-aside list cannot reach them.
+            st.notes.append(f"Yahoo's search did not answer for {', '.join(unnamed[:6])}: "
+                            "their stories carry no outlet this pass")
         if st.ok:
             st.last_ok_utc = datetime.now(UTC).isoformat()
         return st
@@ -1335,6 +1480,7 @@ class ScanStore:
             self.filings_at[sym] = t
             if cik is None:
                 self.filings[sym] = []
+                self.reports[sym] = []
                 continue
             r = fetch(SEC_SUBMISSIONS.format(cik=cik), key=f"scansec_{cik}",
                       ttl_sec=SEC_SEC - 60, ua=UA, timeout=20, stale_max_sec=86400.0,
@@ -1347,6 +1493,8 @@ class ScanStore:
                 self.filings[sym] = parse_filings(doc, cik, today)
                 # The same list's Form 4s, for the insider trades (sources/insiders.py).
                 self.form4_refs[sym] = form4_refs(doc, cik, today)
+                # And its results releases, for the earnings history (sources/earnhist.py).
+                self.reports[sym] = parse_edgar(doc)
             except ValueError as e:
                 err = err or f"{sym}: unparseable: {e}"
         # A few of the Form 4s not read yet, newest first: each is read once and kept.

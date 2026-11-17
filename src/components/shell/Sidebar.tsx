@@ -3,7 +3,7 @@
 import { Mark } from "@/components/shell/Header";
 import { AssetIcon } from "@/components/ui/AssetIcon";
 import { cn } from "@/lib/cn";
-import { FUT_NAME, FUT_VIEWS, isFutBook, type FutView } from "@/lib/futures";
+import { FUT_NAME, FUT_VIEWS, type FutView } from "@/lib/futures";
 import { stripViews, type ScanView, type Tab } from "@/lib/tabs";
 import { useLegacyViews } from "@/lib/legacyViews";
 import { isBool, usePersisted } from "@/lib/usePersisted";
@@ -136,8 +136,8 @@ const SCAN_ICON: Record<ScanView, React.ReactNode> = {
   breakouts: ICON.breakouts,
   extended: ICON.extended,
   day23: ICON.day23,
-  plan: ICON.note,
   multi: ICON.multi,
+  report: ICON.note,
 };
 
 export function Sidebar({
@@ -182,13 +182,16 @@ export function Sidebar({
       label: "Futures",
       items: FUT_VIEWS.map((v) => ({
         key: `fut-${v.key}`,
-        label: isFutBook(v.key) ? `${v.label} · ${FUT_NAME[v.key]}` : v.label,
+        // The written report is a view after CL since 2026-11-16 (lib/futures).
+        label: v.key === "report" ? v.label : `${v.label} · ${FUT_NAME[v.key]}`,
         title: v.title,
-        icon: isFutBook(v.key) ? <AssetIcon id={v.key} size={15} className="block shrink-0" /> : v.key === "brief" ? ICON.note : ICON.layers,
+        icon: v.key === "report" ? ICON.note : <AssetIcon id={v.key} size={15} className="block shrink-0" />,
         on: tab === "futures" && futView === v.key,
         go: () => onFut(v.key),
       })),
     },
+    // No Reports group since 2026-11-16: the written report is a view of the Futures and
+    // the Stocks groups, Market Report under each (lib/futures FUT_VIEWS, lib/tabs SCAN_VIEWS).
     {
       label: "Assistant",
       items: [{ key: "hermes", label: "Hermes AI", title: "Ask about anything on the terminal", icon: ICON.hermes, on: tab === "hermes", go: () => onTab("hermes") }],

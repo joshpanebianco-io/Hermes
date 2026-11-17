@@ -27,8 +27,9 @@ the votes with their reads and never enter the count.
 THE INPUTS KEEP THEIR OWN CLOCKS. A cash-market read (credit, breadth, the
 leaders, the VIX's day change) says "closed" outside US hours and carries
 `live: false`: the futures desk runs through Asia and London, and a read that
-cannot vote is not the same as a flat one. The score leaves it out and prints
-how much of the session's weight that leaves (bias.py), so a thin read says so.
+cannot vote is not the same as a flat one. It is on neither side, and the score
+is over the whole of the session's weight (bias.py), so a board with little
+live reads near zero and `coverage` says how much of the weight could vote.
 
 PURE. `build` takes the snapshot's blocks and does no I/O; computed on read
 like volterm and expiry.
@@ -36,6 +37,7 @@ like volterm and expiry.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -46,9 +48,13 @@ from . import holidays, marketctx, releases, report, structure, volterm
 from .profile import value_position
 from .sources import cot as cot_mod
 
-BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
+#: Every book the board scores. Silver and crude since 2026-11-15 (bias.py says what
+#: each answers to); until then they had levels, ranges and gamma and no score.
+BOOKS: tuple[str, ...] = ("NQ", "ES", "GC", "SIL", "CL")
 #: Which cash index each equity book's leaders are read from.
 INDEX_OF = {"NQ": "NDX", "ES": "SPX"}
+#: The books the CFTC's positioning is read for (sources/cot.py).
+COT_BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
 
 # ---- the thresholds, the stocks desk's where one exists ----------------------
 YIELD_BP = marketctx.YIELD_BP  # the 10Y's day change at or beyond this votes
@@ -62,8 +68,17 @@ PART_SHORT = marketctx.PART_SHORT
 PART_MIN = marketctx.PART_MIN
 #: Silver's day move at or beyond this votes for gold (the metals bid or offered).
 SILVER_FLAT = 0.5
-#: Copper's day move past this is named in silver's note (industrial, not monetary).
+#: Copper's day move past this is named in silver's note (industrial, not monetary),
+#: and votes on silver's own board (its industrial half) and on crude's (demand).
 COPPER_FLAT = 0.5
+#: Gold's day move at or beyond this votes for silver: a quarter of a usual gold day.
+GOLD_FLAT = 0.4
+#: Gasoline and heating oil, averaged: their day move at or beyond this votes for crude.
+PRODUCTS_FLAT = 0.75
+#: The weekly crude inventories: a change, or a miss against consensus, of this many
+#: barrels votes. The weekly figure is routinely a few million either way.
+INVENTORY_FLAT = 1_000_000.0
+_INVENTORIES = re.compile(r"crude oil inventories", re.I)
 
 #: A quote whose feed is one of these printed today; "closed" and "stale" did not.
 _LIVE = ("live", "delayed")
@@ -95,6 +110,14 @@ def _side(x: float, long_at: float, short_at: float) -> str:
 
 def _signed(x: float, dp: int, unit: str = "") -> str:
     return f"{x:+.{dp}f}{unit}"
+
+
+def _px(v: float, of: float | None = None) -> str:
+    """A price as the board says it: whole points from a thousand up (NQ, ES, gold),
+    dollars and cents under it (silver, crude), where whole numbers put silver's
+    value area at "49 · 49 · 49". A distance is said in its price's terms (`of`): 200
+    points off an NQ flip is "200", 0.88 off silver's is "0.88"."""
+    return f"{v:,.0f}" if abs(v if of is None else of) >= 1000 else f"{v:,.2f}"
 
 
 def _trading(q: dict[str, Any] | None) -> bool:
@@ -135,6 +158,9 @@ def _yields(quotes: list[dict[str, Any]], book: str, day: date | None = None) ->
     if book == "GC":
         note = ("yields up: the carrying cost of a zero-coupon asset rises — a headwind"
                 if rising else "yields down: cheaper to hold gold — a tailwind")
+    elif book == "SIL":
+        note = ("yields up: a metal that pays nothing costs more to hold — a headwind"
+                if rising else "yields down: cheaper to hold silver — a tailwind")
     else:
         note = ("the discount rate is rising — a headwind for a long-duration index"
                 if rising else "the discount rate is falling — a tailwind")
@@ -158,6 +184,13 @@ def _dollar(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     if book == "GC":
         note = ("a firmer dollar is the unit gold is priced in rising — a headwind" if up
                 else "a softer dollar — a tailwind for gold")
+    elif book == "SIL":
+        note = ("a firmer dollar is the unit silver is priced in rising — a headwind" if up
+                else "a softer dollar — a tailwind for silver")
+    elif book == "CL":
+        note = ("a firmer dollar makes the barrel dearer for every buyer paying in another "
+                "currency — a headwind" if up
+                else "a softer dollar makes the barrel cheaper outside America — a tailwind")
     else:
         note = ("a firmer dollar tightens conditions — a headwind" if up
                 else "a softer dollar eases conditions — a tailwind")
@@ -250,6 +283,140 @@ def _silver(quotes: list[dict[str, Any]]) -> dict[str, Any]:
                   else "the metals complex is offered") + tail)
 
 
+# ---- silver's and crude's own reads (2026-11-15; bias.py says why these) ------------
+
+
+def _gold(quotes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Gold's day move, for silver: the mirror of the silver read on gold's board."""
+    q = _q(quotes, "GC")
+    pct = _num(q.get("pct")) if q else None
+    if q is None or pct is None:
+        return _vote("gold", "Gold", "macro", "—", "neutral", "no gold on the board", live=False)
+    value = _signed(pct, 2, "%")
+    if _stopped(q):
+        return _vote("gold", "Gold", "macro", value, "neutral",
+                     "gold has stopped printing — no live read", live=False)
+    if abs(pct) < GOLD_FLAT:
+        return _vote("gold", "Gold", "macro", value, "neutral", f"inside ±{GOLD_FLAT}% — no read")
+    return _vote("gold", "Gold", "macro", value, "long" if pct > 0 else "short",
+                 "gold is bid — silver follows it, and moves further" if pct > 0
+                 else "gold is offered — silver rarely holds when gold falls")
+
+
+def _copper(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
+    """Copper's day move: silver's industrial half, and crude's demand read."""
+    q = _q(quotes, "COPPER")
+    pct = _num(q.get("pct")) if q else None
+    if q is None or pct is None:
+        return _vote("copper", "Copper", "macro", "—", "neutral", "no copper on the board",
+                     live=False)
+    value = _signed(pct, 2, "%")
+    if _stopped(q):
+        return _vote("copper", "Copper", "macro", value, "neutral",
+                     "copper has stopped printing — no live read", live=False)
+    if abs(pct) < COPPER_FLAT:
+        return _vote("copper", "Copper", "macro", value, "neutral",
+                     f"inside ±{COPPER_FLAT}% — no read")
+    up = pct > 0
+    if book == "CL":
+        note = ("copper is bid — the growth trade is on, and crude is a demand market" if up
+                else "copper is offered — the growth trade is coming off, and demand with it")
+    else:
+        note = ("copper is bid — the industrial half of silver's demand is with it" if up
+                else "copper is offered — the industrial half of silver's demand is leaving")
+    return _vote("copper", "Copper", "macro", value, "long" if up else "short", note)
+
+
+def _products(quotes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Gasoline and heating oil, for crude: whether the barrel is being pulled through."""
+    legs = [(name, q) for name, key in (("gasoline", "RBOB"), ("heating oil", "HEATOIL"))
+            if (q := _q(quotes, key)) is not None and _num(q.get("pct")) is not None]
+    if not legs:
+        return _vote("products", "Products", "macro", "—", "neutral",
+                     "no gasoline or heating oil on the board", live=False)
+    value = " · ".join(f"{name} {_signed(float(q['pct']), 2, '%')}" for name, q in legs)
+    printing = [float(q["pct"]) for _, q in legs if not _stopped(q)]
+    if not printing:
+        return _vote("products", "Products", "macro", value, "neutral",
+                     "the products have stopped printing — no live read", live=False)
+    avg = sum(printing) / len(printing)
+    if abs(avg) < PRODUCTS_FLAT:
+        return _vote("products", "Products", "macro", value, "neutral",
+                     f"{_signed(avg, 2, '%')} between them, inside ±{PRODUCTS_FLAT}% — no read")
+    return _vote("products", "Products", "macro", value, "long" if avg > 0 else "short",
+                 "the products are bid — refiners are paying up, the barrel is being pulled "
+                 "through" if avg > 0
+                 else "the products are offered — nothing is pulling the barrel through")
+
+
+def _barrels(n: float) -> str:
+    return f"{n / 1e6:+.1f}M bbl"
+
+
+def _inventories(calendar: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    """The weekly crude inventories, on the day they print: a build is short, a draw long.
+
+    Against consensus where the calendar carries one; the week's change itself where it
+    does not (the stand-in feed lists the figure and no forecast), which is still the
+    fact a desk reacts to. It votes from its print to the end of that New York day."""
+    et = report.ET
+    today = now.astimezone(et).date()
+    rows = [r for r in calendar
+            if _INVENTORIES.search(str(r.get("event") or ""))
+            and not re.search(r"\bapi\b|cushing", str(r.get("event") or ""), re.I)
+            and _num(r.get("ts")) is not None]
+    mine = [r for r in rows if datetime.fromtimestamp(float(r["ts"]), et).date() == today]
+    if not mine:
+        nxt = min((r for r in rows if float(r["ts"]) > now.timestamp()),
+                  key=lambda r: float(r["ts"]), default=None)
+        when = (f"next {datetime.fromtimestamp(float(nxt['ts']), et):%a %H:%M} ET"
+                if nxt else "none on the calendar")
+        return _vote("inventories", "Crude inventories", "macro", "—", "neutral",
+                     f"no inventories report today — {when}", live=False)
+    r = mine[-1]
+    actual = _num(r.get("actual"))
+    at = datetime.fromtimestamp(float(r["ts"]), et)
+    if not r.get("released") or actual is None:
+        return _vote("inventories", "Crude inventories", "macro", "—", "neutral",
+                     f"due {at:%H:%M} ET today", live=False)
+    cons = _num(r.get("consensus"))
+    miss = actual - cons if cons is not None else actual
+    value = _barrels(actual) + (f" vs {_barrels(cons)} expected" if cons is not None else "")
+    basis = "against consensus" if cons is not None else "on the week (no consensus on the feed)"
+    if abs(miss) < INVENTORY_FLAT:
+        return _vote("inventories", "Crude inventories", "macro", value, "neutral",
+                     f"inside ±{INVENTORY_FLAT / 1e6:.0f}M barrels {basis} — no read")
+    build = miss > 0
+    than = "expected" if cons is not None else "a week ago"
+    return _vote("inventories", "Crude inventories", "macro", value, "short" if build else "long",
+                 (f"more crude in store than {than} ({_barrels(miss)} {basis}) — supply is "
+                  "ahead of demand" if build
+                  else f"less crude in store than {than} ({_barrels(miss)} {basis}) — demand is "
+                       "ahead of supply"))
+
+
+def _growth_prints(calendar: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    """Today's US growth prints, for crude: stronger activity is more barrels burned.
+
+    On the index books a growth print is read and not counted, because strong data
+    cuts both ways for an equity. For crude it is demand: hot is long, cold is short."""
+    rows = [p for p in marketctx.prints(calendar, now) if p.get("released") and p.get("read")
+            and "growth" in (p.get("themes") or [])]
+    if not rows:
+        return _vote("prints", "US growth prints", "macro", "—", "neutral",
+                     "no US growth print has landed today", live=False)
+    named = " · ".join(f"{p['title']} {p['read']}" for p in rows[-3:])
+    reads = {p["read"] for p in rows}
+    if reads == {"hot"}:
+        return _vote("prints", "US growth prints", "macro", named, "long",
+                     "activity is running ahead of forecast — more demand for the barrel")
+    if reads == {"cold"}:
+        return _vote("prints", "US growth prints", "macro", named, "short",
+                     "activity is running behind forecast — less demand for the barrel")
+    return _vote("prints", "US growth prints", "macro", named, "neutral",
+                 "growth prints mixed or in line — no read")
+
+
 def _prints(calendar: list[dict[str, Any]], now: datetime, book: str) -> dict[str, Any]:
     """Today's inflation prints vote; the rest are named and read, not counted."""
     rows = [p for p in marketctx.prints(calendar, now) if p.get("released") and p.get("read")]
@@ -307,11 +474,12 @@ def _gamma(gex: dict[str, Any] | None, book: str, last: float | None,
     above = spot >= flip
     dist = spot - flip
     in_sig = f" ({abs(dist) / sigma:.1f}σ)" if sigma else ""
-    value = f"{word} · {'above' if above else 'below'} flip {flip:,.0f}"
+    value = f"{word} · {'above' if above else 'below'} flip {_px(flip)}"
     how = ("dealers damp moves — fade into the walls, ranges hold" if regime == "POS"
            else "dealers chase moves — breaks run, trade the break not the fade"
            if regime == "NEG" else "regime unknown")
-    return row(value, f"spot {abs(dist):,.0f} {'above' if above else 'below'} the flip{in_sig}; "
+    side = "above" if above else "below"
+    return row(value, f"spot {_px(abs(dist), flip)} {side} the flip{in_sig}; "
                       f"{how}. Not a direction: positive is not bullish, negative is not bearish")
 
 
@@ -327,12 +495,12 @@ def _value(profiles: dict[str, Any] | None, book: str, last: float | None) -> di
                      "no prior RTH profile yet", live=False)
     pos = value_position(last, prev.get("vah"), prev.get("val"))
     vah, val, poc = prev.get("vah"), prev.get("val"), prev.get("poc")
-    area = f"VAL {val:,.0f} · POC {poc:,.0f} · VAH {vah:,.0f}" if vah and val and poc else "no area"
+    area = f"VAL {_px(val)} · POC {_px(poc)} · VAH {_px(vah)}" if vah and val and poc else "no area"
     if pos == "above_value":
-        return _vote("value", "Value area", "structure", f"above (VAH {vah:,.0f})", "long",
+        return _vote("value", "Value area", "structure", f"above (VAH {_px(vah)})", "long",
                      f"trading above yesterday's value area — acceptance higher; {area}")
     if pos == "below_value":
-        return _vote("value", "Value area", "structure", f"below (VAL {val:,.0f})", "short",
+        return _vote("value", "Value area", "structure", f"below (VAL {_px(val)})", "short",
                      f"trading below yesterday's value area — acceptance lower; {area}")
     return _vote("value", "Value area", "structure", "inside", "neutral",
                  f"inside yesterday's value — rotation, the POC is the magnet; {area}")
@@ -351,7 +519,7 @@ def _session(ranges: dict[str, Any] | None, book: str, last: float | None) -> di
     if hi is None or lo is None:
         return _vote("session", "Last session", "structure", "—", "neutral", "no range",
                      live=False)
-    value = f"{label} {lo:,.0f}–{hi:,.0f}"
+    value = f"{label} {_px(lo)}–{_px(hi)}"
     if last > hi:
         return _vote("session", "Last session", "structure", value, "long",
                      f"{label}'s high is taken out — the handover is higher")
@@ -372,7 +540,7 @@ def _trend10m(ranges: dict[str, Any] | None, book: str, last: float | None) -> d
         return _vote("trend10m", "10m trend", "structure", "—", "neutral",
                      "no ten-minute history yet — the 200 EMA needs two days of bars", live=False)
     slope = str(e.get("slope") or "flat") if isinstance(e, dict) else "flat"
-    px = f"{line:,.0f}" if line >= 1000 else f"{line:,.2f}"
+    px = _px(line)
     side = structure.side_of(last, line)
     if side == "above":
         return _vote("trend10m", "10m trend", "structure", f"above {px}", "long",
@@ -397,7 +565,7 @@ def _regime200(frames: dict[str, Any] | None, book: str, last: float | None) -> 
         return _vote("daily200", "Daily 200", "structure", "—", "neutral",
                      "no daily history yet — the 200-day EMA needs a year of sessions", live=False)
     pct = (last - line) / line * 100.0
-    px = f"{line:,.0f}" if line >= 1000 else f"{line:,.2f}"
+    px = _px(line)
     side = structure.side_of(last, line, structure.DAILY_ON_PCT)
     if side == "above":
         return _vote("daily200", "Daily 200", "structure", f"above {px}", "long",
@@ -512,10 +680,12 @@ def _context(book: str, cot: dict[str, Any] | None, putcall: dict[str, Any] | No
                     "value": f"net {'long' if net >= 0 else 'short'} {abs(net):,.0f} · "
                              f"{cot_mod.ordinal(c.get('pctile'))} pct",
                     "note": f"{c.get('read')} As of {c.get('as_of')}."})
-    else:
+    elif book in COT_BOOKS:
+        # Silver and crude are not among the contracts the CFTC file is read for: no
+        # row, where "has not answered" would say a feed was down.
         out.append({"key": "cot", "label": "COT", "value": "—",
                     "note": "the CFTC has not answered"})
-    if book != "GC":
+    if book in INDEX_OF:
         pc = putcall if isinstance(putcall, dict) else None
         if pc and pc.get("ratios"):
             r, rd = pc["ratios"], pc.get("read") or {}
@@ -528,7 +698,9 @@ def _context(book: str, cot: dict[str, Any] | None, putcall: dict[str, Any] | No
         else:
             out.append({"key": "putcall", "label": "Cboe put/call", "value": "—",
                         "note": "no daily ratios yet"})
-    if isinstance(expiry, dict) and expiry.get("opex_week"):
+    # The monthly expiry is the equity options'; gold has carried the row since the
+    # board was built, silver and crude do not.
+    if book not in ("SIL", "CL") and isinstance(expiry, dict) and expiry.get("opex_week"):
         out.append({"key": "opex", "label": "OpEx week", "value": "this week",
                     "note": str(expiry.get("note") or "the near book is at its largest; "
                                 "price pins to the walls into Friday")})
@@ -548,22 +720,35 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
                sigma: float | None, scan_session: str, now: datetime, weigh: str,
                heavy: list[dict[str, Any]] | None = None,
                events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    q = _q(quotes, book)
+    # Silver and crude ride the board under SILVER and WTI (volterm.quote_key).
+    q = _q(quotes, volterm.quote_key(book))
     last = _num(q.get("last")) if q else None
     cash_open = scan_session == "rth"
-    votes: list[dict[str, Any]] = [
-        _yields(quotes, book, now.astimezone(report.ET).date()), _dollar(quotes, book),
-    ]
-    if book == "GC":
-        votes.append(_silver(quotes))
+    day = now.astimezone(report.ET).date()
+    # THE MACRO READS ARE THE BOOK'S OWN (bias.py says what each answers to). The
+    # index books and gold are as they were; silver reads rates and the dollar as gold
+    # does, with gold and copper beside them; crude reads the dollar, the products,
+    # credit and copper, its inventories and the day's growth prints, and neither the
+    # 10-year nor the VIX.
+    votes: list[dict[str, Any]]
+    if book == "SIL":
+        votes = [_yields(quotes, book, day), _dollar(quotes, book), _gold(quotes),
+                 _copper(quotes, book), _prints(calendar, now, book)]
+    elif book == "CL":
+        votes = [_dollar(quotes, book), _products(quotes), _credit(quotes),
+                 _copper(quotes, book), _inventories(calendar, now),
+                 _growth_prints(calendar, now)]
     else:
-        votes.append(_credit(quotes))
-    votes += [_vix_dir(quotes, book), _vix_curve(quotes, book), _prints(calendar, now, book),
-              _gamma(gex, book, last, sigma),
-              _value(profiles, book, last), _session(ranges, book, last),
-              _frame(frames, book, last), _regime200(frames, book, last),
-              _trend10m(ranges, book, last)]
-    if book != "GC":
+        votes = [_yields(quotes, book, day), _dollar(quotes, book),
+                 _silver(quotes) if book == "GC" else _credit(quotes),
+                 _vix_dir(quotes, book), _vix_curve(quotes, book), _prints(calendar, now, book)]
+    # No trend read (owner, 2026-11-15; bias.BOARD_FAMILY has the why): the daily
+    # frame, the 200-day EMA and the ten-minute 200 EMA were three rows here and are
+    # none. `_frame`, `_regime200` and `_trend10m` are kept below, unused, as the way
+    # back: put them in this list and their families in bias.py.
+    votes += [_gamma(gex, book, last, sigma),
+              _value(profiles, book, last), _session(ranges, book, last)]
+    if book in INDEX_OF:
         sv = marketctx._sectors_vote(sectors, scan_session)
         sv["layer"] = "structure"
         votes.append(sv)
@@ -594,7 +779,7 @@ def weights_for(now: datetime) -> str:
 
 def build(snap: dict[str, Any], scan_session: str = "closed",
           now: datetime | None = None) -> dict[str, Any]:
-    """The driver board for the three books from the snapshot's blocks. Pure."""
+    """The driver board for every book from the snapshot's blocks. Pure."""
     now = now or datetime.now(UTC)
     quotes = [x for x in snap.get("quotes") or [] if isinstance(x, dict)]
     books_sigma = {b.get("key"): _num(b.get("sigma"))
@@ -619,7 +804,7 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
             putcall=snap.get("putcall") if isinstance(snap.get("putcall"), dict) else None,
             expiry=snap.get("expiry") if isinstance(snap.get("expiry"), dict) else None,
             fed=fed, sigma=books_sigma.get(book), scan_session=scan_session, now=now, weigh=weigh,
-            heavy=events_mod.heavyweights(snap, book, now) if book != "GC" else None,
+            heavy=events_mod.heavyweights(snap, book, now) if book in INDEX_OF else None,
             events=events,
         )
         for book in BOOKS

@@ -1,7 +1,7 @@
 // node --experimental-strip-types --test src/lib/earningsOrder.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nearestFirst } from "./earningsOrder.ts";
+import { aheadFirst, nearestFirst } from "./earningsOrder.ts";
 
 const order = (dates: string[], today: string) =>
   nearestFirst(dates.map((d) => [d, null] as const), today).map(([d]) => d);
@@ -41,4 +41,18 @@ test("the input is left alone", () => {
   const input = [["2026-11-06", 1], ["2026-11-05", 2]] as const;
   nearestFirst(input, "2026-11-05");
   assert.equal(input[0][0], "2026-11-06");
+});
+
+test("after the close what is coming leads, and what has been traded follows, latest first", () => {
+  // Fri 13 Nov 2026 in the evening: Thursday's five reports sat above Tuesday's NVDA.
+  const dates = ["2026-11-12", "2026-11-13", "2026-11-17", "2026-11-11", "2026-11-19"];
+  const after = aheadFirst(dates.map((d) => [d, null] as const), "2026-11-13").map(([d]) => d);
+  assert.deepEqual(after, ["2026-11-13", "2026-11-17", "2026-11-19", "2026-11-12", "2026-11-11"]);
+  // A weekend has no today: the days ahead, then the days gone.
+  const sat = aheadFirst(dates.map((d) => [d, null] as const), "2026-11-14").map(([d]) => d);
+  assert.deepEqual(sat, ["2026-11-17", "2026-11-19", "2026-11-13", "2026-11-12", "2026-11-11"]);
+  // Before the close the owner's order stands: yesterday above tomorrow.
+  assert.deepEqual(order(["2026-11-12", "2026-11-13", "2026-11-17"], "2026-11-13"), ["2026-11-13", "2026-11-12", "2026-11-17"]);
+  // No usable today: date order, as nearestFirst falls back to.
+  assert.deepEqual(aheadFirst([["2026-11-17", null], ["2026-11-12", null]] as const, "").map(([d]) => d), ["2026-11-12", "2026-11-17"]);
 });

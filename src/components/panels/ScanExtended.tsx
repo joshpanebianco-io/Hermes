@@ -61,13 +61,13 @@ import { usePinsChanged } from "@/lib/usePinsChanged";
  */
 const CHIPS: ReadonlyArray<{ key: ExtendedChip; label: string; title?: string }> = [
   { key: "all", label: "All" },
-  { key: "news", label: "Has news", title: "A story about this name in the last day" },
-  { key: "up", label: "Gap up" },
-  { key: "down", label: "Gap down" },
+  { key: "news", label: "Has News", title: "A story about this name in the last day" },
+  { key: "up", label: "Gap Up" },
+  { key: "down", label: "Gap Down" },
   // Not "Outside day": that is through both ranges (lib/outsideDay), and in an extended
   // session this list knows the previous day's level alone.
   { key: "through", label: "Through PDH/PDL", title: THROUGH_DAY_TITLE },
-  { key: "inside", label: "Inside day", title: "The last bar sits inside the one before it" },
+  { key: "inside", label: "Inside Day", title: "The last bar sits inside the one before it" },
 ];
 const CAPS = [0, 3e8, 2e9, 5e9, 1e10].map((value) => ({ value, label: capWord(value) }));
 const VOLS = [

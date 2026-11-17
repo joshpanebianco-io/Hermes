@@ -8,11 +8,12 @@ import { SideHeader } from "@/components/shell/SideHeader";
 import { StatusRail } from "@/components/shell/StatusRail";
 import { Scanner } from "@/components/panels/Scanner";
 import { Settings } from "@/components/panels/Settings";
-import { StockPlan } from "@/components/panels/StockPlan";
 import { Dashboard } from "@/components/Dashboard";
 import { MacroBoard } from "@/components/MacroBoard";
 import { FuturesBoard } from "@/components/futures/FuturesBoard";
-import { FUT_NAME, FUT_VIEW_KEYS, type FutView } from "@/lib/futures";
+import { FUT_VIEW_KEYS, futViewName, type FutView } from "@/lib/futures";
+import { MarketReportView } from "@/components/MarketReport";
+import type { ReportController } from "@/lib/useReport";
 import { AlertStrip } from "@/components/shell/AlertStrip";
 import { SectorsBoard } from "@/components/SectorsBoard";
 import { QuoteTiles } from "@/components/market/QuoteTiles";
@@ -22,6 +23,8 @@ import { PinUndo } from "@/components/shell/PinUndo";
 import { AskPanel } from "@/components/ask/AskPanel";
 import { TickerDrawer } from "@/components/ticker/TickerDrawer";
 import { closeTicker } from "@/lib/ticker";
+import { BiasDrawer } from "@/components/vol/BiasDrawer";
+import { closeBias } from "@/lib/biasDrawer";
 import { TickerSearch } from "@/components/ticker/TickerSearch";
 import { HermesTab } from "@/components/hermes/HermesTab";
 import { useHermes } from "@/lib/hermes/useHermes";
@@ -32,7 +35,6 @@ import { UiProvider } from "@/components/state/UiMode";
 import { OfflineProvider } from "@/components/state/Offline";
 import { cn } from "@/lib/cn";
 import { useReport } from "@/lib/useReport";
-import { useStockPlan, type PlanController } from "@/lib/useStockPlan";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import {
   SCAN_VIEWS,
@@ -113,9 +115,9 @@ export function Terminal({
   initialTabPinned?: boolean;
   initialTheme?: ThemeChoice;
   initialUi?: UiMode;
-  /** The view the URL named inside its tab (an old `?tab=plan` link is the Scanner's Game plan); unset, the remembered one. */
+  /** The view the URL named inside its tab; unset, the remembered one. */
   initialScanView?: ScanView;
-  /** The same for Futures: an old `?tab=report` link is its Brief. */
+  /** The same for Futures: an old `?tab=report` link is its Market Report view. */
   initialFutView?: FutView;
 }) {
   // Held here rather than in Settings so the tab can be left and returned to
@@ -132,8 +134,9 @@ export function Terminal({
    * model, and the panel unmounting was cancelling it.
    */
   const report = useReport(initialReport);
-  // The Game plan's state, owned here for the same reason as the report's.
-  const plan = useStockPlan(null);
+  // No stocks overview state here since 2026-11-15: it is on no page (the Dashboard's
+  // Market overview card reads the latest from the dashboard payload), so nothing asks
+  // /api/plan from the browser any more.
   // The Hermes tab's chats and its stream, owned here so an answer being
   // written survives a tab switch (useHermes).
   const hermes = useHermes();
@@ -154,6 +157,8 @@ export function Terminal({
    * only what this browser last looked at, and a deep link that silently landed
    * somewhere else would be worse than not remembering at all.
    */
+  // A browser that remembers "report" (the page, 2026-11-15 and 16) fails the check and
+  // opens the default; the report is a view of Futures and Stocks now.
   const [storedTab, setStoredTab] = usePersisted<Tab>("tab", initialTab, oneOf(...TAB_KEYS));
   const [tab, setTabState] = useState<Tab>(initialTab);
   /*
@@ -199,7 +204,10 @@ export function Terminal({
     // is a change of subject, so the drawer goes with the page — from the bar
     // alone now that the number keys are gone; the Scanner's own view strip is not a
     // change of page and leaves it be.
-    if (t !== tabNow.current) closeTicker();
+    if (t !== tabNow.current) {
+      closeTicker();
+      closeBias();
+    }
     setTabState(t);
     setStoredTab(t);
     urlPinned.current = false;
@@ -222,11 +230,13 @@ export function Terminal({
   // keeps them; otherwise the remembered one opens Today (lib/tabs.ts shownView).
   const legacyViews = useLegacyViews();
   const scanView = shownView(savedScanView, legacyViews);
-  // The Futures section's view: the overview, a book, or the brief.
-  const [futView, setFutView] = usePersisted<FutView>("fut.view", "overview", oneOf(...FUT_VIEW_KEYS));
+  // The Futures section's view: a book, or the Market Report (since 2026-11-16). It opens on
+  // NQ; a remembered "overview" or "brief" (the views removed on 2026-11-14 and 2026-11-15)
+  // fails the check and opens NQ too.
+  const [futView, setFutView] = usePersisted<FutView>("fut.view", "NQ", oneOf(...FUT_VIEW_KEYS));
   useEffect(() => {
-    // The URL's say, once, after storage has had its turn (usePersisted): a link
-    // to the plan or the report opens that view, whatever was open there last.
+    // The URL's say, once, after storage has had its turn (usePersisted): an old link to
+    // the report page opens a desk's Market Report view (lib/tabs LEGACY).
     if (initialScanView) setScanView(initialScanView);
     if (initialFutView) setFutView(initialFutView);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -265,8 +275,6 @@ export function Terminal({
   // Guards against a slow response landing after a newer one — with a fixed
   // interval and a variable round trip this is not hypothetical.
   const seq = useRef(0);
-  // The previous poll's block serialisations — see `shareUnchanged`.
-  const seen = useRef(new Map<string, string>());
 
   // A failed poll, remembered. The previous payload stays on screen — it is
   // still the best there is — but the header stops calling it live and a
@@ -284,7 +292,8 @@ export function Terminal({
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const next = (await r.json()) as TerminalData;
       if (mine === seq.current) {
-        setData((prev) => shareUnchanged(prev, next, seen.current));
+        // An updater runs twice under strict mode: `shareUnchanged` answers the same both times.
+        setData((prev) => shareUnchanged(prev, next));
         setLastPoll(new Date());
         setLost(null);
       }
@@ -328,8 +337,7 @@ export function Terminal({
         {/* Says so when a star takes a name off the pinned list, with an Undo. */}
         <PinUndo />
         {/* The assistant, mounted once; the status rail's button opens it. It is
-            told the page as the collector names it: the Brief view as "report",
-            the Game plan view as "plan". */}
+            told the page as the collector names it (lib/tabs askTab). */}
         <AskPanel tab={askTab(tab, scanView, futView)} />
         <TickerSearch />
 
@@ -360,13 +368,15 @@ export function Terminal({
               // In the Sidebar interface the four are in the header beside the page's
               // name, so the read's card does not carry them a second time.
               prices={side ? undefined : quoteRow(DASH_GROUPS, { spread: true })}
+              // The Futures card reads the Terminal's poll; a row opens that contract.
+              futures={{ data, onBook: openFut }}
             />
           ) : tab === "settings" ? (
             <Settings theme={theme} onTheme={setTheme} ui={ui} onUi={setUi} />
           ) : tab === "hermes" ? (
             <HermesTab hermes={hermes} desk={desk} />
           ) : tab === "scanner" ? (
-            <ScannerTab calendar={data.calendar ?? NONE} view={scanView} onView={setScanView} data={data} plan={plan} />
+            <ScannerTab calendar={data.calendar ?? NONE} view={scanView} onView={setScanView} data={data} report={report} />
           ) : tab === "futures" ? (
             <FuturesBoard data={data} view={futView} onView={setFutView} report={report} />
           ) : tab === "sectors" ? (
@@ -375,6 +385,8 @@ export function Terminal({
             <MacroBoard data={data} market={market} />
           )}
           <TickerDrawer />
+          {/* A futures book's bias, from the right like the stock's (vol/BiasDrawer). */}
+          <BiasDrawer drivers={data.drivers} />
         </div>
 
         <MStatusRail status={st} ages={raw} feeds={data.wire_feeds} pollSec={POLL_SEC} lastPoll={lastPoll} />
@@ -430,7 +442,7 @@ export function Terminal({
  */
 function shellTitle(tab: Tab, scan: ScanView, fut: FutView): string {
   if (tab === "scanner") return SCAN_VIEWS.find((v) => v.key === scan)?.label ?? tabLabel(tab);
-  if (tab === "futures") return fut === "overview" ? "Futures" : fut === "brief" ? "Futures brief" : `${fut} · ${FUT_NAME[fut]}`;
+  if (tab === "futures") return futViewName(fut);
   return tabLabel(tab);
 }
 
@@ -449,14 +461,14 @@ function ScannerTab({
   view,
   onView,
   data,
-  plan,
+  report,
 }: {
   calendar: CalendarRow[];
   view: ScanView;
   onView: (v: ScanView) => void;
   data: TerminalData;
-  /** The written game plan's state, the Terminal's, so a plan being written survives a change of page. */
-  plan: PlanController;
+  /** The written report's state, shared with the Futures tab's view (lib/useReport). */
+  report: ReportController;
 }) {
   const now = useNow(30_000);
   return (
@@ -465,7 +477,7 @@ function ScannerTab({
       calendar={calendar}
       view={view}
       onView={onView}
-      plan={view === "plan" ? <StockPlan {...plan} /> : null}
+      report={view === "report" ? <MarketReportView data={data} report={report} desk="stocks" /> : null}
       prices={<QuoteTiles quotes={data.quotes ?? []} groups={SCAN_GROUPS} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} />}
     />
   );

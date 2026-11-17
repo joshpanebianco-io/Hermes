@@ -64,7 +64,10 @@ UNIVERSE: list[tuple[str, str, str, str, str]] = [
     ("CAC", "^FCHI", "CAC 40", "global", "px"),
     ("SX5E", "^STOXX50E", "Euro Stoxx 50", "global", "px"),
     # ---- rates ---------------------------------------------------------------
-    ("US2Y", "^IRX", "13-week bill", "rates", "bp"),
+    # "US3M", not "US2Y" (2026-11-14): ^IRX is the 13-week bill, and under the old
+    # key the Macro board printed it at 4.12 beside the Rates card's real two-year at
+    # 4.88. Yahoo has no two-year index; the 2Y is the Treasury's, on the Rates card.
+    ("US3M", "^IRX", "13-week bill", "rates", "bp"),
     ("US5Y", "^FVX", "5-year", "rates", "bp"),
     ("US10Y", "^TNX", "10-year", "rates", "bp"),
     ("US30Y", "^TYX", "30-year", "rates", "bp"),
@@ -213,19 +216,21 @@ def spark_key(symbols: list[str], rng: str, iv: str) -> str:
 
 def _spark(symbols: list[str], rng: str, iv: str, ttl: float, *,
            st: SourceStatus | None = None,
-           stale_max: float | None = None) -> tuple[dict[str, Any], str | None]:
+           stale_max: float | None = None,
+           prepost: bool = False) -> tuple[dict[str, Any], str | None]:
     """One spark request → {yahoo symbol: response}. Never raises.
 
     `st` absorbs the fetch's provenance, so a collector built on this can say
     when it is showing a cached copy; `stale_max` caps how old that copy may be.
+    `prepost` asks for the extended hours' bars as well (`collect_extended`).
     """
     q = urllib.parse.quote(",".join(symbols), safe="")
-    url = SPARK.format(syms=q, rng=rng, iv=iv)
+    url = SPARK.format(syms=q, rng=rng, iv=iv) + ("&includePrePost=true" if prepost else "")
     # The cache key must not be the URL: it carries the whole symbol list and
     # would produce a different 400-character filename every time the universe
     # is edited, quietly orphaning the old cache entries.
-    r = fetch(url, key=spark_key(symbols, rng, iv), ttl_sec=ttl, ua=BROWSER_UA, timeout=20,
-              stale_max_sec=stale_max, validate=json_body)
+    r = fetch(url, key=spark_key(symbols, rng, iv) + ("_pp" if prepost else ""), ttl_sec=ttl,
+              ua=BROWSER_UA, timeout=20, stale_max_sec=stale_max, validate=json_body)
     if st is not None:
         st.absorb(r)
     if not r.ok:
@@ -491,7 +496,7 @@ def collect_sectors() -> tuple[list[dict[str, Any]], SourceStatus]:
     got: dict[str, Any] = {}
     errors: list[str] = []
     for chunk in _chunks([s[1] for s in SECTORS], CHUNK):
-        part, err = _spark(chunk, "1mo", "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
+        part, err = _spark(chunk, "1mo", "1d", ttl=SECTOR_TTL, st=st, stale_max=2 * 3600.0)
         got.update(part)
         if err:
             errors.append(err)
@@ -522,6 +527,146 @@ def collect_sectors() -> tuple[list[dict[str, Any]], SourceStatus]:
     return rows, st
 
 
+# ---- the funds outside the session (2026-11-16) ---------------------------------------
+#
+# WHY (owner: "do they move during extended hours also?. i think we should make the app
+# update as to wait theyre actually doing. right now im missing the sectors information
+# going into the aopen and to do my analysis before the open"). The cards were read off
+# the daily bars, whose price is the regular session's: before the bell every card held
+# Friday's move while XLK traded 1.4% lower and SMH 3.4% lower. The funds trade from
+# 04:00 to 09:30 and 16:00 to 20:00 ET, and the spark request carries those bars when
+# asked (`includePrePost`), many funds to a request.
+#
+# THE MOVE IS AGAINST THE LAST REGULAR CLOSE: before the bell the last session's close,
+# after it today's. Yahoo's `regularMarketPrice` is exactly that outside the session (its
+# `chartPreviousClose` is not: it read Thursday's close on a Monday morning).
+#
+# THIN, AND SAID SO. A sector fund can go twenty minutes without a trade before the bell,
+# and Yahoo gives no extended-hours volume for these funds, so each read carries the
+# time of its last trade and how many five-minute bars had one.
+#
+# The engine's own sector reads (the tape count, the driver board, the reports) keep the
+# regular session's moves: this is the Sectors page's, joined on (universe.heatmap).
+
+#: The extended hours, in minutes of the New York day.
+PRE_START_MIN = 4 * 60
+RTH_START_MIN = 9 * 60 + 30
+POST_END_MIN = 20 * 60
+
+
+def _close_min(d: Any) -> int:
+    from ..holidays import close_minute
+
+    return close_minute(d)
+
+
+def ext_read(resp: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A fund's last extended-hours trade from a spark response with the extended bars:
+    which side of the session it is (`pre` or `post`), its price, the move against the
+    last regular close, when, and how many five-minute bars had a trade in that stretch.
+    None when the last trade is the regular session's or there is none. Pure."""
+    if not isinstance(resp, dict):
+        return None
+    ref = (resp.get("meta") or {}).get("regularMarketPrice")
+    try:
+        ts = resp.get("timestamp") or []
+        closes = ((resp.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+    except (AttributeError, IndexError, TypeError):
+        return None
+    bars = [(int(t), float(c)) for t, c in zip(ts, closes, strict=False)
+            if c is not None and t is not None]
+    if not bars or not isinstance(ref, int | float) or not ref:
+        return None
+
+    def side(t: int) -> tuple[str, str]:
+        et = datetime.fromtimestamp(t, _ET)
+        m = et.hour * 60 + et.minute
+        kind = "pre" if m < RTH_START_MIN else "post" if m >= _close_min(et.date()) else "rth"
+        return kind, et.date().isoformat()
+
+    last_t, last_c = bars[-1]
+    kind, day = side(last_t)
+    if kind == "rth":
+        return None
+    n = sum(1 for t, _ in bars if side(t) == (kind, day))
+    return {"kind": kind, "day": day, "px": last_c, "ref": float(ref),
+            "pct": (last_c - ref) / ref * 100.0, "at": last_t, "bars": n}
+
+
+def extended_now(now: datetime | None = None) -> bool:
+    """Whether the funds can be trading outside the session at `now`: a trading day,
+    04:00 to the bell or the close to 20:00 ET, with a few minutes either side. Pure."""
+    from ..holidays import is_trading_day
+
+    et = (now or datetime.now(_ET)).astimezone(_ET)
+    if not is_trading_day(et.date()):
+        return False
+    m = et.hour * 60 + et.minute
+    close = _close_min(et.date())
+    return (PRE_START_MIN <= m < RTH_START_MIN + 2) or (close <= m < POST_END_MIN + 5)
+
+
+#: The price board's US-listed funds, which trade before the bell and after the close
+#: like the sector funds (the audit of 2026-11-16: the SPY, QQQ and IWM tiles read
+#: Friday's close at 08:16 ET on a Monday while SPY traded 0.6% lower).
+BOARD_EXT: tuple[str, ...] = ("SPY", "QQQ", "IWM", "GLD", "HYG", "TLT")
+
+
+def regular_now(now: datetime | None = None) -> bool:
+    """Whether the regular session is on at `now` (a trading day, the bell to the close,
+    a few minutes past it so the closing print lands). Pure."""
+    from ..holidays import is_trading_day
+
+    et = (now or datetime.now(_ET)).astimezone(_ET)
+    if not is_trading_day(et.date()):
+        return False
+    m = et.hour * 60 + et.minute
+    return RTH_START_MIN <= m < _close_min(et.date()) + 5
+
+
+#: How long a sector or theme read is kept (2026-11-16, the owner's yes to reading them
+#: each minute in the session, where it was five): under the job's minute, so each run
+#: asks Yahoo afresh. Outside the session the job runs every five minutes, as before.
+SECTOR_TTL = 45.0
+
+
+def collect_extended() -> tuple[dict[str, dict[str, Any]], SourceStatus]:
+    """Every sector and theme fund's last extended-hours trade (`ext_read`), by key, and
+    the price board's US-listed funds' (`BOARD_EXT`)."""
+    st = SourceStatus("US funds, extended hours")
+    pairs = {key: sym for key, sym, _ in [*SECTORS, *THEMES]}
+    pairs.update({k: k for k in BOARD_EXT})
+    got: dict[str, Any] = {}
+    errors: list[str] = []
+    for chunk in _chunks(sorted(set(pairs.values())), CHUNK):
+        part, err = _spark(chunk, "1d", "5m", ttl=45.0, st=st, stale_max=1800.0, prepost=True)
+        got.update(part)
+        if err:
+            errors.append(err)
+    out = {key: x for key, sym in pairs.items() if (x := ext_read(got.get(sym))) is not None}
+    st.items = len(out)
+    if errors:
+        st.error = errors[0]
+    # Nothing to read in the session is not a failure: only a request that failed is.
+    st.settle(not errors or bool(got), "chunk")
+    return out, st
+
+
+def with_ext(rows: list[dict[str, Any]], ext: dict[str, dict[str, Any]],
+             today: str) -> list[dict[str, Any]]:
+    """The price board with each US-listed fund's extended trade beside its regular price
+    (`ext`: kind, px, pct, at), for the pages' tiles and the Macro board. A pre-market
+    read counts only on its own day; an after-hours one is the latest there is, through
+    the night. `last` and `pct` stay the regular session's: the engine reads those. Pure."""
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        x = ext.get(str(r.get("key"))) if r.get("key") in BOARD_EXT else None
+        ok = x is not None and (x.get("kind") == "post" or x.get("day") == today)
+        out.append({**r, "ext": {k: x.get(k) for k in ("kind", "px", "pct", "at", "day")}}
+                   if ok and x is not None else r)
+    return out
+
+
 def collect_themes() -> tuple[list[dict[str, Any]], SourceStatus]:
     """The theme ETFs, against SPY — `collect_sectors` for the longer list."""
     st = SourceStatus("Theme ETFs")
@@ -529,7 +674,7 @@ def collect_themes() -> tuple[list[dict[str, Any]], SourceStatus]:
     got: dict[str, Any] = {}
     errors: list[str] = []
     for chunk in _chunks([*names, "SPY"], CHUNK):
-        part, err = _spark(chunk, "1mo", "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
+        part, err = _spark(chunk, "1mo", "1d", ttl=SECTOR_TTL, st=st, stale_max=2 * 3600.0)
         got.update(part)
         if err:
             errors.append(err)

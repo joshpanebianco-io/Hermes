@@ -71,7 +71,7 @@ export async function generateMetadata({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<Metadata> {
   const sp = await searchParams;
-  const named = resolveTab(sp.tab, sp.desk);
+  const named = resolveTab(sp.tab);
   return { title: pageTitle(named?.tab ?? "terminal") };
 }
 
@@ -91,10 +91,10 @@ export default async function Page({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  // Current keys and the old ones alike (lib/tabs.ts resolveTab): a link to
-  // the report opens Futures on its Brief, one to the plan the Scanner on its
-  // Game plan, and one to the Analysis tab whichever half its `?desk=` named.
-  const named = resolveTab(sp.tab, sp.desk);
+  // Current keys and the old ones alike (lib/tabs.ts resolveTab): a link to the
+  // report or the Analysis tab opens the Futures tab's Market Report view, the plan the
+  // Stocks tab's.
+  const named = resolveTab(sp.tab);
   const initialTab = named?.tab ?? "terminal";
   /*
    * WHETHER THE URL ASKED AT ALL, which is not the same question as which tab

@@ -321,7 +321,8 @@ CLK = Clock(et(2026, 10, 13, 11, 0), "rth", date(2026, 10, 13), True)
 )
 def test_setup_states(kw: dict[str, Any], state: str, entry_kind: str | None) -> None:
     t = _tech(**kw)
-    side = scan.side_of(scan.lvl_state_of(t.last, t.pdh, t.pdl, t.pmh, t.pml), 0.5)
+    side = scan.side_of(scan.lvl_state_of(t.last, t.pdh, t.pdl, t.pmh, t.pml), t.last, t.pdh,
+                        t.pdl, t.pmh, t.pml, 0.5, True)
     s = scan.setup_of(t, side, CLK)
     assert s["state"] == state
     assert (s["entry"] or {}).get("kind") == entry_kind
@@ -363,11 +364,13 @@ def test_score_parts_sum_to_the_total() -> None:
     reg = {"bias": "long", "confirm": "confirm"}
     sc = scanscore.score_row(_row(), reg, 0.5, None, None)
     by = {p["key"]: p["pts"] for p in sc["parts"]}
-    # The weights of the quant audit (2026-11-13): structure 20, RS 20, location 25,
-    # RVOL 8, market 20 (11 + 5 + 4), frame 6, catalyst 20.
-    assert by == {"structure": 20, "rs": 12, "location": 25, "volume": 6, "market": 20,
-                  "frame": 0, "catalyst": 0}
-    assert sc["total"] == 83 and sc["raw"] == 83 and sc["side"] == "long"
+    # The weights of the quant audit (2026-11-13): structure 20, the entry 25 (all or
+    # nothing since 2026-11-14), RS 10 (halved the same day), RVOL 8, market 20
+    # (11 + 5 + 4), catalyst 20. The daily frame was a seventh part worth 6 until
+    # 2026-11-15 (owner: "i think we drop ema's from the bias and scoring of stocks").
+    assert by == {"structure": 20, "rs": 6, "location": 25, "volume": 6, "market": 20,
+                  "catalyst": 0}
+    assert sc["total"] == 77 and sc["raw"] == 77 and sc["side"] == "long"
 
 
 @pytest.mark.parametrize(
@@ -405,7 +408,10 @@ def test_relative_strength_fills_at_one_daily_atr_in_the_trade_s_direction() -> 
                                  {"bias": "long", "confirm": "confirm"}, None, None, None)
         return next(p for p in sc["parts"] if p["key"] == "rs")["pts"]
 
-    assert (rs_pts(1.0), rs_pts(2.5), rs_pts(0.5), rs_pts(0.0), rs_pts(-0.4)) == (20, 20, 10, 0, 0)
+    # Ten at the most since 2026-11-14 (scanscore.W_RS): the record's fourth read of RS
+    # found nothing in it for how far a trade runs.
+    assert scanscore.W_RS == 10
+    assert (rs_pts(1.0), rs_pts(2.5), rs_pts(0.5), rs_pts(0.0), rs_pts(-0.4)) == (10, 10, 5, 0, 0)
 
 
 def test_relative_strength_is_paid_in_full_only_on_a_live_entry() -> None:
@@ -419,16 +425,47 @@ def test_relative_strength_is_paid_in_full_only_on_a_live_entry() -> None:
         sc = scanscore.score_row(_row(rs={"SPY": 1.5, "QQQ": None}, setup=s), reg, None, None, None)
         return next(p for p in sc["parts"] if p["key"] == "rs")
 
-    assert rs_part()["pts"] == 20
-    assert rs_part(state="pullback")["pts"] == 20
+    full = scanscore.W_RS
+    assert full > scanscore.RS_POOR
+    assert rs_part()["pts"] == full
+    assert rs_part(state="pullback")["pts"] == full
     near = {"kind": "VWAP", "price": 1.0, "dist_atr": 0.6}
-    assert rs_part(state="extended", entry=near)["pts"] == 20
+    assert rs_part(state="extended", entry=near)["pts"] == full
     far = rs_part(state="extended", entry={"kind": "VWAP", "price": 1.0, "dist_atr": 3.0})
     assert far["pts"] == scanscore.RS_POOR and "capped" in far["note"]
     assert rs_part(state="failed")["pts"] == scanscore.RS_POOR
     assert rs_part(lost_vwap=True)["pts"] == scanscore.RS_POOR
     # Before the bell the RS is the gap, which in play already reads.
     assert rs_part(state="forming")["pts"] == scanscore.RS_POOR
+
+
+def test_the_entry_is_all_of_its_part_or_none() -> None:
+    # Owner, 2026-11-14: "does location actually matter? ... if we get our break and
+    # retest that is a good location no?" On 501 signals the part separated a setup with
+    # an entry from one without (58% against 25% at +1R) and nothing among the first.
+    reg = {"bias": "long", "confirm": "confirm"}
+
+    def entry(**setup: Any) -> dict[str, Any]:
+        s = {"side": "long", "state": "retest", "level": "PMH", "lost_vwap": False,
+             "entry": {"kind": "PMH", "price": 1.0, "dist_atr": 0.1}, **setup}
+        sc = scanscore.score_row(_row(setup=s), reg, None, None, None)
+        return next(p for p in sc["parts"] if p["key"] == "location")
+
+    full = scanscore.W_ENTRY
+    assert (entry()["pts"], entry()["max"], entry()["label"]) == (full, full, "Entry")
+    assert entry(state="pullback")["pts"] == full
+    far = entry(state="extended", entry={"kind": "VWAP", "price": 1.0, "dist_atr": 3.0})
+    assert far["pts"] == full and "wait for the pullback" in far["note"]
+    assert entry(state="extended", entry=None)["pts"] == full
+    assert entry(state="approaching")["pts"] == full
+    assert entry(state="forming")["pts"] == full
+    # A plan before the bell is not held to VWAP; every other setup is.
+    assert entry(state="forming", lost_vwap=True)["pts"] == full
+    lost = entry(lost_vwap=True)
+    assert lost["pts"] == 0 and lost["note"] == "wrong side of VWAP"
+    assert entry(state="failed")["pts"] == 0
+    assert entry(state="chop")["pts"] == 0
+    assert entry(side=None)["pts"] == 0 and entry(side=None)["note"] == "no side"
 
 
 def test_the_rvol_gate_keeps_a_quiet_name_out_of_the_top_ten() -> None:

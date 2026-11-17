@@ -148,3 +148,22 @@ def test_the_scanners_next_event_names_the_release_lead() -> None:
     rows.insert(0, rows.pop(7))  # "CPI, n.s.a" first, as the snapshot had it
     ev = next_event(rows, datetime(2026, 10, 14, 6, 14, tzinfo=ET))
     assert ev is not None and ev["title"] == "Core CPI m/m" and ev["in_min"] == 136.0
+
+
+def test_gdp_and_its_parts_are_one_release_led_by_the_growth_rate() -> None:
+    """Japan's GDP of Sun 15 Nov 2026 came as six rows and filled the Macro calendar."""
+    at = int(datetime(2026, 11, 15, 18, 50, tzinfo=ET).timestamp())
+    names = ["GDP Price Index y/y", "GDP Capital Expenditure q/q", "GDP q/q", "GDP Annualized",
+             "GDP Private Consumption q/q", "GDP External Demand q/q"]
+    (gdp,) = _group([_row(n, at, country="Japan") for n in names])
+    assert gdp.lead["event"] == "GDP q/q"
+    assert len(gdp.subs) == 5 and not gdp.levels
+    for n in [*names, "GDP y/y", "German GDP q/q", "GDP 3-Month Avg", "GDP Sales q/q"]:
+        assert family(n) == "gdp"
+    # Not GDP: a nowcast by another name, and the price index of something else.
+    assert family("GDPNow") == "gdpnow" and family("Import Price Index m/m") == "import price"
+    # The UK's monthly and quarterly growth in one minute: the first listed leads.
+    (uk,) = _group([_row("GDP 3-Month Avg", at, country="United Kingdom"),
+                    _row("GDP y/y", at, country="United Kingdom"),
+                    _row("GDP m/m", at, country="United Kingdom")])
+    assert uk.lead["event"] == "GDP m/m"

@@ -2,6 +2,7 @@
 
 import type { ImpliedBook, Quote, VolTerm } from "@/types/terminal";
 import { dir, feedNote, num, quoteChg } from "@/lib/format";
+import { shownQuote } from "@/lib/quoteExt";
 import { cn } from "@/lib/cn";
 import { lagText, quoteGroups, quoteInk } from "@/lib/quoteTiles";
 import { curveShape } from "@/lib/vix";
@@ -61,7 +62,7 @@ export function QuoteTiles({
               <Pill q={q} />
             </VixPopover>
           ) : (
-            <div key={q.key} className="flex shrink-0" title={feedNote(q) ?? undefined}>
+            <div key={q.key} className="flex shrink-0" title={shownQuote(q).note ?? feedNote(q) ?? undefined}>
               <Pill q={q} />
             </div>
           ),
@@ -84,7 +85,7 @@ export function QuoteTiles({
               <Figure q={q} />
             </VixPopover>
           ) : (
-            <div key={q.key} className="flex shrink-0" title={feedNote(q) ?? undefined}>
+            <div key={q.key} className="flex shrink-0" title={shownQuote(q).note ?? feedNote(q) ?? undefined}>
               <Figure q={q} />
             </div>
           ),
@@ -95,9 +96,11 @@ export function QuoteTiles({
 }
 
 /** One instrument on one line, in a capsule. Phrasing content only: on VIX this sits inside a <button>. */
-function Pill({ q }: { q: Quote }) {
+function Pill({ q: raw }: { q: Quote }) {
+  // Outside the session a US-listed fund shows its pre-market or after-hours trade (lib/quoteExt).
+  const { q, tag } = shownQuote(raw);
   const chg = quoteChg(q);
-  const lag = lagText(q, 5);
+  const lag = tag ?? lagText(q, 5);
   return (
     <span className="qt-quote-pill flex items-baseline gap-2 rounded-full border border-ring-2 px-3 py-[5px] whitespace-nowrap">
       <span className="qt-cap text-[10.5px] text-ink-3">
@@ -111,9 +114,11 @@ function Pill({ q }: { q: Quote }) {
 }
 
 /** One instrument. Phrasing content only: on VIX this sits inside a <button>. */
-function Figure({ q }: { q: Quote }) {
+function Figure({ q: raw }: { q: Quote }) {
+  // Outside the session a US-listed fund shows its pre-market or after-hours trade (lib/quoteExt).
+  const { q, tag } = shownQuote(raw);
   const chg = quoteChg(q);
-  const lag = lagText(q);
+  const lag = tag ?? lagText(q);
   return (
     <span className="flex flex-col justify-center gap-1 text-left">
       {/* How late a delayed print is rides under its own label, in lower case: "NQ · 10M"

@@ -5,6 +5,7 @@ import { DriverPopover, biasWord, gradeTone, voteTone } from "@/components/vol/D
 import { HelmLoader } from "@/components/ui/HelmLoader";
 import { AssetIcon } from "@/components/ui/AssetIcon";
 import { familiesLine, liveLine, scoreText } from "@/lib/bias";
+import { wholeScore } from "@/lib/biasScale";
 import { cn } from "@/lib/cn";
 
 /**
@@ -58,7 +59,7 @@ export function DriverStrip({ drivers }: { drivers: Drivers | undefined }) {
                     {biasWord(b.bias)}
                   </span>
                   <span className={cn("fig text-[14px] leading-none font-semibold", voteTone(b.bias))}>
-                    {scoreText(b.score)}
+                    {scoreText(wholeScore(b) ?? b.score)}
                   </span>
                   <span className={cn("qt-cap text-[10px]", gradeTone(b))}>{b.grade}</span>
                   {b.conflict && <span className="qt-cap text-[10px] text-flip-fig">conflict</span>}

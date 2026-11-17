@@ -48,6 +48,18 @@ TIER2 = re.compile(
     r"treasury (?:auction|refunding)|beige book|minutes", re.I,
 )
 
+# A FED OFFICIAL SPEAKING IS WATCHED, NOT A PRINT (2026-11-14). "FOMC" in the name is
+# tier one, so "FOMC Member Barr Speaks" scored five, beside CPI and the decision
+# itself: the Macro calendar read High 44, Med 2, Low 8, eleven of the week's High rows
+# were speeches, and the Scanner's "next event worth stopping for" could be a governor
+# at a research conference. A member is three, with the PMIs and the claims. The Chair
+# is four, the High tier's lower step: a Chair's remarks can move the front end on
+# their own, and a decision still outranks them. It also fixed the other half: Nasdaq's
+# "Fed Chair Powell Speaks" has no "FOMC" in it and scored two.
+FED_SPEAKS = re.compile(
+    r"\b(?:FOMC|Fed|Federal Reserve)\b.*\b(?:speaks?|speech|testif\w*|remarks)\b", re.I)
+FED_CHAIR = re.compile(r"(?<!vice )(?<!vice-)\bchair(?:man|woman)?\b", re.I)
+
 # Countries whose prints move the books on this desk. Everything else is scored
 # down rather than dropped — a Chinese GDP miss is a Nasdaq event even though
 # the US calendar does not list it.
@@ -113,6 +125,8 @@ def score(country: str, event: str) -> int:
         return 0
     weight = MAJOR.get(country, 0)
     us = country == "United States"
+    if us and FED_SPEAKS.search(event):
+        return 4 if FED_CHAIR.search(event) else 3
     if TIER1.search(event):
         return 5 if us else (4 if weight >= 2 else 3)
     if TIER2.search(event):
@@ -636,7 +650,9 @@ def fed_speech_rows(fed: Iterable[dict[str, Any]], lo: date, hi: date,
         if not words:
             continue
         last = words[-1]
-        chair = bool(re.search(r"(?<!vice )\bchair\b", who, re.I))
+        # "Chairman Kevin Warsh" as well as "Chair Jerome H. Powell": `\bchair\b` alone
+        # missed the first, and the Chair was listed as a member (2026-11-14).
+        chair = bool(FED_CHAIR.search(who))
         verb = "Testifies" if r.get("kind") == "Testimony" else "Speaks"
         event = f"FOMC {'Chair' if chair else 'Member'} {last} {verb}"
         minute = when_et.astimezone(UTC).isoformat()[:16]
@@ -723,7 +739,8 @@ def _from_nasdaq(today: date, lo: date, hi: date, days_ahead: int,
             # releases refreshes, because that is where an `actual` appears
             # the moment it prints — and with the dates off by one, the
             # payload asked for yesterday or tomorrow can be today's.
-            ttl_sec=86400.0 if offset < -1 else 540.0,
+            # A day more than three ahead is a schedule, not a print: three hours.
+            ttl_sec=86400.0 if offset < -1 else 3 * 3600.0 if offset > FULL_DAYS else 540.0,
             ua=BROWSER_UA,
             timeout=20,
             headers={"Accept": "application/json"},
@@ -802,6 +819,54 @@ def _from_tradingview(lo: date, hi: date, why: str) -> tuple[list[dict[str, Any]
     st.notes.append(f"TradingView's calendar: Nasdaq is not answering ({why})")
     st.settle(len(rows) > 0, "read")
     return rows, st
+
+
+#: How far ahead the collector reads (2026-11-14). It was three days, so on a Friday
+#: evening the Macro calendar ended on Monday and the week being planned for was not
+#: on it. A week reaches the same weekday next week from any day.
+WEEK_AHEAD = 7
+#: And the week after, for its big releases alone (owner, 2026-11-16: "on macro can we
+#: add a bit more of the future things that show up in the calendar? and have a see more
+#: if we do want to see more"): next week's CPI, payrolls or FOMC is worth seeing now.
+DAYS_AHEAD = 14
+#: Days ahead that are kept whole. Past these only the rows that matter are kept.
+FULL_DAYS = 3
+#: Past a week, a release stays only from this impact up: the ones that stop the tape.
+FAR_SCORE = 4
+
+
+def thin_far(rows: list[dict[str, Any]], today: date,
+             full_days: int = FULL_DAYS) -> list[dict[str, Any]]:
+    """`rows` with the far days cut to what is worth knowing a week out. Pure.
+
+    A day of this feed is seventy-odd releases and most are impact one (Korean
+    industrial production, Italian unemployment). Inside `full_days` every row is
+    kept, as it always was: that is where a reader may want the whole day. Beyond it
+    a row stays only if it reaches the books (`core`, whatever the country) or is a
+    US release scoring three or more (housing starts, Michigan sentiment: what the
+    stocks desk's own filter keeps). So a week of look-ahead adds the week's events
+    and not four more days of the tail to a payload every open tab reads each twenty
+    seconds: measured on 13 Nov 2026, the week's 293 rows became 198 where the
+    three-day window held 139. A row with no time is kept.
+
+    PAST A WEEK (2026-11-16, `DAYS_AHEAD`), only the releases that stop the tape: a
+    score of `FAR_SCORE` or more that reaches the books or is America's.
+    """
+    edge = today + timedelta(days=full_days)
+    week = today + timedelta(days=WEEK_AHEAD)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        ts = r.get("ts")
+        day = datetime.fromtimestamp(float(ts), ET).date() if isinstance(ts, (int, float)) else None
+        score = int(r.get("score") or 0)
+        ours = bool(r.get("core")) or r.get("region") == "us"
+        if day is not None and day > week and not (ours and score >= FAR_SCORE):
+            continue
+        us3 = r.get("region") == "us" and score >= 3
+        if day is not None and day > edge and not r.get("core") and not us3:
+            continue
+        out.append(r)
+    return out
 
 
 def collect(days_ahead: int = 3, days_back: int = 1,

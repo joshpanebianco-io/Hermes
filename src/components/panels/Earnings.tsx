@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import type { EarningsRow } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { TickerLogo } from "@/components/ui/TickerLogo";
-import { nearestFirst } from "@/lib/earningsOrder";
+import { aheadFirst, nearestFirst } from "@/lib/earningsOrder";
 import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -34,6 +34,7 @@ import { cn } from "@/lib/cn";
 export function Earnings({
   rows,
   today,
+  afterClose = false,
   ageMin,
   error,
   watch,
@@ -51,6 +52,8 @@ export function Earnings({
    * and it is the same string on both sides.
    */
   today: string;
+  /** New York has closed for the day, or it is a weekend: the days ahead lead (lib/earningsOrder). */
+  afterClose?: boolean;
   ageMin?: number | null;
   error?: string | null;
 }) {
@@ -61,8 +64,9 @@ export function Earnings({
       if (a) a.push(r);
       else m.set(r.date, [r]);
     }
-    return nearestFirst([...m.entries()], today);
-  }, [rows, today]);
+    // Once the session is over, what is coming leads and what has been traded follows.
+    return (afterClose ? aheadFirst : nearestFirst)([...m.entries()], today);
+  }, [rows, today, afterClose]);
 
   const mine = watch ? rows.filter((r) => watch.has(r.symbol)).length : 0;
   return (
@@ -70,8 +74,19 @@ export function Earnings({
       title="Earnings"
       sub={watch ? `${rows.length} reports · ${mine} on the Scanner` : `${rows.length} large caps`}
       ageMin={ageMin}
+      every={30}
       error={error}
       bodyClassName="px-0 py-0"
+      /*
+       * IT TAKES THE ROOM ITS COLUMN HAS LEFT, AND SCROLLS INSIDE IT (2026-11-15). The
+       * Macro board came to sit under this card (owner: "switch rate and policy with
+       * macro board") and is 140px taller than Rates & policy was; with fourteen reports
+       * listed this card was 596px and pushed the bottom of the board off the screen. It
+       * is the one list in its column, as the Calendar is in the other (`qt-fill`,
+       * globals.css): the days are in order, so what scrolls out of sight is furthest off.
+       */
+      className="qt-fill min-h-[260px] flex-1 basis-0"
+      scroll
     >
       {rows.length === 0 ? (
         <p className="px-3 py-5 text-center text-[11px] text-ink-3">
@@ -102,14 +117,15 @@ export function Earnings({
             <ul>
               {list.map((r) => (
                 <li key={`${r.date}-${r.symbol}`} className="hit flex items-baseline gap-2 px-3 py-[3px]">
+                  {/* NEUTRAL, BOTH OF THEM (2026-11-14). After the close was pink and
+                      before the open green, which on this terminal read as down and up:
+                      a time of day is not a side. The letters say which. */}
                   <span
                     className={cn(
                       "fig w-[34px] shrink-0 rounded-sm px-1 text-center text-[9px] leading-[14px]",
-                      r.when === "after"
-                        ? "qt-pill bg-put/20 text-put [--pill-hue:var(--put-fig)]"
-                        : r.when === "pre"
-                          ? "qt-pill bg-call/20 text-call [--pill-hue:var(--call-fig)]"
-                          : "text-ink-4",
+                      r.when === "after" || r.when === "pre"
+                        ? "qt-pill bg-surface-2 text-ink-2 [--pill-hue:var(--ink-2)]"
+                        : "text-ink-4",
                     )}
                     title={
                       r.when === "after"
@@ -201,5 +217,7 @@ function label(date: string, today: string): string {
   const days = Math.round((d.getTime() - t.getTime()) / 86_400_000);
   if (days === 1) return "Tomorrow";
   if (days === -1) return "Yesterday";
-  return d.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" });
+  // en-GB and in UTC, so it is "Tue 17 Nov" as the comment above says and as the
+  // calendar beside it writes a day; en-US gave "Tue, Nov 17".
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 }

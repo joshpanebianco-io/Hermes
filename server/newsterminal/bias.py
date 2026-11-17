@@ -1,5 +1,5 @@
 """
-The bias, weighed: a score from -100 to +100 across the reads that can vote.
+The bias, weighed: a score from -100 to +100 over the whole of the session's weight.
 
 WHY NOT A COUNT (owner, 2026-11-05: "is there a better way to determine bias? ...
 it rarely gets anywhere close to 16 of 16"; then "do what you recommend"). The
@@ -18,18 +18,30 @@ It could never have been 16:
 So the score does three things the count did not:
 
   * A read that CANNOT vote at this hour (`live` false: the market is shut, the
-    input is missing, nothing has printed) leaves the sum. One that can and sits
-    inside its threshold is a flat read and stays: it is evidence of no lean.
+    input is missing, nothing has printed) is on neither side and is not counted
+    in its family. One that can and sits inside its threshold is a flat read and
+    stays: it is evidence of no lean.
   * Reads are grouped into FAMILIES, each scored by its own net (long minus short,
     over its live reads), so one idea has one voice.
   * Each family has a WEIGHT for the session. The numbers are a judgement, in the
     same order the note's prompt gives the layers (report.session_layers), and
     nothing here claims they have been fitted to outcomes.
 
-`score` is the weighted sum of the live families. +100 means every live read in
-every live family is long, which is reachable on a day when everything agrees, as
-16 of 16 never was. `coverage` is how much of the session's weight is live, and it
-is printed beside the score so a thin read says it is thin.
+`score` is the weighted sum of the families OVER THE WHOLE WEIGHT: a family with
+nothing live adds nothing and its weight still counts, so it pulls the score toward
+zero as a flat one does. +100 means every family is live and every live read in it
+is long. `coverage` is how much of the session's weight is live.
+
+THE SCORE WAS OVER THE LIVE WEIGHT UNTIL 2026-11-15 (owner, of the scale the cards
+draw: "the whole point of implementing the scale was to demonstrate that"). Divided
+by the live weight alone, two reads of eleven that agreed were -100: at a weekend
+the stocks tape was SPY and QQQ's after-hours gap, 35% of the weight, and its mark
+sat on the bearish end of the scale. The pages had to draw that one hollow and
+print "thin" beside it to take it back, and the owner asked why the mark was a
+black circle. How much of the evidence there is belongs in the number: the same
+night reads -35. A score is now what the old one was, times its coverage, so with
+everything live nothing moved. `basis` says which rule a stored read was scored
+by ("whole"; absent on one from before), so a page can draw an old one the same way.
 
 THE GRADE AND ITS CEILING. Strong is 50 or more with at least 60% of the weight
 live; moderate 30; weak 10; under that there is no lean. A macro lean the structure
@@ -58,7 +70,7 @@ _NOTCH = {"strong": "moderate", "moderate": "weak", "weak": "weak", "none": "non
 #: key -> (the name on the board, the name on the strip's one line)
 FAMILY_NAMES: dict[str, tuple[str, str]] = {
     "structure": ("Intraday structure", "Structure"),
-    "daily": ("Daily trend", "Daily trend"),
+    "daily": ("Daily trend", "Daily trend"),  # no read since 2026-11-15: the way back
     "rates": ("Rates & dollar", "Rates & dollar"),
     "risk": ("Risk appetite", "Risk"),
     "catalysts": ("Catalysts", "Catalysts"),
@@ -77,14 +89,107 @@ FAMILY_NAMES: dict[str, tuple[str, str]] = {
 # above the flip, amplified below it), in either direction, and that is where it
 # stays: the board's line on how to treat the score (`treatment`), and its own row,
 # marked as never a side. The family is gone and its weight is shared out below.
+#
+# TREND DOES NOT VOTE EITHER (owner, 2026-11-15: "i think we drop ema's from the bias
+# and scoring of stocks"; asked whether the plain daily read should go with the two
+# EMAs, they chose every trend read). There were three: the ten-minute 200 EMA in the
+# structure family, and the daily family whole (price against the 20, 50 and 200-day,
+# and the 200-day EMA by itself). A moving average is price, late: the board already
+# reads price where it is, against the prior session's value and range. The day it
+# went, the Nasdaq's profile read "accepted higher" and its ten-minute EMA "below
+# trend", which cancelled to no structure read at all, and the whole of its short
+# lean (-11) was the daily family. The futures board no longer builds the three
+# (drivers.py), the daily family has no weight, and its share is given back below as
+# gamma's was. The bias is macro, risk appetite, news and data, the volume profile
+# and the session's range, and participation in the session.
 BOARD_FAMILY: dict[str, str] = {
     "yields": "rates", "dollar": "rates", "silver": "rates",
     "vix_dir": "risk", "vix_curve": "risk", "credit": "risk",
     "prints": "catalysts", "hw_prints": "catalysts",
-    "value": "structure", "session": "structure", "trend10m": "structure",
-    "frame": "daily", "daily200": "daily",
+    "value": "structure", "session": "structure",
     "sectors": "participation", "leaders": "participation",
+    # Silver's and crude's own reads (2026-11-15, drivers.py): the market each follows
+    # sits with its macro drivers, as silver has for gold since the board was built.
+    "gold": "rates", "copper": "rates", "products": "rates",
+    "inventories": "catalysts",
 }
+
+# ---- one board a book: which families can ever speak for it ------------------------
+#
+# EVERY BOOK HAS ITS OWN HUNDRED (2026-11-15). The weights below were written for the
+# index books, and gold read them too with two families it has no vote in: the VIX,
+# its curve and credit are "not a gold vote", and gold has no sectors or leaders. While
+# the score was over the LIVE weight that cost nothing. Over the whole weight (the
+# module's note) a family that can NEVER vote for a book is dead weight for ever: in
+# the New York session 31 of gold's hundred could not be earned, so its score topped
+# out at 69. So each book keeps the families it has a read in, and the session's
+# weights are shared out among those in proportion, to the nearest whole number, the
+# way gamma's share was when it left the score. No family's standing against another
+# changes; an index book's table is the session's, untouched.
+#
+# SILVER AND CRUDE ARE SCORED SINCE THE SAME DAY (owner: "implement the silver and oil
+# bias calculation and weightings and rules too"). What each answers to, as a desk
+# would say it, and none of it fitted to outcomes:
+#
+#   SILVER  a monetary metal with an industrial half. Rates and the dollar as gold
+#           reads them, gold itself (silver follows it, and moves further) and copper
+#           (the industrial half), all one voice; the inflation prints; its own
+#           structure. The equity vol reads are no more a silver vote than a gold one.
+#   CRUDE   a dollar-priced barrel that trades on demand and on its own stocks. The
+#           dollar and the products (gasoline and heating oil: whether refiners are
+#           pulling the barrel through) as one voice; credit and copper as the demand
+#           read; the weekly inventories as its catalyst; its own structure. The
+#           10-year is not a crude vote (yields rise on growth, which lifts
+#           oil, and on the Fed, which sinks it), and neither is the VIX: in a supply
+#           shock crude and fear rise together.
+BOOK_FAMILIES: dict[str, tuple[str, ...]] = {
+    "GC": ("structure", "rates", "catalysts"),
+    "SIL": ("structure", "rates", "catalysts"),
+    "CL": ("structure", "rates", "risk", "catalysts"),
+}
+
+#: A read that sits in another family on one book: copper is silver's own metal and
+#: crude's demand.
+BOOK_FAMILY_OVERRIDE: dict[str, dict[str, str]] = {
+    "CL": {"copper": "risk"},
+}
+
+#: What a family is called on a book where its usual name would mislead.
+BOOK_FAMILY_NAMES: dict[str, dict[str, tuple[str, str]]] = {
+    "SIL": {"rates": ("Rates, dollar & metals", "Rates & metals")},
+    "CL": {"rates": ("Dollar & products", "Dollar & products"),
+           "risk": ("Demand", "Demand"),
+           "catalysts": ("Inventories", "Inventories")},
+}
+
+
+def board_family(book: str) -> dict[str, str]:
+    """Which family each read speaks in, on this book. Pure."""
+    return {**BOARD_FAMILY, **BOOK_FAMILY_OVERRIDE.get(book, {})}
+
+
+def share_out(base: dict[str, int], keep: tuple[str, ...]) -> dict[str, int]:
+    """`base` with only `keep` weighted, scaled back to a hundred in proportion. Pure.
+
+    Whole numbers by the largest remainder, so the parts always sum to exactly 100; a
+    tie goes to the family named first in `keep`."""
+    kept = {k: base.get(k, 0) for k in keep}
+    total = sum(kept.values())
+    if not total:
+        return dict.fromkeys(base, 0)
+    exact = {k: 100.0 * w / total for k, w in kept.items()}
+    out = {k: int(v) for k, v in exact.items()}
+    for k in sorted(exact, key=lambda k: -(exact[k] - out[k]))[:100 - sum(out.values())]:
+        out[k] += 1
+    return {k: out.get(k, 0) for k in base}
+
+
+def board_weights(book: str, session: str) -> dict[str, int]:
+    """A book's family weights for a session: the session's own for an index book,
+    shared out among the families the book has a read in for the rest. Pure."""
+    base = BOARD_WEIGHTS[session]
+    keep = BOOK_FAMILIES.get(book)
+    return dict(base) if keep is None else share_out(base, keep)
 
 #: The stocks desk's eleven reads of the tape.
 TAPE_FAMILY: dict[str, str] = {
@@ -104,7 +209,11 @@ TAPE_FAMILY: dict[str, str] = {
 # and nothing else moved. That is why these are not round numbers. Before, in the same
 # order: Asia 40 / 20 / 15 / 15 / 5, London 35 / 25 / 15 / 15 / 5, the New York
 # pre-open 25 / 20 / 15 / 15 / 10, the session 25 / 15 / 15 / 10 / 10 / 5.
-BOARD_WEIGHTS: dict[str, dict[str, int]] = {
+#
+# AND THE DAILY TREND'S SHARE THE SAME WAY (2026-11-15, the note above BOARD_FAMILY):
+# 21, 16, 11 and 7 of each hundred, given back in proportion by `share_out`. The table
+# as it stood with trend in it is kept, so the arithmetic can be read and undone.
+_WEIGHTS_WITH_TREND: dict[str, dict[str, int]] = {
     "asia": {"structure": 42, "daily": 21, "rates": 16, "catalysts": 16, "risk": 5,
              "participation": 0},
     "london": {"structure": 37, "rates": 26, "daily": 16, "catalysts": 16, "risk": 5,
@@ -113,6 +222,16 @@ BOARD_WEIGHTS: dict[str, dict[str, int]] = {
                "participation": 0},
     "ny_live": {"structure": 31, "rates": 19, "risk": 19, "catalysts": 12, "participation": 12,
                 "daily": 7},
+}
+#: The weights in use: the table above with the daily family's share handed back and
+#: the family itself gone from it. Asia 53 / 20 / 20 / 7 (structure, rates, catalysts,
+#: risk), London 44 / 31 / 19 / 6, the New York pre-open 33 / 27 / 20 / 20 (catalysts,
+#: rates, structure, risk), the session 33 / 21 / 20 / 13 / 13 (structure, rates, risk,
+#: catalysts, participation).
+BOARD_WEIGHTS: dict[str, dict[str, int]] = {
+    s: {k: v for k, v in share_out(w, tuple(k for k in w if k != "daily")).items()
+        if k != "daily"}
+    for s, w in _WEIGHTS_WITH_TREND.items()
 }
 
 #: Before the open the sector and leader reads are yesterday's, so the tape is its
@@ -131,7 +250,7 @@ WEIGHT_LABEL: dict[str, str] = {
 
 #: The families on each side of the macro-against-structure conflict.
 _MACRO = ("rates", "risk", "catalysts")
-_STRUCTURE = ("structure", "daily")
+_STRUCTURE = ("structure",)
 
 
 def session_key(session: str, underway: bool) -> str:
@@ -147,11 +266,12 @@ def tape_key(scan_session: str) -> str:
 
 
 def read(votes: list[dict[str, Any]], family_of: dict[str, str], weights: dict[str, int],
-         session: str) -> dict[str, Any]:
+         session: str, names: dict[str, tuple[str, str]] | None = None) -> dict[str, Any]:
     """The score, its grade and the reads behind it. Pure.
 
     A read with no family (event risk) stays in `votes` and out of everything else.
-    A read with no `live` flag is taken as able to vote."""
+    A read with no `live` flag is taken as able to vote. `names` renames a family for
+    this board (crude's "Rates & dollar" holds the dollar and the products)."""
     tally: dict[str, list[int]] = {}
     tagged: list[dict[str, Any]] = []
     long_n = short_n = flat_n = cannot = 0
@@ -187,14 +307,17 @@ def read(votes: list[dict[str, Any]], family_of: dict[str, str], weights: dict[s
         if s is not None and w:
             live_weight += w
             net += w * s
-        label, short = FAMILY_NAMES.get(fam, (fam, fam))
+        label, short = (names or {}).get(fam) or FAMILY_NAMES.get(fam, (fam, fam))
         families.append({"key": fam, "label": label, "short": short, "weight": w,
                          "score": round(100 * s) if s is not None else None,
                          "live": t[0] + t[1] + t[2], "total": t[3]})
     families.sort(key=lambda f: -f["weight"])
 
     whole = sum(weights.values())
-    score = round(100 * net / live_weight) if live_weight else 0
+    # Over the WHOLE weight, not the live weight: a family that cannot vote counts
+    # as no lean, so a read on a third of the weight is a third of the way out at
+    # most (the module's note has the why).
+    score = round(100 * net / whole) if whole else 0
     coverage = round(100 * live_weight / whole) if whole else 0
     bias = ("long" if score >= LEAN_AT else "short" if score <= -LEAN_AT else None)
     size = abs(score)
@@ -210,7 +333,7 @@ def read(votes: list[dict[str, Any]], family_of: dict[str, str], weights: dict[s
     against = short_n if bias == "long" else long_n if bias == "short" else min(long_n, short_n)
     live = long_n + short_n + flat_n
     return {
-        "bias": bias, "score": score, "coverage": coverage, "grade": grade,
+        "bias": bias, "score": score, "basis": "whole", "coverage": coverage, "grade": grade,
         "max_conviction": MAX_CONVICTION[grade],
         "agree": agree, "against": against, "neutral": flat_n,
         "live": live, "cannot_vote": cannot, "total": live + cannot,
@@ -232,11 +355,15 @@ def tape_read(votes: list[dict[str, Any]], scan_session: str) -> dict[str, Any]:
     recommend"). Overnight only SPY and QQQ against their levels can vote: at
     20:13 ET on 10 Nov both were a third of a percent up after hours, which is one
     family and 35% of the pre-open's weight, and the card read "Long +100,
-    moderate" with plans capped at four. The score is right (every read that can
-    vote agrees), and it is a thin read. So with under THIN_COVERAGE of the weight
-    live the grade is weak at most, the ceiling follows it, and `thin` tells the
-    page to print the count beside the score. Strong already needed 60%; this is
-    the same idea one grade down. The futures board (`board_read`) is not changed.
+    moderate" with plans capped at four. So with under THIN_COVERAGE of the weight
+    live the grade is weak at most and the ceiling follows it. Strong already
+    needed 60%; this is the same idea one grade down. The futures board
+    (`board_read`) is not changed.
+
+    The score is over the whole weight since 2026-11-15, so that night reads +35,
+    not +100, and the pages draw it as any other read: `thin` no longer changes a
+    drawing. It still caps the grade, because +35 on one family would otherwise be
+    moderate and put the plans' ceiling back at four.
     """
     key = tape_key(scan_session)
     r = read(votes, TAPE_FAMILY, TAPE_WEIGHTS[key], key)
@@ -254,8 +381,12 @@ def _side(x: float) -> str | None:
 def board_read(book: str, votes: list[dict[str, Any]], session: str, *,
                regime: str | None, ny_open: bool, events: int = 0) -> dict[str, Any]:
     """One futures book's read for a session: the score, the macro-against-structure
-    conflict, the ceiling and the line on how to treat it. Pure."""
-    r = read(votes, BOARD_FAMILY, BOARD_WEIGHTS[session], session)
+    conflict, the ceiling and the line on how to treat it. Pure.
+
+    The book decides which family each read speaks in and what the families weigh
+    (`board_family`, `board_weights`): an index book's are the session's own."""
+    r = read(votes, board_family(book), board_weights(book, session), session,
+             names=BOOK_FAMILY_NAMES.get(book))
     scores = {f["key"]: f["score"] for f in r["families"] if f["score"] is not None}
     macro = sum(scores.get(k, 0) for k in _MACRO)
     structure = sum(scores.get(k, 0) for k in _STRUCTURE)

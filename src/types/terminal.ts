@@ -61,6 +61,12 @@ export interface Quote {
   feed?: "live" | "delayed" | "stale" | "closed";
   /** Minutes the last print trails the collector's clock. */
   lag_min?: number | null;
+  /**
+   * A US-listed fund's last trade outside the session (server quotes.with_ext, 2026-11-16):
+   * before the bell its pre-market, after the close its after hours, against the last
+   * regular close (`last`). Absent in the session and on every other row.
+   */
+  ext?: { kind: "pre" | "post"; px: number; pct: number; at: number; day?: string } | null;
   spark: number[];
 }
 
@@ -147,6 +153,24 @@ export interface CalendarRow {
   read?: "hot" | "cold" | "inline" | null;
   /** What that read means for each book, in the collector's words (releases.implication). */
   meaning?: Record<"NQ" | "ES" | "GC", string> | null;
+  /**
+   * The agency's own figure for this print, when it publishes one a program can read
+   * (server sources/official.py, 2026-11-15): the BLS, the Census Bureau, the BEA or
+   * the EIA. With it, `actual` IS the agency's figure. Absent on every other row,
+   * which is the calendar feed's alone.
+   */
+  official?: {
+    by: "BLS" | "Census" | "BEA" | "EIA";
+    /** The figure, in the units the row is in. */
+    text: string;
+    /** What it measures: "October 2026", "week ending 6 Nov". */
+    period: string;
+    /** The agency's release. */
+    url: string;
+    /** true: the feed said the same. false: it said `feed`. null: it had said nothing yet. */
+    agrees: boolean | null;
+    feed: string | null;
+  } | null;
 }
 
 export interface GexLevel {
@@ -361,12 +385,16 @@ export interface DriverBook {
   key: string;
   last: number | null;
   bias: "long" | "short" | null;
-  /** -100 to +100 across the reads that can vote, weighed for the session. */
+  /** -100 to +100 over the whole of the session's weight: a family that cannot vote counts as no lean (bias.py, 2026-11-15). */
   score: number;
+  /** "whole" on a read scored by that rule; absent on one scored over the live weight alone (lib/biasScale wholeScore). */
+  basis?: "whole";
   /** The share of the session's weight that is live, percent. */
   coverage: number;
   /** "London's weight": what `coverage` is a share of. */
   weight_label: string;
+  /** The session the weights are for: asia, london, ny_pre, ny_live (bias.session_key). */
+  session_key?: string;
   families: ScoreFamily[];
   agree: number;
   against: number;
@@ -395,6 +423,12 @@ export interface Drivers {
   /** The scanner's session, which says whether the cash-market reads may vote. */
   session: string;
   ny_open: boolean;
+  /**
+   * Which session's weights the board reads now (drivers.weights_for): the session
+   * trading or opening next, New York split at its bell. The Market Report page lights
+   * that session's pill.
+   */
+  weights?: "asia" | "london" | "ny_pre" | "ny_live";
   books: Record<string, DriverBook>;
   error?: string;
 }
@@ -469,15 +503,26 @@ export interface Mover {
   pct: number;
   /** weight x return, in index percentage points. The ranking figure. */
   contribution: number;
+  /** Before the bell: its own pre-market move and that times its weight; null when it has not traded. */
+  pre_pct?: number | null;
+  pre_contribution?: number | null;
 }
 
 export interface IndexMovers {
   label: string;
   index: string;
+  /** The fund the card's tab is labelled by: QQQ, SPY (the key stays the futures book). */
+  fund?: string | null;
+  /** The holdings file's date, "12 Nov 2026" whoever published it. */
   as_of: string | null;
+  /** Whose file the weights are: "iShares", or the second issuer while iShares is not answering. */
+  weights_from?: string | null;
   covered_weight: number;
   net_contribution: number;
   members: Mover[];
+  /** Before the bell (server constituents.with_pre): what the names' own pre-market moves add up to, and how many have traded. */
+  pre_net?: number | null;
+  pre_traded?: number | null;
 }
 
 export interface VolTermPoint {
@@ -663,8 +708,11 @@ export interface DayHold {
   n: number;
   trend: number;
   range: number;
-  /** Which side the condition's counts vote for; null when it only shows. */
-  vote: "range" | "trend" | null;
+  /**
+   * Which side the condition's counts vote for; null when it only shows. "no_trend" is a
+   * trend rate under half of every session's: a vote against a trend call (2026-11-16).
+   */
+  vote: "range" | "trend" | "no_trend" | null;
 }
 
 export interface DayLean {
@@ -815,7 +863,12 @@ export interface ReportBody {
  * before then have no `format` and a ReportBody.
  * ---------------------------------------------------------------------------- */
 
-export type Book = "NQ" | "ES" | "GC";
+/**
+ * A book a brief can carry a call for. Silver and crude since 2026-11-15 (server
+ * report.BOOKS); the three index funds since 2026-11-16, for the Stocks tab's report
+ * (server report.ETF_BOOKS).
+ */
+export type Book = "NQ" | "ES" | "GC" | "SIL" | "CL" | "SPY" | "QQQ" | "IWM";
 
 /** A driver's lean for the book it is listed under. */
 export type Tone = "bear" | "bull" | "mixed" | "neutral";
@@ -866,6 +919,89 @@ export interface BriefBody {
   headlines: { id: string; books: Book[]; note: string }[];
   cross_asset: string;
   risks: string[];
+}
+
+/**
+ * A call in the short brief (2026-11-15, server report.SCHEMA): the side, its reasons,
+ * the map and what kills it. The longer call above (a label for the rest of the day, a
+ * catalyst sentence) is what a note stored before then carries.
+ *
+ * The reasons came in two shapes the same day: `why` (version 2, at most three
+ * bullets) and `factors` (version 3, the market report: one comment a factor the bias
+ * weighs, joined by `key` to the engine's row in `BriefFacts.factors`).
+ */
+export interface ShortCall {
+  book: Book;
+  open_bias: Bias;
+  /** 1–5. The model's own confidence, not a probability; capped by the engine's board. */
+  conviction: number;
+  /** Version 2: one to three reasons, strongest first. */
+  why?: string[];
+  /** Version 3: the model's comment on a factor, by the factor's key. */
+  factors?: { key: string; line: string }[];
+  /** One line: the level that has to hold or break, and where that carries. */
+  plan: string;
+  wrong_if: string;
+}
+
+/**
+ * The short brief: what a report is since 2026-11-15 (`Report.brief_version` 2, and 3
+ * for the market report it became that evening). Five parts, each under a word limit
+ * the collector checks (report.LIMITS).
+ */
+export interface ShortBriefBody {
+  thesis: string;
+  /** The Stocks report's comments on the market's factors, written once (`facts.market_factors`). */
+  factors?: { key: string; line: string }[];
+  calls: ShortCall[];
+  /** What is on the clock, each by the id of its row in `facts.catalysts`. */
+  today: { id: string; note: string }[];
+  risks: string[];
+  headlines: { id: string; books: Book[]; note: string }[];
+}
+
+/**
+ * One row of "what is driving the bias" (server report.factors_of): a family the bias
+ * weighs in this session, with the engine's own tag and share of the score, heaviest
+ * first; the last row is event risk, which is no side and lowers the ceiling instead.
+ * No row for dealer gamma and none for a trend: the bias weighs neither.
+ */
+export interface BriefFactor {
+  /** The family's key, or "event". What a call's comment is joined on. */
+  key: string;
+  name: string;
+  /** The small line under the name: "rates & dollar". */
+  sub: string | null;
+  /** Its share of the session's hundred; null on the event row. */
+  weight: number | null;
+  /** bull and bear are the book's side; none is a family with no read live at this hour. */
+  lean: "bull" | "bear" | "mixed" | "neutral" | "none" | "damp";
+  /** The word on the row's tag: "Bearish", "Nothing yet", "2 stories". */
+  tag: string;
+  /** The engine's figures behind it, for the hover and for a row the model left bare. */
+  reads: string[];
+}
+
+/** The levels a call is traded against, low to high (server report.key_levels). */
+export interface BriefLevels {
+  dp: number;
+  marks: { price: number; label: string; kind: "range" | "poc" | "value" | "last" }[];
+}
+
+/** The engine's read for one book as a brief stores it (server report._drivers). */
+export interface BriefBoard {
+  bias: "long" | "short" | null;
+  score?: number | null;
+  /** The share of the session's weight that could vote, 0 to 100. */
+  coverage?: number | null;
+  /** "whole" when the score is over the whole weight (lib/biasScale wholeScore). */
+  basis?: string | null;
+  grade?: string | null;
+  max_conviction?: number | null;
+  live?: number | null;
+  total?: number | null;
+  /** Whose weights scored it: "London", "New York". */
+  weights_for?: string | null;
 }
 
 export interface BriefSnapshotRow {
@@ -1004,6 +1140,8 @@ export interface BriefCatalyst {
   note: string | null;
   /** The release's other series, its lead being this row (report.py, releases.py). */
   also?: Array<{ title: string; actual: string | null; consensus: string | null; previous: string | null }>;
+  /** Whose figure the actual is, when it is the agency's own: "BLS", "Census", "BEA", "EIA". */
+  official?: string;
 }
 
 export interface BriefRatio {
@@ -1042,12 +1180,31 @@ export interface BriefFacts {
     index_pct: number | null;
   };
   headlines: BriefHeadline[];
+  /** The engine's board per book when the note was written: the scale beside each call. */
+  drivers?: Partial<Record<Book, BriefBoard>>;
+  /** The market report's drivers table, a row a factor, per book (version 3). */
+  factors?: Partial<Record<Book, BriefFactor[]>>;
+  /** The market report's key levels per book (version 3). */
+  levels?: Partial<Record<Book, BriefLevels>>;
+  /**
+   * The Stocks report's one bias (server report.market_board): the Stocks tape count,
+   * read for all three funds, null when it had not been read. Only on that report.
+   */
+  market?: BriefBoard | null;
+  /** Its table, printed once above the calls (server report.factors_of("TAPE")). */
+  market_factors?: BriefFactor[];
 }
 
 export type ReportSession = "asia" | "london" | "ny";
 
-/** Which book the note is about. "all" covers the three together. */
-export type ReportAsset = "all" | "NQ" | "ES" | "GC";
+/**
+ * What the note is about. Since 2026-11-16 the Futures tab writes one book at a time
+ * (NQ, ES, GC, SIL, CL) and the Stocks tab writes "etfs", SPY, QQQ and IWM together
+ * for New York. "indexes" (NQ and ES, the Market Report page's for a day) and "all"
+ * (NQ, ES and gold) are what older notes were written about; they still open, under
+ * each book they carry.
+ */
+export type ReportAsset = "indexes" | "GC" | "SIL" | "CL" | "all" | "NQ" | "ES" | "etfs";
 
 export interface Report {
   ok: boolean;
@@ -1066,6 +1223,14 @@ export interface Report {
   /** "brief" for everything generated since 2026-09-16; absent on older notes. */
   format?: "brief";
   /**
+   * 2 is the short brief (2026-11-15) and 3 the market report it became the same day
+   * (a comment a factor, no dealer gamma): `report` is a ShortBriefBody. Absent on a
+   * brief written before then, whose `report` is the longer BriefBody.
+   */
+  brief_version?: number;
+  /** How many words the model wrote in it (short briefs only). */
+  words?: number;
+  /**
    * Whether the session was ALREADY TRADING when this was written.
    *
    * Decides whether the call reads "at the open" or "from here" — a note
@@ -1077,7 +1242,7 @@ export interface Report {
   session_underway?: boolean;
   /** The brief's tables, computed by the collector. */
   facts?: BriefFacts | null;
-  report: ReportBody | BriefBody | null;
+  report: ReportBody | BriefBody | ShortBriefBody | null;
   error: string | null;
   /** Exactly what the model was shown. Stored so a call can be re-read later. */
   digest: Record<string, unknown> | null;
@@ -1120,6 +1285,9 @@ export interface NoteJob {
   /** When it was started, ISO — the clock a reloaded page resumes from. */
   started_utc?: string;
   model?: string;
+  /** What a report job is writing about, and for which session (api.py's job meta). */
+  asset?: ReportAsset;
+  session?: ReportSession;
 }
 
 export interface ReportFeed {

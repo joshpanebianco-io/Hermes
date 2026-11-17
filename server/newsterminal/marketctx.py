@@ -633,9 +633,10 @@ def fed(pm: dict[str, Any] | None) -> dict[str, Any] | None:
 def macro(quotes: list[dict[str, Any]], rates: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The cross-asset moves an equity trade answers to. Pure.
 
-    THE 2Y IS THE TREASURY'S, NOT THE BOARD'S. The board's "US2Y" is Yahoo's
-    ^IRX, a 13-week bill — not a two-year note — so the 2Y here is the Treasury
-    par curve's, as of its last close. The 10Y is the board's live ^TNX; 2s10s
+    THE 2Y IS THE TREASURY'S, NOT THE BOARD'S. The board's short row is Yahoo's
+    ^IRX, a 13-week bill (keyed "US3M" since 2026-11-14; it was mislabelled "US2Y")
+    — not a two-year note — so the 2Y here is the Treasury par curve's, as of its
+    last close. The 10Y is the board's live ^TNX; 2s10s
     and its change come from the curve so both legs are the same print.
     """
     out: list[dict[str, Any]] = []

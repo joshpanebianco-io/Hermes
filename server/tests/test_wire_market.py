@@ -147,7 +147,7 @@ def test_a_search_result_from_no_newsroom_goes(title: str, outlet: str) -> None:
 
 
 @pytest.mark.parametrize("outlet", ["Reuters", "AP News", "Bloomberg.com", "Financial Times",
-                                    "The Guardian", "Yahoo Finance UK", "CNBC", "The Telegraph"])
+                                    "The Guardian", "CNBC", "The Telegraph"])
 def test_a_newsroom_is_a_newsroom(outlet: str) -> None:
     assert wire.is_newsroom(outlet)
     assert off_tape("Oil falls below $90 as Trump pulls back from threat to strike Iran",
@@ -155,10 +155,10 @@ def test_a_newsroom_is_a_newsroom(outlet: str) -> None:
 
 
 def test_a_feed_that_is_its_own_publisher_is_not_asked() -> None:
-    # ZeroHedge is in the feed table; it is no newsroom, and is not a search result.
-    assert not wire.is_newsroom("ZeroHedge")
+    # DW is in the feed table; it is not on the search list, and is not a search result.
+    assert not wire.is_newsroom("DW")
     assert off_tape("Qatar LNG Loadings Climb To Half Of Pre-War Levels As Energy-Starved Europe "
-                    "Prays For Winter Relief", "ZeroHedge", "Markets") is None
+                    "Prays For Winter Relief", "DW", "Business") is None
 
 
 @pytest.mark.parametrize(

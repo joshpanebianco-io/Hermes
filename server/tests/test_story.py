@@ -307,11 +307,11 @@ def test_the_score_reads_a_preview_worded_move_as_the_names_move() -> None:
     t = ("NBIS Stock Jumps Over 11% On CoreWeave Boost: Analysts Expect Over Six-Fold Growth "
          "In Sales In Upcoming Q3 Report")
     assert catalysts.grade(t).tag == "Preview"
-    news = [{"title": t, "age_min": 300.0, "publisher": "Stocktwits"}]
+    news = [{"title": t, "age_min": 300.0, "publisher": "Benzinga"}]
     read = scanscore.catalyst_read("long", None, news, None, sym="NBIS", names=["Nebius"])
     assert read["pts"] == 20
-    assert scanscore.catalyst_read("short", None, news, None, sym="NBIS",
-                                   names=["Nebius"])["pts"] == -10
+    short = scanscore.catalyst_read("short", None, news, None, sym="NBIS", names=["Nebius"])
+    assert short["pts"] == 20 and short["reads_against"]
     # A preview that says nobody moved is still talk.
     talk = [{"title": "Will Broadcom Inc. (AVGO) Beat Estimates Again in Its Next Earnings "
                       "Report?", "age_min": 300.0, "publisher": "Yahoo Finance"}]
@@ -345,7 +345,7 @@ def test_a_recap_no_longer_costs_the_side() -> None:
                      "Make It”", "ts": ts, "publisher": "Yahoo Finance"},
            {"title": "NBIS Stock Jumps Over 11% On CoreWeave Boost: Analysts Expect Over Six-Fold "
                      "Growth In Sales In Upcoming Q3 Report", "ts": ts + 3600,
-            "publisher": "Stocktwits"}]
+            "publisher": "Benzinga"}]
     got = scanscore.news_for("NBIS", own, [], ["Nebius"], now)
     # The name's own jump is held, though a preview by its words; the recap is not.
     assert [g["title"][:30] for g in got] == ["NBIS Stock Jumps Over 11% On C"]

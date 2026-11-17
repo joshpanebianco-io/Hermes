@@ -82,7 +82,7 @@ export function liveLine(r: ScoreRead): string {
   return `${r.live ?? 0} of ${r.total} reads live · ${r.coverage ?? 0}% of ${r.weight_label ?? "the weight"}`;
 }
 
-/** "Structure +67 · Rates & dollar 0 · Daily trend +50": what carries it, heaviest first. */
+/** "Structure +50 · Rates & dollar 0 · Risk +100": what carries it, heaviest first. */
 export function familiesLine(r: ScoreRead): string {
   return (r.families ?? [])
     .filter((f) => f.score != null && f.weight > 0)

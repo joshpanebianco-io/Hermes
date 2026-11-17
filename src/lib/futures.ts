@@ -37,17 +37,36 @@ export const QUOTE_KEY: Record<FutBook, string> = { NQ: "NQ", ES: "ES", GC: "GC"
  */
 export const isFuture = (q: Pick<Quote, "symbol">): boolean => q.symbol?.endsWith("=F") ?? false;
 
-/** The books the driver board scores. Silver and crude are not scored yet. */
-export const SCORED: ReadonlySet<FutBook> = new Set<FutBook>(["NQ", "ES", "GC"]);
+/**
+ * The books the driver board scores: all five since 2026-11-15, when silver and crude
+ * got a bias of their own (server bias.py). A book the collector has not scored yet
+ * (an older collector) still says so on its card.
+ */
+export const SCORED: ReadonlySet<FutBook> = new Set<FutBook>(FUT_BOOKS);
 
-export const FUT_VIEWS = [
-  { key: "overview", label: "Overview", title: "All five at once: price, bias, gamma, the implied day, the nearest levels, what moves them" },
-  ...FUT_BOOKS.map((b) => ({ key: b, label: b, title: `${FUT_NAME[b]}: the chart with its levels, the news that reaches it, the ranges, the profile and gamma` })),
-  { key: "brief", label: "Brief", title: "The written pre-session brief for NQ, ES and GC" },
-] as const;
+/** The books the trend-or-range record is kept for (server daytype.py). */
+export const DAY_TYPED: ReadonlySet<FutBook> = new Set<FutBook>(["NQ", "ES", "GC"]);
 
-export type FutView = (typeof FUT_VIEWS)[number]["key"];
+// No Overview since 2026-11-14 (owner: "lets remove it completely"): the five side by
+// side repeated each contract's own figures row and stood between the page and a chart.
+// The written report was a Brief view here until 2026-11-15, a page of its own for a day,
+// and is the Market Report view after CL since 2026-11-16 (owner: "in both futures and
+// stocks lets add Market Report tab with the generate funcitonality next to cl").
+export type FutView = FutBook | "report";
+
+export const FUT_VIEWS: readonly { key: FutView; label: string; title: string }[] = [
+  ...FUT_BOOKS.map((b) => ({
+    key: b,
+    label: b,
+    title: `${FUT_NAME[b]}: the chart with its levels, the news that reaches it, the ranges, the profile and gamma`,
+  })),
+  { key: "report", label: "Market Report", title: "The written report: NQ, ES, GC, SIL or CL, for Asia, London or New York" },
+];
+
 export const FUT_VIEW_KEYS: readonly FutView[] = FUT_VIEWS.map((v) => v.key);
+
+/** A view's name in a title: the contract and its name, or the report's. */
+export const futViewName = (v: FutView): string => (v === "report" ? "Market Report" : `${v} · ${FUT_NAME[v]}`);
 
 export const isFutBook = (v: string): v is FutBook => (FUT_BOOKS as readonly string[]).includes(v);
 
@@ -76,4 +95,52 @@ export function booksOf(row: Pick<CalendarRow, "event" | "themes" | "core">): Fu
     hit.add("SIL");
   }
   return FUT_BOOKS.filter((b) => hit.has(b));
+}
+
+/** A US release is "the next" at this score, the Stocks desk's own bar (lib/nextPrint). */
+export const US_SCORE = 4;
+/** A release named for the commodity itself (crude inventories, for crude) counts from here. */
+export const NAMED_SCORE = 3;
+
+/** The releases named for a book's own commodity. The indices have none. */
+const NAMED: Record<FutBook, RegExp | null> = { NQ: null, ES: null, GC: METALS, SIL: METALS, CL: ENERGY };
+
+/**
+ * The next scheduled release that can move a book: its Next release card.
+ *
+ * AMERICA'S, AT THE STOCKS DESK'S BAR (2026-11-15, of an audit of the cards the owner
+ * answered "do what you recommend"). The card took the soonest release scored 3 or more
+ * that `booksOf` passes, from any country: on Saturday 14 Nov 2026 NQ's read "in 23h 57m
+ * · GDP Price Index y/y", which was Japan's, with no country on it, and the next thing
+ * under it was a regional Fed member at 05:00. It reads a US release scored 4 or more
+ * now, the rule the Stocks tab's next event already goes by (lib/nextPrint), on a
+ * subject that reaches the book; and a release named for the commodity itself from 3,
+ * wherever it prints (the weekly crude inventories are a 3 and are crude's own number).
+ * The news card beside it goes by the same idea: nothing from another country's
+ * central bank.
+ *
+ * `leads` are releases, one row each (lib/releases groupReleases, as lib/nextPrint
+ * groups them), so 08:30 reads the release's lead series and not whichever of its rows
+ * the feed listed first. The soonest wins; at the same minute the higher score, and at
+ * the same score the shorter name, which is the headline of two that print together
+ * ("Retail Sales m/m" over "Retail Sales Ex Autos m/m", which the feed lists first).
+ */
+export function nextRelease<T extends Pick<CalendarRow, "event" | "themes" | "core" | "region" | "score" | "ts" | "released">>(
+  leads: readonly T[],
+  book: FutBook,
+  nowSec: number,
+): T | null {
+  const named = NAMED[book];
+  let best: T | null = null;
+  for (const r of leads) {
+    if (r.released || r.ts == null || r.ts <= nowSec - 60) continue;
+    if (!booksOf(r).includes(book)) continue;
+    const us = r.region === "us" && r.score >= US_SCORE;
+    const own = named != null && named.test(r.event) && r.score >= NAMED_SCORE;
+    if (!us && !own) continue;
+    const sooner = best === null || r.ts < (best.ts as number);
+    const level = best !== null && r.ts === best.ts;
+    if (sooner || (level && (r.score > best!.score || (r.score === best!.score && r.event.length < best!.event.length)))) best = r;
+  }
+  return best;
 }

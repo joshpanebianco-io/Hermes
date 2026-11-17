@@ -174,14 +174,20 @@ BRIEF: dict[str, Any] = {
     "thesis": "Real yields are the driver.",
     "calls": [
         {"book": "NQ", "open_bias": "Lean Bear", "conviction": "3",
-         "rest_of_day": "Neutral to leaning bearish", "rest_of_day_bias": "nonsense",
-         "wrong_if": "Acceptance above 29,459"},
+         "factors": [{"key": "rates", "line": "Yields up"},
+                     {"key": "rates", "line": "the same row twice"},
+                     {"key": "daily", "line": "no such row"},
+                     {"key": "catalysts", "line": 7}, "not a row",
+                     {"key": "structure", "line": "Oil up"}],
+         "plan": "Below 29,459 targets 29,300", "wrong_if": "Acceptance above 29,459"},
         {"book": "GC", "open_bias": "bearish", "conviction": 3},
     ],
-    "reads": [{"book": "NQ", "regime": "Rate scare", "chain": ["Oil up", 7, "Yields up"],
-               "drivers": [{"label": "10Y", "text": "19-yr high", "tone": "sideways"}]}],
-    "snapshot_watch": [{"key": "US10Y", "note": "19-yr high"}, {"key": "BTC", "note": "x"}],
-    "catalyst_notes": [{"id": "c1", "note": "missed"}, {"id": "c9", "note": "invented"}],
+    # The longer shape's parts (a read per book, a note on a snapshot row) are not
+    # kept: the short brief has no place for them.
+    "reads": [{"book": "NQ", "regime": "Rate scare", "chain": ["Oil up"]}],
+    "snapshot_watch": [{"key": "US10Y", "note": "19-yr high"}],
+    "today": [{"id": "c1", "note": "missed"}, {"id": "c9", "note": "invented"}],
+    "risks": ["one", "two", "three", "four"],
     "headlines": [
         {"id": "h1", "books": ["NQ", "Gold"], "note": "driver"},
         {"id": "h7", "books": ["NQ"], "note": "no such headline"},
@@ -195,11 +201,13 @@ def test_sanitize_maps_spelling_and_drops_what_it_cannot_join() -> None:
     assert [c["book"] for c in out["calls"]] == ["NQ"]  # GC is out of scope
     assert out["calls"][0]["open_bias"] == "leaning bearish"
     assert out["calls"][0]["conviction"] == 3
-    assert out["calls"][0]["rest_of_day_bias"] == "leaning bearish"  # falls back to the open
-    assert out["reads"][0]["chain"] == ["Oil up", "Yields up"]
-    assert out["reads"][0]["drivers"][0]["tone"] == "neutral"
-    assert [w["key"] for w in out["snapshot_watch"]] == ["US10Y"]
-    assert [n["id"] for n in out["catalyst_notes"]] == ["c1"]
+    # One comment a row, on rows that exist, and only where there are words.
+    assert out["calls"][0]["factors"] == [{"key": "rates", "line": "Yields up"},
+                                          {"key": "structure", "line": "Oil up"}]
+    assert out["calls"][0]["plan"] == "Below 29,459 targets 29,300"
+    assert set(out) == {"thesis", "calls", "today", "risks", "headlines"}
+    assert out["today"] == [{"id": "c1", "note": "missed"}]  # c9 is no row of the calendar
+    assert out["risks"] == ["one", "two", "three"]
     assert out["headlines"] == [{"id": "h1", "books": ["NQ", "GC"], "note": "driver"}]
 
 

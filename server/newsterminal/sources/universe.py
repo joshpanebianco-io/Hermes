@@ -200,7 +200,8 @@ _SECTOR_INDUSTRIES: dict[str, tuple[str, ...]] = {
 SECTOR_OF_INDUSTRY: dict[str, str] = {i: k for k, inds in _SECTOR_INDUSTRIES.items() for i in inds}
 SECTOR_KEYS: frozenset[str] = frozenset(_SECTOR_INDUSTRIES)
 
-#: The sector a theme sits under on the Sectors page; None is the Global menu. Written in
+#: The sector a theme sits under on the Sectors page; None is a theme under no sector (the
+#: two China funds), which has a card and no row in any sector's strip. Written in
 #: the order the owner's reference screenshots run their themes, which is sector by sector
 #: and is where Solar and Bitcoin Miners sit: Solar with the oil names, Miners after the
 #: technology block, in the Financials slot beside regional banks.
@@ -326,12 +327,34 @@ def session_day(now: datetime) -> date:
     return prev_trading_day(d)
 
 
+def cards_phase(spy_ext: dict[str, Any] | None, now: datetime) -> str:
+    """Which stretch of trading the Sectors cards show at `now` (2026-11-16, the owner:
+    "make the app update as to what they're actually doing"): `rth` in the regular
+    session; `pre` once SPY has traded before today's bell; `post` from the close, and
+    overnight and over a weekend, while the last extended trade is the after hours';
+    `last` with nothing outside a session to show. Pure."""
+    et = now.astimezone(scan.ET)
+    d, m = et.date(), _mod(et)
+    if is_trading_day(d) and scan.RTH_START <= m < scan.rth_end(d):
+        return "rth"
+    if isinstance(spy_ext, dict) and spy_ext.get("kind") == "pre" \
+            and spy_ext.get("day") == d.isoformat():
+        return "pre"
+    if isinstance(spy_ext, dict) and spy_ext.get("kind") == "post":
+        return "post"
+    return "last"
+
+
 def cards_day(now: datetime) -> date:
     """The session a card's move is about: the screener's columns and the ETFs' 1D both
-    read the last regular session until the open. Pure."""
+    read the last regular session until the open. Pure.
+
+    FROM THE BELL, NOT FROM 09:45 (handover audit, 16 Nov 2026). A card's move is the
+    fund's own quote, live from 09:30, and its counts are the stocks' pre-market until the
+    delayed screener reaches the session (`heatmap`'s `counts_pre`): both are today's."""
     et = now.astimezone(scan.ET)
     basis = basis_at(now)
-    if basis in ("rth", "post"):
+    if basis in ("rth", "post") or (basis == "pre" and _mod(et) >= scan.RTH_START):
         return et.date()
     return session_day(now) if basis == "last" else prev_trading_day(et.date())
 
@@ -442,10 +465,13 @@ class Ctx:
     rvol: Callable[[str], float | None] = lambda _s: None
 
 
-def span_stats(rows: list[dict[str, Any]], column: str, leaders: int = 3) -> dict[str, Any]:
+def span_stats(rows: list[dict[str, Any]], column: str | Callable[[dict[str, Any]], Any],
+               leaders: int = 3) -> dict[str, Any]:
     """How a group's stocks moved over one span: the count each way, the median stock
-    (one 40% name cannot carry it the way it carries an average), and who led. Pure."""
-    moves = sorted(((r["sym"], r[column]) for r in rows if r.get(column) is not None),
+    (one 40% name cannot carry it the way it carries an average), and who led. `column`
+    is a row's field, or a function of the row (a name's pre-market move). Pure."""
+    get = column if callable(column) else (lambda r: r.get(column))
+    moves = sorted(((r["sym"], v) for r in rows if (v := get(r)) is not None),
                    key=lambda m: -m[1])
     vals = [m for _, m in moves]
     return {"up": sum(1 for v in vals if v > 0), "down": sum(1 for v in vals if v < 0),
@@ -498,6 +524,8 @@ class UniverseStore:
         self.source = "unavailable"
         self.error: str | None = None
         self.last_attempt = 0.0
+        #: The basis the last read was asked under: a new one is due the tick it changes.
+        self.tried_basis: str | None = None
         self.pause_until = 0.0
         self.pm_ref: dict[str, list[float | None]] = {}
         self.ah_ref: dict[str, list[float | None]] = {}
@@ -604,10 +632,19 @@ class UniverseStore:
         basis = basis_at(now)
         st = SourceStatus("Universe")
         wait = IDLE_SEC if basis == "last" else ACTIVE_SEC
-        due = not self.rows or t - self.last_attempt >= wait
+        # READ AGAIN THE TICK THE BASIS CHANGES (handover audit, 09:45 ET on 16 Nov 2026).
+        # The columns change meaning at each flip (04:15, 09:45, 16:15, 20:15) and a read
+        # means what it meant when it was taken: ten seconds after 09:45 the page served
+        # a 09:44 read as the session's, and the Sectors cards printed Friday's counts
+        # (XLE 83 up, 18 down under a fund 1.42% down) until the next read, up to
+        # ACTIVE_SEC later. One read at the flip, not a retry loop: a failure waits its
+        # turn as any other.
+        flipped = self.tried_basis is not None and self.tried_basis != basis
+        due = not self.rows or t - self.last_attempt >= wait or flipped
         read = False
         if due and t >= self.pause_until:
             self.last_attempt = t
+            self.tried_basis = basis
             read = True
             r = st.absorb(fetch(URL, key=CACHE_KEY, ttl_sec=0.0, timeout=TIMEOUT, ua=BROWSER_UA,
                                 headers=HEADERS, stale_max_sec=STALE_MAX_SEC, validate=pool_body,
@@ -726,6 +763,16 @@ class UniverseStore:
         at = self.read_at if self.read_at is not None else now.timestamp()
         return {"volume": r["pm_vol"], "high": r["pm_h"], "low": r["pm_l"], "last": r["pm_c"],
                 "asof": datetime.fromtimestamp(at, UTC).isoformat(), "source": "screener"}
+
+    def pre_move(self, sym: str, now: datetime | None = None) -> float | None:
+        """A name's own pre-market move against the last close while the screener's
+        columns are the pre-market's and the name has traded in it, else None."""
+        r = self.by_sym.get(sym)
+        basis = basis_at(now or datetime.now(UTC))
+        if r is None or basis != "pre" or not self.pm_ok(r, basis):
+            return None
+        v = r.get("pm_chg")
+        return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
 
     def day_move(self, sym: str, now: datetime | None = None) -> float | None:
         """The name's move since the previous close (%), as the screener has it fifteen
@@ -882,11 +929,44 @@ class UniverseStore:
                      if r["industry"] and r["industry"].casefold() == want), None)
 
     def heatmap(self, etfs: list[dict[str, Any]], now: datetime | None = None,
-                floor: float = DEFAULT_CAP) -> dict[str, Any]:
-        """The Sectors page: every ETF card with what its stocks did, and the industries."""
+                floor: float = DEFAULT_CAP,
+                ext: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+        """The Sectors page: every ETF card with what its stocks did, and the industries.
+
+        OUTSIDE THE SESSION THE CARDS FOLLOW THE FUNDS (2026-11-16). `ext` is each fund's
+        last trade before the bell or after the close (quotes.collect_extended). Before
+        the bell a card's day is its pre-market move against the last close, with its
+        distance from SPY's, and its stocks' counts and the industries' medians are their
+        own pre-market moves (the names that have traded, as the Extended hours table
+        reads them). After the close the day stays the session's and the after-hours move
+        rides beside it. The week and the month are to the last close throughout."""
         now = now or datetime.now(UTC)
         big = [r for r in self.rows if (r["cap"] or 0) >= floor]
-        spans = {k: f for k, f in SPANS}
+        ext = ext or {}
+        spy_ext = ext.get("SPY")
+        phase = cards_phase(spy_ext, now)
+        basis = basis_at(now)
+        # The stocks' own pre-market, once the screener's columns are the pre-market's.
+        # AND FROM THE BELL TO 09:45 (handover audit, 09:36 ET on 16 Nov 2026): the
+        # cards are the session's from 09:30, but the screener is fifteen minutes behind
+        # and its `chg` is still the last session's until 09:45 (`basis_at`), so every
+        # card printed today's fund move over Friday's stock counts (XLK -2.55% over 103
+        # up, 214 down). In that quarter hour the counts are the stocks' pre-market moves,
+        # today's, and the page says so.
+        counts_pre = basis == "pre" and phase in ("pre", "rth")
+        spans: dict[str, Any] = {k: f for k, f in SPANS}
+        if counts_pre:
+            spans["day"] = lambda r: r["pm_chg"] if self.pm_ok(r, basis) else None
+        ext_day = spy_ext.get("day") if phase in ("pre", "post") and spy_ext else None
+
+        def ext_of(key: str) -> dict[str, Any]:
+            x = ext.get(key)
+            if not x or ext_day is None or x.get("kind") != phase or x.get("day") != ext_day:
+                return {"ext_pct": None, "rs_ext": None, "ext_at": None, "ext_bars": None}
+            base = (spy_ext or {}).get("pct")
+            return {"ext_pct": round(x["pct"], 3), "ext_at": x.get("at"),
+                    "ext_bars": x.get("bars"),
+                    "rs_ext": round(x["pct"] - base, 3) if base is not None else None}
 
         def read(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return {"names": len(rows), **{k: span_stats(rows, f) for k, f in spans.items()}}
@@ -912,6 +992,7 @@ class UniverseStore:
             cards.append({
                 **{k: e.get(k) for k in ("key", "label", "last", "day_pct", "week_pct",
                                          "month_pct", "rs_day", "rs_week", "rs_month")},
+                **ext_of(key),
                 "kind": "sector" if is_sector else "theme",
                 "top": is_sector or key in TOP_THEMES,
                 "parent": None if is_sector else THEME_PARENT.get(key),
@@ -922,7 +1003,15 @@ class UniverseStore:
         groups = [{"key": k, "label": k, "sector": SECTOR_OF_INDUSTRY.get(k), **read(v)}
                   for k, v in industries.items() if len(v) >= MIN_INDUSTRY]
         groups.sort(key=lambda g: g["key"])
-        return {**self._head(basis_at(now), now), "cards_day": cards_day(now).isoformat(),
+        if spy_ext and ext_day is not None:
+            spy["ext"] = round(spy_ext["pct"], 3)
+        return {**self._head(basis, now), "cards_day": cards_day(now).isoformat(),
+                # What the cards show outside the session (`cards_phase`), the day the
+                # extended trades are on, SPY's last one, and whether the counts are the
+                # pre-market's.
+                "cards_phase": phase, "ext_day": ext_day,
+                "ext_at": spy_ext.get("at") if spy_ext and ext_day is not None else None,
+                "counts_pre": counts_pre,
                 "floor": floor, "names": len(big), "spy": spy, "cards": cards,
                 "industries": groups}
 

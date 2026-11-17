@@ -8,6 +8,7 @@ import { Sparkline } from "@/components/ui/Sparkline";
 import { AssetIcon, hasAssetIcon } from "@/components/ui/AssetIcon";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { autoDp, dir, feedNote, num, quoteChg } from "@/lib/format";
+import { shownQuote } from "@/lib/quoteExt";
 import { cn } from "@/lib/cn";
 
 /**
@@ -22,6 +23,23 @@ import { cn } from "@/lib/cn";
  * obvious two; where the last print sits inside the day's range is the one
  * that says whether a +0.4% is holding its highs or has already given half of
  * it back, and it cannot be inferred from the other two.
+ *
+ * THE MACRO BOARD DRAWS TWO UP (owner, 2026-11-14, of an audit of the Macro cards:
+ * "do what you recommend"). One column of forty-three rows was 1,567px, a screen and
+ * a half, and half of every row was an empty track. On a card wide enough the groups
+ * flow into two columns in the order asked for, which halves it. A row that narrow
+ * has no room for the range bar, so it goes there and the sparkline, whose last dot
+ * sits where the print is in the day's range, carries that reading.
+ *
+ * A NAME WHERE THE CODE IS NOT ONE (same day). "N225", "SX5E", "HEATO…" (cut off at
+ * the column) and "ZB" are a feed's codes. Those rows are named for what they are;
+ * a code a desk says aloud (VIX, DXY, WTI, BTC, US10Y) stays as it is. The code is
+ * on the hover either way.
+ *
+ * A RISE IN THE VIX, A YIELD OR THE DOLLAR IS NOT A SIDE (owner, 2026-11-12:
+ * "positive doesnt mean bullish and vice versa"). Those three groups print their
+ * change in ink with an arrow and draw their line in grey. An index, a commodity and
+ * a coin are their own price, so they keep green and pink.
  */
 
 const GROUPS: { key: Quote["group"]; label: string }[] = [
@@ -35,12 +53,39 @@ const GROUPS: { key: Quote["group"]; label: string }[] = [
   { key: "crypto", label: "Risk appetite" },
 ];
 
+/** Groups whose change is a move, never a side: ink and an arrow. */
+const MOVES: ReadonlySet<Quote["group"]> = new Set(["vol", "rates", "fx"]);
+
+/** The rows whose key is a feed's code, as what they are. Nine characters at most: the column's width ("Long bonds" was cut to "Long bon…"). */
+const NAMES: Record<string, string> = {
+  N225: "Nikkei",
+  HSI: "Hang Seng",
+  SHCOMP: "Shanghai",
+  SX5E: "Stoxx 50",
+  ZN: "10Y fut",
+  ZB: "Bond fut",
+  BRENT: "Brent",
+  NATGAS: "Nat gas",
+  RBOB: "Gasoline",
+  HEATOIL: "Heat oil",
+  // The gold future, which the Macro board draws at the head of the metals (MacroBoard).
+  GC: "Gold",
+  SILVER: "Silver",
+  COPPER: "Copper",
+  PLAT: "Platinum",
+  WHEAT: "Wheat",
+  CORN: "Corn",
+  HYG: "HY credit",
+  TLT: "TLT bonds",
+};
+
 export function Board({
   quotes,
   ageMin,
   error,
   groups,
   title = "Board",
+  twoUp = false,
 }: {
   quotes: Quote[];
   ageMin?: number | null;
@@ -48,6 +93,8 @@ export function Board({
   /** Which groups this instance renders — the board is split across columns. */
   groups?: Quote["group"][];
   title?: string;
+  /** The Macro board: two columns on a wide card, and plain names for coded rows. */
+  twoUp?: boolean;
 }) {
   // In the order asked for: the Macro page puts volatility and rates first (owner,
   // 2026-11-14: "yes put vix and rates first"). With none asked, GROUPS' own order.
@@ -63,25 +110,41 @@ export function Board({
           <p className="px-3 py-6 text-center text-[11px] text-ink-3">The quote feed returned nothing for these instruments.</p>
         )
       ) : (
-        shown.map((g) => {
-          const rows = quotes.filter((q) => q.group === g.key);
-          if (!rows.length) return null;
-          return (
-            <div key={g.key}>
-              <div className="qt-band border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0">
-                <span className="eyebrow text-[9px]">{g.label}</span>
-              </div>
-              <ul>
-                {rows.map((q) => (
-                  <Row key={q.key} q={q} mark={g.key === "core"} />
-                ))}
-              </ul>
-            </div>
-          );
-        })
+        // The columns balance themselves and a group never splits across them, so with
+        // seven groups the first three (volatility, rates, global indices) are the left.
+        <div className="@container">
+          {/* Two columns from 32rem of card (`@lg`; it was `@xl`, 36rem): the board sits in
+              Macro's left column since 2026-11-15, which on the Sidebar interface is 597px
+              of card, and under the old mark it fell to one column 1,160px tall. */}
+          <div className={cn(twoUp && "@lg:columns-2 @lg:gap-0 @lg:[column-rule:1px_solid_color-mix(in_oklab,var(--ring)_45%,transparent)]")}>
+            {shown.map((g) => {
+              const rows = quotes.filter((q) => q.group === g.key);
+              if (!rows.length) return null;
+              return (
+                <div key={g.key} className="break-inside-avoid">
+                  <div className={cn("qt-band border-y border-ring/40 bg-surface-2/50 px-3 py-1 first:border-t-0", twoUp && "qt-band-tight")}>
+                    <span className="eyebrow text-[9px]">{g.label}</span>
+                  </div>
+                  <ul>
+                    {rows.map((q) => (
+                      <Row key={q.key} q={q} mark={g.key === "core"} move={MOVES.has(g.key)} named={twoUp} />
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </Module>
   );
+}
+
+/** A move's change as the row prints it: "↑ 3.21%", "↓ 0.6bp", and a flat one with no arrow. */
+function moveText(text: string, v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return text;
+  const bare = text.replace(/^[+\-−]/, "");
+  return v === 0 ? bare : `${v > 0 ? "↑" : "↓"} ${bare}`;
 }
 
 /**
@@ -92,27 +155,59 @@ export function Board({
  * grain contract between sessions). The tooltip says which, how late and as
  * of when. A live row looks exactly as it always did.
  */
-function Row({ q, mark }: { q: Quote; mark?: boolean }) {
+function Row({ q: raw, mark, move, named }: { q: Quote; mark?: boolean; move?: boolean; named?: boolean }) {
+  // Outside the session a US-listed fund shows its pre-market or after-hours trade, tagged
+  // beside its name (lib/quoteExt, the audit of 2026-11-16).
+  const { q, tag, note: extNote } = shownQuote(raw);
   const chg = quoteChg(q);
-  const note = feedNote(q);
+  const note = extNote ?? feedNote(q);
   const ink = q.feed === "closed" || q.feed === "stale" ? "text-ink-3" : "text-ink";
+  const name = named ? (NAMES[q.key] ?? q.key) : q.key;
+  const what = name === q.key ? q.name : `${q.key} · ${q.name}`;
   return (
-    <li className="hit flex items-center gap-2 px-3 py-[3px]" title={note ? `${q.name} — ${note}` : q.name}>
+    // A container, so the range bar answers to the ROW's width: in two columns a row
+    // is half the card and the bar is what gives way.
+    // TIGHTER ON THE MACRO BOARD (owner, 2026-11-14: "can we reduce the size of the macro
+    // board a bit and increase the calender"). The calendar above takes whatever this
+    // card leaves, so every pixel off a row here is a pixel of schedule: the line is
+    // 17px, not the page's 20, and the row is 21px on screen where it was 27 (23 at
+    // first; then "a want a bit more room for the calendar", and the padding went to 1px).
+    // TIGHTER AGAIN, FOR THE EARNINGS CARD (owner, 2026-11-15: "lets decrease the macro
+    // board a bit and increase the earnings card"). The board sits under Earnings now and
+    // Earnings takes what it leaves: the line is 14px and the sparkline 13 (it was 16 and
+    // set the row's height), so a row is 17.6px on the owner's screen where it was 20.9.
+    // And once more the same day ("can we reduce the macro board and increase the earnings
+    // card slightly again"): a 13px line and a 12px sparkline, 16.5px on screen.
+    <li className={cn("hit @container flex items-center gap-2 px-3", named ? "py-[1px] leading-[13px]" : "py-[3px]")} title={note ? `${what} — ${note}` : what}>
       {/* The book's own rows wear their marks: a future its badge or ingot, a fund its logo. */}
       {mark && (hasAssetIcon(q.key) ? <AssetIcon id={q.key} size={16} className="block shrink-0 text-ink-2" /> : <TickerLogo sym={q.key} size={16} />)}
-      <span className="fig w-[52px] shrink-0 truncate text-[11px] text-ink-2">{q.key}</span>
+      <span className={cn("fig shrink-0 truncate text-[11px] text-ink-2", named ? "w-[76px]" : "w-[52px]")}>
+        {name}
+        {tag && <span className="ml-1 text-[8.5px] text-ink-3">{tag}</span>}
+      </span>
       <Tick
         value={num(q.last, q.last >= 1000 ? autoDp(q.last) : undefined)}
-        className={cn("fig w-[74px] shrink-0 truncate text-right text-[11.5px]", ink)}
+        className={cn("fig shrink-0 truncate text-right text-[11.5px]", named ? "w-[62px]" : "w-[74px]", ink)}
       />
       <span className="fig -ml-1 w-[7px] shrink-0 text-[8.5px] leading-none text-ink-4" aria-label={note ?? undefined}>
         {q.feed === "delayed" ? "D" : ""}
       </span>
-      <Tick value={chg.text} className={cn("fig -ml-1 w-[62px] shrink-0 text-right text-[11px]", dir(chg.v))} />
-      <RangeBar pos={q.range_pos} />
+      {move ? (
+        <Tick
+          value={moveText(chg.text, chg.v)}
+          className={cn("fig -ml-1 shrink-0 text-right text-[11px] whitespace-nowrap", named ? "w-[60px]" : "w-[62px]", chg.v ? "text-ink-2" : "text-ink-3")}
+        />
+      ) : (
+        <Tick value={chg.text} className={cn("fig -ml-1 shrink-0 text-right text-[11px]", named ? "w-[60px]" : "w-[62px]", dir(chg.v))} />
+      )}
+      <RangeBar pos={q.range_pos} plain={move} className={cn(named && "@max-[330px]:hidden")} />
       {/* Right-aligned, with the range bar taking up the slack: the rows stopped
           two-thirds of the way across a wide pane and left the rest blank. */}
-      <Sparkline className="ml-auto shrink-0" data={q.spark} prev={q.prev} width={72} height={16} />
+      {/* IN TWO COLUMNS THE LINE GIVES WAY (2026-11-15). The name, the price and the change
+          take 229px of a row and cannot be cut; the line is 52px where there is room for
+          it, narrower where there is less, and is not drawn in a row with under 24px to
+          give it (a 1920 screen), where it used to run into the next column. */}
+      <Sparkline className={cn("ml-auto", named ? "@max-[252px]:hidden" : "shrink-0")} fluid={named} data={q.spark} prev={q.prev} width={named ? 52 : 72} height={named ? 12 : 16} tone={move ? "ink" : "side"} />
     </li>
   );
 }
@@ -124,17 +219,18 @@ function Row({ q, mark }: { q: Quote; mark?: boolean }) {
  * something"); this is a position, and the distinction matters because the
  * interesting states are the two ends. The track is drawn in the neutral
  * chrome hue and only the mark takes the direction colour, so a row that is
- * down but pinned at its highs still reads correctly.
+ * down but pinned at its highs still reads correctly. `plain` keeps the mark
+ * grey too: at the top of its range is not a side for the VIX or a yield.
  */
-function RangeBar({ pos }: { pos: number | null }) {
+function RangeBar({ pos, plain, className }: { pos: number | null; plain?: boolean; className?: string }) {
   if (pos === null || !Number.isFinite(pos)) {
-    return <span className="h-[3px] max-w-[220px] min-w-[44px] flex-1" aria-hidden />;
+    return <span className={cn("h-[3px] max-w-[220px] min-w-[44px] flex-1", className)} aria-hidden />;
   }
   const p = Math.max(0, Math.min(1, pos));
-  const tone = p >= 0.75 ? "var(--call)" : p <= 0.25 ? "var(--put)" : "var(--ink-3)";
+  const tone = plain ? "var(--ink-2)" : p >= 0.75 ? "var(--call)" : p <= 0.25 ? "var(--put)" : "var(--ink-3)";
   return (
     <span
-      className="relative h-[3px] max-w-[220px] min-w-[44px] flex-1 rounded-full bg-ring"
+      className={cn("relative h-[3px] max-w-[220px] min-w-[44px] flex-1 rounded-full bg-ring", className)}
       title={`${(p * 100).toFixed(0)}% of the day's range`}
     >
       <span

@@ -19,7 +19,10 @@ import { openTicker } from "@/lib/ticker";
  * 6 - lay it out so its 3 columns 2 rows etc and then have the options to change what is
  * displayed in those 6 charts from the top 10"). One of the Stocks tab's views since
  * 2026-11-13, the tab after Game plan (lib/tabs.ts); it began as a button on the Setups
- * chip bar.
+ * chip bar. The ten are the Scanner list's first ten (Scanner.tsx `pool`): most of them
+ * are names the engine does not track until the pool promotes them, and such a chart is
+ * read on the request (collector `ensure_adhoc`: about half a second the first time,
+ * then the held bars, read again at most once a minute).
  *
  * SIX, BECAUSE THAT IS WHAT STILL READS. Measured the day it was built, the candles of
  * each chart get 772 by 512 pixels on the 2560 screen and 566 by 348 on a 1920 one: room

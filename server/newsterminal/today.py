@@ -454,7 +454,11 @@ def rank_evening(rows: Iterable[dict[str, Any]], *, ah_of: Callable[[dict[str, A
             "last": last, "live": False, "chg": read["chg"], "move": read["which"],
             "score": round(score, 1), "score_max": pool.SCORE_MAX, "score_kind": "in play",
             "why": why, "story": story,
-            "lean": "long" if read["chg"] > 0 else "short" if read["chg"] < 0 else None,
+            # A lean needs the move the pre-market list asks for (pool.GAP_MIN, a tenth of
+            # an ATR): under it the name is on the list for its report or its story, and
+            # 0.09 of an ATR after the close is not a side (MSFT, 14 Nov 2026).
+            "lean": (("long" if read["chg"] > 0 else "short")
+                     if read["chg"] and read["move_atr"] >= pool.GAP_MIN else None),
             "plan": plan_of(last, lv["pdh"], lv["pdl"], None, None), "setup": None,
             "levels": lv, "gap_atr": round(read["move_atr"], 2), "vol_pct": read["share"],
             "rvol": read["rvol"], "stage": tomorrow or None,
@@ -516,6 +520,29 @@ def _inplay_score(t: dict[str, Any], side: str | None, base: dict[str, Any] | No
                        "max": round(mx), "note": " · ".join(t.get("why") or [])}]}
 
 
+def _lean_setup(lean: str, eng: dict[str, Any]) -> dict[str, Any]:
+    """The engine's pre-market plan for the other side: the same trigger `plan_of` picks
+    on the engine's own levels, in the words scan.setup_of writes for a plan. Pure."""
+    lv = eng.get("levels") or {}
+    last = _num(eng.get("last"))
+    out: dict[str, Any] = {"side": lean, "state": "forming", "level": None, "entry": None,
+                           "note": ""}
+    trig = plan_of(last, _num(lv.get("pdh")), _num(lv.get("pdl")), _num(lv.get("pmh")),
+                   _num(lv.get("pml"))).get(lean)
+    if not trig or last is None:
+        return out
+    k, p = trig["level"], float(trig["price"])
+    ab = _num(eng.get("atr_b"))
+    out["level"] = k
+    out["entry"] = {"kind": k, "price": p, "dist_atr": round((last - p) / ab, 2) if ab else 0.0}
+    if trig["held"]:
+        word = "above" if lean == "long" else "below"
+        out["note"] = f"Holding {word} {k} {scan.fmt_px(p)} — plan: the retest of it after the open"
+    else:
+        out["note"] = f"Plan: break of {k} {scan.fmt_px(p)}, then the retest"
+    return out
+
+
 def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
              wide: dict[str, Any] | None) -> dict[str, Any]:
     """The Setups table's row for one Today row (src/types/scanner.ts ScanRow), so the
@@ -530,6 +557,18 @@ def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
             row["score"] = {**(eng.get("score") or {}), "rank": t.get("rank")}
         else:
             side = (eng.get("score") or {}).get("side") or t.get("lean")
+            # ONE RULE FOR THE LIST (owner, 2026-11-15, of an audit of the sides: "do what
+            # you recommend"). A name the engine does not track is leaned by the move that
+            # put it on the list; a tracked one took the engine's side whatever it was, so
+            # the weekend of 14 Nov showed NVDA long on a row that read "day ▼". While the
+            # engine is planning (before the bell, overnight: its setup is "forming"), a
+            # tracked name keeps the engine's side only when it is through a level; inside
+            # them it takes the list's lean, and the plan is written for that side.
+            planning = (eng.get("setup") or {}).get("state") == "forming"
+            lean = t.get("lean")
+            if planning and not (eng.get("lvl_state") or 0) and lean and lean != side:
+                side = lean
+                row["setup"] = _lean_setup(lean, eng)
             row["score"] = _inplay_score(t, side, eng.get("score"))
         row["catalyst"] = eng.get("catalyst") or t.get("story")
         row["today"] = {k: t.get(k) for k in ("rank", "why", "new", "status", "move")}
@@ -571,7 +610,9 @@ def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
                    "ema8": None, "day_hi": None, "day_lo": None, "open": None},
         "progress": {"pdh": None, "pdl": None, "pmh": None, "pml": None},
         "broken": {"pdh": over(pdh), "pdl": under(pdl), "pmh": over(pmh), "pml": under(pml)},
-        "lvl_state": up if up else -dn, "trend": 1 if up == 2 else -1 if dn == 2 else 0,
+        # As scan.lvl_state_of: over one high and under one low is no state.
+        "lvl_state": up if up and not dn else -dn if dn and not up else 0,
+        "trend": 1 if up == 2 else -1 if dn == 2 else 0,
         "range_used": None,
         "setup": {"side": lean, "state": "forming", "level": trig.get("level"), "entry": None,
                   "note": ""},

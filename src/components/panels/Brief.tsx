@@ -2,19 +2,28 @@
 
 import type {
   Book,
+  BriefBoard,
   BriefBody,
   BriefCall,
+  BriefCatalyst,
+  BriefFactor,
   BriefFacts,
   BriefGamma,
   BriefLadder,
   BriefLadderRow,
+  BriefLevels,
   BriefRead,
   BriefSnapshotRow,
   Report,
+  ShortBriefBody,
+  ShortCall,
   Tone,
 } from "@/types/terminal";
-import { createContext, useContext } from "react";
-import { biasInk, biasLabel, convictionWord } from "@/lib/bias";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { biasInk, biasLabel, convictionWord, scoreText } from "@/lib/bias";
+import { wholeScore } from "@/lib/biasScale";
+import { fromLast, layoutRuler, priceText } from "@/lib/levelRuler";
+import { BiasScale } from "@/components/ui/BiasScale";
 import { cn } from "@/lib/cn";
 import { bp, dir, num, pct, signed } from "@/lib/format";
 import { useLum, useQuiet } from "@/components/state/UiMode";
@@ -107,7 +116,7 @@ const usePaint = () => useContext(PaintCtx);
 
 // The name a reader says, not the ticker they type (owner, 2026-09-22: "Nasdaq",
 // as GC was already "Gold"). The pickers and the terminal panels keep the ticker.
-const BOOK_NAME: Record<Book, string> = { NQ: "Nasdaq", ES: "ES", GC: "Gold" };
+const BOOK_NAME: Record<Book, string> = { SPY: "SPY", QQQ: "QQQ", IWM: "IWM", NQ: "Nasdaq", ES: "ES", GC: "Gold", SIL: "Silver", CL: "Crudeoil" };
 
 const TONE_HUE: Record<Tone, string> = {
   bear: "var(--put)",
@@ -197,8 +206,857 @@ export function Brief({ rep }: { rep: Report }) {
   const lum = useLum();
   return (
     <PaintCtx.Provider value={lum ? LUM : quiet ? QUIET : CARDED}>
-      <BriefBodyView rep={rep} />
+      {/* A note keeps the layout it was written for: the market report (3), the short
+          brief of the same afternoon (2), and the longer note before them. */}
+      {(rep.brief_version ?? 1) >= 3 ? (
+        <MarketReportView rep={rep} />
+      ) : (rep.brief_version ?? 1) >= 2 ? (
+        <ShortBrief rep={rep} />
+      ) : (
+        <BriefBodyView rep={rep} />
+      )}
     </PaintCtx.Provider>
+  );
+}
+
+/* ---------------------------------------------------------------- the short brief */
+
+/*
+ * THE SHORT BRIEF (owner, 2026-11-15: "can we work on really making the reports concise
+ * and impactful?", then "i want it to be really hard hitting impactful stuff that
+ * actually matters and makes a difference to the markets"). The layout below this one
+ * drew thirteen written parts: a real Indexes note was 1,850 words, seven screens, with
+ * the same four facts in nine places. The model now writes five (server report.SCHEMA)
+ * and the page leads with them: the day, a call per book with why, the plan and what
+ * kills it, what is on the clock, the risks. Under them the two tables a call is traded
+ * against, the levels and the dealer gamma; the rest of the tables (the snapshot, the
+ * whole calendar, rotation, the headlines picked) are one click away under More.
+ *
+ * NO MASTHEAD: the bar above the report already names what it is about, the session and
+ * when it was written, so the first thing on the page is the first thing it says.
+ *
+ * THE SCALE ON A CALL IS THE ENGINE'S, NOT THE MODEL'S (owner, the same day: "and also
+ * for the bias add the same slider we did else where"). The word is the model's call;
+ * the slider is the driver board's score for that book when the note was written, on
+ * the one scale every bias card draws (ui/BiasScale), with its figure. The two usually
+ * agree, and where they do not the reader sees both; the collector caps the call's
+ * conviction at 3 against the board's lean.
+ */
+function ShortBrief({ rep }: { rep: Report }) {
+  const p = usePaint();
+  const b = rep.report as ShortBriefBody;
+  const f = rep.facts as BriefFacts;
+  const live = rep.session_underway === true;
+  const [more, setMore] = useState(false);
+
+  const rowOf = new Map(f.catalysts.map((c) => [c.id, c]));
+  // In the order the model ranked them, not the calendar's.
+  const clock = b.today.flatMap((t) => {
+    const row = rowOf.get(t.id);
+    return row ? [row] : [];
+  });
+  const notes = new Map(b.today.map((t) => [t.id, t.note]));
+  const one = f.ladders.length <= 1;
+  const hasRot = f.rotation.ratios.length > 0 || f.rotation.megacaps.length > 0;
+  const hasHead = b.headlines.some((h) => f.headlines.some((x) => x.id === h.id));
+  const folded = [
+    f.snapshot.length > 0 && "Snapshot",
+    f.catalysts.length > 0 && "Calendar",
+    hasRot && "Rotation",
+    hasHead && "Headlines",
+  ].filter(Boolean) as string[];
+  /*
+   * The folded tables are drawn by the components the longer brief has, which read a
+   * note in that shape: this is the short one's words in it. The calendar's notes are
+   * left out there, because Today has already said them.
+   */
+  const tables: BriefBody = {
+    thesis: b.thesis, calls: [], snapshot_watch: [], gamma_read: "", catalysts_intro: "",
+    catalyst_notes: [], reads: [], rotation_read: "", ratio_reads: [], rotation_notes: [],
+    headlines: b.headlines, cross_asset: "", risks: [],
+  };
+  const pair = (left: boolean, other: boolean, wide: string, narrow: string) =>
+    !other ? "xl:col-span-12" : left ? wide : narrow;
+
+  return (
+    <article
+      className={cn(
+        p.lum
+          ? "qt-noscale grid w-full grid-cols-1 gap-2 lum:gap-[var(--lum-gap)] xl:grid-cols-12"
+          : "qt-noscale w-full px-3 pt-2 pb-8",
+      )}
+    >
+      <div className={cn(p.lum && "qt-card min-w-0 px-6 pt-5 pb-6 xl:col-span-12")}>
+        {f.partial.length > 0 && (
+          <div className="mb-4 border-l-[3px] border-warn bg-warn/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2 [&>strong]:text-warn">
+            <strong className="font-semibold">Partial data.</strong>
+            {f.partial.map((x, i) => (
+              <div key={i}>{x}</div>
+            ))}
+          </div>
+        )}
+        {rep.unverified && rep.unverified.length > 0 && (
+          <div className="mb-4 border-l-[3px] border-put-fig bg-put-fig/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2 [&>strong]:text-put-fig">
+            <strong className="font-semibold">Unverified figures.</strong> The model printed{" "}
+            {rep.unverified.length === 1 ? "a number" : "numbers"} the data it was given does not contain:{" "}
+            <span className="fig text-ink">{rep.unverified.join(", ")}</span>. Read the sentences carrying{" "}
+            {rep.unverified.length === 1 ? "it" : "them"} as unchecked; the tables on this page are the
+            collector&apos;s and are exact.
+          </div>
+        )}
+        <p className="qt-cap text-[10.5px] text-ink-3">The day</p>
+        <p className="mt-2 max-w-[1080px] text-[21px] leading-[1.4] font-medium tracking-[-0.005em] text-ink">{b.thesis}</p>
+        <ShortCalls calls={b.calls} boards={f.drivers} live={live} />
+      </div>
+
+      {clock.length > 0 && (
+        <Section title="Today" span={pair(true, b.risks.length > 0, "xl:col-span-7", "xl:col-span-5")} right="what can move it this session">
+          <CatalystTable rows={clock} notes={notes} lead />
+        </Section>
+      )}
+
+      {b.risks.length > 0 && (
+        <Section title="Risks" span={pair(false, clock.length > 0, "xl:col-span-7", "xl:col-span-5")} right="outside the call">
+          <ul className="flex flex-col gap-2.5">
+            {b.risks.map((x, i) => (
+              <li key={i} className="flex gap-2.5 text-[13.5px] leading-[1.5] text-ink">
+                <span aria-hidden className={cn("mt-[7px] h-[6px] w-[6px] shrink-0 bg-flip-fig", p.mark)} />
+                {x}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {f.ladders.length > 0 && (
+        <Section title="Levels" span={pair(true, f.gamma.length > 0 && one, "xl:col-span-7", "xl:col-span-5")}>
+          <Legend />
+          <div className={cn("grid gap-x-8 gap-y-6", f.ladders.length > 1 && "lg:grid-cols-2", p.quiet && "gap-x-10")}>
+            {f.ladders.map((l) => (
+              <Ladder key={l.book} l={l} />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {f.gamma.length > 0 && (
+        <Section title="Dealer gamma" span={pair(false, f.ladders.length > 0 && one, "xl:col-span-7", "xl:col-span-5")} right="how far a move runs, not which way">
+          <div className={cn("grid gap-3", f.gamma.length > 1 && "lg:grid-cols-2", p.quiet && !p.lum && "gap-x-10 gap-y-5")}>
+            {f.gamma.map((g) => (
+              <GammaCard key={g.book} g={g} />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {folded.length > 0 && (
+        <div className={cn(p.lum ? "qt-card min-w-0 xl:col-span-12" : "mt-7 border-t border-ring")}>
+          <button
+            type="button"
+            onClick={() => setMore((v) => !v)}
+            aria-expanded={more}
+            title={more ? "Hide the rest of the tables" : "The rest of the tables this report was written from"}
+            className={cn("flex w-full items-baseline gap-3 text-left", p.lum ? "px-5 py-3.5" : "py-4")}
+          >
+            <span className="text-[14.5px] font-semibold text-ink">More</span>
+            <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{folded.join(" · ")}</span>
+            <span className="qt-cap text-[10.5px] text-ink-2">{more ? "Hide" : "Show"}</span>
+          </button>
+        </div>
+      )}
+
+      {more && (
+        <>
+          {f.snapshot.length > 0 && (
+            <Section title="Snapshot" span="xl:col-span-12">
+              <Snapshot rows={f.snapshot} watch={new Map()} />
+            </Section>
+          )}
+          <Catalysts f={f} b={tables} span="xl:col-span-12" title="Calendar" />
+          <Rotation f={f} b={tables} span={hasHead ? "xl:col-span-6" : "xl:col-span-12"} />
+          <Headlines f={f} b={tables} span={hasRot ? "xl:col-span-6" : "xl:col-span-12"} />
+        </>
+      )}
+    </article>
+  );
+}
+
+/**
+ * The short brief's calls: one panel a book. The side is the big word and a rule down
+ * the panel's edge; under it the conviction and the engine's score on the bias scale.
+ * The reasons sit beside the call, and the plan and what kills it run along the foot.
+ */
+function ShortCalls({
+  calls,
+  boards,
+  live,
+}: {
+  calls: ShortCall[];
+  boards?: Partial<Record<Book, BriefBoard>>;
+  live?: boolean;
+}) {
+  const p = usePaint();
+  const one = calls.length === 1;
+  return (
+    <div className={cn("mt-6 grid gap-3", calls.length > 1 && "lg:grid-cols-2", calls.length > 2 && "2xl:grid-cols-3")}>
+      {calls.map((c) => {
+        const hue = p.ink(c.open_bias);
+        return (
+          <div
+            key={c.book}
+            className={cn("relative min-w-0", p.lum ? cn(TILE, "overflow-hidden py-5 pr-6 pl-7") : "border-t border-ring py-4 pl-4")}
+          >
+            <span
+              aria-hidden
+              className={cn("absolute w-[3px] rounded-full", p.lum ? "inset-y-4 left-[10px]" : "inset-y-4 left-0")}
+              style={{ background: hue }}
+            />
+            <div
+              className={cn(
+                "grid gap-x-10 gap-y-4",
+                one ? "lg:grid-cols-[minmax(240px,290px)_minmax(0,1fr)]" : "min-[2200px]:grid-cols-[minmax(220px,250px)_minmax(0,1fr)]",
+              )}
+            >
+              <div className="min-w-0">
+                <p className="qt-cap text-[11px] text-ink-3">{BOOK_NAME[c.book]}</p>
+                <p className="mt-2 text-[32px] leading-none font-semibold tracking-[-0.01em]" style={{ color: hue }}>
+                  {biasLabel(c.open_bias)}
+                </p>
+                <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
+                  <Pips n={c.conviction} hue={hue} />
+                  <span>
+                    {convictionWord(c.conviction)} conviction {live ? "from here" : "at the open"}
+                  </span>
+                </p>
+                <EngineScale board={boards?.[c.book]} book={c.book} />
+              </div>
+              {(c.why ?? []).length > 0 && (
+                <ul className="flex min-w-0 flex-col gap-2.5">
+                  {(c.why ?? []).map((w, i) => (
+                    <li key={i} className="flex gap-2.5 text-[14px] leading-[1.5] text-ink">
+                      <span aria-hidden className={cn("mt-[8px] h-[6px] w-[6px] shrink-0", p.mark)} style={{ background: hue }} />
+                      <span>
+                        <Layered text={w} />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {(c.plan || c.wrong_if) && (
+              <div
+                className={cn(
+                  "mt-5 grid gap-x-10 gap-y-3 border-t pt-4 text-[13.5px] leading-[1.5]",
+                  p.lum ? "border-white/[0.07]" : "border-ring/60",
+                  c.plan && c.wrong_if && "md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]",
+                )}
+              >
+                {c.plan && (
+                  <div className="min-w-0">
+                    <p className="qt-cap text-[10.5px] text-ink-3">Plan</p>
+                    <p className="mt-1 text-ink">{c.plan}</p>
+                  </div>
+                )}
+                {c.wrong_if && (
+                  <div className="min-w-0">
+                    <p className="qt-cap text-[10.5px] text-ink-3">Wrong if</p>
+                    <p className="mt-1 font-semibold text-ink">{c.wrong_if}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The engine's score for a book on the bias scale, with its figure; nothing when the note has no board for it. */
+function EngineScale({ board, book, name, className = "mt-3.5" }: { board?: BriefBoard; book: Book; name?: string; className?: string }) {
+  if (!board) return null;
+  const score = wholeScore(board);
+  if (score == null) return null;
+  const tone = board.bias === "long" ? "text-call-fig" : board.bias === "short" ? "text-put-fig" : "text-ink-2";
+  const title =
+    `The engine's bias for ${name ?? BOOK_NAME[book]} when this was written: ${scoreText(score)} on a scale from -100, bearish, to +100, bullish` +
+    `${board.weights_for ? `, weighed for ${board.weights_for}` : ""}` +
+    `${board.live != null && board.total != null ? ` (${board.live} of ${board.total} reads live)` : ""}. ` +
+    "The call above is the model's; its conviction is capped by this board.";
+  return (
+    <p className={cn("flex items-center gap-2.5", className)} title={title}>
+      <BiasScale score={score} side={board.bias} ends className="w-[184px] max-w-full" />
+      <span className={cn("fig text-[12.5px] leading-none", tone)}>{scoreText(score)}</span>
+    </p>
+  );
+}
+
+/* ---------------------------------------------------------------- the market report */
+
+/*
+ * THE MARKET REPORT (owner, 2026-11-15, of the short brief above: "need to rework the
+ * report, so it looks like a nice concise readable report aesthetically pleasing. i dont
+ * think we need to mention gex since it does impact bias. we should mention all the
+ * factors impacting the bias, like news, macro, geopolitics important news, volume
+ * profile structure. i dont think we need to include about the ema's"; then, of the
+ * first mock of this, "make it look like professional market report").
+ *
+ * ONE SHEET, SET LIKE A DESK'S NOTE. The short brief was a board of cards: a thesis
+ * card, a card a call, two more for the clock and the risks, then the levels and the
+ * gamma. This is one document: a masthead that says what it is about and when it was
+ * written over a rule, the summary, a section a book, the calendar beside the risks,
+ * and a line at its foot saying whose figures are whose. Hairlines divide it, as they
+ * would on paper; the other tables (the snapshot, the whole calendar, rotation, the
+ * headlines picked) are still one click away under More, on cards of their own.
+ *
+ * EVERY FACTOR THE BIAS WEIGHS IS A ROW, AND THE ROW IS THE ENGINE'S. The table under a
+ * call is `facts.factors`: the families with a weight in this session, heaviest first,
+ * each with the tag and the share the score was actually made of, and event risk last
+ * (no side: it lowers the ceiling). The model writes only the comment. So the tags
+ * cannot disagree with the slider above them, and a factor the model had nothing to say
+ * about still has its row, on the engine's own figures.
+ *
+ * NO DEALER GAMMA AND NO MOVING AVERAGE. Neither is in the bias (bias.py), so neither is
+ * in the report: no gamma card, no walls among the levels, no trend row. The levels are
+ * the ones a call is traded against, on one line (`KeyLevels`).
+ */
+const BOOK_TITLE: Record<Book, string> = {
+  NQ: "Nasdaq 100", ES: "S&P 500", GC: "Gold", SIL: "Silver", CL: "Crude oil",
+  SPY: "S&P 500", QQQ: "Nasdaq 100", IWM: "Russell 2000",
+};
+
+/** The masthead's subject, in the word the page's pills use (the collector labels gold "GC"). */
+const SUBJECT_TITLE: Partial<Record<Report["asset"], string>> = {
+  indexes: "Indexes", GC: "Gold", SIL: "Silver", CL: "Oil", NQ: "Nasdaq 100", ES: "S&P 500",
+  etfs: "SPY · QQQ · IWM",
+};
+
+function MarketReportView({ rep }: { rep: Report }) {
+  const p = usePaint();
+  const b = rep.report as ShortBriefBody;
+  const f = rep.facts as BriefFacts;
+  const live = rep.session_underway === true;
+  const [more, setMore] = useState(false);
+  const rule = p.lum ? "border-white/[0.07]" : "border-ring/60";
+  const pad = p.lum ? "px-7" : "px-4";
+
+  const rowOf = new Map(f.catalysts.map((c) => [c.id, c]));
+  // In the order the model ranked them, not the calendar's.
+  const clock = b.today.flatMap((t) => {
+    const row = rowOf.get(t.id);
+    return row ? [row] : [];
+  });
+  const notes = new Map(b.today.map((t) => [t.id, t.note]));
+  const hasRot = f.rotation.ratios.length > 0 || f.rotation.megacaps.length > 0;
+  const hasHead = b.headlines.some((h) => f.headlines.some((x) => x.id === h.id));
+  const folded = [
+    f.snapshot.length > 0 && "Snapshot",
+    f.catalysts.length > 0 && "Calendar",
+    hasRot && "Rotation",
+    hasHead && "Headlines",
+  ].filter(Boolean) as string[];
+  // The folded tables are the longer brief's components, which read a note in that shape.
+  const tables: BriefBody = {
+    thesis: b.thesis, calls: [], snapshot_watch: [], gamma_read: "", catalysts_intro: "",
+    catalyst_notes: [], reads: [], rotation_read: "", ratio_reads: [], rotation_notes: [],
+    headlines: b.headlines, cross_asset: "", risks: [],
+  };
+  const wide = b.calls.length === 1;
+  // The Stocks report: one board for the three funds, its table printed once above them.
+  const shared = f.market_factors != null;
+  const cols = shared ? 3 : wide ? 1 : 2;
+  // "Sat 14 Nov 2026, 23:14 ET": the date on the dateline, the hour under it.
+  const cut = f.as_of.lastIndexOf(", ");
+  const date = cut > 0 ? f.as_of.slice(0, cut) : f.as_of;
+  const hour = cut > 0 ? f.as_of.slice(cut + 2) : "";
+  const both = clock.length > 0 && b.risks.length > 0;
+
+  return (
+    <article
+      className={cn(
+        p.lum
+          ? "qt-noscale grid w-full grid-cols-1 gap-2 lum:gap-[var(--lum-gap)] xl:grid-cols-12"
+          : "qt-noscale w-full pt-2 pb-8",
+      )}
+    >
+      <div className={cn("min-w-0", p.lum && "qt-card overflow-hidden xl:col-span-12")}>
+        <header className={cn(pad, "pt-6")}>
+          <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-2">
+            <div className="min-w-0">
+              <p className="qt-cap text-[10.5px] tracking-[0.16em] text-ink-3">Hermes · Market report</p>
+              <h2 className="mt-2 text-[28px] leading-none font-semibold tracking-[-0.015em] text-ink">
+                {SUBJECT_TITLE[rep.asset] ?? rep.asset_label}
+                <span className="font-normal text-ink-3"> · {rep.session_label} session</span>
+              </h2>
+            </div>
+            <div className="text-right">
+              <p className="fig text-[13px] leading-none text-ink">{date}</p>
+              <p className="mt-1.5 text-[11.5px] leading-none text-ink-3">
+                {hour}
+                {hour && " · "}
+                {live ? "written with the session underway" : "written before the open"}
+              </p>
+            </div>
+          </div>
+          <div aria-hidden className="mt-5 h-[2px] rounded-full bg-ink opacity-80" />
+        </header>
+
+        <section className={cn(pad, "pt-5 pb-6")}>
+          <ReportBanners f={f} rep={rep} />
+          <p className="qt-cap text-[10.5px] text-ink-3">Summary</p>
+          <p className="mt-2 max-w-[1100px] text-[21px] leading-[1.42] font-medium tracking-[-0.005em] text-ink">{b.thesis}</p>
+        </section>
+
+        {/* THE STOCKS REPORT'S ONE BIAS (2026-11-16): the tape, read for all three funds,
+            with its table once; each fund's call below carries its plan and levels only. */}
+        {shared && <MarketSection board={f.market ?? undefined} rows={f.market_factors ?? []} said={b.factors ?? []} className={cn(pad, rule)} />}
+
+        <div className={cn("grid border-t", rule, cols === 2 && "xl:grid-cols-2", cols === 3 && "xl:grid-cols-3")}>
+          {b.calls.map((c, i) => (
+            <BookSection
+              key={c.book}
+              c={c}
+              board={shared ? undefined : f.drivers?.[c.book]}
+              rows={shared ? [] : (f.factors?.[c.book] ?? [])}
+              levels={f.levels?.[c.book]}
+              live={live}
+              wide={wide}
+              className={cn(pad, rule, i > 0 && "border-t", i > 0 && i < cols && "xl:border-t-0", i % cols !== 0 && "xl:border-l")}
+            />
+          ))}
+        </div>
+
+        {(clock.length > 0 || b.risks.length > 0) && (
+          <div className={cn("grid border-t", rule, both && "xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]")}>
+            {clock.length > 0 && (
+              <section className={cn(pad, "min-w-0 py-6")} aria-label="Calendar">
+                <SheetHead title="Calendar" right="what can move it this session" />
+                <CatalystTable rows={clock} notes={notes} lead />
+              </section>
+            )}
+            {b.risks.length > 0 && (
+              <section className={cn(pad, rule, "min-w-0 py-6", both && "border-t xl:border-t-0 xl:border-l")} aria-label="Risks">
+                <SheetHead title="Risks" right="outside the call" />
+                <ol className={cn("border-t", rule)}>
+                  {b.risks.map((x, i) => (
+                    <li key={i} className={cn("flex gap-3 border-b py-2.5 text-[13.5px] leading-[1.5] text-ink", rule)}>
+                      <span className="fig w-5 shrink-0 text-[11.5px] leading-[20px] text-flip-fig">{String(i + 1).padStart(2, "0")}</span>
+                      <span className="min-w-0">{x}</span>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+          </div>
+        )}
+
+        <footer className={cn(pad, rule, "border-t py-3 text-[11px] leading-relaxed text-ink-3")}>
+          The bias scores, weights and levels are the engine&apos;s, computed from live data when this was written; the
+          comments beside them are the model&apos;s. The weights are a judgement and have not been tested against outcomes.
+        </footer>
+      </div>
+
+      {folded.length > 0 && (
+        <div className={cn(p.lum ? "qt-card min-w-0 xl:col-span-12" : cn("mt-2 border-t border-ring", pad))}>
+          <button
+            type="button"
+            onClick={() => setMore((v) => !v)}
+            aria-expanded={more}
+            title={more ? "Hide the rest of the tables" : "The rest of the tables this report was written from"}
+            className={cn("flex w-full items-baseline gap-3 text-left", p.lum ? "px-7 py-3.5" : "py-4")}
+          >
+            <span className="text-[14.5px] font-semibold text-ink">More</span>
+            <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{folded.join(" · ")}</span>
+            <span className="qt-cap text-[10.5px] text-ink-2">{more ? "Hide" : "Show"}</span>
+          </button>
+        </div>
+      )}
+
+      {more && (
+        <div className={cn(p.lum ? "contents" : pad)}>
+          {f.snapshot.length > 0 && (
+            <Section title="Snapshot" span="xl:col-span-12">
+              <Snapshot rows={f.snapshot} watch={new Map()} />
+            </Section>
+          )}
+          <Catalysts f={f} b={tables} span="xl:col-span-12" title="Calendar" />
+          <Rotation f={f} b={tables} span={hasHead ? "xl:col-span-6" : "xl:col-span-12"} />
+          <Headlines f={f} b={tables} span={hasRot ? "xl:col-span-6" : "xl:col-span-12"} />
+        </div>
+      )}
+    </article>
+  );
+}
+
+/** What was down when the report was written, and any figure the check could not find. */
+function ReportBanners({ f, rep }: { f: BriefFacts; rep: Report }) {
+  return (
+    <>
+      {f.partial.length > 0 && (
+        <div className="mb-4 border-l-[3px] border-warn bg-warn/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2 [&>strong]:text-warn">
+          <strong className="font-semibold">Partial data.</strong>
+          {f.partial.map((x, i) => (
+            <div key={i}>{x}</div>
+          ))}
+        </div>
+      )}
+      {rep.unverified && rep.unverified.length > 0 && (
+        <div className="mb-4 border-l-[3px] border-put-fig bg-put-fig/[0.07] px-3 py-2 text-[12px] leading-relaxed text-ink-2 [&>strong]:text-put-fig">
+          <strong className="font-semibold">Unverified figures.</strong> The model printed{" "}
+          {rep.unverified.length === 1 ? "a number" : "numbers"} the data it was given does not contain:{" "}
+          <span className="fig text-ink">{rep.unverified.join(", ")}</span>. Read the sentences carrying{" "}
+          {rep.unverified.length === 1 ? "it" : "them"} as unchecked; the tables on this page are the
+          collector&apos;s and are exact.
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A section's title on the sheet, with a few quiet words at the end of its line. */
+function SheetHead({ title, right }: { title: string; right?: string }) {
+  return (
+    <h3 className="mb-3 flex items-baseline justify-between gap-3">
+      <span className="text-[14.5px] font-semibold text-ink">{title}</span>
+      {right && <span className="truncate text-[11px] text-ink-3">{right}</span>}
+    </h3>
+  );
+}
+
+/**
+ * The Stocks report's market (2026-11-16): the tape's side as the big word, its grade and
+ * the ceiling it puts on the three calls, its score on the bias scale, and its table of
+ * factors with the model's comment on each, once for SPY, QQQ and IWM. The rows, tags
+ * and weights are the engine's, as under a futures call.
+ */
+function MarketSection({
+  board,
+  rows,
+  said,
+  className,
+}: {
+  board?: BriefBoard;
+  rows: BriefFactor[];
+  said: { key: string; line: string }[];
+  className?: string;
+}) {
+  const side = board?.bias ?? null;
+  const tone = side === "long" ? "text-call-fig" : side === "short" ? "text-put-fig" : "text-ink-2";
+  return (
+    <section className={cn("border-t py-6", className)} aria-label="The market">
+      <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+        <div className="min-w-0">
+          <p className="qt-cap text-[10.5px] text-ink-3">Market bias · the Stocks tape, for all three</p>
+          <p className={cn("mt-2 text-[32px] leading-none font-semibold tracking-[-0.01em]", tone)}>
+            {side === "long" ? "▲ Long" : side === "short" ? "▼ Short" : board ? "No lean" : "Not read"}
+          </p>
+        </div>
+        {board && (
+          <div className="flex min-w-0 flex-col gap-2.5">
+            <p className="text-[12px] leading-none text-ink-3">
+              {board.grade ? `${board.grade[0].toUpperCase()}${board.grade.slice(1)}` : "—"}
+              {board.max_conviction != null && ` · calls capped at ${board.max_conviction} of 5`}
+            </p>
+            <EngineScale board={board} book="SPY" name="the market" className="" />
+          </div>
+        )}
+      </div>
+      {rows.length > 0 && (
+        <div className="mt-6">
+          <DriversTable rows={rows} said={said} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One book's section: the call (the side as the big word, the conviction, the engine's
+ * score on the bias scale), the drivers behind it, the plan and what kills it, and the
+ * levels it is traded against. A report about one book has the room to set the plan and
+ * the levels beside the table; two books sit side by side, each stacked.
+ */
+function BookSection({
+  c,
+  board,
+  rows,
+  levels,
+  live,
+  wide,
+  className,
+}: {
+  c: ShortCall;
+  board?: BriefBoard;
+  rows: BriefFactor[];
+  levels?: BriefLevels;
+  live: boolean;
+  wide: boolean;
+  className?: string;
+}) {
+  const p = usePaint();
+  const hue = p.ink(c.open_bias);
+  const head = (
+    <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+      <div className="min-w-0">
+        <p className="qt-cap text-[10.5px] text-ink-3">
+          {BOOK_TITLE[c.book]} · {c.book}
+        </p>
+        <p className="mt-2 text-[32px] leading-none font-semibold tracking-[-0.01em]" style={{ color: hue }}>
+          {biasLabel(c.open_bias)}
+        </p>
+      </div>
+      <div className="flex min-w-0 flex-col gap-2.5">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-none text-ink-3">
+          <Pips n={c.conviction} hue={hue} />
+          <span>
+            {convictionWord(c.conviction)} conviction {live ? "from here" : "at the open"}
+          </span>
+        </p>
+        <EngineScale board={board} book={c.book} className="" />
+      </div>
+    </div>
+  );
+  const drivers = rows.length > 0 && (
+    <div className="mt-6">
+      <DriversTable rows={rows} said={c.factors ?? []} />
+    </div>
+  );
+  const box = p.lum ? cn(TILE, "px-4 py-3") : "border-l-2 border-ring py-0.5 pl-3";
+  const plan = (c.plan || c.wrong_if) && (
+    <div className={cn("grid gap-3", c.plan && c.wrong_if && "sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]")}>
+      {c.plan && (
+        <div className={cn("min-w-0", box)}>
+          <p className="qt-cap text-[10.5px] text-ink-3">Plan</p>
+          <p className="mt-1 text-[13.5px] leading-[1.5] text-ink">{c.plan}</p>
+        </div>
+      )}
+      {c.wrong_if && (
+        <div className={cn("min-w-0", box)}>
+          <p className="qt-cap text-[10.5px] text-ink-3">Wrong if</p>
+          <p className="mt-1 text-[13.5px] leading-[1.5] font-semibold text-ink">{c.wrong_if}</p>
+        </div>
+      )}
+    </div>
+  );
+  const ruler = levels && <KeyLevels lv={levels} />;
+  if (wide) {
+    return (
+      <section
+        className={cn("grid min-w-0 gap-x-12 gap-y-6 py-6 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]", className)}
+        aria-label={BOOK_TITLE[c.book]}
+      >
+        <div className="min-w-0">
+          {head}
+          {drivers}
+        </div>
+        <div className="flex min-w-0 flex-col gap-6 xl:pt-1">
+          {plan}
+          {ruler}
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className={cn("flex min-w-0 flex-col py-6", className)} aria-label={BOOK_TITLE[c.book]}>
+      {head}
+      {drivers}
+      {plan && <div className="mt-5">{plan}</div>}
+      {ruler && <div className="mt-6">{ruler}</div>}
+    </section>
+  );
+}
+
+/**
+ * What is driving the bias: a row a factor. The name, the tag and the weight are the
+ * engine's (`facts.factors`); the comment is the model's, and where it wrote none the
+ * engine's own reads stand in, quieter. Hover a row for the reads behind its tag.
+ *
+ * The weight has a column of its own where the table is wide enough for one, and sits
+ * under the factor's name where it is not (two books side by side on a 1920 screen).
+ */
+function DriversTable({ rows, said }: { rows: BriefFactor[]; said: { key: string; line: string }[] }) {
+  const p = usePaint();
+  const rule = p.lum ? "border-white/[0.07]" : "border-ring/60";
+  const line = new Map(said.map((x) => [x.key, x.line]));
+  const top = Math.max(1, ...rows.map((r) => r.weight ?? 0));
+  const th = "qt-cap pb-1.5 text-[10px] font-medium text-ink-3";
+  return (
+    <div className="@container">
+      <table className="w-full table-fixed border-collapse text-left">
+        <thead>
+          <tr className={cn("border-b", rule)}>
+            <th className={cn(th, "w-[172px] @[600px]:w-[196px]")}>Factor</th>
+            <th className={cn(th, "w-[108px] @[600px]:w-[118px]")}>Read</th>
+            <th
+              className={cn(th, "hidden w-[84px] pr-6 text-right @[600px]:table-cell")}
+              title="The factor's share of the bias score in this session"
+            >
+              Weight
+            </th>
+            <th className={th}>Comment</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const text = line.get(r.key);
+            const engine = r.reads.join(" · ");
+            return (
+              <tr
+                key={r.key}
+                className={cn("border-b align-top last:border-b-0", rule)}
+                title={engine ? `The engine's reads: ${engine}` : undefined}
+              >
+                <td className="py-2.5 pr-4">
+                  <div className="text-[13.5px] leading-snug font-semibold text-ink">{r.name}</div>
+                  {(r.sub || r.weight != null) && (
+                    <div className="mt-0.5 text-[11px] leading-snug text-ink-3">
+                      {r.sub}
+                      {r.weight != null && (
+                        <span className="@[600px]:hidden">
+                          {r.sub && " · "}
+                          <span className="fig">{r.weight}%</span>
+                          {!r.sub && " of the score"}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </td>
+                <td className="py-2.5 pr-4">
+                  <LeanTag lean={r.lean} tag={r.tag} />
+                </td>
+                <td className="hidden py-2.5 pr-6 text-right @[600px]:table-cell">
+                  {r.weight != null ? (
+                    <>
+                      <span className="fig text-[12.5px] leading-[20px] text-ink-2">{r.weight}%</span>
+                      <span
+                        aria-hidden
+                        className="mt-1 ml-auto block h-[3px] w-[46px] overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--ink-3)_26%,transparent)]"
+                      >
+                        <span className="block h-full rounded-full bg-ink-3" style={{ width: `${(r.weight / top) * 100}%` }} />
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-[12.5px] leading-[20px] text-ink-3" title="Not a side: it lowers the ceiling on the call's conviction">
+                      —
+                    </span>
+                  )}
+                </td>
+                <td className="py-2.5 text-[13.5px] leading-[1.5]">
+                  {text ? <span className="text-ink">{text}</span> : <span className="text-ink-3">{engine || "No read at this hour."}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** A factor's tag. Green and pink are the book's own side; amber is the damper; the rest are ink. */
+function LeanTag({ lean, tag }: { lean: BriefFactor["lean"]; tag: string }) {
+  const hue =
+    lean === "bull"
+      ? (["var(--call)", "var(--call-fig)"] as const)
+      : lean === "bear"
+        ? (["var(--put)", "var(--put-fig)"] as const)
+        : lean === "damp"
+          ? (["var(--flip)", "var(--warn)"] as const)
+          : lean === "mixed"
+            ? (["var(--ink-2)", "var(--ink-2)"] as const)
+            : null;
+  return (
+    <Chip hue={hue?.[0]} quietHue={hue?.[1]} className="ml-0 text-[11px] leading-[18px]">
+      {tag}
+    </Chip>
+  );
+}
+
+/**
+ * The levels a call is traded against, on one line from the lowest to the highest
+ * (lib/levelRuler has the layout): a tick a level with its price and name, the prior
+ * session's value area as the thicker stretch, and the last price as the dot. Labels
+ * that would print over each other take the row above the line, then a second row under
+ * it. No level here is a side, so nothing is coloured as one.
+ */
+function KeyLevels({ lv }: { lv: BriefLevels }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWidth(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const r = width > 0 ? layoutRuler(lv.marks, width, lv.dp) : null;
+  const last = lv.marks.find((m) => m.kind === "last");
+  if (lv.marks.length < 2) return null;
+  const TICK = 9;
+  const ROW = 34;
+  // The line's distance from the top: room above it only when a row of labels sits there.
+  const top = r && r.lanes >= 2 ? 44 : 10;
+  const height = top + TICK + 34 + (r && r.lanes >= 3 ? ROW : 0);
+  return (
+    <div>
+      <div className="mb-2.5 flex items-baseline justify-between gap-3">
+        <h4 className="qt-cap text-[10.5px] text-ink-3">Key levels</h4>
+        {last && (
+          <span className="flex items-center gap-1.5 text-[11.5px] leading-none text-ink-3">
+            <span aria-hidden className="h-[9px] w-[9px] rounded-full bg-ink" />
+            Last <span className="fig text-ink">{priceText(last.price, lv.dp)}</span>
+          </span>
+        )}
+      </div>
+      <div ref={ref} className="relative w-full" style={{ height }}>
+        {r && (
+          <>
+            <span
+              aria-hidden
+              className="absolute inset-x-0 h-[2px] rounded-full bg-[color-mix(in_oklab,var(--ink-3)_40%,transparent)]"
+              style={{ top: top - 1 }}
+            />
+            {r.value && (
+              <span
+                title="The prior session's value area"
+                className="absolute h-[8px] rounded-[3px] bg-[color-mix(in_oklab,var(--ink-3)_44%,transparent)]"
+                style={{ left: r.value[0], width: r.value[1] - r.value[0], top: top - 4 }}
+              />
+            )}
+            {r.marks.map((m) => {
+              const above = m.lane === 1;
+              const far = m.lane >= 2;
+              const away = fromLast(m.price, last?.price, lv.dp);
+              return (
+                <span key={`${m.price}-${m.labels[0]}`} title={away ? `${m.labels.join(", ")}: ${away} from last` : undefined}>
+                  <span
+                    aria-hidden
+                    className={cn("absolute w-px", m.kind === "poc" ? "bg-ink" : "bg-ink-3")}
+                    style={{ left: m.x, top: above ? top - TICK : top, height: far ? TICK + ROW : TICK }}
+                  />
+                  <span
+                    className="absolute text-center leading-[14px] whitespace-nowrap"
+                    style={{ left: m.left, width: m.width, top: above ? top - TICK - 31 : top + TICK + 3 + (far ? ROW : 0) }}
+                  >
+                    <span className="fig block text-[11px] text-ink-2">{priceText(m.price, lv.dp)}</span>
+                    <span className="block text-[10.5px] text-ink-3">{m.labels.join(" · ")}</span>
+                  </span>
+                </span>
+              );
+            })}
+            {r.last && (
+              <span
+                aria-hidden
+                className="absolute h-[11px] w-[11px] -translate-x-1/2 rounded-full bg-ink shadow-[0_0_0_2px_rgba(5,7,12,0.7)]"
+                style={{ left: r.last.x, top: top - 5.5 }}
+              />
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -660,7 +1518,18 @@ function Pips({ n, hue }: { n: number; hue: string }) {
         <span
           key={i}
           className={cn(p.quiet ? "h-[7px] w-[7px]" : "h-[8px] w-[8px]", p.mark)}
-          style={{ background: i <= n ? hue : p.quiet ? "var(--qt-track, var(--surface-3))" : "var(--ring-2)" }}
+          // An unlit pip is a mix of the ink under Luminous, as the bias scale's track is: on
+          // glass the surface grey was not there to see, and one of five read as one of one.
+          style={{
+            background:
+              i <= n
+                ? hue
+                : p.lum
+                  ? "color-mix(in oklab, var(--ink-3) 34%, transparent)"
+                  : p.quiet
+                    ? "var(--qt-track, var(--surface-3))"
+                    : "var(--ring-2)",
+          }}
         />
       ))}
     </span>
@@ -1084,19 +1953,29 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
 
 /* ---------------------------------------------------------------- catalysts */
 
-function Catalysts({ f, b, span }: { f: BriefFacts; b: BriefBody; span?: string }) {
+function Catalysts({ f, b, span, title = "Catalysts" }: { f: BriefFacts; b: BriefBody; span?: string; title?: string }) {
   if (f.catalysts.length === 0 && !b.catalysts_intro) return null;
   const notes = new Map(b.catalyst_notes.map((n) => [n.id, n.note]));
   return (
-    <Section title="Catalysts" span={span}>
+    <Section title={title} span={span}>
       {b.catalysts_intro && <P muted>{b.catalysts_intro}</P>}
-      {f.catalysts.length > 0 && (
+      {f.catalysts.length > 0 && <CatalystTable rows={f.catalysts} notes={notes} />}
+    </Section>
+  );
+}
+
+/**
+ * The calendar's rows: when, what, its figures, and the model's note on it. `lead` is the
+ * short brief's Today, where the note is the point of the row and is set as such.
+ */
+function CatalystTable({ rows, notes, lead }: { rows: BriefCatalyst[]; notes: Map<string, string>; lead?: boolean }) {
+  return (
         <table className="w-full border-collapse border-t border-ring/60">
           <tbody>
-            {f.catalysts.map((c) => {
+            {rows.map((c) => {
               const note = notes.get(c.id);
               const detail = [
-                c.actual && `actual ${c.actual}`,
+                c.actual && `actual ${c.actual}${c.official ? ` (${c.official})` : ""}`,
                 c.consensus && `${c.kind === "earnings" ? "EPS est." : "consensus"} ${c.consensus}`,
                 c.previous && `prior ${c.previous}`,
                 c.note,
@@ -1139,15 +2018,17 @@ function Catalysts({ f, b, span }: { f: BriefFacts; b: BriefBody; span?: string 
                           .join(" · ")}
                       </div>
                     ))}
-                    {note && <div className="mt-0.5 text-[12.5px] leading-snug text-ink-2">{note}</div>}
+                    {note && (
+                      <div className={lead ? "mt-1 text-[13.5px] leading-[1.5] text-ink" : "mt-0.5 text-[12.5px] leading-snug text-ink-2"}>
+                        {note}
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-      )}
-    </Section>
   );
 }
 

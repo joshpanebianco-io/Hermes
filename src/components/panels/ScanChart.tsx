@@ -128,8 +128,8 @@ const LAYER_TITLE: Record<Layer, string> = {
   ema50: "The 50 EMA",
   ema200: "The 200 EMA",
   vwap: "VWAP, from 09:30",
-  pd: "The previous day's high and low",
-  pm: "The pre-market high and low",
+  pd: "The previous day's high and low (its 09:30 to 16:00 ET session), for the last day on the chart",
+  pm: "The pre-market high and low, 04:00 to 09:30 ET, on a stock and a future alike",
   vol: "Volume",
 };
 // The 20 and the 50 are there to be picked, not on by default: the strategy reads
@@ -287,9 +287,8 @@ interface Segment {
   v: number;
   hue: string;
   dashed: boolean;
-  label: string;
-  /** Named at its right end (PMH / PML) or left (PDH / PDL), so a close pair does not collide. */
-  labelEnd: boolean;
+  /** The chart's own level (the last day's): drawn on past the last bar to the right edge. */
+  toEdge?: boolean;
 }
 
 interface OverlayData {
@@ -402,14 +401,13 @@ class Overlays implements ISeriesPrimitive<Time> {
           c.closePath();
           c.fill();
         }
-        c.font = `${Math.round(9 * vr)}px ${d.font}`;
         for (const s of d.segments) {
           const a = x(s.i0);
           const b = x(s.i1);
           const py = y(s.v);
           if (a === null || b === null || py === null) continue;
           const x1 = (a - step / 2) * hr;
-          const x2 = (b + step / 2) * hr;
+          const x2 = s.toEdge ? bitmapSize.width : (b + step / 2) * hr;
           const yy = Math.round(py * vr) + 0.5;
           c.strokeStyle = s.hue;
           c.fillStyle = s.hue;
@@ -419,13 +417,12 @@ class Overlays implements ISeriesPrimitive<Time> {
           c.moveTo(x1, yy);
           c.lineTo(x2, yy);
           c.stroke();
-          c.textAlign = s.labelEnd ? "right" : "left";
-          c.fillText(s.label, s.labelEnd ? x2 - 2 * hr : x1 + 2 * hr, yy - 3 * vr);
         }
         c.restore();
       });
     },
   };
+
 
   private view: IPrimitivePaneView = { zOrder: () => "bottom", renderer: () => this.renderer };
 
@@ -524,6 +521,8 @@ interface LevelLine {
   dashed: boolean;
   faint: boolean;
   layer: Layer | null;
+  /** The bar it starts at, when it is drawn from there and not across the whole chart. */
+  from?: number;
 }
 
 interface Built {
@@ -604,6 +603,7 @@ export function ScanChart({
   store = "scan",
   prefs: shared,
   head,
+  onLevels,
 }: {
   sym: string;
   state: -2 | -1 | 0 | 1 | 2;
@@ -627,7 +627,15 @@ export function ScanChart({
    * there, and set from the grid's one toolbar. How fresh it is still shows at the end.
    */
   head?: React.ReactNode;
+  /**
+   * Handed the four levels this chart has just been sent, each time its bars are read
+   * (the Futures tab's Nearest levels card, 2026-11-15). The card measures from the same
+   * PDH, PDL, PMH and PML the chart names, so the two cannot say different prices.
+   */
+  onLevels?: (levels: ScanBars["levels"] | null) => void;
 }) {
+  const onLevelsRef = useRef(onLevels);
+  onLevelsRef.current = onLevels;
   const own = useChartPrefs(store, Boolean(barsUrl));
   const prefs = shared ?? own;
   const { tf, layers, anchor, bands, gex } = prefs;
@@ -805,11 +813,51 @@ export function ScanChart({
         i0,
         i1,
         v: h.v,
-        hue: rgba(h.key === "PDH" || h.key === "PMH" ? p.up : p.down, 0.5),
+        // An earlier day's line has no name, as the Pine's has none: only the last day's
+        // four are named, on the price axis, so there is one PDH on the chart to read.
+        hue: rgba(h.key === "PDH" || h.key === "PMH" ? p.up : p.down, 0.4),
         dashed: pm,
-        label: h.key,
-        labelEnd: pm,
       });
+    }
+    // The levels. Near ones help set the scale; a level far off must not crush the candles.
+    for (const l of b.levels) b.candles.removePriceLine(l);
+    b.levels = [];
+    const L = d.levels;
+    const forming = !L.pm_done;
+    const list: LevelLine[] = [];
+    /*
+     * ONE NAMED SET, THE LAST DAY'S ON THE CHART, AS THE OWNER'S PINE DRAWS THEM (owner,
+     * 2026-11-14: "i think there is a bug with the pdh/l and pmh/l levels on the stocks
+     * charts", then, of the first fix, "you now have double ups of the levels"). The
+     * collector sends the levels of the day the last bar is in (scan.chart_levels,
+     * futures.day_levels): on a weekend Friday's, as it traded against them, not
+     * Monday's over Friday's candles. They were the library's price lines, which cross
+     * the whole chart, so today's also ran back over yesterday. Each now starts at its
+     * day's first bar (`pd_from`, `pm_from`) and runs to the right edge, drawn here; the
+     * library keeps the name on the price axis. Earlier days' lines are plain. A reply
+     * without the starts (the daily view, an older collector) draws lines across.
+     */
+    const startOf = (from: number | null | undefined): number | undefined => {
+      if (from == null || tfNow === "D") return undefined;
+      const i = d.bars.findIndex((x) => x.t >= from);
+      // Nothing on the chart from there yet: a stub at the last bar, so the level and its
+      // label are still on the page.
+      return i < 0 ? d.bars.length - 1 : i;
+    };
+    const pdFrom = startOf(L.pd_from);
+    const pmFrom = startOf(L.pm_from);
+    const add = (key: string, v: number | null | undefined, hue: string, dashed: boolean, faint: boolean, layer: Layer | null, title: string, from?: number) => {
+      if (v == null) return;
+      if (layer && !on(layer)) return;
+      list.push({ key, v, hue, dashed, faint, layer, title, from });
+    };
+    add("PDH", L.pdh, p.up, false, false, "pd", "PDH", pdFrom);
+    add("PMH", L.pmh, p.up, true, forming, "pm", forming ? "PMH ·f" : "PMH", pmFrom);
+    add("PML", L.pml, p.down, true, forming, "pm", forming ? "PML ·f" : "PML", pmFrom);
+    add("PDL", L.pdl, p.down, false, false, "pd", "PDL", pdFrom);
+    for (const l of list) {
+      if (l.from === undefined) continue;
+      segments.push({ i0: l.from, i1: d.bars.length - 1, v: l.v, hue: rgba(l.hue, l.faint ? 0.5 : 0.85), dashed: l.dashed, toEdge: true });
     }
     b.overlays.set({
       shades,
@@ -820,22 +868,6 @@ export function ScanChart({
       segments,
       font: getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace",
     });
-
-    // The levels. Near ones help set the scale; a level far off must not crush the candles.
-    for (const l of b.levels) b.candles.removePriceLine(l);
-    b.levels = [];
-    const L = d.levels;
-    const forming = !L.pm_done;
-    const list: LevelLine[] = [];
-    const add = (key: string, v: number | null | undefined, hue: string, dashed: boolean, faint: boolean, layer: Layer | null, title: string) => {
-      if (v == null) return;
-      if (layer && !on(layer)) return;
-      list.push({ key, v, hue, dashed, faint, layer, title });
-    };
-    add("PDH", L.pdh, p.up, false, false, "pd", "PDH");
-    add("PMH", L.pmh, p.up, true, forming, "pm", forming ? "PMH ·f" : "PMH");
-    add("PML", L.pml, p.down, true, forming, "pm", forming ? "PML ·f" : "PML");
-    add("PDL", L.pdl, p.down, false, false, "pd", "PDL");
     const band = emRef.current ?? d.em ?? null;
     if (band) {
       add("EMH", band.hi, p.ink3, true, false, null, band.label);
@@ -867,6 +899,8 @@ export function ScanChart({
           color: rgba(l.hue, l.faint ? 0.5 : 0.85),
           lineWidth: 1,
           lineStyle: l.key.startsWith("EM") ? LineStyle.Dotted : l.dashed ? LineStyle.Dashed : LineStyle.Solid,
+          // A level drawn from its own start is the overlay's line; this keeps its label.
+          lineVisible: l.from === undefined,
           axisLabelVisible: true,
           title: l.title,
         }),
@@ -1103,6 +1137,7 @@ export function ScanChart({
       setErr(d.offline ? d.offline.reason : d.ok ? null : (d.error ?? "no bars"));
       if (!d.ok) return;
       data.current = d;
+      onLevelsRef.current?.(d.levels ?? null);
       setAnchored(d.vwaps != null);
       // A stock's bands can be picked before the bell, while there is no VWAP yet to
       // draw them about; a daily bar has neither.

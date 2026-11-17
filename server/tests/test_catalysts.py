@@ -62,11 +62,14 @@ def test_the_score_pays_for_what_the_news_is() -> None:
     assert read("short", None, [_h("FDA rejects X's new drug")], None)["pts"] == 20
 
 
-def test_major_news_against_costs_ten_a_note_six_and_a_tweak_three() -> None:
+def test_news_that_reads_against_the_side_earns_its_grade_and_is_flagged() -> None:
+    # It cost three, six and ten until 2026-11-14 (scanscore.W_CATALYST has the record).
     read = scanscore.catalyst_read
-    assert read("short", None, [_h("X price target raised to $50 by Y")], None)["pts"] == -3
-    assert read("short", None, [_h("Y upgrades X to Buy")], None)["pts"] == -6
-    assert read("short", None, [_h("X beats on revenue")], None)["pts"] == -10
+    for title, want in (("X price target raised to $50 by Y", 3), ("Y upgrades X to Buy", 12),
+                        ("X beats on revenue", 20)):
+        got = read("short", None, [_h(title)], None)
+        assert got["pts"] == want and got["against"] is None
+        assert got["reads_against"] and got["item"]["with"] is False
 
 
 def test_a_law_firms_notice_counts_for_nothing() -> None:
@@ -79,7 +82,8 @@ def test_a_law_firms_notice_counts_for_nothing() -> None:
 def test_the_strongest_item_decides_not_the_newest() -> None:
     items = [_h("Y raises X price target to $50", 10.0), _h("X misses on revenue", 300.0)]
     got = scanscore.catalyst_read("long", None, items, None)
-    assert got["pts"] == -10 and "misses" in got["against"]
+    assert got["pts"] == 20 and got["item"]["tag"] == "Earnings"
+    assert "misses" in got["reads_against"]
 
 
 def test_a_move_is_major_with_its_reason_and_minor_without() -> None:
@@ -144,7 +148,8 @@ def test_the_score_reads_the_names_own_move() -> None:
     read = scanscore.catalyst_read
     jump = _h("Broadcom Stocks Jump 8.21% as Investors Eye $21.7 Billion AI Revenue Guide")
     assert read("long", None, [jump], None, sym="AVGO", names=["Broadcom"])["pts"] == 20
-    assert read("short", None, [jump], None, sym="AVGO", names=["Broadcom"])["pts"] == -10
+    under_short = read("short", None, [jump], None, sym="AVGO", names=["Broadcom"])
+    assert under_short["pts"] == 20 and under_short["reads_against"]
     # Without the name to find, the move has no direction, as before.
     assert read("long", None, [jump], None)["pts"] == 0
     # A bare list of movers is minor: three with the side.
@@ -154,7 +159,8 @@ def test_the_score_reads_the_names_own_move() -> None:
     # 04:20 ET on 2026-11-10: it cost a short three as a List, and it is Amazon's move).
     wrap = _h("Amazon Stocks Rise 4.05% as JPMorgan Adds It to Focus List on AWS")
     assert catalysts.grade(wrap["title"]) == ("List", 3)
-    assert read("short", None, [wrap], None, sym="AMZN", names=["Amazon"])["pts"] == -10
+    amzn = read("short", None, [wrap], None, sym="AMZN", names=["Amazon"])
+    assert amzn["pts"] == 20 and amzn["item"]["tag"] == "Move" and amzn["reads_against"]
     assert read("short", None, [wrap], None)["pts"] == 0
     assert read("short", None, [_h("Asian Stocks Rise as Oil Eases")], None, sym="AMZN",
                 names=["Amazon"])["pts"] == 0
@@ -374,9 +380,10 @@ def test_the_score_on_the_evening_of_10_nov() -> None:
                "ARM", ["Arm Holdings", "Arm"]) == 0
     # The day is not the reason: twenty before, a bare move's three now.
     assert pts("long", "Why AMD shares are rallying on Tuesday?", "AMD", ["AMD"]) == 3
-    # A recap of the week is minor: it cost the short ten.
+    # A recap of the week is minor: it cost the short ten, then three, and is worth a
+    # minor story's three either way since 2026-11-14.
     assert pts("short", "Oklo Soars 14% in a Week on a Narrower Loss and a Deal for 27 "
-               "Reactors’ Worth of Forgings", "OKLO", ["Oklo"]) == -3
+               "Reactors’ Worth of Forgings", "OKLO", ["Oklo"]) == 3
     # A product's upgrade is not a rating: it cost the short six.
     assert pts("short", "Home Depot brings back viral Christmas tree with major holiday upgrade",
                "HD", ["HOME"]) == 0
@@ -398,8 +405,9 @@ def test_the_score_on_the_evening_of_10_nov() -> None:
     assert pts("long", "CoreWeave beats on revenue and lifts guidance, easing AI slowdown "
                "concerns", "CRWV", ["CoreWeave"]) == 20
     assert pts("long", "Organigram to be acquired by Aurora", "OGI", ["Organigram"]) == 20
+    # A raised target under a short cost three; it is worth a tweak's three either way now.
     assert pts("short", "Bernstein maintains Home Depot at Market Perform, raises price target "
-               "to $357 from $344", "HD", ["HOME"]) == -3
+               "to $357 from $344", "HD", ["HOME"]) == 3
 
 
 def test_a_stored_story_is_graded_again_when_it_is_loaded(tmp_path: Any) -> None:

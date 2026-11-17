@@ -448,13 +448,20 @@ class _DayLike(Protocol):
 
 
 def realised_earnings_moves(days: Sequence[_DayLike], reports: list[date],
-                            keep: int = 4) -> list[dict[str, Any]]:
+                            keep: int = 4,
+                            when: dict[date, str] | None = None) -> list[dict[str, Any]]:
     """The close-to-close move across each past report, newest first. Pure.
 
-    THE REACTION DAY IS PICKED BY VOLUME. The report table gives the date and
-    not the hour, and a report after the close moves the NEXT session: of the
-    report day and the session after it, the one that traded more volume is
-    the reaction, and the move is its close against the close before it.
+    THE HOUR DECIDES THE REACTION DAY when it is known (`when`, from EDGAR's
+    acceptance stamp, sources/earnhist.py): before the open or in the session,
+    the report day; after the close, the session after it. The move is that
+    session's close against the close before it.
+
+    WITHOUT AN HOUR IT IS PICKED BY VOLUME: of the report day and the session
+    after it, the one that traded more. That guess misses when the day before
+    an after-close report is busy too (Apple, 30 Apr 2026: 92M shares on the
+    report day, 80M on the reaction, and +0.44% read where +3.24% happened),
+    which is why the hour wins whenever there is one.
     """
     out: list[dict[str, Any]] = []
     if not days:
@@ -463,8 +470,17 @@ def realised_earnings_moves(days: Sequence[_DayLike], reports: list[date],
         i = next((j for j, d in enumerate(days) if d.day >= rep), None)
         if i is None or i == 0:
             continue
-        cands = [i] + ([i + 1] if i + 1 < len(days) else [])
-        react = max(cands, key=lambda j: days[j].volume)
+        hour = (when or {}).get(rep)
+        if hour in ("pre", "during") or (hour == "after" and days[i].day > rep):
+            # The report day, or the first session after a report on a day with none.
+            react = i
+        elif hour == "after":
+            if i + 1 >= len(days):
+                continue  # its reaction session has not traded yet
+            react = i + 1
+        else:
+            cands = [i] + ([i + 1] if i + 1 < len(days) else [])
+            react = max(cands, key=lambda j: days[j].volume)
         prev = days[react - 1].close
         if not prev:
             continue
@@ -898,11 +914,13 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
                 reports: list[date] | None = None,
                 daily: list[Any] | None = None,
                 oi_prev: dict[str, Any] | None = None,
-                vol_hist: list[float] | None = None) -> dict[str, Any]:
+                vol_hist: list[float] | None = None,
+                report_when: dict[date, str] | None = None) -> dict[str, Any]:
     """The contract's OptionsCtx for one scanner row. Pure.
 
-    `reports` are the name's past report dates and `daily` its daily bars,
-    for the realised earnings moves; `oi_prev` and `vol_hist` the previous
+    `reports` are the name's past report dates, `report_when` the hour of those
+    that have one, and `daily` its daily bars, for the realised earnings moves
+    (`realised_earnings_moves`); `oi_prev` and `vol_hist` the previous
     session's open interest and the chain's volume history (options_flow).
     All optional.
     """
@@ -954,7 +972,8 @@ def options_ctx(chain: Chain, row: dict[str, Any], closes: list[float], history:
             implied_earn = earnings_move(chain, spot, rep_day, earnings.get("when"), ref_day)
         except ValueError:
             implied_earn = None
-    realised = realised_earnings_moves(daily or [], reports or []) if daily and reports else []
+    realised = (realised_earnings_moves(daily or [], reports or [], when=report_when)
+                if daily and reports else [])
     abs_moves = [abs(m["pct"]) for m in realised]
     earn_block = None
     if implied_earn is not None or realised:

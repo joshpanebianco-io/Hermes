@@ -134,7 +134,39 @@ def page(**kw: Any) -> dict[str, Any]:
     snap.update(kw.pop("snap", {}))
     brk = {"stats": {"pdh": 41, "pdl": 34}}
     d23 = {"chips": {"all": 32, "day1": 11, "day2": 21, "day3": 2}}
-    return d.build(scan, snap, brk, d23, [{"syms": ["IRTC"], "title": "x"}], session_day=FRI)
+    return d.build(scan, snap, brk, d23, [{"syms": ["IRTC"], "title": "x"}], session_day=FRI,
+                   pre_day=kw.pop("pre_day", None))
+
+
+MON = "2026-11-16"
+
+
+def pre(pct: float, day: str = MON) -> dict[str, Any]:
+    return {"kind": "pre", "day": day, "pct": pct, "at": 1, "bars": 5}
+
+
+EXT = {"SPY": pre(-0.65), "XLP": pre(0.60), "XLK": pre(-1.76), "XLE": pre(-0.23),
+       "XHB": pre(0.10), "WGMI": pre(-4.38), "XLC": pre(0.5, "2026-11-13")}
+
+
+def test_before_the_bell_the_focus_and_the_rotation_are_the_pre_markets() -> None:
+    # Owner, 2026-11-16: "is todays game plan on the dash board up to date? or is it
+    # suffering the problem we fixed earlier with sectors" — it was: Friday's leaders.
+    p = page(snap={"sector_ext": EXT}, pre_day=MON)
+    assert p["sectors_basis"] == "pre"
+    # Ahead of SPY's -0.65% before the bell, best first; XLC's read is Friday's, not today's.
+    assert [f["key"] for f in p["plan"]["focus"]] == ["XLP", "XLE"]
+    assert p["plan"]["focus"][0]["pct"] == 0.60 and round(p["plan"]["focus"][0]["rs"], 2) == 1.25
+    assert [f["key"] for f in p["plan"]["themes"]] == ["XHB"]
+    # The rotation row ranks by the pre-market move, a fund with no trade yet last.
+    assert [s["key"] for s in p["rotation"]] == ["XLP", "XLE", "XLK", "XLC"]
+    assert p["read"]["lines"][1].startswith("Staples and Homebuilders lead the pre-market")
+
+
+def test_in_and_after_the_session_the_sectors_are_the_sessions() -> None:
+    p = page(snap={"sector_ext": EXT})
+    assert p["sectors_basis"] == "session"
+    assert [f["key"] for f in p["plan"]["focus"]] == ["XLK", "XLC"]
 
 
 def test_the_top_setups_are_the_engines_own_order_of_what_scored() -> None:

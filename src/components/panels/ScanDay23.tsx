@@ -53,7 +53,7 @@ const CHIPS: ReadonlyArray<{ key: Day23Chip; label: string; title?: string }> = 
   // Not "Outside": an outside day is through both ranges (lib/outsideDay); this is the
   // previous day's level alone.
   { key: "through", label: "Through PDH/PDL", title: THROUGH_DAY_TITLE },
-  { key: "inside", label: "Inside day", title: "The whole session inside the previous day's range: resting" },
+  { key: "inside", label: "Inside Day", title: "The whole session inside the previous day's range: resting" },
   { key: "long", label: "Long" },
   { key: "short", label: "Short" },
   { key: "day1", label: "Day 1" },

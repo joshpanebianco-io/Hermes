@@ -1,48 +1,35 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
-import type { BriefLadder, CalendarRow, DayType, GexAsset, ImpliedBook, Quote, Terminal as TerminalData, WireItem } from "@/types/terminal";
-import { Board } from "@/components/panels/Board";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import type { BriefLadder, CalendarRow, DayLabel, DayType, DayTypeBook, GexAsset, ImpliedBook, Quote, Terminal as TerminalData, WireItem } from "@/types/terminal";
 import { Gamma } from "@/components/panels/Gamma";
-import { Report } from "@/components/panels/Report";
-import { Sessions } from "@/components/panels/Sessions";
 import { SessionRanges } from "@/components/panels/SessionRanges";
-import { Volatility } from "@/components/panels/Volatility";
 import { VolumeProfile } from "@/components/panels/VolumeProfile";
 import { ScanChart } from "@/components/panels/ScanChart";
-import { Glyph, StatCard } from "@/components/panels/ScanWide";
-import { DriverPopover, biasWord, gradeTone, voteTone } from "@/components/vol/DriverBoard";
+import { Arrow, BiasStat, StatCard } from "@/components/panels/ScanWide";
+import { BiasOpener } from "@/components/vol/DriverBoard";
+import { MarketReportView } from "@/components/MarketReport";
+import type { ReportController } from "@/lib/useReport";
+import { biasOut, closeBias, openBias } from "@/lib/biasDrawer";
 import { AssetIcon } from "@/components/ui/AssetIcon";
 import { PageLoader } from "@/components/ui/HelmLoader";
 import { useSide } from "@/components/state/UiMode";
 import { Module } from "@/components/ui/Module";
 import { Tick } from "@/components/ui/Tick";
-import { liveLine, scoreText } from "@/lib/bias";
+import { liveLine } from "@/lib/bias";
+import { wholeScore } from "@/lib/biasScale";
 import { cn } from "@/lib/cn";
-import { CALL_HUE, labelWords, leanTitle, nightWords } from "@/lib/daytype";
 import { ageStep, dir, inMin, num, pct } from "@/lib/format";
+import { CALL_HUE, labelWords, leanLine, leanTitle, nightWords, voteWord } from "@/lib/daytype";
+import { countryShort, levelsFrom, type ChartLevels } from "@/lib/futCards";
 import { bookStories } from "@/lib/futNews";
 import { regimeMeans } from "@/lib/gammaRegime";
-import { FUT_BOOKS, FUT_NAME, FUT_VIEWS, QUOTE_KEY, SCORED, booksOf, isFutBook, isFuture, type FutBook, type FutView } from "@/lib/futures";
-import { placedName } from "@/lib/releases";
+import { DAY_TYPED, FUT_NAME, FUT_VIEWS, QUOTE_KEY, SCORED, nextRelease, type FutBook, type FutView } from "@/lib/futures";
+import { etDay } from "@/lib/nextPrint";
+import { dayState } from "@/lib/outsideDay";
+import { groupReleases } from "@/lib/releases";
 import { segItem } from "@/lib/seg";
-import type { ReportController } from "@/lib/useReport";
 import { useNow } from "@/lib/useNow";
-import { wallRank } from "@/lib/walls";
-
-/**
- * A level's name; a gamma wall's rank as triangles (lib/walls), set at three quarters of
- * the type so they stand about the chart's drawn triangles' height (2026-11-14).
- */
-function LevelName({ label }: { label: string }) {
-  const w = wallRank(label);
-  if (!w) return <>{label}</>;
-  return (
-    <>
-      {w.word} <span className="text-[0.75em]">{(w.up ? "▲" : "▼").repeat(w.n)}</span>
-    </>
-  );
-}
 
 /**
  * Futures — everything about the futures traded, on one page (owner, 2026-11-10:
@@ -54,20 +41,34 @@ function LevelName({ label }: { label: string }) {
  * Index view until that went on 2026-11-13 (lib/tabs.ts). The page is built the way the Scanner is: a row of views, a row of
  * figures, one framed body.
  *
- *   Overview   the five side by side: price, bias, gamma, the implied day, the
- *              nearest level each way, the next release that reaches it; under
- *              them what moves them today, the news, the vol curve, the book
  *   NQ … CL    one contract: its figures, its chart with the levels drawn, the news
  *              that reaches it, the session ranges, the profile and gamma, all on
  *              that book
- *   Brief      the written pre-session brief (the Analysis tab carried it too until 2026-11-11)
+ *
+ * NO BRIEF VIEW SINCE 2026-11-15 (owner: "i want to remove the market section from stocks
+ * and brief section from futures and consolidate it all into one area"): the written
+ * report is the Market Report page's, with silver and crude written as well as scored.
+ * That page is off the navigation since 2026-11-16 (lib/tabs OFF_NAV; owner: "just utilise
+ * the pop up cards when you click on the bias in each assets section"), so a contract's
+ * read on a page is its Bias card here and the driver board the card slides out from the
+ * right (vol/BiasDrawer, the same afternoon: "comes from the right similar to when you
+ * click on a stock").
  *
  * ONE BOOK A VIEW. The panels used to pick their own book each, so the ladder could
  * be on NQ beside gamma on ES; in a book's view all of them are that book.
  *
- * SILVER AND CRUDE ARE NOT SCORED YET. They have the levels, ranges, profile, gamma
- * and implied day; the driver board's bias and the written brief are NQ, ES and GC
- * until their weights are worked out, and their cards say so rather than show a gap.
+ * THERE IS NO OVERVIEW (owner, 2026-11-14: "do you think the overview tab is necessary
+ * in futures?", then "lets remove it completely"). It was the first view: the five side
+ * by side, each a cut-down copy of its own view's figures row, over the calendar and the
+ * news again, and a click between the page and the chart it was opened for. With it went
+ * the only place the Session type card, the vol curve (panels/Volatility), "The book"
+ * board and the Sessions panel were drawn; the data behind each is still served, and
+ * Hermes still reads it. The page opens on NQ.
+ *
+ * SILVER AND CRUDE ARE SCORED SINCE 2026-11-15 (owner: "implement the silver and oil
+ * bias calculation and weightings and rules too"; server bias.py says what each answers
+ * to). Their Bias card is the same card the other three have. The trend-or-range record
+ * is still NQ, ES and gold only, and their Session type card says so.
  */
 
 const SOURCES = ["quotes", "ranges", "profiles", "gex"];
@@ -78,8 +79,6 @@ const COL = "qt-col flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto";
 const MRanges = memo(SessionRanges);
 const MProfile = memo(VolumeProfile);
 const MGamma = memo(Gamma);
-const MVol = memo(Volatility);
-const MBoard = memo(Board);
 
 export function FuturesBoard({
   data,
@@ -90,27 +89,30 @@ export function FuturesBoard({
   data: TerminalData;
   view: FutView;
   onView: (v: FutView) => void;
+  /** The written report's state, the Terminal's, so a report being written survives a change of page. */
   report: ReportController;
 }) {
   const st = data.status ?? {};
   const ready = Boolean(data.offline) || SOURCES.every((k) => st[k] !== undefined);
   // The Sidebar interface lists the views itself and says the session in its header.
   const side = useSide();
+  // A contract's bias slid out (vol/BiasDrawer) would sit over the report: the report puts it away.
+  useEffect(() => {
+    if (view === "report") closeBias();
+  }, [view]);
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       {!side && <Masthead view={view} onView={onView} phase={data.clock?.phase.label ?? null} />}
       <div className="qt-frame mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[6px] border border-ring">
-        {!ready ? (
+        {view === "report" ? (
+          // The written report (MarketReportView), after CL since 2026-11-16: it reads the
+          // collector's report store, not the desk's sources, so it does not wait on them.
+          <MarketReportView data={data} report={report} desk="futures" />
+        ) : !ready ? (
           <PageLoader label="Loading the desk" size={64} />
-        ) : view === "overview" ? (
-          <Overview data={data} onPick={onView} />
-        ) : view === "brief" ? (
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <Report {...report} />
-          </div>
-        ) : isFutBook(view) ? (
+        ) : (
           <BookView key={view} book={view} data={data} />
-        ) : null}
+        )}
       </div>
     </main>
   );
@@ -125,7 +127,7 @@ function Masthead({ view, onView, phase }: { view: FutView; onView: (v: FutView)
       <span className="seg seg-tabs shrink-0" role="tablist" aria-label="Futures views">
         {FUT_VIEWS.map((v) => (
           <button key={v.key} type="button" role="tab" aria-selected={view === v.key} title={v.title} onClick={() => onView(v.key)} {...segItem(view === v.key)}>
-            {isFutBook(v.key) && <AssetIcon id={v.key} size={13} className="block shrink-0" />}
+            <AssetIcon id={v.key} size={13} className="block shrink-0" />
             {v.label}
           </button>
         ))}
@@ -157,8 +159,6 @@ interface Read {
   gex: GexAsset | null;
   flip: number | null;
   implied: ImpliedBook | null;
-  up: { price: number; label: string } | null;
-  down: { price: number; label: string } | null;
 }
 
 function read(data: TerminalData, book: FutBook): Read {
@@ -169,9 +169,6 @@ function read(data: TerminalData, book: FutBook): Read {
   const implied = data.volterm?.books?.find((x) => x.key === book) ?? null;
   const last = q?.last ?? ladder?.last ?? null;
   const dp = ladder?.dp ?? implied?.dp ?? 2;
-  const rows = (ladder?.rows ?? []).filter((r) => r.kind !== "last" && r.kind !== "em");
-  const above = last == null ? [] : rows.filter((r) => r.price > last).sort((a, b) => a.price - b.price);
-  const below = last == null ? [] : rows.filter((r) => r.price < last).sort((a, b) => b.price - a.price);
   return {
     q,
     last,
@@ -180,8 +177,6 @@ function read(data: TerminalData, book: FutBook): Read {
     gex,
     flip: gex?.levels.find((l) => l.key === "flip")?.price ?? null,
     implied,
-    up: above[0] ? { price: above[0].price, label: above[0].label } : null,
-    down: below[0] ? { price: below[0].price, label: below[0].label } : null,
   };
 }
 
@@ -196,298 +191,155 @@ function gammaWord(r: Read): { word: string; hue: string; line: string } {
   return { word: pos ? "Positive γ" : "Negative γ", hue: "text-ink", line: `${regimeMeans(r.gex.regime)} · ${line}` };
 }
 
-function upcoming(calendar: CalendarRow[], now: number | null): CalendarRow[] {
-  if (now == null) return [];
-  return calendar
-    .filter((r) => !r.released && r.ts != null && r.ts > now / 1000 - 60 && r.score >= 3)
-    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0) || b.score - a.score);
+/**
+ * When a release is, as the card's figure: a countdown inside a day ("in 5h 30m"), the
+ * day and the hour past that ("Mon 12:00", New York's), where the countdown would only
+ * say "in 1d" for anything from 24 hours to 48.
+ */
+function whenWord(r: CalendarRow, now: number | null): { value: string; soon: boolean } {
+  if (now == null || r.ts == null) return { value: "—", soon: false };
+  const min = (r.ts - now / 1000) / 60;
+  if (min < 24 * 60 || !r.et) return { value: `in ${inMin(min)}`, soon: true };
+  return { value: `${etDay(r.ts, now)}${r.et}`, soon: false };
 }
+
+/* ---- the two cards that were swapped in on 2026-11-15 (lib/futCards has the why) ---- */
+
+const sameLevels = (a: ChartLevels | null, b: ChartLevels | null) =>
+  a === b || (a != null && b != null && a.pdh === b.pdh && a.pdl === b.pdl && a.pmh === b.pmh && a.pml === b.pml && a.pm_done === b.pm_done);
+
+/** "Trend day up", "Range day": what New York was, once it has closed. */
+const dayKind = (l: DayLabel) => (l.type === "trend" ? `Trend day${l.dir ? ` ${l.dir}` : ""}` : `${l.type[0].toUpperCase()}${l.type.slice(1)} day`);
 
 /**
- * One row a release: CPI prints as seven figures at 08:30, and seven rows saying the
- * same minute pushed everything else off the card. The heaviest names the row, and
- * the rest are a count, as the Calendar groups them.
+ * Session type: will New York trend or range (daytype.py), the call with the count that
+ * carries it; after the close, what the day was. Its click opens every condition that
+ * holds today with its count over the record, as the Overview's card did until that
+ * view went on 2026-11-14 and took the read off every page. Counts, never percentages,
+ * and never a side: the call is in ink.
  */
-function oneEach(rows: CalendarRow[]): Array<{ row: CalendarRow; more: number }> {
-  const out: Array<{ row: CalendarRow; more: number }> = [];
-  for (const r of rows) {
-    const same = out.find((x) => x.row.ts === r.ts && x.row.country === r.country);
-    if (same) same.more += 1;
-    else out.push({ row: r, more: 0 });
+function sessionCard(st: DayTypeBook | null) {
+  if (!st) return null;
+  const { lean, label } = st;
+  if (label) {
+    const rest = labelWords(label).split(" · ").slice(1).join(" · ");
+    return { value: dayKind(label), hue: "text-ink", label: "Session type · today was", sub: rest || nightWords(lean), title: `Today: ${labelWords(label)}\n${leanTitle(lean)}` };
   }
-  return out;
+  // A call prints the count that carries it; no lean prints what it has to go on.
+  return { value: lean.word, hue: CALL_HUE[lean.call], label: "Session type", sub: leanLine(lean), title: `${nightWords(lean)}\n${leanTitle(lean)}` };
 }
 
-const untilWord = (r: CalendarRow, now: number | null) => (now == null || r.ts == null ? "" : `in ${inMin((r.ts - now / 1000) / 60)}`);
-
-/* -------------------------------------------------------------------------- */
-/* Overview                                                                    */
-/* -------------------------------------------------------------------------- */
-
-function Overview({ data, onPick }: { data: TerminalData; onPick: (v: FutView) => void }) {
-  const now = useNow(30_000);
-  const st = data.status ?? {};
-  const age = (k: string) => ageStep((data.age_min ?? {})[k]) ?? undefined;
-  const next = useMemo(() => upcoming(data.calendar ?? NONE, now), [data.calendar, now]);
-  // The book is the contracts alone: the feed's group also holds each one's ETF (QQQ,
-  // SPY, GLD, IWM), and those are the stocks pages' (lib/futures.isFuture).
-  const contracts = useMemo(() => (data.quotes ?? NONE).filter(isFuture), [data.quotes]);
+/** Every condition that holds today, with its count over the record, and the base rate. */
+function SessionPanel({ book, st, rec }: { book: FutBook; st: DayTypeBook; rec: DayType["record"][string] | undefined }) {
+  const { lean, label } = st;
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      {/* `qt-books`: under Luminous, where the five sit in one row, they are columns of one
-          card and the band over the page is its top (globals.css). */}
-      <div className="qt-tiles qt-books grid shrink-0 grid-cols-1 gap-px border-b border-ring bg-ring sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-        {FUT_BOOKS.map((b) => (
-          <BookCard key={b} book={b} data={data} next={next.find((r) => booksOf(r).includes(b)) ?? null} now={now} onPick={() => onPick(b)} />
+    <div className="w-[min(520px,calc(100vw-24px))] px-4 py-3 text-ink">
+      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="qt-cap text-[10.5px] text-ink-3">Session type</span>
+        <span className="fig text-[16px] leading-none">{book}</span>
+        <span className={cn("text-[13px] font-semibold", CALL_HUE[lean.call])}>{label ? `Today: ${labelWords(label)}` : lean.word}</span>
+      </p>
+      <p className="fig mt-1.5 text-[11px] text-ink-3">{nightWords(lean)}</p>
+      <p className="mt-2 text-[12px] leading-[1.5] text-ink-2">{lean.why}</p>
+      <ul className="mt-2.5 space-y-1 border-t border-ring/40 pt-2 text-[11.5px]">
+        {lean.holds.map((h) => (
+          <li key={h.condition} className="flex items-baseline gap-2">
+            <span className={cn("min-w-0 flex-1", h.vote ? "text-ink" : "text-ink-2")}>
+              {h.condition}
+              {h.shown && <span className="fig text-ink-3"> · {h.shown}</span>}
+            </span>
+            <span className="fig shrink-0 text-ink-2">
+              {h.trend} trend in {h.n} · {h.range} range
+            </span>
+            <span className="qt-cap w-[80px] shrink-0 text-right text-[9.5px] text-ink-3">{voteWord(h.vote)}</span>
+          </li>
         ))}
-      </div>
-      <div className="qt-board grid grid-cols-1 gap-2 p-2 xl:grid-cols-3">
-        <div className="qt-col flex min-w-0 flex-col gap-2">
-          <MovesToday rows={oneEach(next.filter((r) => booksOf(r).length > 0)).slice(0, 10)} now={now} />
-          <FuturesNews wire={data.wire ?? NONE} now={now} />
-        </div>
-        <div className="qt-col flex min-w-0 flex-col gap-2">
-          <SessionType dt={data.daytype} />
-          <MVol vol={data.volterm} ageMin={age("quotes")} implied putcall={data.putcall} />
-        </div>
-        <div className="qt-col flex min-w-0 flex-col gap-2">
-          <MBoard title="The book" quotes={contracts} groups={["core"]} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
-          {data.clock && <Sessions clock={data.clock} />}
-        </div>
-      </div>
+        {lean.holds.length === 0 && <li className="text-ink-3">No condition in the record holds today.</li>}
+      </ul>
+      <p className="fig mt-2 border-t border-ring/40 pt-2 text-[10.5px] leading-[1.45] text-ink-3">
+        every session: {lean.base.trend} trend days in {lean.base.n}, {lean.base.range} range
+        {rec ? ` · ${rec.backfill} from the backfill, ${rec.live} live` : ""}
+      </p>
+      <p className="mt-1 text-[11px] leading-[1.45] text-ink-3">
+        A condition votes only with fifty sessions behind it and a rate well off every session&apos;s; a trend rate under half of
+        every session&apos;s votes against a trend call, and the two together read Mixed record. Counts over the record, not
+        probabilities.
+      </p>
     </div>
   );
 }
 
-/** The books the record is kept for (daytype.BOOKS); silver and crude have none yet. */
-const DAY_BOOKS: FutBook[] = ["NQ", "ES", "GC"];
-
 /**
- * Session type — will New York trend or range (daytype.py). One row a book: the
- * call, the night so far and yesterday's shape, and under it the conditions that
- * carry the call with their counts; a click opens every condition that holds today
- * with its count over the record, and the base rate. After the close the row says
- * what the day was. Counts, never probabilities — the server's own words.
+ * Levels: the day's state against the chart's four, in the Stocks chips' words
+ * (lib/outsideDay dayState), and under it the levels that make it so. An outside day and
+ * a break through the previous day's level wear the way they went, green up and pink
+ * down: that is the contract's own move. Inside is ink.
  */
-function SessionType({ dt }: { dt: DayType | undefined }) {
-  const [open, setOpen] = useState<string | null>(null);
-  const rec = dt?.record?.NQ;
-  const sub = rec?.n ? `will New York trend or range · ${rec.n.toLocaleString()} sessions since ${rec.from ?? "?"}` : "will New York trend or range";
-  return (
-    <Module title="Session type" sub={sub} bodyClassName="px-0 py-0" error={dt?.error ?? null}>
-      <ul>
-        {DAY_BOOKS.map((b) => {
-          const e = dt?.books?.[b] ?? null;
-          const isOpen = open === b;
-          const r = dt?.record?.[b];
-          return (
-            <li key={b} className="border-b border-ring/60 last:border-b-0">
-              <button
-                type="button"
-                onClick={() => setOpen(isOpen ? null : b)}
-                aria-expanded={isOpen}
-                title={e ? leanTitle(e.lean) : "The ranges or the daily bars have not arrived for this book"}
-                className="hit flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-surface"
-              >
-                <AssetIcon id={b} size={18} className="mt-px shrink-0 text-ink-2" />
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline gap-2">
-                    <span className="text-[13px] font-semibold text-ink">{b}</span>
-                    {e ? (
-                      <span className={cn("min-w-0 truncate text-[12.5px] font-semibold", CALL_HUE[e.lean.call])}>{e.label ? `Today: ${labelWords(e.label)}` : e.lean.word}</span>
-                    ) : (
-                      <span className="text-[12.5px] text-ink-3">Not read yet</span>
-                    )}
-                    {e && <span className="fig ml-auto shrink-0 text-[10.5px] text-ink-3">{nightWords(e.lean)}</span>}
-                  </span>
-                  {e && <span className="mt-0.5 block truncate text-[11.5px] text-ink-2">{e.lean.why}</span>}
-                </span>
-              </button>
-              {isOpen && e && (
-                <div className="border-t border-ring/40 px-3 py-2 text-[11.5px]">
-                  <ul className="space-y-0.5">
-                    {e.lean.holds.map((h) => (
-                      <li key={h.condition} className="flex items-baseline gap-2">
-                        <span className={cn("min-w-0 flex-1", h.vote ? "text-ink" : "text-ink-2")}>
-                          {h.condition}
-                          {h.shown && <span className="fig text-ink-3"> · {h.shown}</span>}
-                        </span>
-                        <span className="fig shrink-0 text-ink-2">
-                          {h.trend} trend in {h.n} · {h.range} range
-                        </span>
-                        <span className="qt-cap w-[64px] shrink-0 text-right text-[9.5px] text-ink-3">{h.vote ? `votes ${h.vote}` : ""}</span>
-                      </li>
-                    ))}
-                    {e.lean.holds.length === 0 && <li className="text-ink-3">No condition in the record holds today.</li>}
-                  </ul>
-                  <p className="fig mt-1.5 border-t border-ring/40 pt-1.5 text-[10.5px] text-ink-3">
-                    every session: {e.lean.base.trend} trend days in {e.lean.base.n}, {e.lean.base.range} range
-                    {r ? ` · ${r.backfill} from the backfill, ${r.live} live` : ""} · counts, not probabilities
-                  </p>
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </Module>
-  );
-}
-
-function Line({ label, children, hue, title }: { label: string; children: React.ReactNode; hue?: string; title?: string }) {
-  return (
-    <p className="flex items-baseline gap-2 text-[12px] leading-[1.35]" title={title}>
-      <span className="qt-cap w-[52px] shrink-0 text-[9.5px] text-ink-3">{label}</span>
-      <span className={cn("min-w-0 truncate", hue ?? "text-ink-2")}>{children}</span>
-    </p>
-  );
-}
-
-/** One contract on the overview: the whole read in a card, a click opens its view. */
-function BookCard({ book, data, next, now, onPick }: { book: FutBook; data: TerminalData; next: CalendarRow | null; now: number | null; onPick: () => void }) {
-  const r = read(data, book);
-  const drv = SCORED.has(book) ? data.drivers?.books?.[book] : undefined;
-  const gw = gammaWord(r);
-  const imp = r.implied;
-  const st = data.daytype?.books?.[book] ?? null;
-  return (
-    <button type="button" onClick={onPick} title={`Open ${FUT_NAME[book]}`} className="hit flex min-w-0 flex-col gap-1.5 bg-bg px-4 py-3 text-left hover:bg-surface">
-      <p className="flex items-center gap-2">
-        <AssetIcon id={book} size={20} className="block shrink-0 text-ink-2" />
-        <span className="text-[15px] leading-none font-semibold text-ink">{book}</span>
-        <span className="min-w-0 truncate text-[11.5px] text-ink-3">{FUT_NAME[book]}</span>
-      </p>
-      <p className="flex items-baseline gap-2">
-        <Tick value={num(r.last, r.dp)} className="fig text-[19px] leading-none text-ink" />
-        <Tick value={pct(r.q?.pct)} className={cn("fig text-[12.5px]", dir(r.q?.pct))} />
-      </p>
-      <div className="mt-0.5 flex flex-col gap-[3px]">
-        <Line label="Bias" hue={drv ? voteTone(drv.bias) : "text-ink-3"} title={drv ? liveLine(drv) : "Silver and crude have no driver-board score yet"}>
-          {drv ? (
-            <>
-              {biasWord(drv.bias)} <span className="fig">{scoreText(drv.score)}</span> <span className={cn("qt-cap text-[9.5px]", gradeTone(drv))}>{drv.grade}</span>
-            </>
-          ) : (
-            "Not scored yet"
-          )}
-        </Line>
-        <Line label="Gamma" hue={gw.hue} title={gw.line}>
-          {gw.word}
-          {r.gex && r.flip != null && r.last != null && <span className="fig text-ink-3"> · {r.last >= r.flip ? "above" : "below"} flip</span>}
-        </Line>
-        <Line label="Implied" title={imp ? `${imp.vol_key} ${num(imp.vol, 1)} · the one-sigma day` : undefined}>
-          {imp?.sigma != null ? (
-            <span className="fig">
-              ±{num(imp.sigma, r.dp)}
-              {imp.used != null && (
-                <span className={imp.fuel === "stretched" ? "text-flip-fig" : "text-ink-3"}> · {Math.round(imp.used * 100)}% used</span>
-              )}
-            </span>
-          ) : (
-            "—"
-          )}
-        </Line>
-        <Line label="Session" hue={st ? CALL_HUE[st.lean.call] : "text-ink-3"} title={st ? leanTitle(st.lean) : "No session-type record for this book yet"}>
-          {st ? (
-            <>
-              {st.label ? `Today: ${labelWords(st.label)}` : st.lean.word}
-              {!st.label && st.lean.night.atr != null && (
-                <span className="fig text-ink-3">
-                  {" "}
-                  · night {st.lean.night.atr.toFixed(2)} ATR{st.lean.night.done === false ? " so far" : ""}
-                </span>
-              )}
-            </>
-          ) : (
-            "No record yet"
-          )}
-        </Line>
-        <Line label="Above" hue="text-call-fig">
-          {r.up ? (
-            <span className="fig">
-              {num(r.up.price, r.dp)} <span className="text-ink-3"><LevelName label={r.up.label} /></span>
-            </span>
-          ) : (
-            "—"
-          )}
-        </Line>
-        <Line label="Below" hue="text-put-fig">
-          {r.down ? (
-            <span className="fig">
-              {num(r.down.price, r.dp)} <span className="text-ink-3"><LevelName label={r.down.label} /></span>
-            </span>
-          ) : (
-            "—"
-          )}
-        </Line>
-        <Line label="Next" hue={next ? "text-ink-2" : "text-ink-3"}>
-          {next ? (
-            <>
-              <span className="fig text-ink">{untilWord(next, now)}</span> {placedName(next.event, next.country)}
-            </>
-          ) : (
-            "Nothing scheduled"
-          )}
-        </Line>
-      </div>
-    </button>
-  );
-}
-
-function MovesToday({ rows, now }: { rows: Array<{ row: CalendarRow; more: number }>; now: number | null }) {
-  return (
-    <Module title="What moves them" sub="releases scored 3+, and the books each reaches" bodyClassName="px-0 py-0">
-      {rows.length === 0 ? (
-        <p className="px-3 py-4 text-[12px] text-ink-3">Nothing scheduled that reaches these books.</p>
-      ) : (
-        <ul className="py-1">
-          {rows.map(({ row: r, more }, i) => (
-            <li key={`${r.event}-${r.ts}-${i}`} className="flex items-center gap-2 px-3 py-[5px]">
-              <span className="fig w-[124px] shrink-0 text-[11px] whitespace-nowrap text-ink-3">
-                {r.et ?? "—"} <span className="text-ink-4">{untilWord(r, now)}</span>
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[12px] text-ink">
-                {placedName(r.event, r.country)}
-                {more > 0 && <span className="fig text-ink-3"> +{more}</span>}
-              </span>
-              <span className="flex shrink-0 items-center gap-1">
-                {booksOf(r).map((b) => (
-                  <span key={b} title={FUT_NAME[b]}>
-                    <AssetIcon id={b} size={14} className="block text-ink-3" />
-                  </span>
-                ))}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Module>
-  );
+function levelsCard(lv: ChartLevels | null, last: number | null, day: { high: number | null; low: number | null } | null, dp: number) {
+  const st = dayState(last, lv, day);
+  if (!st || !lv || lv.pdh == null || lv.pdl == null) return { value: "—", hue: "text-ink-3", sub: "No levels on the chart yet", title: "The chart's PDH, PDL, PMH and PML, once the day has them" };
+  const p = (v: number) => num(v, dp);
+  const span = `between PDL ${p(lv.pdl)} and PDH ${p(lv.pdh)}`;
+  let value: React.ReactNode;
+  let hue = "text-ink";
+  let sub: string;
+  if (st.kind === "outside" || st.kind === "through") {
+    const up = st.dir === "up";
+    hue = up ? "text-call-fig" : "text-put-fig";
+    const day1 = up ? `above PDH ${p(lv.pdh)}` : `below PDL ${p(lv.pdl)}`;
+    const pm = up ? lv.pmh : lv.pml;
+    if (st.kind === "outside") {
+      value = (
+        <>
+          Outside Day <Arrow up={up} />
+        </>
+      );
+      // Before 09:30 the previous day's level alone decides (lib/outsideDay).
+      sub = !lv.pm_done ? `${day1} · pre-market still forming` : pm != null ? `${day1} and ${up ? "PMH" : "PML"} ${p(pm)}` : day1;
+    } else {
+      value = (
+        <>
+          {up ? "Through PDH" : "Through PDL"} <Arrow up={up} />
+        </>
+      );
+      sub = pm != null ? `${day1} · ${up ? "under PMH" : "over PML"} ${p(pm)}` : `${day1} · no pre-market range`;
+    }
+  } else if (st.kind === "inside") {
+    value = "Inside Day";
+    sub = span;
+  } else if (st.kind === "back") {
+    value = "Back Inside";
+    sub = st.over && st.under ? `${span} · traded through both` : st.over ? `under PDH ${p(lv.pdh)} · traded above it earlier` : `over PDL ${p(lv.pdl)} · traded below it earlier`;
+  } else {
+    value = "Inside the range";
+    sub = span;
+  }
+  const title = [
+    ...levelsFrom(lv, last).map((l) => `${l.key} ${p(l.price)}  ${l.dist >= 0 ? "+" : "−"}${p(Math.abs(l.dist))}`),
+    `The chart's own levels, measured from the last print${last != null ? ` ${p(last)}` : ""}.`,
+    "Outside Day: above both the previous day's high and the pre-market high, or below both lows. Through: beyond the previous day's level alone. Inside Day: the whole day so far inside the previous day's range. Back Inside: between them again after trading beyond one.",
+  ].join("\n");
+  return { value, hue, sub, title };
 }
 
 /**
- * The wire's stories that reach a book, or on the Overview any of them (lib/futNews):
- * the Fed, US data and yields for the indices and the metals, oil and the Gulf for
- * crude, nothing from another country's central bank. In a book's view it stands
- * where the ladder stood (owner, 2026-11-10: "instead of Levels section maybe have a
- * news feed with important things that affect that, eg if nq then things that have
- * high impact on nq"); the ladder's rows are drawn on the chart, and Hermes still
- * reads the ladder itself. Two lines a story: the headline, then why it is here,
- * who filed it and how long ago, and on the Overview the books it reaches.
+ * The wire's stories that reach a book (lib/futNews): the Fed, US data and yields for
+ * the indices and the metals, oil and the Gulf for crude, nothing from another
+ * country's central bank. It stands where the ladder stood (owner, 2026-11-10:
+ * "instead of Levels section maybe have a news feed with important things that affect
+ * that, eg if nq then things that have high impact on nq"); the ladder's rows are drawn
+ * on the chart, and Hermes still reads the ladder itself. Two lines a story: the
+ * headline, then why it is here, who filed it and how long ago.
  */
-function FuturesNews({ wire, now, book }: { wire: WireItem[]; now: number | null; book?: FutBook }) {
+function FuturesNews({ wire, now, book }: { wire: WireItem[]; now: number | null; book: FutBook }) {
   const rows = useMemo(() => bookStories(wire, book), [wire, book]);
   return (
-    <Module
-      title={book ? `${book} news` : "Futures news"}
-      sub={book ? `what reaches ${FUT_NAME[book]} · high and medium` : "what reaches the books · high and medium"}
-      bodyClassName="px-0 py-0"
-    >
+    <Module title={`${book} news`} sub={`what reaches ${FUT_NAME[book]} · high and medium`} bodyClassName="px-0 py-0">
       {rows.length === 0 ? (
-        <p className="px-3 py-4 text-[12px] text-ink-3">{book ? `No high or medium story reaches ${FUT_NAME[book]} right now.` : "No high or medium story reaches these books."}</p>
+        <p className="px-3 py-4 text-[12px] text-ink-3">{`No high or medium story reaches ${FUT_NAME[book]} right now.`}</p>
       ) : (
         <ul className="py-1">
-          {rows.map(({ item: w, tags, books }) => (
+          {rows.map(({ item: w, tags }) => (
             <li key={w.url}>
               <a href={w.url} target="_blank" rel="noreferrer noopener" className="hit flex flex-col gap-[3px] px-3 py-[6px]" title={w.summary || w.title}>
                 <span className="flex items-start gap-2">
@@ -499,15 +351,6 @@ function FuturesNews({ wire, now, book }: { wire: WireItem[]; now: number | null
                   <span className="fig ml-auto shrink-0 text-[10.5px] text-ink-3">
                     {w.publisher} · {now != null && w.ts != null ? inMin((now / 1000 - w.ts) / 60) : "—"}
                   </span>
-                  {!book && (
-                    <span className="flex shrink-0 items-center gap-1">
-                      {books.map((b) => (
-                        <span key={b} title={FUT_NAME[b]}>
-                          <AssetIcon id={b} size={13} className="block text-ink-3" />
-                        </span>
-                      ))}
-                    </span>
-                  )}
                 </span>
               </a>
             </li>
@@ -528,10 +371,38 @@ function BookView({ book, data }: { book: FutBook; data: TerminalData }) {
   const age = (k: string) => ageStep((data.age_min ?? {})[k]) ?? undefined;
   const r = read(data, book);
   const drv = SCORED.has(book) ? data.drivers?.books?.[book] : undefined;
+  // The bias slid out for one contract follows the page to the next: a view is keyed by
+  // its book, so this runs as one opens. Left shut when it was shut.
+  useEffect(() => {
+    const out = biasOut();
+    if (out && out !== book) openBias(book);
+  }, [book]);
   const gw = gammaWord(r);
-  const imp = r.implied;
-  const next = upcoming(data.calendar ?? NONE, now).find((x) => booksOf(x).includes(book)) ?? null;
-  const fuelHue = imp?.fuel === "stretched" ? "text-flip-fig" : imp?.fuel === "room" ? "text-call-fig" : "text-ink";
+  // One row a release, so 08:30 names the release's lead series (lib/releases).
+  const leads = useMemo(
+    () =>
+      groupReleases(data.calendar ?? NONE, (x: CalendarRow) => ({
+        event: x.event,
+        when: x.ts,
+        country: x.country,
+        score: x.score,
+        figures: [x.actual_raw, x.consensus_raw, x.previous_raw],
+      })).map((x) => x.lead),
+    [data.calendar],
+  );
+  const next = now == null ? null : nextRelease(leads, book, now / 1000);
+  const when = next ? whenWord(next, now) : null;
+  // The chart's own four levels, handed up each time it reads its bars: the card and the
+  // lines beside it are one set of prices. Held as it was while nothing has changed.
+  const [chartLevels, setChartLevels] = useState<ChartLevels | null>(null);
+  const onLevels = useCallback((l: ChartLevels | null) => {
+    const got = l ? { pdh: l.pdh, pdl: l.pdl, pmh: l.pmh, pml: l.pml, pm_done: l.pm_done } : null;
+    setChartLevels((was) => (sameLevels(was, got) ? was : got));
+  }, []);
+  // The day's own range so far: a future's quote runs its high and low from the 18:00 reopen.
+  const lv = levelsCard(chartLevels, r.last, r.q ? { high: r.q.high, low: r.q.low } : null, r.dp);
+  const dt = data.daytype?.books?.[book] ?? null;
+  const sess = sessionCard(dt);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="qt-stats flex shrink-0 flex-wrap border-b border-ring">
@@ -547,51 +418,47 @@ function BookView({ book, data }: { book: FutBook; data: TerminalData }) {
           </div>
         </div>
         {drv ? (
-          <DriverPopover book={drv} className="qt-stat flex min-w-[190px] flex-1 items-center gap-3 rounded-none border-r border-ring px-4 py-[7px] text-left">
-            <span className={cn("flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[5px] border border-ring-2 bg-surface-2", voteTone(drv.bias))}>
-              <Glyph name="tape" />
-            </span>
-            <span className="flex min-w-0 flex-col">
-              <span className={cn("fig text-[16px] leading-none whitespace-nowrap", voteTone(drv.bias))}>
-                {biasWord(drv.bias)} {scoreText(drv.score)}
-              </span>
-              <span className="qt-cap mt-[5px] text-[9.5px] leading-none text-ink-2">Bias · {drv.grade}</span>
-              <span className="mt-[3px] truncate text-[11px] leading-[1.2] text-ink-3">{liveLine(drv)}</span>
-            </span>
-          </DriverPopover>
+          // From the right since 2026-11-16, as a stock's chart is (vol/BiasDrawer); a popover until then.
+          <BiasOpener book={book} className="qt-stat flex min-w-[190px] flex-1 items-center gap-3 rounded-none border-r border-ring px-4 py-[7px] text-left">
+            {/* A SCALE WHERE THE COUNT WAS (owner, 2026-11-15: "instead of bias saying 6 of 14
+                reads or whatever, why dont we jus have a scale instead"). The contents are
+                the Stocks tape card's too (ScanWide BiasStat), so the two cannot differ.
+                The count is on the scale's hover and in the board this card opens. */}
+            <BiasStat what="Bias" side={drv.bias} score={wholeScore(drv)} grade={drv.grade} scaleTitle={liveLine(drv)} />
+          </BiasOpener>
         ) : (
-          <StatCard glyph="tape" value="—" hue="text-ink-3" label="Bias" sub="Not scored yet for silver and crude" />
+          <StatCard glyph="tape" value="—" hue="text-ink-3" label="Bias" sub="Not scored yet" />
         )}
         <StatCard glyph="pulse" value={gw.word} hue={gw.hue} label="Gamma" sub={gw.line} title="The regime says how far a move runs, not which way: positive is not bullish, negative is not bearish" />
-        <StatCard
-          glyph="arrow"
-          tint="move"
-          value={imp?.sigma != null ? `±${num(imp.sigma, r.dp)}` : "—"}
-          label="Implied day"
-          sub={imp?.lo != null && imp.hi != null ? `${num(imp.lo, r.dp)} – ${num(imp.hi, r.dp)}` : undefined}
-          title={imp ? `The one-sigma day from ${imp.vol_key}` : undefined}
-        />
-        <StatCard
-          glyph="bolt"
-          value={imp?.used != null ? `${Math.round(imp.used * 100)}%` : "—"}
-          hue={fuelHue}
-          label="Range used"
-          sub={imp?.fuel ? `${imp.fuel} · of the implied day` : undefined}
-        />
-        <StatCard
-          glyph="star"
-          tint="news"
-          value={imp?.vol != null ? `${imp.vol_key} ${num(imp.vol, 1)}` : "—"}
-          hue="text-desk-markets"
-          label="Implied vol"
-          sub={imp?.iv_rv != null ? `IV/RV ${num(imp.iv_rv, 2)}${imp.premium ? ` · ${imp.premium}` : ""}` : undefined}
-        />
+        {/* SESSION TYPE AND LEVELS, WHERE DAY RANGE AND NEAREST LEVELS STOOD (owner,
+            2026-11-15: "is there anything mor euseful we can replace day range and nearest
+            levels with?", then "yes do it"). Each of those was a second copy of something on
+            this page: the range used is the Session ranges card's Fuel line, the distance
+            to a level is on the chart. These two are on no other card (lib/futCards). */}
+        {sess && dt ? (
+          <StatCard
+            glyph="session"
+            tint="move"
+            value={sess.value}
+            hue={sess.hue}
+            label={sess.label}
+            sub={sess.sub}
+            title={sess.title}
+            pop={{ label: `${book} session type: every condition that holds today`, panel: <SessionPanel book={book} st={dt} rec={data.daytype?.record?.[book]} /> }}
+          />
+        ) : (
+          <StatCard glyph="session" value="—" hue="text-ink-3" label="Session type" sub={DAY_TYPED.has(book) ? "Not read yet" : "No record kept yet for silver and crude"} />
+        )}
+        <StatCard glyph="levels" value={lv.value} hue={lv.hue} label="Levels" sub={lv.sub} title={lv.title} />
         <StatCard
           glyph="clock"
-          value={next ? untilWord(next, now) : "—"}
+          value={when ? when.value : "—"}
           hue={next && next.ts != null && now != null && next.ts - now / 1000 <= 1800 ? "text-flip-fig" : "text-ink"}
           label="Next release"
-          sub={next ? next.event : "Nothing scheduled that reaches it"}
+          // The country first: "GDP Price Index y/y" with none on it was Japan's. The hour
+          // rides behind a countdown; past a day the figure is the day and the hour itself.
+          sub={next ? [countryShort(next.country), next.event, when?.soon && next.et ? `${next.et} ET` : null].filter(Boolean).join(" · ") : "No US release scored 4 or more ahead"}
+          title={next ? `${next.country} · ${next.event}${next.et ? ` · ${next.date} ${next.et} ET` : ""}\nThe next US release scored 4 or more that reaches ${FUT_NAME[book]}, or one named for it.` : undefined}
         />
       </div>
       {/*
@@ -620,7 +487,7 @@ function BookView({ book, data }: { book: FutBook; data: TerminalData }) {
         <section aria-label={`${book} chart`} className="qt-card order-first flex min-h-[460px] min-w-0 flex-col overflow-hidden rounded-[6px] border border-ring xl:order-none xl:min-h-0">
           {/* Live from the tracking ETF between 04:00 and 17:00 ET (server futfill.py, 2026-11-14):
               CME's own bars run ten minutes behind. */}
-          <ScanChart key={book} sym={book} state={0} barsUrl={`/api/futures/bars/${book}`} tickUrl={`/api/futures/tick/${book}`} store="fut" />
+          <ScanChart key={book} sym={book} state={0} barsUrl={`/api/futures/bars/${book}`} tickUrl={`/api/futures/tick/${book}`} store="fut" onLevels={onLevels} />
         </section>
       </div>
     </div>

@@ -24,6 +24,8 @@ import { Module } from "@/components/ui/Module";
 import { PastList } from "@/components/panels/PastList";
 import { HelmLoader } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
+import { BiasScale } from "@/components/ui/BiasScale";
+import { wholeScore } from "@/lib/biasScale";
 import { Failed, GenerateButton, NoKey, Offline, Working } from "@/components/panels/Report";
 import { useQuiet } from "@/components/state/UiMode";
 import { ConvictionBar, SplitBar, biasWord, gradeText, readFigure, leanText, readText, sideText, stateText, voteGlyph, votesTip } from "@/components/market/shared";
@@ -105,19 +107,24 @@ const SESSION: Record<PlanFacts["session"], string> = {
   closed: "market closed",
 };
 
-export function StockPlan({
+/**
+ * The market overview's card: the stocks half of a report on the indexes for New York
+ * (components/panels/Report places it under the index call, since 2026-11-15; until
+ * then it was the Stocks tab's Market view, with its history beside it).
+ *
+ * It is written by itself at 09:00 ET on a trading day, with the index call's Generate,
+ * and again on its own "Write again". `title` is what the card is called where it stands.
+ */
+export function OverviewCard({
   feed,
   busy,
-  viewing,
   generate,
-  open,
-  discard,
-  discardMany,
-  discardAll,
   retry,
   poll,
   startedAt,
-}: PlanController) {
+  title = "Market",
+  className = "xl:grow",
+}: PlanController & { title?: string; className?: string }) {
   const [showDigest, setShowDigest] = useState(false);
   const plan = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
@@ -136,12 +143,8 @@ export function StockPlan({
   }, [busy, poll]);
 
   return (
-    <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
-      {/* Shrinkable only side by side, and the card runs to the foot of its column
-          whatever it holds: the brief's arrangement, and its reasons (panels/Report). */}
-      <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
         <Module
-          title="Market"
+          title={title}
           large
           sub={
             plan
@@ -150,7 +153,7 @@ export function StockPlan({
                   .join(" · ")
               : "the market before the open"
           }
-          className="xl:grow"
+          className={className}
           bodyClassName={cn("px-0 py-0", waiting && "flex flex-col justify-center")}
           error={
             feed?.offline && enabled
@@ -206,9 +209,13 @@ export function StockPlan({
             <Failed error="The stored note has no body." raw={plan.raw} noun={overview ? "overview" : "plan"} />
           )}
         </Module>
-      </div>
+  );
+}
 
-      <div className="flex min-w-0 flex-col gap-2 xl:min-h-0 xl:overflow-y-auto">
+/** The overviews kept, newest first: the list beside the card. */
+export function OverviewHistory({ feed, viewing, open, discard, discardMany, discardAll }: PlanController) {
+  const plan = feed?.latest ?? null;
+  return (
         <PastList
           title="Past overviews"
           noun="overview"
@@ -232,8 +239,6 @@ export function StockPlan({
             </>
           )}
         />
-      </div>
-    </div>
   );
 }
 
@@ -732,6 +737,7 @@ const CONFIRM: Record<string, string> = {
   confirm: "SPY up, VIX down — confirmed",
   divergence: "SPY up with VIX up — a hedged rally",
   risk_off: "SPY down, VIX up — risk-off",
+  divergence_down: "SPY down with VIX down — selling nobody is hedging",
   chop: "SPY and VIX both flat",
 };
 
@@ -894,9 +900,23 @@ function TapeCount({ c }: { c: Conviction }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="qt-cap text-[10.5px] text-ink-3">Tape</span>
         <span className={cn("text-[14px] font-semibold", sideText(c.bias))}>{biasWord(c.bias)}</span>
-        <span className={cn("fig text-[13px] font-semibold", sideText(c.bias))}>{readFigure(c)}</span>
-        <span className={cn("qt-cap text-[10.5px]", gradeText(c))}>{c.grade}</span>
-        <ConvictionBar c={c} className="w-[160px] self-center" />
+        {/* The scale every bias card draws (ui/BiasScale); a plan stored before there was a
+            score (2026-11-05) keeps its count and its split bar, as it was written. */}
+        {c.score == null ? (
+          <>
+            <span className={cn("fig text-[13px] font-semibold", sideText(c.bias))}>{readFigure(c)}</span>
+            <span className={cn("qt-cap text-[10.5px]", gradeText(c))}>{c.grade}</span>
+            <ConvictionBar c={c} className="w-[160px] self-center" />
+          </>
+        ) : (
+          <>
+            {/* A plan stored before 2026-11-15 was scored over the live reads alone; it is
+                drawn where the whole-weight rule puts it (lib/biasScale wholeScore). */}
+            <span className={cn("fig text-[13px] font-semibold", sideText(c.bias))}>{readFigure(c)}</span>
+            <span className={cn("qt-cap text-[10.5px]", gradeText(c))}>{c.grade}</span>
+            <BiasScale score={wholeScore(c)} side={c.bias} ends className="w-[190px] self-center" />
+          </>
+        )}
         <span className="ml-auto text-[12px] text-ink-3">
           every plan capped at <span className="fig text-ink-2">{c.max_conviction}</span>
           {c.bias && <>, one against the tape at <span className="fig text-ink-2">3</span></>}

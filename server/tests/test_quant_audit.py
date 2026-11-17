@@ -39,65 +39,77 @@ def pts(side: str, title: str, sym: str, names: list[str], tape: float | None = 
 
 
 @pytest.mark.parametrize(
-    ("sym", "names", "title", "tag", "long_pts"),
+    ("sym", "names", "title", "tag", "long_pts", "with_long"),
     [
+        # `long_pts` is what a long earns, `with_long` whether the story reads with it
+        # (None: it reads no way). A story against the long cost -10 / -6 until
+        # 2026-11-14; it earns its grade now and the row is flagged (W_CATALYST).
         # The name's own stated move is the market's verdict on the event's words.
-        ("PLTR", ["Palantir"], "Palantir Stock Falls Despite Earnings Beat", "Earnings", -10),
-        ("INTC", ["Intel"], "Intel Jumps After AMD Misses Estimates", "Earnings", 20),
-        ("NVDA", ["Nvidia"], "Nvidia Revenue Soars 62% on AI Demand", "Move", 20),
+        ("PLTR", ["Palantir"], "Palantir Stock Falls Despite Earnings Beat", "Earnings", 20,
+         False),
+        ("INTC", ["Intel"], "Intel Jumps After AMD Misses Estimates", "Earnings", 20, True),
+        ("NVDA", ["Nvidia"], "Nvidia Revenue Soars 62% on AI Demand", "Move", 20, True),
         # A report with talk after it is the report.
         ("NVDA", ["Nvidia"], "Nvidia Beats Estimates, Here's What Wall Street Thinks",
-         "Earnings", 20),
+         "Earnings", 20, True),
         ("PLTR", ["Palantir"], "Palantir Soars 20% After Earnings Beat. Should You Buy Now?",
-         "Earnings", 20),
+         "Earnings", 20, True),
         # Equity raised, however it is written.
         ("ACME", ["Acme"], "Acme Announces $300 Million Public Offering of Common Stock",
-         "Offering", -10),
+         "Offering", 20, False),
         ("ACME", ["Acme"],
          "Acme Announces Proposed Offering of $500 Million Convertible Senior Notes",
-         "Offering", -10),
+         "Offering", 20, False),
         # Guidance, however it is written.
-        ("ACME", ["Acme"], "Acme Raises 2026 Revenue Forecast", "Guidance", 20),
-        ("ACME", ["Acme"], "Acme Cuts Annual Sales Forecast", "Guidance", -10),
-        ("ACME", ["Acme"], "Acme Lowers Full-Year Outlook", "Guidance", -10),
+        ("ACME", ["Acme"], "Acme Raises 2026 Revenue Forecast", "Guidance", 20, True),
+        ("ACME", ["Acme"], "Acme Cuts Annual Sales Forecast", "Guidance", 20, False),
+        ("ACME", ["Acme"], "Acme Lowers Full-Year Outlook", "Guidance", 20, False),
         # The guidance came first; the notes followed it.
         ("LLY", ["Eli Lilly", "Lilly"], "Lilly Raises Guidance; Analysts Raise Price Targets",
-         "Guidance", 20),
+         "Guidance", 20, True),
         # A buyer has no direction from the words; its target does.
-        ("MRK", ["Merck"], "Merck to Buy Verona Pharma for $10 Billion", "Deal", 0),
-        ("VRNA", ["Verona"], "Merck to Acquire Verona Pharma for $107 a Share", "Deal", 20),
+        ("MRK", ["Merck"], "Merck to Buy Verona Pharma for $10 Billion", "Deal", 0, None),
+        ("VRNA", ["Verona"], "Merck to Acquire Verona Pharma for $107 a Share", "Deal", 20,
+         True),
         ("ITCI", ["Intra-Cellular"],
-         "Johnson & Johnson to Acquire Intra-Cellular for $14.6 Billion", "Deal", 20),
-        ("TSLA", ["Tesla"], "Tesla Recalls 2 Million Vehicles Over Autopilot", "Legal", -10),
-        ("ACME", ["Acme"], "Acme Phase 3 Trial Meets Primary Endpoint", "FDA", 20),
-        ("ACME", ["Acme"], "Acme Announces $5 Billion Share Buyback", "Buyback", 12),
-        ("ACME", ["Acme"], "Acme Shares Jump on S&P 500 Inclusion", "Move", 20),
-        ("ACME", ["Acme"], "Acme Set to Join S&P 500", "Index", 20),
-        ("ACME", ["Acme"], "Acme CEO Steps Down Effective Immediately", "Exec", -6),
-        ("ACME", ["Acme"], "Hindenburg Discloses Short Position in Acme", "Short", -10),
-        ("MU", ["Micron"], "Bank of America Securities Upgrades Micron to Buy", "Analyst", 12),
+         "Johnson & Johnson to Acquire Intra-Cellular for $14.6 Billion", "Deal", 20, True),
+        ("TSLA", ["Tesla"], "Tesla Recalls 2 Million Vehicles Over Autopilot", "Legal", 20,
+         False),
+        ("ACME", ["Acme"], "Acme Phase 3 Trial Meets Primary Endpoint", "FDA", 20, True),
+        ("ACME", ["Acme"], "Acme Announces $5 Billion Share Buyback", "Buyback", 12, True),
+        ("ACME", ["Acme"], "Acme Shares Jump on S&P 500 Inclusion", "Move", 20, True),
+        ("ACME", ["Acme"], "Acme Set to Join S&P 500", "Index", 20, True),
+        ("ACME", ["Acme"], "Acme CEO Steps Down Effective Immediately", "Exec", 12, False),
+        ("ACME", ["Acme"], "Hindenburg Discloses Short Position in Acme", "Short", 20, False),
+        ("MU", ["Micron"], "Bank of America Securities Upgrades Micron to Buy", "Analyst", 12,
+         True),
         # A press release's figures are not a round-up of companies.
         ("ACME", ["Acme"], "Acme Corp. Reports Third Quarter 2026 Results: Revenue Up 20%, "
-         "EPS $1.05, Raises Full-Year Guidance", "Guidance", 20),
+         "EPS $1.05, Raises Full-Year Guidance", "Guidance", 20, True),
         # Not a price move.
-        ("INTC", ["Intel"], "Intel Drops Plans for Ohio Fab", "News", 0),
+        ("INTC", ["Intel"], "Intel Drops Plans for Ohio Fab", "News", 0, None),
         # What was right stays right.
-        ("ACME", ["Acme"], "Acme Beats Estimates and Raises Guidance", "Guidance", 20),
-        ("MU", ["Micron"], "Micron Upgraded to Buy at Morgan Stanley", "Analyst", 12),
-        ("ACME", ["Acme"], "Acme Plunges 18% After Guidance Cut", "Guidance", -10),
+        ("ACME", ["Acme"], "Acme Beats Estimates and Raises Guidance", "Guidance", 20, True),
+        ("MU", ["Micron"], "Micron Upgraded to Buy at Morgan Stanley", "Analyst", 12, True),
+        ("ACME", ["Acme"], "Acme Plunges 18% After Guidance Cut", "Guidance", 20, False),
     ],
 )
 def test_standard_headlines_grade_and_point_the_right_way(
-        sym: str, names: list[str], title: str, tag: str, long_pts: int) -> None:
+        sym: str, names: list[str], title: str, tag: str, long_pts: int,
+        with_long: bool | None) -> None:
     assert catalysts.grade(title).tag == tag
     assert pts("long", title, sym, names) == long_pts
+    got = scanscore.catalyst_read("long", None, [_h(title)], None, sym=sym, names=names)
+    assert (got["item"] or {}).get("with") is with_long
+    # The flag is raised exactly where the words read against the long.
+    assert bool(got["reads_against"]) is (with_long is False)
 
 
 def test_a_routine_dividend_is_noise_and_a_changed_one_is_news() -> None:
     assert catalysts.grade("Acme Declares Quarterly Dividend").tier == catalysts.NOISE
     assert catalysts.grade("Acme Declares Special Dividend of $2 a Share").tag == "Dividend"
     assert catalysts.grade("Acme Suspends Dividend").tier == catalysts.NOTABLE
-    assert pts("long", "Acme Suspends Dividend", "ACME", ["Acme"]) == -6
+    assert pts("long", "Acme Suspends Dividend", "ACME", ["Acme"]) == 12
 
 
 def test_another_company_named_first_sets_no_direction() -> None:
@@ -109,18 +121,23 @@ def test_another_company_named_first_sets_no_direction() -> None:
 
 def test_an_analysts_action_after_the_joiner_still_counts() -> None:
     t = "Bernstein maintains Home Depot at Market Perform, raises price target to $357"
-    assert pts("short", t, "HD", ["Home Depot"]) == -3
+    r = scanscore.catalyst_read("short", None, [_h(t)], None, sym="HD", names=["Home Depot"])
+    assert r["pts"] == 3 and r["item"]["dir"] == "bull" and r["reads_against"]
 
 
 # ---- the tape has the last word -------------------------------------------------------
 
 
-def test_words_the_tape_contradicts_are_set_aside() -> None:
+def test_words_the_tape_contradicts_are_overruled_and_the_story_still_pays() -> None:
     t = "Acme Beats Estimates"
     assert pts("long", t, "ACME", ["Acme"], tape=1.0) == 20
     # Down a full ATR against SPY on a "beat": the market has read it the other way.
     r = scanscore.catalyst_read("long", None, [_h(t)], None, sym="ACME", names=["Acme"], tape=-1.0)
-    assert r["pts"] == 0 and "set aside, the tape disagrees" in r["note"]
+    # It was set aside, earning nothing, until 2026-11-14: the story is still the
+    # name's news, so it pays; its words read no way, so nothing is flagged.
+    assert r["pts"] == 20 and "its words overruled by the tape" in r["note"]
+    assert r["item"]["dir"] is None and r["item"]["src"] == "overruled"
+    assert r["reads_against"] is None and r["set_aside"] == 1
     # Under TAPE_CLEAR the tape has not spoken and the words stand.
     assert pts("long", t, "ACME", ["Acme"], tape=-0.2) == 20
 
@@ -128,7 +145,10 @@ def test_words_the_tape_contradicts_are_set_aside() -> None:
 def test_a_story_with_no_direction_takes_the_tapes() -> None:
     t = "Acme Reports Third Quarter Results"
     assert pts("long", t, "ACME", ["Acme"], tape=0.8) == 20
-    assert pts("short", t, "ACME", ["Acme"], tape=0.8) == -10
+    # Under a short it pays as well, and the row is told the tape runs the other way.
+    short = scanscore.catalyst_read("short", None, [_h(t)], None, sym="ACME", names=["Acme"],
+                                    tape=0.8)
+    assert short["pts"] == 20 and "its direction from the tape" in short["reads_against"]
     r = scanscore.catalyst_read("long", None, [_h(t)], None, sym="ACME", names=["Acme"], tape=0.8)
     assert "its direction from the tape" in r["note"]
     # A minor story does not borrow the tape, and a quiet tape lends nothing.
@@ -138,7 +158,9 @@ def test_a_story_with_no_direction_takes_the_tapes() -> None:
 def test_the_report_surprise_is_checked_against_the_tape_too() -> None:
     beat = {"days": -1, "when": "after", "surprise_pct": 4.0}
     assert scanscore.catalyst_read("long", beat, [], None, tape=0.3)["pts"] == 20
-    assert scanscore.catalyst_read("long", beat, [], None, tape=-1.2)["pts"] == 0
+    down = scanscore.catalyst_read("long", beat, [], None, tape=-1.2)
+    assert down["pts"] == 20 and down["item"]["dir"] is None and down["reads_against"] is None
+    assert "overruled by the tape" in down["note"]
 
 
 # ---- the news day ---------------------------------------------------------------------

@@ -75,8 +75,10 @@ def test_the_evening_wrap_is_not_the_next_mornings_catalyst() -> None:
     flat = read(0.3)
     assert flat["pts"] == 0 and flat["earlier"] == 1
     assert "set aside, an earlier move" in flat["note"] and "says +5.9%" in flat["note"]
-    # Thursday afternoon, AMD up 5.4%: today's story, against the short.
-    assert read(5.4)["pts"] == -10
+    # Thursday afternoon, AMD up 5.4%: today's story. It reads against the short, which
+    # cost ten until 2026-11-14 and is a flag on the row since (scanscore.W_CATALYST).
+    up = read(5.4)
+    assert up["pts"] == 20 and up["reads_against"] and up["item"]["with"] is False
     # Palantir down 2% today on a "falls 19%" headline: no longer ten against the long.
     pltr = scanscore.catalyst_read("long", None, [_h(PLTR)], None, sym="PLTR",
                                    names=["Palantir"], day_move=-2.0)

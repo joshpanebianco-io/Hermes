@@ -80,6 +80,8 @@ ALIASES: dict[str, str] = {
 _FAMILY_LEAD: dict[str, re.Pattern[str]] = {
     "jobs": re.compile(r"nonfarm payrolls|employment change", re.I),
     "claims": re.compile(r"\binitial\b", re.I),
+    # The growth rate itself, not one of its parts: "GDP q/q", "German GDP y/y".
+    "gdp": re.compile(r"(?:^|\s)gdp\s+(?:q/q|m/m|y/y|qoq|mom|yoy)(?:\s|$)", re.I),
 }
 
 #: Families where core, not headline, is the figure that is priced.
@@ -99,6 +101,12 @@ def family(event: str) -> str:
     → "claims"; "Unemployment Rate" → "jobs"; "Cleveland CPI" → "cleveland cpi".
     """
     b = base(event)
+    # GDP'S PARTS ARE ONE RELEASE (2026-11-14; src/lib/releases.ts has the same line).
+    # Japan's quarterly GDP came as six rows, each named differently and so each its
+    # own family: "GDP Price Index y/y", "GDP Capital Expenditure q/q", "GDP Annualized".
+    # Anything named "GDP …" at one minute from one country is the GDP release.
+    if b.startswith("gdp "):
+        return "gdp"
     return ALIASES.get(b, b)
 
 

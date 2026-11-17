@@ -75,6 +75,20 @@ export interface DashOverview {
   risks: string[];
 }
 
+/** The newest Stocks Market Report as the Dashboard's card (server report.card_of, 2026-11-16). */
+export interface DashReportCard {
+  id: string;
+  et_label: string;
+  created_et: string | null;
+  /** Written by the 09:00 ET clock rather than the button. */
+  auto: boolean;
+  underway: boolean;
+  thesis: string;
+  market: { bias: "long" | "short" | null; score: number | null; basis?: string | null; grade: string | null } | null;
+  calls: { book: string; open_bias: string; conviction: number }[];
+  risks: string[];
+}
+
 export interface DashboardPayload {
   ok: boolean;
   session: ScanSession;
@@ -93,7 +107,7 @@ export interface DashboardPayload {
       live: number | null;
       total: number | null;
       cap: number | null;
-      /** Under half the session's weight could vote: the chip prints the count. Absent from an older collector. */
+      /** Under half the session's weight could vote: the grade is weak at most. Not drawn since 2026-11-15, when the score came to say it. */
       thin?: boolean | null;
     };
     focus: DashFocus[];
@@ -107,11 +121,15 @@ export interface DashboardPayload {
   top: DashRow[];
   /** The pool's rank with the engine's verdict; null until the pool has been read. */
   inplay: DashInPlay | null;
-  /** The latest market overview's card (server overview.latest_card), in In play's place since 2026-11-13. */
+  /** The latest market overview's card (server overview.latest_card), in In play's place since 2026-11-13; on no card since 2026-11-16. */
   overview?: DashOverview | null;
+  /** The newest Stocks Market Report's card, in the overview card's place since 2026-11-16. */
+  report?: DashReportCard | null;
   stories: DashStory[];
   news_live: boolean;
   rotation: Array<{ key: string; label: string; day_pct: number | null; rs_day: number | null; leaders: string[] }>;
+  /** "pre" before the bell: the focus lists and the rotation row are the funds' pre-market moves (2026-11-16). */
+  sectors_basis?: "pre" | "session";
   offline?: { reason: string; api: string };
 }
 
@@ -150,11 +168,24 @@ export interface HeatCard extends GroupRead {
   kind: "sector" | "theme";
   /** Ranks with the eleven sectors. */
   top: boolean;
-  /** The sector a theme sits under; null is the Global menu. */
+  /** The sector a theme sits under; null is a theme under no sector (the two China funds), reached by its card. */
   parent: string | null;
   /** Where its stocks come from: every name in the group, the fund's top ten, or a hand-written list. */
   list: "sector" | "industry" | "fund" | "hand";
+  /**
+   * Outside the session (server universe.heatmap, 2026-11-16): the fund's last trade
+   * before the bell or after the close, against its last regular close, and that against
+   * SPY's; null when it has not traded in the stretch the cards show.
+   */
+  ext_pct?: number | null;
+  rs_ext?: number | null;
+  /** When that trade was (epoch seconds), and how many five-minute bars in the stretch had one. */
+  ext_at?: number | null;
+  ext_bars?: number | null;
 }
+
+/** Which stretch the cards show (server universe.cards_phase). */
+export type CardsPhase = "pre" | "rth" | "post" | "last";
 
 export interface HeatIndustry extends GroupRead {
   key: string;
@@ -168,13 +199,20 @@ export interface HeatmapPayload {
   day: string;
   /** The session the cards' moves are about. */
   cards_day: string;
+  /** Before the bell the cards are the pre-market's; after the close the after hours ride beside the day. */
+  cards_phase?: CardsPhase;
+  /** The day the extended trades are on, and SPY's last one (epoch seconds). */
+  ext_day?: string | null;
+  ext_at?: number | null;
+  /** The cards' up/down counts and the industries are the stocks' own pre-market moves. */
+  counts_pre?: boolean;
   read_age_min: number | null;
   delayed_min: number;
   source: string;
   error: string | null;
   floor: number;
   names: number;
-  spy: { day: number | null; week: number | null; month: number | null };
+  spy: { day: number | null; week: number | null; month: number | null; ext?: number | null };
   cards: HeatCard[];
   industries: HeatIndustry[];
   offline?: { reason: string; api: string };

@@ -55,7 +55,6 @@ from .catalysts import (
     NOISE,
     NOTABLE,
     TALK,
-    TIER_PENALTY,
     TIER_POINTS,
     about,
     acted,
@@ -109,23 +108,59 @@ W_APPROACH = 7
 # on Nov 2 and 29% against 58% on Oct 30, and 20 and 25 rank about even. RS is measured
 # from yesterday's close, so it includes the gap; the log keeps the 1-hour RS beside it
 # (scanlog `ctx`) to test RS now against RS since the close.
-W_RS = 20
+#
+# HALVED, 20 → 10 (owner, 2026-11-14: "do what you recommend", on the question of which
+# stocks trend). The fourth read to find RS flat or behind: at a valid entry, inside each
+# day, signals earning half the part reached +2R 5 points LESS often and held +0.01 R.
+# The same replay as the news rule's (W_CATALYST), judged on trending: with the news paid
+# either way and RS at 10 the top third of each day's list beat the bottom third at +2R
+# by 11.2 points (8.1 and 14.0 on the halves; 4.8 as built) and the top five held +0.64 R
+# (0.78 and 0.51; 0.49 as built). At 0 it read better still (16.1 points, +0.70 R), and
+# it stays at 10 on a judgement, not a measurement: the (L) retests alone do not back
+# taking it out, RS is how the strategy reads a stock, and a name's move is also what
+# the news is held to. RS_POOR stays 5, which is what the replay ran.
+W_RS = 10
 RS_FULL = 1.0  # RS of +1 daily ATR over SPY earns the whole RS part
 #: RS is paid in full only on a live entry (retest, pullback, near VWAP / the 8 EMA);
 #: anywhere else — extended far from it, failed, approaching, chop, the wrong side of
 #: VWAP, or a pre-market plan whose RS is the gap — at most this (2026-11-13).
 RS_POOR = 5
 RS_GOOD_ENTRY = frozenset({"retest", "pullback", "extended_near"})
-# A LIVE ENTRY IS A LIVE ENTRY (2026-11-05). A retest earned 20, the most, and did
-# the worst of the live states on both halves of the record: +1R 30% and 45%, where
-# a pullback made 54% and 57%, and near-VWAP or the 8 EMA 46% and 87%. The strategy's
-# entry is still the retest, and 47 signals are thin, so it is not marked below the
-# others; it has only stopped outranking them. Wrong side of VWAP stays at zero: 22%
-# and 44% on the same split, which settles that open call.
-W_LOCATION = {
-    "retest": 25, "pullback": 25, "extended_near": 25, "extended_far": 7,
-    "approaching": 11, "forming": 14, "failed": 0, "chop": 0,
-}
+# THE ENTRY IS A GATE, NOT A GRADE (owner, 2026-11-14: "does location actually matter?
+# i mean cos if we get our break and retest that is a good location no? shouldnt we
+# focus on things that make it a stronger stock to actually follow through"). On the 501
+# scored, settled signals of seventeen sessions this part said one thing: whether there
+# was an entry to take. Anything above zero against zero reached +1R 58% of the time
+# against 25%, ahead on 10 days of 11 and by thirty points on both halves of them; 67
+# of the 71 zeros were the wrong side of VWAP (27%, -0.33 R held) and four a failed
+# break (none won). Among the rest the grade told nothing apart: the full part against
+# a smaller one reached +1R 57% against 60%, ahead on 2 days of 10. It had been graded
+# 25 / 14 / 11 / 7 since the day before, and 20 / 14 / 12 / 4 to begin with.
+#
+# So it is all or nothing. A name with a side and a setup earns the whole part: at the
+# level, extended from it, approaching it, or a plan before the bell, alike. A failed
+# break, the wrong side of VWAP and no setup earn none. What ranks one valid name above
+# another is then the stock and the tape, which is the list's job: to say which names
+# are worth waiting on. An extended name is still held back where the record said it
+# should be (RS_POOR, P_FUEL, the flag that says what to wait for). The part's key stays
+# `location`, so the log and tools/fit_score.py read one part across the change.
+#
+# WHAT THE RECORD CAN AND CANNOT SAY OF IT. With every signal put on these weights, the
+# top third of each day's list beat the bottom third by 11.3 points of +1R graded and
+# 10.9 as a gate, on both halves either way: no gain and no loss it can see, because
+# signals fire at entries and only some thirty of the 501 sat on a smaller grade. What
+# the gate changes is the list BETWEEN signals, which the log does not test: a name that
+# has run or has not broken yet is no longer fourteen to eighteen points down for it.
+# The same replay tried the owner's lean (RS 30, RVOL 16, the catalyst half as much
+# again): no better on every signal, worse on the (L) retests, and plainly worse with RS
+# uncapped. Less RS with more market and news was a little better at the top and not on
+# both halves of both samples. So no other weight moved. The gate with the market part
+# alone separated +1R best of all (21 points), which is the tape picking the side, not
+# a stock; the stock's own parts are what carried the top five further (40% reaching
+# +2R against 32%).
+W_ENTRY = 25
+#: The setups with an entry to take or to wait for; `extended` is near and far alike.
+ENTRY_STATES = frozenset({"retest", "pullback", "extended", "approaching", "forming"})
 # RVOL PAYS FROM 1.5x (2026-11-05). Inside a day, signals at 1.5x or more reached +2R
 # more often on 5 days of 6, while 1.0x to 1.5x did worse than under 1.0x, ahead on 2
 # days of 9. Thin: 49 signals at 1.5x or more, 33 of them from two sessions. The 1.25x
@@ -175,6 +210,29 @@ PMVOL_FULL = 4.0  # % of ADV for the whole part; log-scaled between the two
 # since we trade high momentum and volume break and retests"): on twenty sessions the
 # catalyst was worth +0.82 R held inside each day against -0.06 R for RS, which has 25,
 # and at 12 it ranked below the frame. The tiers under it are catalysts.TIER_POINTS.
+#
+# NEWS IS FUEL, AND THE PRICE PICKS THE SIDE (owner, 2026-11-14: "the whole purpose of
+# the scanner is to identify stocks that are more likely to be strong trenders ... news
+# (important since at the end of the day news is what causes stocks to move)"). The
+# record was read again on trending, +2R reached and R held, not +1R. At a valid entry
+# the catalyst was the stock's own part most tied to it: +11 points of +2R and +0.52 R
+# held inside each day. And the direction read from the headline told nothing apart: on
+# the (L) retests at a valid entry, news read as with the trade reached +1R 65% of the
+# time (34 signals), news read as AGAINST it 67% (21), no news 49% (134). So a story
+# earns its grade for whichever side the setup is on, the -10 / -6 / -3 for a headline
+# that read against the side is gone, and what the words say is a flag on the row
+# ("Headline reads against the long"), not points. That is all that moved: a story that
+# says no way still needs the tape to have spoken, and two analysts two ways still earn
+# nothing, because the record tested only stories that read a direction. Words the tape
+# contradicts now pay too (they were set aside): under the old reader those were the
+# "against" signals the record is about. Replayed on one set of weights, top
+# third of each day's list against the bottom third: +4.8 points of +2R as built (12.7
+# and -2.2 on the halves) and +9.7 with the news paid either way (10.7 and 8.9); the top
+# five held +0.49 R and +0.61 (both halves better). IN-SAMPLE, seventeen sessions,
+# thirteen versions tried, the old reader on all but the last day; and the (L) retests
+# alone do not confirm it (their top five held +0.23 R for +0.13, their thirds' gap fell
+# from +0.38 R to +0.21). A filing is not a headline's words and keeps its side: an
+# offering against a long still costs P_OFFERING, a bankruptcy 8-K P_CATALYST.
 W_CATALYST = 20
 CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08:00)
 # THE CATALYST IS ITS OWN PART NOW, ALL SESSION (owner, 2026-10-23: "i want
@@ -187,8 +245,8 @@ CATALYST_FRESH_MIN = 16 * 60  # a headline since yesterday's close (16:00 → 08
 # "Broadcom Stocks Jump 8.21% as Investors Eye $21.7 Billion AI Revenue Guide" is
 # the news the stock is moving on, and it earned nothing because it is not a
 # rating. A prior, not a finding: logged on every signal so tools/fit_score.py
-# can keep it or throw it out. Major news against the side costs 10 (2026-11-10;
-# it was 6, the same as an analyst's note).
+# can keep it or throw it out. Major news against the side cost 10 from 2026-11-10 to
+# 2026-11-14 (W_CATALYST has why it stopped); the figure is now the bankruptcy 8-K's.
 P_CATALYST = -10
 #: An offering filed against a long keeps the old six: a form, not a headline.
 P_OFFERING = -6
@@ -216,10 +274,13 @@ TAPE_GRADES = ("moderate", "strong")
 #: The record line needs this many settled signals before it says a rate.
 RECORD_MIN = 10
 RECORD_SOLID = 30
-#: The daily frame (frame.py): the whole part with the daily trend, half of
-#: it between the averages, nothing against it — and a flag when against.
-#: DOUBLED (2026-11-05): 56% against the 46% of a setup against the daily trend.
-W_FRAME = 6
+#: THE DAILY FRAME IS NOT A PART (owner, 2026-11-15: "i think we drop ema's from the
+#: bias and scoring of stocks", and of the plain daily read too, every trend read). It
+#: was 6: the whole of it with the daily trend (price against the 20, 50 and 200-day,
+#: the 200 an EMA), half between the averages. The quant audit had already found it
+#: showed no edge (7 days of 14) and halved it. The row still carries the read, and a
+#: setup against the daily trend is still FLAGGED (flags are not points). The 8 EMA
+#: wave is another thing and stays: it is where an entry is, not a trend filter.
 W_BIAS = 11
 W_CONFIRM = 5
 W_SECTOR = 4
@@ -394,6 +455,11 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
         confirm = "divergence"
     elif spy_dir == -1 and vix_dir == 1:
         confirm = "risk_off"
+    elif spy_dir == -1 and vix_dir == -1:
+        # The mirror of "divergence", which had no word (the both-sides audit, 2026-11-14):
+        # a fall nobody is buying protection for. Words only, like its twin: the score
+        # pays a long on "confirm" and a short on "risk_off".
+        confirm = "divergence_down"
     elif spy_dir == 0 and vix_dir == 0 and spy is not None and vix_pct is not None:
         confirm = "chop"
 
@@ -447,6 +513,9 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
     elif confirm == "risk_off":
         notes.append("SPY down, VIX up — risk-off; shorts on weak names are favoured, don't "
                      "catch the knife.")
+    elif confirm == "divergence_down":
+        notes.append("SPY down but VIX down too — no demand for protection under the selling; "
+                     "be quicker to take profits on shorts.")
     elif confirm == "chop":
         notes.append("SPY and VIX both flat — expect rotation; levels are more likely to be "
                      "faded than broken.")
@@ -644,8 +713,13 @@ def names_of(aliases: Sequence[str], own: Sequence[str] = ()) -> list[str]:
 
 def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
              aliases: list[str], now: datetime, limit: int | None = NEWS_MAX,
-             names: Sequence[str] = (), strict: bool = True) -> list[dict[str, Any]]:
+             names: Sequence[str] = (), strict: bool = True,
+             reach_min: float | None = None) -> list[dict[str, Any]]:
     """The ticker's own headlines plus any wire story that names it. Pure.
+
+    `reach_min` reaches further back than NEWS_DAYS where the caller needs it: the
+    previous session's window opens at the close two sessions ago, which on a Monday
+    is Thursday's (prior_story).
 
     THE WIRE MATCH IS STRICT ON PURPOSE: the cashtag, or a company name written
     as a proper noun on a word boundary. "Meta" in "metadata" or "Intel" in
@@ -668,6 +742,8 @@ def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
     """
     now_ts = now.timestamp()
     cutoff = now_ts - NEWS_DAYS * 86400
+    if isinstance(reach_min, (int, float)):
+        cutoff = min(cutoff, now_ts - reach_min * 60.0)
     pats = [re.compile(rf"\${re.escape(sym)}\b")]
     pats += [re.compile(rf"\b{re.escape(a)}\b") for a in aliases if a]
     called = names or names_of(aliases)
@@ -831,8 +907,35 @@ _BEAR = re.compile(
     r"grizzly research|wolfpack research|iceberg research|fuzzy panda|blue orca|"
     r"white diamond research|bleecker street research|viceroy research)\b|"
     r"\b(?:cuts?|slashes?|slashed|suspends?|suspended|eliminates?|eliminated|halts?|halted|"
-    r"omits?)\b[^.;]{0,30}\bdividends?\b|\breverse (?:stock )?split\b",
+    r"omits?)\b[^.;]{0,30}\bdividends?\b|\breverse (?:stock )?split\b|"
+    # THE BAD TWINS THE GOOD WORDS HAD AND THESE DID NOT (the both-sides audit, 2026-11-14;
+    # owner: "trending means ... both to the upside or downside"). Each good event read a
+    # direction and its mirror read none, so it earned nothing until the tape spoke: a
+    # contract or a customer lost (won or awarded is bull), a sell rating reiterated (a
+    # buy is bull), negative or disappointing data (positive is bull).
+    r"\b(?:loses?|lost|losing)\b[^.;]{0,40}\b(?:contract|order|customer|client)\b|"
+    r"\b(?:contract|order)\b[^.;]{0,25}\b(?:cancell?ed|terminated|scrapped|pulled)\b|"
+    r"reiterat\w*[^.]{0,20}\b(?:sell|underperform|underweight)\b|"
+    r"\b(?:negative|disappointing) (?:phase|topline|trial|data|results|readout|interim|pivotal)\b",
     re.I)
+#: A SUCCESS THAT DID NOT HAPPEN IS A FAILURE, AND A CHARGE THAT WENT AWAY IS GOOD NEWS
+#: (the same audit). "Acme Phase 3 Trial Fails to Meet Primary Endpoint" carries the bull
+#: words "meet primary endpoint", so it read both ways and therefore no way, where
+#: "Meets Primary Endpoint" read bull; and "Acme Wins Patent Lawsuit" carries the bear
+#: word "lawsuit", so the win read no way where the loss read bear. The negating phrase
+#: is taken out of what the other side's words are searched in, and counts for its own.
+_NEGATED = re.compile(
+    r"\b(?:fails?|failed|failing|unable|did not|didn['’]t|does not|doesn['’]t|will not|"
+    r"won['’]t|falls? short of|fell short of)\b[^.;]{0,12}?"
+    r"\b(?:to\s+)?(?:meet|meets|met|achieve|achieves|achieved|hit|hits|reach|reaches|reached|"
+    r"win|wins|won|secure|secures|secured|beat|beats|top|tops|clear|clears|gain|gains)\b", re.I)
+_CLEARED = re.compile(
+    r"\b(?:wins?|won|prevails?|prevailed)\b[^.;]{0,30}"
+    r"\b(?:lawsuits?|case|appeal|ruling|verdict|patent|suit)\b|"
+    r"\b(?:lawsuits?|case|suit|probe|investigation)\b[^.;]{0,25}"
+    r"\b(?:dismissed|tossed|dropped|closed|ended)\b|"
+    r"\b(?:dismiss(?:es|ed)|toss(?:es|ed)|drops?|dropped|closes?|closed|ends?|ended)\b[^.;]{0,25}"
+    r"\b(?:lawsuits?|case|suit|probe|investigation)\b", re.I)
 _OFFERING_FORMS = ("S-1", "S-3", "424B", "F-1", "F-3")
 
 
@@ -881,8 +984,18 @@ def _direction(title: str, sym: str, names: tuple[str, ...]) -> str | None:
             if someone_else(title, sym, names):
                 return None
             scope = " ".join(lead(title, sym, names)) or title
-    bull = bool(_BULL.search(scope)) or analyst_upgrade(scope)
-    bear = bool(_BEAR.search(scope))
+            # AN INDEX IS NAMED AFTER "FROM", WHERE THE LEAD STOPS (the both-sides audit,
+            # 2026-11-14): "Acme to Be Removed From S&P 500" read no way because its lead is
+            # "Acme to Be Removed", while "Acme Set to Join S&P 500" read bull. An index
+            # change the name leads is read whole.
+            if g.tag == "Index":
+                scope = title
+    # Each side's words are searched with the other side's negation taken out (_NEGATED,
+    # _CLEARED), and the negation counts for its own side.
+    failed, cleared = bool(_NEGATED.search(scope)), bool(_CLEARED.search(scope))
+    bull = (bool(_BULL.search(_NEGATED.sub(" ", scope) if failed else scope))
+            or analyst_upgrade(scope) or cleared)
+    bear = bool(_BEAR.search(_CLEARED.sub(" ", scope) if cleared else scope)) or failed
     if bull == bear:
         return None
     return "bull" if bull else "bear"
@@ -896,6 +1009,20 @@ def _direction(title: str, sym: str, names: tuple[str, ...]) -> str | None:
 #: words give no direction ("Acme Reports Q3 Results", "Merck to Buy Verona", "Acme CEO
 #: Steps Down") takes the tape's. Under it the tape has not spoken and the words stand.
 TAPE_CLEAR = 0.5
+
+
+@lru_cache(maxsize=32768)
+def _others_event(title: str, sym: str, names: tuple[str, ...]) -> bool:
+    """Whether a story filed under the name is somebody else's event: the name leads it
+    only as another company's supplier, rival or backer ("Apple Supplier Foxconn Beats
+    Estimates" is listed under Apple and is not Apple's beat). Such a story set no
+    direction, which was enough to earn nothing while only a direction earned; since the
+    news pays whichever way it reads (W_CATALYST, 2026-11-14) it is asked outright. An
+    analyst's note and a story where the name is the object of the action are the name's
+    own, as `_direction` has it. Kept by its arguments, like `_direction`."""
+    if not sym or acted(title, sym, names) or grade(title).tag in ("Analyst", "Target"):
+        return False
+    return bool(about(title, sym, names)) and bool(someone_else(title, sym, names))
 
 def day_move_of(row: dict[str, Any]) -> float | None:
     """The name's move since the previous close (%), whatever the session: the pre-market
@@ -912,28 +1039,38 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
                   names: Sequence[str] = (), *, tape: float | None = None,
                   fresh_min: float | None = None,
                   day_move: float | None = None) -> dict[str, Any]:
-    """The catalyst part: {pts, note, against} — points with the side (up to
-    W_CATALYST), P_CATALYST against it with the item quoted in `against`, zero
-    with no directional item. Pure.
+    """The catalyst part: {pts, note, against, reads_against, item, …}. Pure.
 
-    Items: a report since the close with its surprise sign (W_CATALYST); a
-    headline since the close with a direction, GRADED BY WHAT IT IS
-    (catalysts.py, owner 2026-11-09): a beat, guidance, an FDA readout, a deal or
-    the name's move with its reason W_CATALYST, an upgrade or downgrade 12, a
-    price-target tweak 3, a law firm's notice nothing. The direction is what the
-    headline says was done, else which way it says the name moved (`sym` and
-    `names` find the name in it; catalysts.moved). An offering filed in the last
-    three days (3, bear); a bankruptcy 8-K (W_CATALYST, bear). The strongest item each way decides;
-    against wins a tie, because the downside of ranking a name into its own bad
-    news is the larger one. A minor note against the side costs 3 where it used
-    to cost the full penalty, since it now earns only 3 with it.
+    NEWS IS FUEL (W_CATALYST, 2026-11-14): the strongest story since the close earns its
+    grade for whichever side the setup is on. Stories: a report since the close with
+    its surprise in (W_CATALYST); a headline since the close, GRADED BY WHAT IT IS
+    (catalysts.py, owner 2026-11-09): a beat, guidance, an FDA readout, a deal or the
+    name's move with its reason W_CATALYST, an upgrade or downgrade 12, a price-target
+    tweak 3, a law firm's notice, a preview or an opinion nothing.
+
+    THE DIRECTION IS STILL READ, AND IS A FLAG, NOT POINTS: what the headline says the
+    name did (`sym` and `names` find the name in it; catalysts.moved), else what its
+    words say was done, else, for a story that matters, the tape (TAPE_CLEAR). Words the
+    tape contradicts are overruled: the story pays and reads no way. A story that says
+    no way while the tape has not spoken earns nothing, as before: there the price has
+    not picked a side either. Where the strongest story that reads against the side is
+    at least as strong as the strongest that reads with it, `reads_against` quotes it
+    for the row's flag.
+
+    A FILING KEEPS ITS SIDE: an offering filed in the last three days (3 to a short,
+    P_OFFERING against a long where no story outweighs it), a bankruptcy 8-K (W_CATALYST
+    to a short, P_CATALYST against a long); `against` quotes the filing that cost.
     """
-    # (direction, weight, text, penalty, what it was: the grade, where its direction came
-    # from and its age — logged with each signal so the record can test the news, phase 3)
-    items: list[tuple[str, int, str, int, dict[str, Any]]] = []
+    # The stories: (weight, text, what it was: the grade, the headline, where its direction
+    # came from and its age, logged with each signal so the record can test the news; and
+    # the direction it reads, or None).
+    fuel: list[tuple[int, str, dict[str, Any], str | None]] = []
+    # The filings: (direction, weight, text, penalty, what it was).
+    forms: list[tuple[str, int, str, int, dict[str, Any]]] = []
     # The tape's direction, when it has spoken (TAPE_CLEAR); None when it has not.
     tape_dir = (("bull" if tape > 0 else "bear")
                 if isinstance(tape, (int, float)) and abs(tape) >= TAPE_CLEAR else None)
+    # Stories whose words the tape overruled (they still pay; they read no way).
     set_aside: list[str] = []
     # Stories whose stated move the name has not made today (STATED_MIN), and analyst
     # headlines that rate it both ways (catalysts.rated_both).
@@ -950,14 +1087,20 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
     days, when = (earnings or {}).get("days"), (earnings or {}).get("when")
     sp = (earnings or {}).get("surprise_pct")
     last_night = bool((earnings or {}).get("last_night")) or days == -1
+    # The report, once its surprise is in. Its sign is its direction, and it pays the
+    # setup either way; a surprise the tape contradicts reads no way and still pays.
     if earnings and (last_night or (days == 0 and when == "pre")):
         when_txt = "after the close" if last_night else "this morning"
         if isinstance(sp, (int, float)) and sp != 0:
-            d0 = "bull" if sp > 0 else "bear"
             text0 = f"reported {when_txt}, EPS {sp:+.1f}% vs estimate"
-            if heard(d0, text0):
-                items.append((d0, W_CATALYST, text0, P_CATALYST,
-                              {"tag": "Report", "tier": MAJOR, "src": "report", "age_min": None}))
+            says = "bull" if sp > 0 else "bear"
+            d0: str | None = says
+            src0 = "report"
+            if not heard(says, text0):
+                d0, src0 = None, "overruled"
+                text0 = f"{text0} · overruled by the tape"
+            fuel.append((W_CATALYST, text0, {"tag": "Report", "tier": MAJOR, "src": src0,
+                                             "age_min": None, "title": None}, d0))
     window = fresh_min if isinstance(fresh_min, (int, float)) else CATALYST_FRESH_MIN
     fresh = [h for h in news or []
              if isinstance(h, dict) and h.get("age_min") is not None
@@ -989,52 +1132,61 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
             g = move_grade(title) or g
         if g.tag in TALK:
             continue
+        if sym and _others_event(title, sym, tuple(names)):
+            continue
         pub = str(h.get("publisher") or "").strip()
         age = h.get("age_min")
         age_txt = f"{round(age / 60)}h" if isinstance(age, (int, float)) and age >= 60 else (
             f"{round(age)}m" if isinstance(age, (int, float)) else "")
         text = f"{pub + ': ' if pub else ''}\"{str(h.get('title') or '').strip()[:90]}\""
         text = f"{text} ({age_txt})" if age_txt else text
-        if sym and rated_both(title, sym, names):
-            # Two calls, two ways: no direction, and not the tape's either.
-            mixed += 1
-            continue
         said = stated_move(title, sym, names) if sym else None
         if not stated_today(said, day_move):
             assert said is not None and day_move is not None
             earlier.append(f"{text} says {said:+.1f}%, the name is {day_move:+.1f}% since "
                            "the close")
             continue
+        if sym and rated_both(title, sym, names):
+            # Two calls, two ways: no direction, and not the tape's either.
+            mixed += 1
+            continue
         # THE NAME'S OWN STATED MOVE FIRST (2026-11-13): it is the market's verdict on the
         # news, where the event's words may be anybody's ("Palantir Stock Falls Despite
         # Earnings Beat" was a beat). Then the words, in the name's own clause. Then, for
         # a story that matters and says no way, the tape (TAPE_CLEAR).
-        d = mv or headline_direction(title, sym, names)
+        d: str | None = mv or headline_direction(title, sym, names)
         src = "move" if mv else "words"
         if d is not None:
+            # Words the tape contradicts: the story is still the name's news and still
+            # pays; it reads no way (it was set aside, earning nothing, until 2026-11-14).
             if not heard(d, text):
-                continue
+                d, src = None, "overruled"
+                text = f"{text} · its words overruled by the tape"
         elif g.tier in (MAJOR, NOTABLE) and tape_dir is not None:
             d, src = tape_dir, "tape"
             text = f"{text} · its direction from the tape"
         else:
+            # It says no way and the price has not picked one: nothing to go on, as before.
+            # What the record tested is a story that READS against the side (W_CATALYST).
             continue
-        items.append((d, min(TIER_POINTS[g.tier], W_CATALYST), text, TIER_PENALTY[g.tier],
-                      {"tag": g.tag, "tier": g.tier, "src": src,
-                       "age_min": age if isinstance(age, (int, float)) else None}))
+        fuel.append((min(TIER_POINTS[g.tier], W_CATALYST), text,
+                     {"tag": g.tag, "tier": g.tier, "src": src,
+                      "age_min": age if isinstance(age, (int, float)) else None,
+                      "title": title}, d))
     for f in filings or []:
         form = str((f or {}).get("form") or "")
         desc = str((f or {}).get("desc") or form)
         if form.startswith(_OFFERING_FORMS):
             text = f"offering filed: {desc[:60]}"
             if heard("bear", text):
-                items.append(("bear", 3, text, P_OFFERING,
-                              {"tag": "Filing", "tier": MINOR, "src": "filing", "age_min": None}))
+                forms.append(("bear", 3, text, P_OFFERING,
+                              {"tag": "Filing", "tier": MINOR, "src": "filing", "age_min": None,
+                               "title": None}))
         elif form.startswith("8-K") and "bankruptcy" in desc.lower():
-            items.append(("bear", W_CATALYST, f"8-K: {desc[:60]}", P_CATALYST,
-                          {"tag": "Filing", "tier": MAJOR, "src": "filing", "age_min": None}))
-    more = f" and {len(set_aside) - 1} more" if len(set_aside) > 1 else ""
-    aside = f" · set aside, the tape disagrees: {set_aside[0]}{more}" if set_aside else ""
+            forms.append(("bear", W_CATALYST, f"8-K: {desc[:60]}", P_CATALYST,
+                          {"tag": "Filing", "tier": MAJOR, "src": "filing", "age_min": None,
+                           "title": None}))
+    aside = ""
     if earlier:
         more = f" and {len(earlier) - 1} more" if len(earlier) > 1 else ""
         aside += f" · set aside, an earlier move: {earlier[0]}{more}"
@@ -1042,34 +1194,111 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         aside += (" · set aside, analysts rating it both ways" if mixed == 1 else
                   f" · set aside, {mixed} headlines rating it both ways")
     # What the record keeps of the read (scanlog ctx `news`, phase 3 of the quant audit):
-    # how many headlines were in the window, how many the tape set aside, and the item
+    # how many headlines were in the window, how many the tape overruled, and the item
     # that decided the part — its grade, its direction and where that came from.
     seen = {"fresh": len(fresh), "set_aside": len(set_aside), "earlier": len(earlier),
             "mixed": mixed}
-    if side not in ("long", "short") or not items:
+    none = {"pts": 0, "against": None, "reads_against": None, "item": None, **seen}
+    if side not in ("long", "short"):
+        return {**none, "note": "no side" + aside}
+    if not fuel and not forms:
         n_fresh = len(fresh)
-        why = ("no side" if side not in ("long", "short") else
-               f"no directional catalyst · {n_fresh} headline{'s' if n_fresh != 1 else ''} "
-               f"since the close" if n_fresh else "no directional catalyst · no headlines since "
-               "the close")
-        return {"pts": 0, "note": why + aside, "against": None, "item": None, **seen}
+        why = (f"no directional catalyst · {n_fresh} headline{'s' if n_fresh != 1 else ''} "
+               "since the close" if n_fresh else
+               "no directional catalyst · no headlines since the close")
+        return {**none, "note": why + aside}
     mine = "bull" if side == "long" else "bear"
-    with_items = sorted((it for it in items if it[0] == mine), key=lambda x: -x[1])
-    against_items = sorted((it for it in items if it[0] != mine), key=lambda x: -x[1])
-    best_with = with_items[0] if with_items else None
-    best_against = against_items[0] if against_items else None
-    if best_against and (best_with is None or best_against[1] >= best_with[1]):
-        note = f"against the {side} · {best_against[2]}"
-        if best_with:
-            note += f" · with it: {best_with[2]}"
-        return {"pts": best_against[3], "note": note + aside, "against": best_against[2],
-                "item": {**best_against[4], "dir": best_against[0], "with": False}, **seen}
-    assert best_with is not None
-    note = f"with the {side} · {best_with[2]}"
-    if best_against:
-        note += f" · against it: {best_against[2]}"
-    return {"pts": min(best_with[1], W_CATALYST), "note": note + aside, "against": None,
-            "item": {**best_with[4], "dir": best_with[0], "with": True}, **seen}
+
+    def order(it: tuple[int, str, dict[str, Any], str | None]) -> tuple[int, int, float]:
+        """The strongest; of two as strong, the one that reads with the side, then the
+        one that reads no way; then the newest."""
+        way = 0 if it[3] == mine else 1 if it[3] is None else 2
+        age = it[2].get("age_min")
+        return (-it[0], way, age if isinstance(age, (int, float)) else 0.0)
+
+    top = min(fuel, key=order) if fuel else None
+    # What the words say against the side, for the flag: the strongest story reading
+    # against it, where none reading with it is stronger.
+    w_with = max((it[0] for it in fuel if it[3] == mine), default=0)
+    opposed = min((it for it in fuel if it[3] not in (None, mine)), key=order, default=None)
+    reads_against = opposed[1] if opposed is not None and opposed[0] >= w_with else None
+    form_with = max((f for f in forms if f[0] == mine), key=lambda f: f[1], default=None)
+    form_against = max((f for f in forms if f[0] != mine), key=lambda f: f[1], default=None)
+    earned = max(top[0] if top else 0, form_with[1] if form_with else 0)
+    if form_against is not None and form_against[1] >= earned:
+        note = f"against the {side} · {form_against[2]}"
+        if top:
+            note += f" · news on the name: {top[1]}"
+        return {"pts": form_against[3], "note": note + aside, "against": form_against[2],
+                "reads_against": reads_against,
+                "item": {**form_against[4], "dir": form_against[0], "with": False}, **seen}
+    if top is None or (form_with is not None and form_with[1] > top[0]):
+        assert form_with is not None
+        return {"pts": min(form_with[1], W_CATALYST), "note": f"with the {side} · {form_with[2]}"
+                + aside, "against": None, "reads_against": reads_against,
+                "item": {**form_with[4], "dir": form_with[0], "with": True}, **seen}
+    way = top[3]
+    if way == mine:
+        note = f"with the {side} · {top[1]}"
+    elif way is None:
+        note = f"news on the name · {top[1]}"
+    else:
+        note = f"news on the name · {top[1]} · its headline reads against the {side}"
+    if reads_against and reads_against != top[1]:
+        note += f" · reads against the {side}: {reads_against}"
+    return {"pts": min(top[0], W_CATALYST), "note": note + aside, "against": None,
+            "reads_against": reads_against,
+            "item": {**top[2], "dir": way, "with": None if way is None else way == mine}, **seen}
+
+
+#: A previous session's story OF A MOVE has to state at least this much (%), where it
+#: states one at all: the size the Dashboard counts a name as moving.
+PRIOR_MOVE_MIN = 4.0
+
+
+def prior_story(news: list[dict[str, Any]] | None, sym: str | None = None,
+                names: Sequence[str] = (), *, fresh_min: float | None,
+                prior_min: float | None) -> dict[str, Any] | None:
+    """The name's major story from the PREVIOUS session's window, or None. Pure.
+
+    CONTEXT, NEVER SCORE (2026-11-14). A story older than today's window (`fresh_min`
+    back) and inside the one before it (`prior_min` back: from the close two sessions ago
+    to yesterday's) is what the last session traded on, and today would be its second
+    day. Whether that should earn anything is a question the record cannot answer yet:
+    seven signals on five stock-days had news the day before and none on the day. So it
+    is a line on the row and a field in the signal log (scanlog `ctx.news.prior`), for
+    tools/fit_score.py to read once there are enough. A name still running on it is
+    already paid through its levels, its strength and its volume.
+
+    Held to the same tests as today's news: about the name, an event, not talk. The
+    newest major one, which after a report is usually the story of the move it made.
+    A story of a move that states a small one is not a first day: "Apple Stocks Rise
+    1.04% as Siri AI-Powered HomeView and Apple TV Hit Shelves" led Apple's row as its
+    previous session's story the evening this was built (PRIOR_MOVE_MIN)."""
+    if not (isinstance(fresh_min, (int, float)) and isinstance(prior_min, (int, float))):
+        return None
+    best: dict[str, Any] | None = None
+    for h in news or []:
+        age = h.get("age_min") if isinstance(h, dict) else None
+        if not isinstance(age, (int, float)) or not fresh_min < age <= prior_min:
+            continue
+        title = str(h.get("title") or "")
+        g = grade(title)
+        if g.tier == NOISE or (sym and names and about(title, sym, names) is None):
+            continue
+        if sym and g.tag in ("List", "Preview") and moved(title, sym, names):
+            g = move_grade(title) or g
+        if g.tag in TALK or g.tier != MAJOR or (sym and _others_event(title, sym, tuple(names))):
+            continue
+        if g.tag == "Move" and sym:
+            said = stated_move(title, sym, names)
+            if said is not None and abs(said) < PRIOR_MOVE_MIN:
+                continue
+        if best is None or age < best["age_min"]:
+            pub = str(h.get("publisher") or "").strip()
+            best = {"tag": g.tag, "tier": g.tier, "title": title.strip(), "publisher": pub,
+                    "age_min": age}
+    return best
 
 
 def _signal_minute(at_et: Any) -> int | None:
@@ -1222,13 +1451,14 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
               catalyst: dict[str, Any] | None = None,
               conviction: dict[str, Any] | None = None,
               now: datetime | None = None) -> dict[str, Any]:
-    """The contract's score: seven parts and the penalties, every one listed. Pure.
+    """The contract's score: six parts and the penalties, every one listed. Pure.
 
     Before the bell (and overnight) the volume part is IN PLAY instead — see
-    W_INPLAY. From 09:30 it is RVOL exactly as before. The daily frame
-    (W_FRAME) and the catalyst (W_CATALYST, catalyst_read) are the sixth and
-    seventh; the clock (P_CLOCK) is a penalty from the record. The total is capped
-    at 100 as before.
+    W_INPLAY. From 09:30 it is RVOL exactly as before. The catalyst (W_CATALYST,
+    catalyst_read) is the sixth; the daily frame was the seventh until 2026-11-15
+    and earns nothing now; the clock (P_CLOCK) is a penalty from the record. The total is capped
+    at 100 as before. The entry part is all or nothing since 2026-11-14 (W_ENTRY):
+    a setup with an entry to take or to wait for earns it, whatever the distance.
     """
     setup = row.get("setup") or {}
     side = setup.get("side")
@@ -1267,7 +1497,7 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         pts, note = 0, "inside the levels" if d else "no side"
     parts.append(_part("structure", "Structure", pts, max(W_STRUCTURE.values()), note))
 
-    # Where the entry is: the location part below, and what RS is paid against it.
+    # Where the entry is: what RS is paid against, and the entry part's note below.
     entry = setup.get("entry")
     loc_key = state
     if state == "extended":
@@ -1289,20 +1519,20 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         parts.append(_part("rs", "RS vs SPY", 0, W_RS,
                            "no RS yet" if rs is None else "no side"))
 
-    # ---- location ------------------------------------------------------------
-    pts = W_LOCATION.get(loc_key, 0)
+    # ---- the entry: all of the part or none of it (W_ENTRY) -------------------
+    valid = bool(d) and state in ENTRY_STATES
     note = {
         "retest": "at the broken level", "pullback": "between the level and extended",
         "extended_near": "extended — near VWAP / 8 EMA",
-        "extended_far": "extended — far from entry",
+        "extended_far": "extended — wait for the pullback",
         "approaching": "not broken yet", "forming": "pre-market plan", "failed": "failed break",
-        "chop": "no entry",
+        "chop": "no setup",
     }.get(loc_key, loc_key)
     if setup.get("lost_vwap") and state != "forming":
-        pts, note = 0, "wrong side of VWAP"
+        valid, note = False, "wrong side of VWAP"
     if not d:
-        pts, note = 0, "no side"
-    parts.append(_part("location", "Location", pts, max(W_LOCATION.values()), note))
+        note = "no side"
+    parts.append(_part("location", "Entry", W_ENTRY if valid else 0, W_ENTRY, note))
 
     # ---- volume (in play before the bell) -----------------------------------
     rvol = row.get("rvol")
@@ -1342,18 +1572,7 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
         bits.append(against_tape)
     parts.append(_part("market", "Market", pts, W_MARKET, ", ".join(bits) or "no tailwind"))
 
-    # ---- the daily frame -----------------------------------------------------
-    ws = frame.with_side(frame_read, side)
-    ftext = (frame_read or {}).get("text") or ""
-    if ws == "with":
-        pts, note = W_FRAME, f"with the daily trend — {ftext}"
-    elif ws == "mixed":
-        pts, note = W_FRAME // 2, f"between the averages — {ftext}"
-    elif ws == "against":
-        pts, note = 0, f"against the daily trend — {ftext}"
-    else:
-        pts, note = 0, "no daily frame yet" if d else "no side"
-    parts.append(_part("frame", "Daily frame", pts, W_FRAME, note))
+    # The daily frame was a part here until 2026-11-15 (the note where W_FRAME was).
 
     # ---- the catalyst, for direction ------------------------------------------
     cat = catalyst if catalyst is not None else catalyst_read(side, earnings, news, None)
@@ -1361,8 +1580,9 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     cpart = _part("catalyst", "Catalyst", cpts, W_CATALYST if cpts >= 0 else 0,
                   str(cat.get("note") or ""))
     # What decided it, for the signal log (scanlog `ctx.news`); not drawn on the page.
+    # `prior` is the previous session's major story (prior_story): logged, never scored.
     cpart["read"] = {"item": cat.get("item"), "fresh": cat.get("fresh"),
-                     "set_aside": cat.get("set_aside")}
+                     "set_aside": cat.get("set_aside"), "prior": cat.get("prior")}
     parts.append(cpart)
 
     # ---- penalties -----------------------------------------------------------
@@ -1406,10 +1626,15 @@ def flags_for(row: dict[str, Any], earnings: dict[str, Any] | None,
         if not any(f["kind"] == kind and f["text"] == text for f in out):
             out.append({"kind": kind, "tone": tone, "text": text})
 
+    side = (row.get("setup") or {}).get("side") or (row.get("score") or {}).get("side")
     if catalyst and catalyst.get("against"):
         add("catalyst", "warn", f"Against: {catalyst['against']}")
+    # What the headline's words say against the side: a flag since 2026-11-14, when the
+    # story began to earn its grade either way (W_CATALYST). The price picked the side;
+    # the reader is told the story reads the other way.
+    if catalyst and catalyst.get("reads_against") and side in ("long", "short"):
+        add("catalyst", "warn", f"Headline reads against the {side}: {catalyst['reads_against']}")
 
-    side = (row.get("setup") or {}).get("side") or (row.get("score") or {}).get("side")
     if frame.with_side(frame_read, side) == "against" and frame_read:
         trend = "downtrend" if frame_read.get("trend") == "down" else "uptrend"
         add("frame", "warn", f"{'Long' if side == 'long' else 'Short'} into a daily {trend}: "
@@ -1442,6 +1667,13 @@ def flags_for(row: dict[str, Any], earnings: dict[str, Any] | None,
         desc = f.get("desc") or form
         add("filing", "warn" if offering else "info",
             f"Offering filed: {desc}" if offering else form if desc == form else f"{form}: {desc}")
+    # The previous session's major story (prior_story): today would be its second day.
+    # Context under the warnings, never score.
+    prior = (catalyst or {}).get("prior")
+    if isinstance(prior, dict) and prior.get("title"):
+        pub = f"{prior['publisher']}: " if prior.get("publisher") else ""
+        add("prior", "info", f"Previous session's story · {prior.get('tag')}: {pub}"
+                             f"\"{str(prior['title'])[:90]}\"")
     fresh = [n for n in news if n.get("age_min") is not None and n["age_min"] <= 24 * 60]
     rating = next((n for n in fresh if n.get("kind") == "rating"), None)
     if rating is not None:
@@ -1495,8 +1727,14 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           top_story: Callable[[str], dict[str, Any] | None] | None = None,
           news_limit: int | None = NEWS_MAX,
           calendar_ok: bool | None = None,
-          sure: Callable[[str], bool] | None = None) -> dict[str, Any]:
+          sure: Callable[[str], bool] | None = None,
+          news_read: Callable[[str, dict[str, Any] | None, dict[str, Any] | None],
+                              dict[str, Any] | None] | None = None) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
+
+    `news_read` gives what the model made of the story that decided a name's catalyst
+    part (newsread.py: how big it is, in one line), from its symbol, that item and its
+    report; context on the row and in the signal log, never score.
 
     `sure` says whether a name's words are the table's, and so can be held against a
     headline that does not carry them (catalysts.story's `strict`); None trusts them all.
@@ -1550,6 +1788,10 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
     # The news this session trades on: since the previous trading day's close
     # (holidays.news_since), as minutes back from now — the catalyst's window.
     fresh_min = max(0.0, (now_ts - news_since(now.astimezone(ET), td).timestamp()) / 60.0)
+    # And the window before it, the previous session's (prior_story): from the close two
+    # sessions ago to the start of this one.
+    prior_min = max(fresh_min, (now_ts - news_since(
+        now.astimezone(ET), prev_trading_day(td)).timestamp()) / 60.0)
     out_rows: list[dict[str, Any]] = []
     for sym in watchlist:
         base = rows_in.get(sym)
@@ -1572,8 +1814,12 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         # The catalyst reads every headline it can see: the row carries the newest
         # eight, and an analyst's note on top of them must not hide the report.
         called = names_of(aliases.get(sym) or [], (own or {}).get(sym) or [])
-        all_news = news_for(sym, news.get(sym) or [], wire, aliases.get(sym) or [], now,
-                            limit=None, names=called, strict=sure(sym) if sure else True)
+        reach = news_for(sym, news.get(sym) or [], wire, aliases.get(sym) or [], now,
+                         limit=None, names=called, strict=sure(sym) if sure else True,
+                         reach_min=prior_min)
+        # The row lists NEWS_DAYS of them, as it says; the longer reach is prior_story's.
+        all_news = [h for h in reach
+                    if h.get("age_min") is None or h["age_min"] <= NEWS_DAYS * 1440]
         nws = all_news[:NEWS_MAX]
         fil = [f for f in (filings.get(sym) or [])][:FILINGS_MAX]
         row["earnings"] = earn
@@ -1603,6 +1849,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         cat = catalyst_read(side0, earn, all_news, fil, sym=sym, names=called,
                             tape=(row.get("rs") or {}).get("SPY"), fresh_min=fresh_min,
                             day_move=day_move_of(row))
+        cat["prior"] = prior_story(reach, sym, called, fresh_min=fresh_min, prior_min=prior_min)
+        # What the model made of the deciding story, when it has read it (newsread.py).
+        row["news_read"] = news_read(sym, cat.get("item"), earn) if news_read else None
         if row.get("ok"):
             row["score"] = score_row(row, reg, srs, earn, event, session,
                                      premkt=row["premkt"], news=nws,
@@ -1621,7 +1870,8 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         row["options"] = options_for(sym, row, options, closes, iv_hist, td, now,
                                      reports=report_dates((earn_hist or {}).get(sym)),
                                      daily=(daily or {}).get(sym),
-                                     oi_prev=fc.get("oi_prev"), vol_hist=fc.get("vol_hist"))
+                                     oi_prev=fc.get("oi_prev"), vol_hist=fc.get("vol_hist"),
+                                     report_when=report_hours((earn_hist or {}).get(sym)))
         row["score"] = liquidity_penalty(row["score"], row["options"])
         # The record line: settled signals of this kind, side and score band.
         row["record"] = record_for(implied_kind(row), row["score"].get("side"),
@@ -1666,9 +1916,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
 
 
 def next_report(nxt: dict[str, Any] | None, trading_day: date) -> dict[str, Any] | None:
-    """A name's next report from the history source (sources/earnhist.parse_next)
+    """A name's next report from the history source (sources/earnhist.parse_tv)
     in the row's own `earnings` shape — the calendar feed reaches a week ahead,
-    this reaches as far as Nasdaq knows, with no estimate or actual. Pure."""
+    this reaches as far as TradingView knows, with no estimate or actual. Pure."""
     if not isinstance(nxt, dict):
         return None
     try:
@@ -1694,12 +1944,28 @@ def report_dates(rows: list[dict[str, Any]] | None) -> list[date]:
     return out
 
 
+def report_hours(rows: list[dict[str, Any]] | None) -> dict[date, str]:
+    """Each past report's side of the session, where the history knows it ("pre",
+    "during", "after"; not "unspecified"). Pure."""
+    out: dict[date, str] = {}
+    for r in rows or []:
+        when = r.get("when") if isinstance(r, dict) else None
+        if when not in ("pre", "during", "after"):
+            continue
+        try:
+            out[date.fromisoformat(str(r.get("date")))] = str(when)
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def options_for(sym: str, row: dict[str, Any],
                 options: dict[str, tuple[optcalc.Chain, float]] | None,
                 closes: dict[str, list[float]] | None, iv_hist: dict[str, list[float]] | None,
                 trading_day: date, now: datetime, reports: list[date] | None = None,
                 daily: list[Any] | None = None, oi_prev: dict[str, Any] | None = None,
-                vol_hist: list[float] | None = None) -> dict[str, Any] | None:
+                vol_hist: list[float] | None = None,
+                report_when: dict[date, str] | None = None) -> dict[str, Any] | None:
     """The row's OptionsCtx (optcalc.options_ctx), or None before its first chain.
 
     A failure in the maths costs this one row its options, never the payload:
@@ -1714,7 +1980,7 @@ def options_for(sym: str, row: dict[str, Any],
         return optcalc.options_ctx(chain, row, (closes or {}).get(sym) or [],
                                    (iv_hist or {}).get(sym) or [], trading_day, now, age,
                                    reports=reports, daily=daily, oi_prev=oi_prev,
-                                   vol_hist=vol_hist)
+                                   vol_hist=vol_hist, report_when=report_when)
     except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
         return optcalc.unavailable(f"options maths failed: {e.__class__.__name__}: {e}", age)
 

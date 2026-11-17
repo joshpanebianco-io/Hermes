@@ -317,7 +317,7 @@ SESSIONS: dict[str, dict[str, str]] = {
         "character": (
             "Thinner than New York. Index futures often range unless a regional print or "
             "a policy headline moves them, and USD/JPY tends to lead the Nasdaq future "
-            "rather than follow it. Gamma walls hold more easily in thin liquidity."
+            "rather than follow it."
         ),
     },
     "london": {
@@ -336,8 +336,7 @@ SESSIONS: dict[str, dict[str, str]] = {
         "handover": "Asia and London are the handover — the US opens into their range",
         "character": (
             "The deepest liquidity and the widest ranges. The 08:30 data window and the "
-            "09:30 open set the day; dealer gamma matters most here because the option "
-            "volume that creates it is American."
+            "09:30 open set the day."
         ),
     },
 }
@@ -364,7 +363,17 @@ BOOK_KEYS: dict[str, tuple[str, ...]] = {
     "NQ": ("NQ_futures", "QQQ"),
     "ES": ("ES_futures", "SPY"),
     "GC": ("GC_gold_futures", "GLD"),
+    "SIL": ("SI_silver_futures",),
+    "CL": ("CL_crude_futures",),
 }
+
+# THE MARKET REPORT'S FOUR SUBJECTS (owner, 2026-11-15: "we have a pill selector where
+# we can select say Indexes, gold, silver, oil and then another pill ... Asia, London,
+# New York"). `indexes` is NQ and ES together, each with its ETF, which is one subject:
+# QQQ and SPY are the same two indexes in another wrapper. Gold, silver and crude are
+# one book each. `all` (the three the brief began with) and the single index books stay
+# so a note stored under them still opens with its own label; the page no longer
+# offers them.
 
 ASSETS: dict[str, dict[str, str]] = {
     "all": {
@@ -404,6 +413,75 @@ ASSETS: dict[str, dict[str, str]] = {
             "hard enough to be a risk signal in their own right."
         ),
     },
+    "indexes": {
+        "label": "Indexes",
+        "instruments": "NQ/QQQ and ES/SPY",
+        "drivers": (
+            "The two US equity indexes, each a future and the ETF on the same index: a level "
+            "on NQ is a level on QQQ and a level on ES one on SPY, so write the call once per "
+            "index. It holds for both wrappers and the reader knows it: spend no words saying "
+            "so. Say where the Nasdaq and the S&P agree "
+            "and, more usefully, where they do not: the Nasdaq leading or lagging the broader "
+            "index is itself the read. `index_movers` usually IS the Nasdaq's story; sector "
+            "rotation and breadth carry more of the S&P's."
+        ),
+    },
+    "SIL": {
+        "label": "Silver",
+        "instruments": "silver futures (SIL)",
+        "drivers": (
+            "Silver is a monetary metal with an industrial half, and NOT an equity index: the "
+            "equity blocks mostly do not apply to it. What moves it: real yields, the policy "
+            "path and the dollar, as they move gold; gold itself, which silver follows and "
+            "then outruns in both directions; and copper, which says whether the industrial "
+            "half is with the move. The gold/silver ratio says which metal is leading. Ignore "
+            "sector rotation and index constituents unless equities are moving hard enough to "
+            "be a risk signal in their own right."
+        ),
+    },
+    "CL": {
+        "label": "Crude oil",
+        "instruments": "WTI crude oil futures (CL)",
+        "drivers": (
+            "Crude is a dollar-priced barrel that trades on demand, on its own stocks and on "
+            "supply risk, and NOT an equity index: the equity blocks mostly do not apply to "
+            "it. What moves it: the dollar; the products (gasoline and heating oil: whether "
+            "refiners are pulling the barrel through); the demand read from copper and credit; "
+            "the weekly inventories; and the Gulf, OPEC and war headlines, which are supply "
+            "risk and cut either way. Brent beside WTI says whether a move is the world's or "
+            "America's. The 10-year and the VIX are not crude votes. Ignore sector rotation "
+            "and index constituents unless equities are moving hard enough to be a demand "
+            "signal in their own right."
+        ),
+    },
+}
+
+#: The Stocks desk's report (owner, 2026-11-16: "in stocks it will just be combination
+#: overview of SPY, QQQ, IWM with just NY for the session", the market report sheet the
+#: Futures tab has). The three index funds in one report, New York only, read through
+#: the Stocks tape count, which is one bias for all three (`_etf_facts`).
+ETF_ASSET = "etfs"
+ETF_BOOKS: tuple[str, ...] = ("SPY", "QQQ", "IWM")
+ASSETS[ETF_ASSET] = {
+    "label": "SPY · QQQ · IWM",
+    "instruments": ("SPY, QQQ and IWM, the index funds on the S&P 500, the Nasdaq 100 "
+                    "and the Russell 2000"),
+    "drivers": (
+        "The three index funds the stocks desk trades the session through, in one report "
+        "for New York. QQQ is the cap-weighted Nasdaq 100, where a handful of megacaps are "
+        "the move and the front of the curve hits hardest; SPY is the broad S&P 500, where "
+        "sector rotation and breadth carry more of it; IWM is the Russell 2000's small caps, "
+        "the most rate-sensitive and the most domestic of the three, which lead or lag the "
+        "others on the curve and on credit. Say where the three agree and, more usefully, "
+        "where they do not: small caps against megacaps is itself the read."
+    ),
+}
+
+#: The books behind a subject that is more than one.
+ASSET_BOOKS: dict[str, tuple[str, ...]] = {
+    "all": ("NQ", "ES", "GC"),
+    "indexes": ("NQ", "ES"),
+    ETF_ASSET: ETF_BOOKS,
 }
 
 
@@ -607,7 +685,11 @@ def _vp_reads(asset: dict[str, Any], session: str) -> dict[str, Any]:
 # writes only the read, pointing at rows by `id` or `key` when it annotates.
 # --------------------------------------------------------------------------
 
-BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
+#: Every book a brief can carry a call for. Silver and crude since 2026-11-15, when the
+#: driver board came to score them (drivers.py, bias.py).
+BOOKS: tuple[str, ...] = ("NQ", "ES", "GC", "SIL", "CL")
+#: The books that are an equity index, with the ETF on each.
+INDEX_BOOKS: tuple[str, ...] = ("NQ", "ES")
 BOOK_LABELS = {"NQ": "NQ", "ES": "ES", "GC": "Gold (GC)", "SIL": "Silver (SIL)", "CL": "Crude (CL)"}
 # BOOK_DP AND EM_VOL ARE VOLTERM'S NOW (imported above): the Terminal's
 # implied-day rows quote the same decimals and read the same index per book, so
@@ -662,7 +744,7 @@ BRIEF_SOURCES = {
 def books_for(asset: str) -> list[str]:
     """The books a brief carries a call for."""
     book = resolve_asset(asset)
-    return list(BOOKS) if book == "all" else [book]
+    return list(ASSET_BOOKS[book]) if book in ASSET_BOOKS else [book]
 
 
 def _ctx(snap: dict[str, Any], key: str) -> dict[str, Any] | None:
@@ -742,17 +824,19 @@ def _snapshot(
         return " · ".join([*bits, stamp] if stamp else bits)
 
     rates = snap.get("rates") or {}
-    equity = any(b in books for b in ("NQ", "ES"))
+    equity = any(b in books for b in INDEX_BOOKS)
+    metal = any(b in books for b in ("GC", "SIL"))
     rows: list[dict[str, Any]] = []
 
     for b in books:
-        q = _q(quotes, b)
+        # Silver and crude ride the board, and the daily context, as SILVER and WTI.
+        q = _q(quotes, quote_key(b))
         if not q:
             continue
         bits: list[str] = []
         if q.get("prev") is not None:
             bits.append(f"settle {q['prev']:,.{BOOK_DP[b]}f}")
-        bits += _wk_mo(_ctx(snap, b), month=True)
+        bits += _wk_mo(_ctx(snap, quote_key(b)), month=True)
         rows.append(_srow(b, BOOK_LABELS[b], q["last"], BOOK_DP[b], chg=q.get("pct"),
                           sub=aged(q, bits)))
 
@@ -775,7 +859,7 @@ def _snapshot(
             sub=aged(ten, bits),
         ))
 
-    if "GC" in books:
+    if metal:
         real = next((r for r in rates.get("real") or [] if r.get("key") == "10Y real"), None)
         if real:
             be = next((s for s in rates.get("spreads") or [] if s.get("key") == "be10"), None)
@@ -799,27 +883,49 @@ def _snapshot(
                 sub=aged(vix or vxn, bits),
             ))
 
-    if "GC" in books:
-        gvz = _ctx(snap, "GVZ")
-        if gvz:
-            rows.append(_srow("GVZ", "GVZ", gvz["last"], 1, chg=gvz.get("day_pct"),
-                              sub=" · ".join(_wk_mo(gvz))))
+    # Each book's own vol index, off the daily context: gold's, silver's, crude's.
+    for b, key in (("GC", "GVZ"), ("SIL", "VXSLV"), ("CL", "OVX")):
+        vol = _ctx(snap, key) if b in books else None
+        if vol and vol.get("last") is not None:
+            rows.append(_srow(key, key, vol["last"], 1, chg=vol.get("day_pct"),
+                              sub=" · ".join(_wk_mo(vol))))
 
-    wti = _q(quotes, "WTI")
-    if wti:
-        rows.append(_srow("WTI", "WTI", wti["last"], 2, chg=wti.get("pct"),
-                          sub=aged(wti, _wk_mo(_ctx(snap, "WTI"), month=True))))
+    # Crude is a context row on every other note; on its own it is the book above, and
+    # what stands beside it is Brent and the two products.
+    if "CL" in books:
+        for key, label, dp in (("BRENT", "Brent", 2), ("RBOB", "Gasoline", 4),
+                               ("HEATOIL", "Heating oil", 4)):
+            leg = _q(quotes, key)
+            if leg:
+                rows.append(_srow(key, label, leg["last"], dp, chg=leg.get("pct"),
+                                  sub=aged(leg, [])))
+    else:
+        wti = _q(quotes, "WTI")
+        if wti:
+            rows.append(_srow("WTI", "WTI", wti["last"], 2, chg=wti.get("pct"),
+                              sub=aged(wti, _wk_mo(_ctx(snap, "WTI"), month=True))))
 
     jpy = _q(quotes, "USDJPY")
     if jpy:
         rows.append(_srow("USDJPY", "USD/JPY", jpy["last"], 2, chg=jpy.get("chg"), unit="pts",
                           sub=aged(jpy, _wk_mo(_ctx(snap, "USDJPY")))))
 
-    if "GC" in books:
+    if "GC" in books and "SIL" not in books:
         si = _q(quotes, "SILVER")
         if si:
             rows.append(_srow("SILVER", "Silver", si["last"], 2, chg=si.get("pct"),
                               sub=aged(si, _wk_mo(_ctx(snap, "SILVER")))))
+    # Silver's note reads gold beside it, and both metals' notes and crude's read copper.
+    if "SIL" in books and "GC" not in books:
+        gc = _q(quotes, "GC")
+        if gc:
+            rows.append(_srow("GOLD", "Gold", gc["last"], 1, chg=gc.get("pct"),
+                              sub=aged(gc, _wk_mo(_ctx(snap, "GC"), month=True))))
+    if any(b in books for b in ("SIL", "CL")):
+        cu = _q(quotes, "COPPER")
+        if cu:
+            rows.append(_srow("COPPER", "Copper", cu["last"], 2, chg=cu.get("pct"),
+                              sub=aged(cu, [])))
     return rows
 
 
@@ -1121,6 +1227,11 @@ def _holiday_catalysts(now: datetime) -> list[dict[str, Any]]:
     return out
 
 
+#: A release that is crude's own, wherever it prints (lib/futures.ts ENERGY, by hand).
+_ENERGY_EVENT = re.compile(
+    r"crude|\boil\b|\beia\b|opec|gasoline|distillate|baker hughes|rig count", re.I)
+
+
 def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[dict[str, Any]]:
     """Everything scheduled from twelve hours back to three days out, in time order."""
     now_ts = now.timestamp()
@@ -1135,7 +1246,10 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
         # `core` is the calendar's own "does this reach NQ, ES or GC" test.
         # Without it the first live brief (2026-09-15) listed eleven foreign
         # CPI and PPI prints by title alone — "CPI", "CPI", "Core CPI".
-        if not r.get("core"):
+        # Crude's own releases (the weekly inventories, OPEC) carry no macro theme, so
+        # the calendar does not mark them core: a crude note lists them by name.
+        if not r.get("core") and not ("CL" in books and _ENERGY_EVENT.search(
+                str(r.get("event") or ""))):
             continue
         # Past its time but with no actual yet is neither upcoming nor printed.
         if ts < now_ts and not r.get("released"):
@@ -1170,6 +1284,10 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
             consensus=r.get("consensus_raw"), previous=r.get("previous_raw"),
             surprise=round(r["surprise"], 2) if r.get("surprise") is not None else None,
             high=high_for_the_books(rel.rows),
+            # Whose figure the actual is, when it is the agency's own and not only
+            # the calendar feed's (sources/official.py): "BLS", "Census", "BEA", "EIA".
+            **({"official": r["official"].get("by")}
+               if isinstance(r.get("official"), dict) else {}),
             **({"also": [{"title": x.get("event"), "actual": x.get("actual_raw"),
                            "consensus": x.get("consensus_raw"),
                            "previous": x.get("previous_raw")} for x in rel.subs]}
@@ -1214,7 +1332,7 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
             note=(f"${amt:g}bn" + (", reopening" if a.get("reopening") else "")) if amt else None,
         ))
 
-    if any(b in books for b in ("NQ", "ES")):
+    if any(b in books for b in INDEX_BOOKS):
         for e in snap.get("earnings") or []:
             if not e.get("bellwether") and (e.get("market_cap") or 0) < 200e9:
                 continue
@@ -1253,10 +1371,13 @@ def _leg(snap: dict[str, Any], key: str) -> dict[str, Any] | None:
 def _rotation(snap: dict[str, Any], books: list[str]) -> dict[str, Any]:
     """The ratio strip with five-day direction, and the index heavyweights' moves."""
     specs: list[tuple[str, str, str, str]] = []
-    if any(b in books for b in ("NQ", "ES")):
+    if any(b in books for b in INDEX_BOOKS):
         specs += [(name, a, b, "equity") for name, a, b in EQUITY_RATIOS]
     if "GC" in books:
         specs += [(name, a, b, "gold") for name, a, b in GOLD_RATIOS]
+    elif "SIL" in books:
+        # Silver's own note reads the one ratio that is about silver.
+        specs += [(name, a, b, "gold") for name, a, b in GOLD_RATIOS if "Silver" in name]
 
     ratios: list[dict[str, Any]] = []
     for name, key_a, key_b, group in specs:
@@ -1397,12 +1518,205 @@ def _partial(snap: dict[str, Any], books: list[str]) -> list[str]:
                 why = f" ({g['error']})" if g.get("error") else ""
                 out.append(f"No gamma levels for {b}{why}.")
     wanted = ["DXY", "US10Y", "WTI", "USDJPY"]
-    if any(b in books for b in ("NQ", "ES")):
+    if any(b in books for b in INDEX_BOOKS):
         wanted += ["VIX", "VXN", "VIX3M"]
+    if "SIL" in books:
+        wanted += ["SILVER", "GC", "COPPER"]
+    if "CL" in books:
+        wanted += ["BRENT", "RBOB", "HEATOIL", "COPPER"]
     have = {q.get("key") for q in snap.get("quotes") or []}
     missing = [k for k in wanted if k not in have]
     if missing and (status.get("quotes") or {}).get("ok"):
         out.append(f"No quote for {', '.join(missing)}.")
+    return out
+
+
+# --------------------------------------------------------------------------
+# What is driving the bias, as the report prints it (2026-11-15).
+# --------------------------------------------------------------------------
+#
+# THE REPORT NAMES EVERY FACTOR THE BIAS WEIGHS (owner: "we should mention all the
+# factors impacting the bias, like news, macro, geopolitics important news, volume
+# profile structure"). The short brief gave the model three bullets to pick reasons
+# with, and what it left out was simply not on the page. So the page now carries one
+# row for every family with a weight in this session, in the engine's order, with the
+# engine's own tag and share of the score: those cannot disagree with the slider,
+# because they are the same arithmetic. The model writes the comment beside each.
+#
+# DEALER GAMMA IS NOT A ROW AND IS NOT IN THE REPORT (the same message: "i dont think
+# we need to mention gex"). It has not voted since 2026-11-12; a regime that is no
+# side had a card, a ladder of walls and a clause in every plan. It stays on the
+# Futures page. Event risk is not a side either, but it lowers the ceiling on the
+# call, and the owner named it: it is the last row, marked for what it does.
+#
+# PLAIN NAMES. "Catalysts" is News & data, "Rates & dollar" is Macro, "Intraday
+# structure" is Volume profile & structure.
+#
+# NO TREND ROW (owner, the same day: "i dont think we need to include about the
+# ema's", then "i think we drop ema's from the bias and scoring of stocks"). The bias
+# has no trend family to print (bias.BOARD_FAMILY has the why), and the model is not
+# handed a moving average to write about (`report_view`).
+
+#: family → (the row's name, the small line under it).
+FACTOR_NAMES: dict[str, tuple[str, str | None]] = {
+    "catalysts": ("News & data", None),
+    "rates": ("Macro", "rates & dollar"),
+    "risk": ("Risk appetite", None),
+    "structure": ("Volume profile & structure", None),
+    "participation": ("Participation", "sectors & leaders"),
+}
+BOOK_FACTOR_NAMES: dict[str, dict[str, tuple[str, str | None]]] = {
+    "SIL": {"rates": ("Macro", "rates, dollar & metals")},
+    "CL": {"rates": ("Macro", "dollar & products"), "risk": ("Demand", "credit & copper"),
+           "catalysts": ("Inventories & data", None)},
+}
+#: Every key a factor comment may carry: the families and the event row.
+FACTOR_KEYS: tuple[str, ...] = (*FACTOR_NAMES, "event")
+_LEADING_INT = re.compile(r"^\s*(\d+)")
+
+
+def factors_of(book: str, board: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row a factor for a book's board, heaviest first, the event row last. Pure.
+
+    `lean` is what the family's own score says: bull or bear by its sign, mixed when
+    it is level with votes both ways, neutral when nothing leans, none when no vote
+    in it can speak at this hour. `reads` are the engine's figures behind it, for the
+    hover and for a report whose model wrote no comment.
+    """
+    votes = [v for v in board.get("votes") or [] if isinstance(v, dict)]
+    names = {**FACTOR_NAMES, **BOOK_FACTOR_NAMES.get(book, {})}
+    if book == "TAPE":
+        names = {**names, **TAPE_FACTOR_NAMES}
+    out: list[dict[str, Any]] = []
+    for fam in board.get("families") or []:
+        key = fam.get("key") if isinstance(fam, dict) else None
+        weight = int(fam.get("weight") or 0) if isinstance(fam, dict) else 0
+        if not isinstance(key, str) or weight <= 0:
+            continue
+        mine = [v for v in votes if v.get("family") == key]
+        live = [v for v in mine if v.get("can_vote_now")]
+        score = fam.get("score")
+        longs = sum(1 for v in live if v.get("vote") == "long")
+        shorts = sum(1 for v in live if v.get("vote") == "short")
+        if not live or score is None:
+            lean, tag = "none", "Nothing yet" if key == "catalysts" else "Not live yet"
+        elif score > 0:
+            lean, tag = "bull", "Bullish"
+        elif score < 0:
+            lean, tag = "bear", "Bearish"
+        elif longs and shorts:
+            lean, tag = "mixed", "Mixed"
+        else:
+            lean, tag = "neutral", "Neutral"
+        name, sub = names.get(key, (str(fam.get("label") or key), None))
+        out.append({
+            "key": key, "name": name, "sub": sub, "weight": weight, "lean": lean, "tag": tag,
+            "reads": [f"{v.get('label')}: {v.get('value')}"
+                      for v in mine if v.get("value") not in (None, "", "—")],
+        })
+    ev = next((v for v in votes if v.get("label") == "Event risk"), None)
+    m = _LEADING_INT.match(str((ev or {}).get("value") or ""))
+    n = int(m.group(1)) if m else 0
+    note = str((ev or {}).get("note") or "").strip()
+    out.append({
+        "key": "event", "name": "Geopolitics & events", "sub": "lowers conviction, not a side",
+        "weight": None, "lean": "damp" if n else "neutral",
+        "tag": f"{n} stor{'y' if n == 1 else 'ies'}" if n else "Quiet",
+        "reads": [note] if n and note else ["No high-impact story since the close"],
+    })
+    return out
+
+
+def key_levels(snap: dict[str, Any], book: str,
+               ladder: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The levels a call is traded against, low to high, for the report's ruler: the
+    prior session's high and low, its value area and point of control, the handover
+    range and the last price. No gamma level and no trend line: those are not the
+    report's. At the book's own decimals, as the page prints them. Pure."""
+    if not ladder:
+        return None
+    dp = int(ladder.get("dp") or 0)
+
+    def at(x: float) -> float:
+        return round(x, dp) if dp else round(x)
+
+    prof = ((snap.get("profiles") or {}).get("assets") or {}).get(book) or {}
+    prev = next((r for r in prof.get("rows") or [] if r.get("key") == "prev_rth"), None) \
+        if prof.get("ok") else None
+    day = str((prev or {}).get("date") or "").split(" ")[0] or "Prior"
+    rename = {"Prior RTH high": f"{day} high", "Prior RTH low": f"{day} low",
+              "Prior RTH POC": "POC", "ON high": "Overnight high", "ON low": "Overnight low",
+              "RTH high so far": "Session high", "RTH low so far": "Session low"}
+    # A HANDOVER RANGE FROM BEFORE THE LAST SESSION IS NOT THE HANDOVER (the first real
+    # report, written on a Sunday morning for Monday's open): the ranges still held
+    # Thursday night's box, so "Overnight low 28,243" printed above a last price of
+    # 28,035. Friday's session had already traded through it; the night it names is
+    # not the one the open inherits. A range that began before the last COMPLETE New
+    # York session began is left off; one that follows it, or runs into a session
+    # still trading, stays.
+    rng = ((snap.get("ranges") or {}).get("assets") or {}).get(book) or {}
+    boxes = {s.get("key"): s for s in rng.get("sessions") or []
+             if isinstance(s, dict) and s.get("ok")}
+    ny = boxes.get("ny") or {}
+    done = ny.get("start_ts") if ny.get("status") == "complete" else None
+
+    def stale(key: str) -> bool:
+        began = (boxes.get(key) or {}).get("start_ts")
+        return (isinstance(done, int | float) and isinstance(began, int | float)
+                and began < done)
+
+    gone = {label for key, labels in (("overnight", ("ON high", "ON low")),
+                                      ("asia", ("Asia high", "Asia low")))
+            if stale(key) for label in labels}
+    marks: list[dict[str, Any]] = []
+    for r in ladder.get("rows") or []:
+        kind, label = r.get("kind"), str(r.get("label") or "")
+        if kind not in ("range", "ref", "last") or label == "Prior settle" or label in gone:
+            continue
+        marks.append({"price": at(float(r["price"])), "label": rename.get(label, label),
+                      "kind": "last" if kind == "last" else "poc" if label.endswith("POC")
+                      else "range"})
+    if prev:
+        for k, label in (("vah", "Value high"), ("val", "Value low")):
+            v = prev.get(k)
+            if isinstance(v, int | float) and not isinstance(v, bool):
+                marks.append({"price": at(float(v)), "label": label, "kind": "value"})
+    marks.sort(key=lambda mk: mk["price"])
+    return {"dp": dp, "marks": marks} if marks else None
+
+
+def report_view(digest: dict[str, Any], facts: dict[str, Any]) -> dict[str, Any]:
+    """The digest as the REPORT's model reads it: no dealer gamma anywhere (its block,
+    its card, its walls on the ladder, its row on the board, the board's line on how
+    to treat the score) and no moving average (the ladder's two EMA lines and its
+    daily-regime sentence), the key levels in the ladder's place, and the rows the
+    page will print beside the call. What it cannot see it cannot write. Hermes reads
+    the digest whole (tools.py); this is only for the report. Pure."""
+    out = dict(digest)
+    out.pop("gamma_levels", None)
+    tables = dict(out.get("brief_tables") or {})
+    ladders = tables.pop("ladders", None) or []
+    tables.pop("gamma", None)
+    out["brief_tables"] = tables
+    out["key_levels"] = facts.get("levels") or {}
+    # How much of the day's range is used and what yesterday was: the ladder's two
+    # range cards. Its `regime` (the 200-day line) and `ema200_10m` stay behind.
+    cards = {lad.get("book"): {k: lad.get(k) for k in ("fuel", "yesterday") if lad.get(k)}
+             for lad in ladders if isinstance(lad, dict)}
+    if any(cards.values()):
+        out["range_so_far"] = cards
+    board: dict[str, Any] = {}
+    for b, d in (out.get("engine_driver_board") or {}).items():
+        if isinstance(d, dict):
+            d = {k: v for k, v in d.items() if k not in ("treatment", "regime")}
+            d["votes"] = [v for v in d.get("votes") or []
+                          if not (isinstance(v, dict) and v.get("label") == "Dealer gamma")]
+        board[b] = d
+    if board:
+        out["engine_driver_board"] = board
+    out["factors_on_the_page"] = {
+        b: [{k: f.get(k) for k in ("key", "name", "weight", "tag")} for f in rows]
+        for b, rows in (facts.get("factors") or {}).items()}
     return out
 
 
@@ -1412,6 +1726,7 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
     now = _now_et(snap)
     ladders = [lad for b in books if (lad := _ladder(snap, b, session, now))]
     by_book = {lad["book"]: lad for lad in ladders}
+    drivers = _drivers(snap, books, session, now)
     return {
         "books": books,
         "as_of": f"{now:%a %d %b %Y}, {now:%H:%M} ET",
@@ -1427,11 +1742,16 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         "headlines": _headlines(snap, session, now),
         # The driver board's read per book (drivers.py), weighed for the session
         # this note is written for: the ceiling the call's conviction is capped at.
-        "drivers": _drivers(snap, books, session, now),
+        "drivers": drivers,
+        # What is driving each book's bias, a row a factor (`factors_of`), and the
+        # levels its call is traded against (`key_levels`): the report's two tables.
+        "factors": {b: factors_of(b, drivers[b]) for b in books if b in drivers},
+        "levels": {b: lv for b in books if (lv := key_levels(snap, b, by_book.get(b)))},
         # THE CATALYSTS THE BIAS WAS BLIND TO (events.py, 2026-10-30): the names
         # moving each equity index, with their prints and headlines, and the
         # high-impact events since the close. The call's `catalyst` cites them.
-        "heavyweights": {b: events_mod.heavyweights(snap, b, now) for b in books if b != "GC"},
+        "heavyweights": {b: events_mod.heavyweights(snap, b, now)
+                         for b in books if b in INDEX_BOOKS},
         "event_risk": events_mod.event_risk(snap, now),
     }
 
@@ -1458,27 +1778,201 @@ def _drivers(snap: dict[str, Any], books: list[str], session: str = "ny",
                 b, bd["votes"], key, regime=bd.get("regime"),
                 ny_open=bool((drivers or {}).get("ny_open")),
                 events=int(bd.get("event_count") or 0))}
-        out[b] = {
-            "bias": bd.get("bias"), "score": bd.get("score"), "coverage": bd.get("coverage"),
-            "grade": bd.get("grade"), "max_conviction": bd.get("max_conviction"),
-            "agree": bd.get("agree"), "against": bd.get("against"),
-            "neutral": bd.get("neutral"), "live": bd.get("live"),
-            "cannot_vote": bd.get("cannot_vote"), "total": bd.get("total"),
-            "weights_for": bd.get("weight_label"),
-            "families": [{k: f.get(k) for k in ("label", "weight", "score")}
-                         for f in bd.get("families") or [] if isinstance(f, dict)],
-            "macro_lean": bd.get("macro_lean"), "structure_lean": bd.get("structure_lean"),
-            "conflict": bool(bd.get("conflict")),
-            "treatment": bd.get("treatment"),
-            # A read in no family (dealer gamma, event risk) is not a side, and says so.
-            "votes": [{"label": v.get("label"), "family": v.get("family"),
-                       "value": v.get("value"),
-                       "vote": v.get("vote") if v.get("family") else "not a side",
-                       "can_vote_now": v.get("live", True), "note": v.get("note")}
-                      for v in bd.get("votes") or [] if isinstance(v, dict)],
-            "context": [{"label": c.get("label"), "value": c.get("value"), "note": c.get("note")}
-                        for c in bd.get("context") or [] if isinstance(c, dict)],
-        }
+        out[b] = _board_view(bd)
+    return out
+
+
+def _board_view(bd: dict[str, Any]) -> dict[str, Any]:
+    """A board as the brief stores it: a futures book's (drivers.py) or the stocks
+    tape's (marketctx), cut to what the report caps by and prints. Pure."""
+    return {
+        "bias": bd.get("bias"), "score": bd.get("score"), "coverage": bd.get("coverage"),
+        # What the score is over (bias.read): the page draws it on the bias scale
+        # beside the call, and a score with no basis is taken for the older rule.
+        "basis": bd.get("basis"),
+        "grade": bd.get("grade"), "max_conviction": bd.get("max_conviction"),
+        "agree": bd.get("agree"), "against": bd.get("against"),
+        "neutral": bd.get("neutral"), "live": bd.get("live"),
+        "cannot_vote": bd.get("cannot_vote"), "total": bd.get("total"),
+        "weights_for": bd.get("weight_label"),
+        "families": [{k: f.get(k) for k in ("key", "label", "weight", "score")}
+                     for f in bd.get("families") or [] if isinstance(f, dict)],
+        "macro_lean": bd.get("macro_lean"), "structure_lean": bd.get("structure_lean"),
+        "conflict": bool(bd.get("conflict")),
+        "treatment": bd.get("treatment"),
+        # A read in no family (dealer gamma, event risk) is not a side, and says so.
+        "votes": [{"label": v.get("label"), "family": v.get("family"),
+                   "value": v.get("value"),
+                   "vote": v.get("vote") if v.get("family") else "not a side",
+                   "can_vote_now": v.get("live", True), "note": v.get("note")}
+                  for v in bd.get("votes") or [] if isinstance(v, dict)],
+        "context": [{"label": c.get("label"), "value": c.get("value"), "note": c.get("note")}
+                    for c in bd.get("context") or [] if isinstance(c, dict)],
+    }
+
+
+# --------------------------------------------------------------------------
+# The Stocks desk's report: SPY, QQQ and IWM for New York (2026-11-16).
+# --------------------------------------------------------------------------
+#
+# ONE BIAS FOR THE THREE. The stocks desk already weighs the market as one tape
+# (marketctx.votes, bias.tape_read): SPY and QQQ against their levels, the VIX and its
+# curve, credit, yields and the dollar, the sectors, equal weight, index volume and the
+# leaders. That is the read the Stocks tab's Tape card prints, so it is the read this
+# report's single drivers table prints, once, above three calls. It is taken from the
+# scanner's payload as it stood when Generate was pressed, with event risk added as the
+# futures boards carry it (a row that is no side and takes a notch off the ceiling).
+#
+# EACH FUND ITS OWN LEVELS. A call is traded against the fund's own previous-day and
+# pre-market high and low, the levels the owner's strategy draws, not a futures ladder.
+#
+# THE REST IS THE INDEXES REPORT'S. The calendar, the headlines, the rotation, the
+# snapshot and every macro block are built as an Indexes report's are (NQ and ES are
+# the same two indexes in futures prices), and the futures-only parts (ladders, gamma,
+# the session-type record) are left out of what the page prints.
+
+#: The tape's families as the report names them (FACTOR_NAMES has the futures' names).
+TAPE_FACTOR_NAMES: dict[str, tuple[str, str | None]] = {
+    "levels": ("Index levels", "SPY and QQQ against their own"),
+    "risk": ("Risk appetite", "the VIX, its curve and credit"),
+    "rates": ("Macro", "rates & dollar"),
+    "participation": ("Participation", "sectors, equal weight, volume & leaders"),
+}
+#: Every key a comment on the tape's table may carry (the futures' are FACTOR_KEYS).
+TAPE_FACTOR_KEYS: tuple[str, ...] = (*TAPE_FACTOR_NAMES, "event")
+#: A fund's levels on the report's ruler, in the strategy's own names.
+_FUND_LEVELS: tuple[tuple[str, str], ...] = (
+    ("pdh", "PDH"), ("pdl", "PDL"), ("pmh", "PMH"), ("pml", "PML"), ("pdc", "Prev close"))
+
+
+def _num_or_none(v: Any) -> float | None:
+    return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
+
+
+def _fund_rows_by_sym(scan: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return {r["sym"]: r for r in (scan or {}).get("rows") or []
+            if isinstance(r, dict) and r.get("ok") and r.get("sym") in ETF_BOOKS}
+
+
+def fund_levels(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One fund's levels for the report's ruler, low to high: PDH, PDL, PMH, PML, the
+    previous close and the last price, at cents. Pure."""
+    if not isinstance(row, dict):
+        return None
+    lv = row.get("levels") if isinstance(row.get("levels"), dict) else {}
+    marks = [{"price": round(v, 2), "label": label, "kind": "range"}
+             for k, label in _FUND_LEVELS if (v := _num_or_none(lv.get(k))) is not None]
+    last = _num_or_none(row.get("last"))
+    if last is not None:
+        marks.append({"price": round(last, 2), "label": "Last", "kind": "last"})
+    marks.sort(key=lambda mk: mk["price"])
+    return {"dp": 2, "marks": marks} if len(marks) >= 2 else None
+
+
+def fund_rows(scan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """SPY, QQQ and IWM against their own levels, for the model: the move, the move
+    outside the session, the levels and where the last price sits. No trend read (the
+    report argues from none). Pure."""
+    by = _fund_rows_by_sym(scan)
+    out: list[dict[str, Any]] = []
+    for sym in ETF_BOOKS:
+        r = by.get(sym)
+        if r is None:
+            continue
+        lv = r.get("levels") if isinstance(r.get("levels"), dict) else {}
+        last = _num_or_none(r.get("last"))
+        pdh, pdl = _num_or_none(lv.get("pdh")), _num_or_none(lv.get("pdl"))
+        pmh, pml = _num_or_none(lv.get("pmh")), _num_or_none(lv.get("pml"))
+        where = None
+        if last is not None and pdh is not None and pdl is not None:
+            where = ("above the previous day's high" if last > pdh else
+                     "below the previous day's low" if last < pdl else
+                     "inside the previous day's range")
+        pm = None
+        if last is not None and pmh is not None and pml is not None:
+            pm = ("above the pre-market high" if last > pmh else
+                  "below the pre-market low" if last < pml else "inside the pre-market range")
+        out.append({
+            "sym": sym, "last": _num_or_none(r.get("last")),
+            "chg_pct": _num_or_none(r.get("chg_pct")), "ext_pct": _num_or_none(r.get("ext_pct")),
+            "levels": {k: _num_or_none(lv.get(k)) for k in ("pdh", "pdl", "pmh", "pml", "pdc")},
+            "against_previous_day": where, "against_pre_market": pm,
+        })
+    return out
+
+
+def market_board(scan: dict[str, Any] | None, snap: dict[str, Any],
+                 now: datetime) -> dict[str, Any] | None:
+    """The stocks tape count as a report board: the Scanner's own read (marketctx,
+    weighed by bias.tape_read for the scanner's session) with event risk added as a
+    row that is no side and lowers the ceiling a notch, as on a futures board. Pure,
+    bar the lazy import (drivers imports this module)."""
+    c = (((scan or {}).get("regime") or {}).get("conviction")
+         if isinstance((scan or {}).get("regime"), dict) else None)
+    if not isinstance(c, dict) or not c.get("votes"):
+        return None
+    from . import drivers as drivers_mod
+
+    events = events_mod.event_risk(snap, now)
+    ev = drivers_mod._event_risk(events)
+    cap = c.get("max_conviction")
+    if ev.get("damper") and isinstance(cap, int):
+        cap = max(1, cap - 1)
+    board = {**c, "max_conviction": cap, "votes": [*c["votes"], {**ev, "family": None}],
+             "event_count": len(events) if ev.get("damper") else 0}
+    return _board_view(board)
+
+
+def _etf_facts(snap: dict[str, Any], scan: dict[str, Any] | None,
+               base: dict[str, Any]) -> dict[str, Any]:
+    """The Stocks report's tables: an Indexes report's (`base`) with the three funds as
+    its books, the tape as its one board and each fund's own levels. Pure."""
+    now = _now_et(snap)
+    market = market_board(scan, snap, now)
+    by = _fund_rows_by_sym(scan)
+    partial = list(base.get("partial") or [])
+    if market is None:
+        partial.append("The Stocks tape count has not been read yet: the market bias is missing.")
+    if len(by) < len(ETF_BOOKS):
+        missing = ", ".join(s for s in ETF_BOOKS if s not in by)
+        partial.append(f"The scanner has no row for {missing} yet: no levels for it.")
+    return {
+        **base,
+        "books": list(ETF_BOOKS),
+        "partial": partial,
+        "ladders": [], "gamma": [], "session_type": {},
+        "drivers": {}, "factors": {},
+        "levels": {s: lv for s in ETF_BOOKS if (lv := fund_levels(by.get(s)))},
+        # The one bias the three calls are read against, and its table (`factors_of`).
+        "market": market,
+        "market_factors": factors_of("TAPE", market) if market else [],
+        "funds": fund_rows(scan),
+    }
+
+
+def etf_view(digest: dict[str, Any], facts: dict[str, Any]) -> dict[str, Any]:
+    """An Indexes digest as the Stocks report's model reads it: `report_view`'s cuts,
+    then the futures boards and range cards out and the funds, the tape and the funds'
+    levels in. Pure."""
+    out = report_view(digest, {**facts, "levels": {}, "factors": {}})
+    for k in ("engine_driver_board", "range_so_far", "the_book_this_note_is_about",
+              "other_books_context_only"):
+        out.pop(k, None)
+    out["writing_about"] = ASSETS[ETF_ASSET]["instruments"]
+    out["the_funds_this_note_is_about"] = list(ETF_BOOKS)
+    out["index_funds"] = facts.get("funds") or []
+    board = dict(facts.get("market") or {})
+    board.pop("treatment", None)
+    out["stocks_tape_count"] = board or None
+    out["key_levels"] = facts.get("levels") or {}
+    out["factors_on_the_page"] = {"market": [
+        {k: f.get(k) for k in ("key", "name", "weight", "tag")}
+        for f in facts.get("market_factors") or []]}
+    out["futures_blocks"] = (
+        "session_ranges, volume_profile, session_type_lean and the NQ and ES rows are the "
+        "Nasdaq 100's and the S&P 500's futures: the same indexes as QQQ and SPY in futures "
+        "prices, read as context for the open. No fund level comes from them, and the "
+        "Russell 2000 has no future here.")
     return out
 
 
@@ -1705,10 +2199,15 @@ def build_digest(
         "SPY": brief("SPY"),
         "GC_gold_futures": brief("GC"),
         "GLD": brief("GLD"),
+        "SI_silver_futures": brief("SILVER"),
+        "CL_crude_futures": brief("WTI"),
         "YM_dow": brief("YM"),
         "RTY_russell": brief("RTY"),
     }
-    focus_keys = BOOK_KEYS.get(asset, ())
+    # The quotes that ARE the subject: one book's, or the two indexes' with their ETFs.
+    # `all` holds nothing back.
+    focus_keys = () if asset == "all" else tuple(
+        k for b in facts["books"] for k in BOOK_KEYS.get(b, ()))
     if focus_keys:
         book: dict[str, Any] = {
             "the_book_this_note_is_about": {k: all_books[k] for k in focus_keys},
@@ -1723,7 +2222,7 @@ def build_digest(
     # ONE PLACE DECIDES WHAT "FOCUSED" MEANS, so the three per-instrument
     # blocks cannot disagree about which book the note is for.
     def wanted(key: str) -> bool:
-        return asset == "all" or key == asset
+        return key in facts["books"]
 
     # ---- gamma: the seven levels per asset, with spot placed among them ----
     gamma: dict[str, Any] = {}
@@ -1973,7 +2472,7 @@ def build_digest(
         "gamma_levels": gamma,
         # What a move will find: who is crowded, and how hedged the market is.
         # Slow, and never a direction on its own.
-        "positioning": _positioning(snap, asset != "GC", wanted),
+        "positioning": _positioning(snap, any(b in facts["books"] for b in INDEX_BOOKS), wanted),
         # What each session traded, and where price sits inside each range.
         # The most useful block on the page for a handover read: "London has
         # already taken out the Asia high" is one number here and an inference
@@ -2047,12 +2546,66 @@ def build_digest(
     }
 
 
+# A FIGURE AS THE PAGE PRINTS IT (2026-11-15). The digest carried what the sources
+# gave: a 200 EMA of 28206.3935 beside a ladder that prints 28,206, a contribution of
+# -0.3763 percentage points. A model copies what it is shown, and a real note printed
+# both as they stood. The guard cannot help: it is exact on the value, so the rounded
+# figure a person would write is the one it flags. So the digest is tidied before it is
+# shown, and what is stored on the report is what was shown.
+_TWO_PLACES = re.compile(r"(?:_pct|_pp)$|^(?:chg|pct|weight|week_change|month_change)$")
+
+
+def _tidy(v: Any, key: str = "") -> Any:
+    """Floats at a printable precision: two places for a percentage, a share or any
+    figure of 10 and over, four for the rest (an exchange rate, a ratio). Pure."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            return v
+        return round(v, 2 if (_TWO_PLACES.search(key) or abs(v) >= 10) else 4)
+    if isinstance(v, dict):
+        return {k: _tidy(x, str(k)) for k, x in v.items()}
+    if isinstance(v, list | tuple):
+        return [_tidy(x, key) for x in v]
+    return v
+
+
+def shown(digest: dict[str, Any]) -> dict[str, Any]:
+    """The digest as the model reads it: a copy, every figure tidied, and each
+    ladder's levels at the ladder's own decimals, which is how the page prints them
+    (NQ in whole points). The facts the page draws from are not touched. Pure."""
+    out: dict[str, Any] = _tidy(digest)
+    src = (digest.get("brief_tables") or {}).get("ladders") or []
+    dst = (out.get("brief_tables") or {}).get("ladders") or []
+    for a, b in zip(src, dst, strict=False):
+        dp = a.get("dp") if isinstance(a, dict) else None
+        if not isinstance(dp, int) or not isinstance(b, dict):
+            continue
+
+        def at(x: Any, dp: int = dp) -> Any:
+            if isinstance(x, bool) or not isinstance(x, int | float):
+                return x
+            return round(x, dp) if dp else round(x)
+
+        b["last"] = at(a.get("last"))
+        for ra, rb in zip(a.get("rows") or [], b.get("rows") or [], strict=False):
+            rb["price"] = at(ra.get("price"))
+        for ca, cb in zip(a.get("confluence") or [], b.get("confluence") or [], strict=False):
+            if isinstance(ca, dict) and isinstance(cb, dict):
+                cb["lo"], cb["hi"] = at(ca.get("lo")), at(ca.get("hi"))
+        if isinstance(a.get("regime"), dict) and isinstance(b.get("regime"), dict):
+            b["regime"]["ema200"] = at(a["regime"].get("ema200"))
+        if isinstance(a.get("ema200_10m"), dict) and isinstance(b.get("ema200_10m"), dict):
+            b["ema200_10m"]["value"] = at(a["ema200_10m"].get("value"))
+    return out
+
+
 # --------------------------------------------------------------------------
 # The schema. Forces a direction and a conviction rather than adjectives.
 # --------------------------------------------------------------------------
 
 BIASES = ("bullish", "leaning bullish", "neutral", "leaning bearish", "bearish")
-TONES = ("bear", "bull", "mixed", "neutral")
 
 _STR: dict[str, Any] = {"type": "string"}
 
@@ -2070,69 +2623,98 @@ def _arr(items: dict[str, Any], lo: int, hi: int) -> dict[str, Any]:
 
 
 _BOOK = {"type": "string", "enum": list(BOOKS)}
+#: A book as a model names it when it does not use the key.
+_BOOK_WORDS = {"GOLD": "GC", "SILVER": "SIL", "SI": "SIL", "CRUDE": "CL", "CRUDE OIL": "CL",
+               "OIL": "CL", "WTI": "CL"}
 _BIAS = {"type": "string", "enum": list(BIASES)}
 
-# THE BRIEF. Words only: every figure it annotates lives in the facts, and the
-# `id`/`key` fields are how an annotation finds its row. See `sanitize_brief`
-# for what happens to one that points at nothing.
+# THE BRIEF, SHORT (owner, 2026-11-15: "can we work on really making the reports
+# concise and impactful?", then "i want it to be really hard hitting impactful stuff
+# that actually matters and makes a difference to the markets"). The shape before
+# this asked for thirteen parts: a call and then a full read per book, a note on every
+# table, a rotation paragraph, a cross-asset paragraph. A real Indexes note came back
+# at 1,850 words with the same four facts in nine places, beside tables that already
+# printed them. What is left is what only a judgement supplies: the day in two
+# sentences, a call per book with its reasons, its plan and what kills it, what is on
+# the clock, and what could break it. Words only, as before: every figure lives in
+# the facts, and an `id` is how a note finds its row (`sanitize_brief`).
+#
+# THE LIMITS ARE COUNTED IN WORDS AND CHECKED. They are printed into the prompt from
+# this table and held on the way back (`too_long`), because "be brief" is an
+# instruction a model agrees with and then writes four paragraphs.
+#
+# A note stored before this has the older shape and no `brief_version`; the page
+# still draws it (Brief.tsx).
+# 3 IS THE MARKET REPORT (later the same day: "need to rework the report, so it looks
+# like a nice concise readable report", "make it look like professional market
+# report"). The three reasons of 2 became one comment a factor, for every factor the
+# bias weighs (`factors_of`), so nothing that moves the score is left off the page;
+# and dealer gamma left the report. A 2 keeps its layout on the page.
+BRIEF_VERSION = 3
+
+LIMITS: dict[str, int] = {
+    "thesis": 40, "factor": 20, "plan": 28, "wrong_if": 16,
+    "today": 14, "risks": 14, "headlines": 12,
+}
+#: A quarter over is let through: a bullet two words long of its limit is not worth
+#: forty seconds of a second answer.
+LIMIT_SLACK = 1.25
+
 SCHEMA: dict[str, Any] = _obj({
-    "thesis": {**_STR, "description": "One or two plain sentences: the idea of the day."},
+    "thesis": {**_STR, "description": (
+        f"The day in one or two plain sentences, {LIMITS['thesis']} words at most."
+    )},
     "calls": _arr(_obj({
         "book": _BOOK,
         "open_bias": _BIAS,
         "conviction": {"type": "integer", "minimum": 1, "maximum": 5},
-        "rest_of_day": {**_STR, "description": "Short label, e.g. 'Neutral to leaning bearish'."},
-        "rest_of_day_bias": _BIAS,
-        "wrong_if": {**_STR, "description": "Under 60 characters, using ladder levels."},
-        # THE JUSTIFICATION, IN LAYERS. Two to four bullets, each naming its
-        # layer, so a call cannot be asserted without saying what it rests on:
-        # the macro driver, whether structure confirms or conflicts, and what
-        # tipped it. The owner asked for the bias to explain itself
-        # (2026-09-16); a bias with a conviction score and no reasoning is a
-        # number that cannot be argued with, which is not a virtue.
-        "why": _arr(
-            {
-                **_STR,
-                "description": (
-                    "One reason, prefixed with its layer: "
-                    "Macro:, Positioning:, Structure:, Session:."
-                ),
-            },
-            2, 4,
-        ),
-        # THE CATALYST (2026-10-30): the heavyweight print or the event moving
-        # this book, cited by id from `heavyweights` / `event_risk` so the
-        # sanitiser can check it points at something on the board.
-        "catalyst": {**_STR, "description": (
-            "One sentence: the heavyweight print or the event moving this book, "
-            "with its figure. Empty string when neither is on the board. The ids "
-            "go in catalyst_ids, not in this sentence."
+        # THE REASONS, ONE A FACTOR. The owner asked for the bias to explain itself
+        # (2026-09-16) and then for every factor behind it to be named (2026-11-15).
+        # The key is the row it is the comment on; the tag and the weight beside it
+        # are the engine's and are not the model's to write.
+        "factors": _arr(_obj({
+            "key": {"type": "string", "enum": list(FACTOR_KEYS)},
+            "line": {**_STR, "description": (
+                f"What this factor is saying now, with its figure, {LIMITS['factor']} "
+                "words at most, in plain words."
+            )},
+        }), 1, 8),
+        "plan": {**_STR, "description": (
+            f"One line, {LIMITS['plan']} words at most: the key level that has to "
+            "hold or break, and where that carries."
         )},
-        "catalyst_ids": _arr(_STR, 0, 3),
+        "wrong_if": {**_STR, "description": (
+            f"One line, {LIMITS['wrong_if']} words at most: what kills the call."
+        )},
     }), 1, 3),
-    "snapshot_watch": _arr(_obj({"key": _STR, "note": _STR}), 0, 5),
-    "gamma_read": _STR,
-    "catalysts_intro": _STR,
-    "catalyst_notes": _arr(_obj({"id": _STR, "note": _STR}), 0, 14),
-    "reads": _arr(_obj({
-        "book": _BOOK,
-        "regime": _STR,
-        "chain": _arr(_STR, 2, 6),
-        "at_open": _STR,
-        "wrong_if": _STR,
-        "rest_of_day": _STR,
-        "flips": _arr(_STR, 1, 3),
-        "drivers": _arr(_obj({
-            "label": _STR, "text": _STR, "tone": {"type": "string", "enum": list(TONES)},
-        }), 3, 8),
-    }), 1, 3),
-    "rotation_read": _STR,
-    "ratio_reads": _arr(_obj({"id": _STR, "read": _STR}), 0, 8),
-    "rotation_notes": _arr(_STR, 0, 3),
-    "headlines": _arr(_obj({"id": _STR, "books": _arr(_BOOK, 1, 3), "note": _STR}), 0, 6),
-    "cross_asset": _STR,
-    "risks": _arr(_STR, 0, 4),
+    "today": _arr(_obj({"id": _STR, "note": _STR}), 0, 3),
+    "risks": _arr(_STR, 0, 3),
+    "headlines": _arr(_obj({"id": _STR, "books": _arr(_BOOK, 1, 3), "note": _STR}), 0, 3),
 })
+
+# THE STOCKS REPORT'S SHAPE (2026-11-16): one bias for the three funds, so the comments
+# on its factors are written once, at the top, and a call per fund carries none.
+_ETF = {"type": "string", "enum": list(ETF_BOOKS)}
+_CALL = SCHEMA["properties"]["calls"]["items"]["properties"]
+_TAPE_FACTORS = {**_CALL["factors"], "items": {**_CALL["factors"]["items"], "properties": {
+    **_CALL["factors"]["items"]["properties"],
+    "key": {"type": "string", "enum": list(TAPE_FACTOR_KEYS)}}}}
+SCHEMA_ETFS: dict[str, Any] = _obj({
+    "thesis": SCHEMA["properties"]["thesis"],
+    "factors": _TAPE_FACTORS,
+    "calls": _arr(_obj({
+        "book": _ETF, "open_bias": _BIAS, "conviction": _CALL["conviction"],
+        "plan": _CALL["plan"], "wrong_if": _CALL["wrong_if"],
+    }), 3, 3),
+    "today": SCHEMA["properties"]["today"],
+    "risks": SCHEMA["properties"]["risks"],
+    "headlines": _arr(_obj({"id": _STR, "books": _arr(_ETF, 1, 3), "note": _STR}), 0, 3),
+})
+
+
+def schema_for(asset: str) -> dict[str, Any]:
+    """The strict schema a subject is answered in. Pure."""
+    return SCHEMA_ETFS if resolve_asset(asset) == ETF_ASSET else SCHEMA
 
 # What a non-US session can actually do to a US-priced book, and through which
 # channel. One entry per session; the gold line is separate because the answer
@@ -2193,8 +2775,7 @@ the 08:30 ET US print, which remains the actual event.""",
 NEW YORK IS THE SESSION EVERYTHING ELSE WAS POSITIONING FOR. The 08:30 data
 window, the 09:30 open, Fed speakers and the auction cycle are the drivers, and
 the overnight is now the range being broken or defended rather than a separate
-story. Dealer gamma matters most here because the option volume that creates it
-is American.""",
+story.""",
 }
 
 # Gold's answer to the same question is different enough to state separately.
@@ -2208,6 +2789,37 @@ headline reports one, cite that headline as the source. What the data does
 carry, and what sets the level: US real yields (`rates.real`) and the policy
 path, the dollar (DXY, USD/JPY), silver and copper beside gold, GVZ, and the
 session ranges. A gold thesis that never mentions real rates is incomplete."""
+
+# Silver and crude (2026-11-15), each stated separately for the reason gold is.
+TRANSMISSION_SIL = """\
+SILVER TRADES AS GOLD'S HIGH-BETA SHADOW AND AS AN INDUSTRIAL METAL AT ONCE. As with
+gold, much of the physical market trades in London and Asia, so a move there can be
+real flow rather than drift. BUT THIS DATA CARRIES NO PHYSICAL-MARKET SERIES — no fix
+prices, no regional premiums, no ETF holdings, no industrial or solar demand figures,
+and no positioning in silver (the COT here covers NQ, ES and gold only). Do not name
+any of them as a fact or a driver; if a headline reports one, cite that headline as
+the source. What the data does carry, and what sets the level: US real yields
+(`rates.real`) and the policy path, the dollar (DXY, USD/JPY), GOLD beside silver (the
+gold/silver ratio says which metal is leading), COPPER (the industrial half), VXSLV,
+and the session ranges. A silver thesis that never says what gold is doing is
+incomplete."""
+
+TRANSMISSION_CL = """\
+CRUDE IS A GLOBAL BARREL PRICED IN DOLLARS, AND EACH SESSION CAN MOVE IT FOR ITS OWN
+REASON: Asia is where the marginal demand is, London is where Brent trades and where
+the Gulf and Russia headlines usually land, and New York is where the US data, the
+weekly inventories (Wednesday 10:30 ET) and the products trade. BUT THIS DATA CARRIES
+NO SUPPLY SERIES — no OPEC production or quota figures, no refinery runs, no Cushing
+or regional stocks, no tanker rates, and no positioning in crude (the COT here covers
+NQ, ES and gold only). Do not name any of them as a fact or a driver; if a headline
+reports one, cite that headline as the source. What the data does carry, and what
+sets the level: the dollar, Brent beside WTI, gasoline and heating oil (whether
+refiners are pulling the barrel through), copper and credit as the demand read, OVX,
+the weekly inventories row once it has printed, the session ranges, and the
+geopolitics and energy headlines. Those headlines are SUPPLY RISK and cut either way:
+say which way THIS one cuts, with its id, never that risk is simply bullish. The
+10-year and the VIX are not crude drivers on their own; cite them only through the
+dollar or through demand."""
 
 
 def _thin_tape(session: str) -> str:
@@ -2233,24 +2845,6 @@ bar, and in a thin book acceptance means more, not less. Macro keeps the
 direction only through what is live right now, and the weighting below says what
 that is. Say explicitly when a move looks like position-driven drift rather than
 a repricing.
-
-DEALER GAMMA IS THE EXCEPTION, AND IT SPLITS IN TWO. Overnight a wall is a
-LEVEL, NOT A FORCE. The pin works through dealers hedging in a deep book, and
-that flow is largely absent out of hours — desks that can hedge overnight mostly
-wait for liquidity rather than work size into Globex. So:
-  * A POSITIVE-GAMMA PIN IS WEAKER HERE than the same setup at 10:30 ET. Cite
-    the walls as reference geometry and as the frame New York will open into;
-    do not claim price should pin between them tonight on hedging that is not
-    happening.
-  * THE FLIP CUTS THE OTHER WAY. Negative gamma in a thin book is MORE
-    dangerous, not less: whatever hedging flow does arrive moves price further
-    than it would in depth, which is how overnight cascades happen at all. Spot
-    below the flip out of hours deserves more weight, not less.
-AND THE MAP ITSELF IS THE US CLOSE'S. Open interest clears once a day and the
-options barely trade out of hours, so this is where dealers WERE when New York
-shut, not where they are now. Usually still fair — positions do not move much
-when nothing trades — but it is one more reason to read the walls as geometry
-overnight rather than as a live constraint.
 """
 
 
@@ -2269,8 +2863,7 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
          "Asia's range so far, the developing profile, acceptance against the New York close. "
          "It is the only evidence still being written."),
         ("Structure", "frames it",
-         "prior value, the New York range, the 200 EMAs and the daily frame: what the tape is "
-         "being judged against."),
+         "prior value and the New York range: what the tape is being judged against."),
         ("Macro", "the anchor, mostly at its close",
          "the cash 10Y, credit and the VIX are shut, so they are closing prints that frame the "
          "call and cannot make a new one. Live: USD/JPY, the dollar, oil, gold and last night's "
@@ -2279,8 +2872,7 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
          "HIGH stories since the close first, and only where they reach a book through the "
          "channels above."),
         ("Positioning", "a reference",
-         "gamma walls are geometry tonight, though below the flip a break runs further in a "
-         "thin book. COT and put/call are slow background, never tonight's direction."),
+         "COT and put/call are slow background, never tonight's direction."),
     ],
     "london": [
         ("Session tape", "leads the path",
@@ -2291,10 +2883,9 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
         ("News", "since the close",
          "HIGH stories first; a European policy decision today outranks anything overnight."),
         ("Structure", "frames it",
-         "prior value and the 200 EMAs: the frame New York will inherit."),
+         "prior value and the prior session's range: the frame New York will inherit."),
         ("Positioning", "a reference",
-         "gamma is still the US close's map, so geometry until New York; COT and put/call are "
-         "slow background."),
+         "COT and put/call are slow background."),
     ],
     "ny_pre": [
         ("Macro", "sets the direction",
@@ -2304,9 +2895,8 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
          "HIGH stories first: whatever changed overnight is what the open has to price."),
         ("Structure", "sets the path",
          "the overnight range against prior value is the range the open breaks or defends."),
-        ("Positioning", "sets how far",
-         "the gamma map is what the open will trade against, and the regime says whether a "
-         "break runs; it counts in full from 09:30. COT and put/call say who is crowded."),
+        ("Positioning", "who is crowded",
+         "COT and put/call say who is crowded and what a break will find, never a direction."),
         ("Session tape", "the handover",
          "Asia and London are context here, not the subject."),
     ],
@@ -2314,9 +2904,8 @@ _WEIGHTING: dict[str, list[tuple[str, str, str]]] = {
         ("Structure", "leads the path",
          "acceptance against prior value, the opening range, VWAP, and the levels this session "
          "has already taken or rejected."),
-        ("Positioning", "decisive",
-         "the hedging flow is real now: the gamma regime, the flip, the walls and any expiry "
-         "decide how far a move runs and whether a break is faded or chased, never which way."),
+        ("Positioning", "who is crowded",
+         "COT and put/call say who is crowded and what a break will find, never which way."),
         ("Macro", "direction, where it is live",
          "prints that have landed, and how the curve and the dollar reacted. A print the tape "
          "has faded does not anchor by reputation."),
@@ -2341,17 +2930,17 @@ def _weighting(session: str, prog: dict[str, Any]) -> str:
                      for i, (layer, role, what) in enumerate(session_layers(session, prog), 1))
     return f"""\
 HOW THE LAYERS WEIGH IN THIS NOTE, heaviest first. Where they disagree the higher \
-row decides the path and the conflict lowers conviction; the `why` bullets say \
-which layer carried the call.
+row decides the path and the conflict lowers conviction; the `factors` comments \
+say what each layer is doing.
 {rows}"""
 
 
 def _transmission(session: str, asset: str) -> str:
     """The session's transmission channels for the book being written about."""
     block = TRANSMISSION.get(session, TRANSMISSION["ny"])
-    if resolve_asset(asset) == "GC":
-        return f"{block}\n\n{TRANSMISSION_GC}"
-    return block
+    own = {"GC": TRANSMISSION_GC, "SIL": TRANSMISSION_SIL, "CL": TRANSMISSION_CL}.get(
+        resolve_asset(asset))
+    return f"{block}\n\n{own}" if own else block
 
 
 def _live_framing(session: str, prog: dict[str, Any]) -> str:
@@ -2379,10 +2968,10 @@ of the open. WRITE THE NOTE FROM HERE.
 Read every field below that names "the open" as "from this moment":
   * `open_bias` is your call for the REMAINDER of the session, from the current \
 price — not a call for an open that has already happened.
-  * `at_open` describes where price sits NOW, and what this session has already \
-done to get there: the range it has built, which levels it has taken or \
-rejected, whether it is holding above or below them.
-  * `rest_of_day` is the path from this moment to the close.
+  * `plan` starts from where price sits NOW: which levels this session has already \
+taken or rejected, and what is next from here.
+  * `today` leads with what is still to come; a print already out is there only for \
+what it did.
 
 The session's own developing profile and its range so far are the live \
 evidence; the completed reference windows are what it is being judged against. \
@@ -2427,7 +3016,6 @@ def system_prompt(session: str, asset: str = "all", prog: dict[str, Any] | None 
   session_ranges   what each session traded, and where price sits inside each. \
 The most important block for a handover: 0 is that session's low, 1 its high, \
 above 1 means the high has been taken out.
-  gamma_levels     where dealer hedging turns on the GC board, and the regime.
   session_type_lean   will New York trend or range: the conditions that hold \
 today with their counts over the record, and the call. Counts, never odds — say \
 "2 trend days in 142" — and gold's New York box rarely earns a call by this rule, \
@@ -2444,12 +3032,67 @@ headlines — context, cited where it changes the read. Sector rotation and \
 index constituents are equity internals: bring them in only when equities \
 are moving hard enough to be a risk signal for gold in their own right, \
 never as structure."""
+    elif resolve_asset(asset) == "SIL":
+        must_read = """\
+  session_ranges   what each session traded, and where price sits inside each. \
+The most important block for a handover: 0 is that session's low, 1 its high, \
+above 1 means the high has been taken out.
+  rates            the policy path and the curve. Real yields are the carrying \
+cost of a metal that pays nothing, so silver trades the front of the curve and \
+what is priced into it, as gold does.
+  dollar_and_commodities   the unit silver is priced in, plus copper, which says \
+whether the industrial half is with the move; and gold, in `brief_tables.snapshot` \
+and the gold/silver ratio, which says whether silver is following or leading.
+
+Then volatility (VXSLV in the snapshot), the volume profile levels, the calendar \
+ahead and the headlines — context, cited where it changes the read. There is no \
+session-type record and no COT for silver: say nothing about either. Sector \
+rotation and index constituents are equity internals: bring them in only when \
+equities are moving hard enough to be a risk signal for silver in their own \
+right, never as structure."""
+    elif resolve_asset(asset) == "CL":
+        must_read = """\
+  session_ranges   what each session traded, and where price sits inside each. \
+The most important block for a handover: 0 is that session's low, 1 its high, \
+above 1 means the high has been taken out.
+  dollar_and_commodities   the unit the barrel is priced in, Brent beside WTI, \
+and copper for demand; gasoline and heating oil are in `brief_tables.snapshot` and \
+say whether refiners are pulling the barrel through.
+  catalysts        the weekly inventories and anything from OPEC, with the figure \
+once printed: a build is more crude in store, a draw less. Where the row carries no \
+consensus, quote the week's change itself and say there is no forecast to hold it to.
+
+Then the headlines (the Gulf, Russia, OPEC and sanctions are supply risk and cut \
+either way), volatility (OVX in the snapshot), the volume profile levels, credit \
+as a demand read, and the calendar ahead — context, cited where it changes the \
+read. There is no session-type record and no COT for crude: say nothing about \
+either. The 10-year, the VIX, sector rotation and index constituents are not \
+crude's: bring equities in only when they are moving hard enough to be a demand \
+signal in their own right, never as structure."""
+    elif resolve_asset(asset) == ETF_ASSET:
+        must_read = """\
+  index_funds      SPY, QQQ and IWM against their own levels: the move, the move \
+outside the session, the previous day's high and low (PDH, PDL), the pre-market high \
+and low (PMH, PML), the previous close, and where the last price sits against each \
+range. The most important block: every call is traded against these.
+  stocks_tape_count   the one bias for the three funds, vote by vote: SPY and QQQ \
+against their levels, the VIX and its curve, credit, yields and the dollar, the \
+sectors, equal weight, index volume and the leaders.
+  index_movers     WHICH NAMES supplied the move in the Nasdaq 100 and the S&P 500. \
+Use the contribution figures, which are weight times return.
+  sector_rotation  WHICH SECTORS are being bought, as excess return over SPY. \
+Defensives leading is a different tape from technology leading, and small caps \
+against megacaps is IWM against QQQ.
+
+Then rates and the policy path (IWM is the most rate-sensitive of the three), \
+credit, volatility, the calendar ahead, earnings and the headlines, and as context \
+for the open the futures blocks (`futures_blocks` says what they are) — cited where \
+they change the read."""
     else:
         must_read = """\
   session_ranges   what each session traded, and where price sits inside each. \
 The most important block for a handover: 0 is that session's low, 1 its high, \
 above 1 means the high has been taken out.
-  gamma_levels     where dealer hedging turns, and the regime.
   session_type_lean   will New York trend or range: every condition that holds \
 today (the night so far in ATRs, yesterday's shape, the gap, the VIX band) with its \
 count over two years of sessions, and the call. Counts, never odds — say "2 trend \
@@ -2468,14 +3111,14 @@ put/call ratios: who is crowded and how hedged the market is — what a move wil
 find, never a direction on its own), volatility, the volume profile (POC is the \
 magnet, VAH/VAL bound acceptance; STATE where the session opened and where \
 price trades now against prior value — the classifier already decided, cite \
-it — and name any confluence between profile levels and gamma walls), the \
+it), the \
 dollar and commodities, the calendar ahead, earnings, expiry and the \
 headlines — context, cited where it changes the read."""
 
     book_list = ", ".join(books_for(asset))
     return f"""You are a markets strategist writing the pre-session brief for one \
-trader's desk. They trade NQ/QQQ, ES/SPY and GC/GLD futures and ETFs, and they \
-trade the Asia, London and New York sessions.
+trader's desk. They trade NQ/QQQ, ES/SPY and GC/GLD futures and ETFs, and silver \
+and WTI crude futures, and they trade the Asia, London and New York sessions.
 
 THIS BRIEF IS ABOUT {a["instruments"].upper()}.
   {a["drivers"]}
@@ -2489,7 +3132,8 @@ THIS BRIEF IS FOR THE {s["label"].upper()} SESSION, {prog.get("hours")}.
 
 US MACRO AND THE FED ARE THE ANCHOR IN EVERY SESSION, INCLUDING THIS ONE. These \
 are US-priced books: NQ and ES are claims on US earnings discounted at US real \
-rates, and gold is priced against the same curve and the same dollar. The \
+rates, gold and silver are priced against the same curve and the same dollar, and \
+crude is priced in that dollar and trades American demand and American stocks. The \
 session above decides WHICH OTHER EVIDENCE IS ADMISSIBLE and how far to believe \
 a break; it never demotes the US.
 {_thin_tape(session)}
@@ -2509,7 +3153,7 @@ made ("10Y 4.99%, +6bp", not "yields are up"). If the data does not support a \
 view, the call is neutral with a low conviction — a hedged guess presented \
 confidently is worse than no brief.
 
-WHAT THIS DATA DOES NOT HAVE: net gamma notional, strike-level open interest, \
+WHAT THIS DATA DOES NOT HAVE: strike-level open interest, \
 ETF flows or holdings, European or Japanese government bond yields, gold fixes \
 or physical premiums. Never mention them. A figure that is not in the data \
 does not go in the brief, however standard it would be in one — AND NEITHER \
@@ -2524,23 +3168,24 @@ index whose exchange is shut). Quote those as the last or closing print \
 ("10Y closed 4.12%"), never as where the market is now, and do not build a \
 "right now" read on them.
 
-WORK THROUGH EVERY BLOCK OF THE DATA BEFORE YOU CONCLUDE. Notes written before \
-this instruction cited the gamma levels and the session ranges and silently \
-ignored sector rotation in three runs out of five — that was not a judgement \
-that it did not matter, it was the block not being read. Each of these answers \
-a different question, and the first four should appear somewhere in the brief:
+READ EVERY BLOCK OF THE DATA BEFORE YOU CONCLUDE, AND WRITE ONLY WHAT MOVED THE \
+CALL. Notes written before this instruction cited the \
+session ranges and silently ignored sector rotation in three runs out of five — \
+that was not a judgement that it did not matter, it was the block not being read. \
+Reading is not optional; mentioning is. Each of these answers a different \
+question, and each is weighed before the call is made:
 
 {must_read}
 
-If a block genuinely says nothing today, leave it out rather than padding. \
-What is not acceptable is not looking.
+A block that did not move the call stays out of the brief. What is not \
+acceptable is not looking.
 
 THE NEWS IS DATA, AND IT IS RANKED. `headlines` carries one row per story, HIGH \
 first, then what has landed since the last cash close, then the session's own \
 regions; `also` counts the other tellings of it. Read every HIGH row before you \
 conclude. One that reaches a book — through rates, the dollar, oil, chips, tariffs, \
-war or fiscal policy — belongs in that book's `why` or `catalyst` and, if it is \
-the day's story, in the thesis. One you set aside but could still matter goes in \
+war or fiscal policy — belongs in that book's `factors` and, if it is the day's \
+story, in the thesis, with its id in `headlines`. One you set aside but could still matter goes in \
 `risks`. Coverage is not importance, and a story with no channel to the book is \
 not a driver however loud it is. `event_risk` is the same wire's geopolitics, \
 policy and energy desks, for the books' ceilings.
@@ -2558,20 +3203,10 @@ session"), never as today's. `index_pp` is that name's contribution to the index
 in PERCENTAGE POINTS (weight times return), not index points: write "0.42 \
 percentage points of the index".
 
-Read the gamma levels the way a dealer-flow trader does: positive gamma means \
-hedging dampens moves and price tends to pin between the walls; negative gamma \
-means hedging amplifies them and ranges extend. Spot's position against the \
-gamma flip and the expected move is the single most important structural fact \
-on the page. If `expiry` says it is OpEx week, say what that does to the walls.
-
-GAMMA IS NEVER A DIRECTION. Positive gamma is not bullish and negative gamma is \
-not bearish; spot above the flip is not a reason to be long and spot below it is \
-not a reason to be short. The regime says HOW FAR a move runs and whether a break \
-is faded or chased, in either direction. So gamma is never the reason for \
-`open_bias`, never a link in a `chain` that ends in a direction, and never a \
-`drivers` row with a bull or bear tone: it belongs in `gamma_read`, in the range \
-the call expects, and in `wrong_if`. On the engine board the Dealer gamma row has \
-no family and reads "not a side" for the same reason.
+DEALER GAMMA IS NOT IN THIS REPORT. It is not a side, the bias does not weigh it \
+and the page does not print it. Never mention gamma, the flip, a call or put wall, \
+dealer hedging or pinning, and never use one of those levels: every level you \
+name is in `key_levels`.
 
 THE CURVE HAS A DATE. `rates.curve` is Treasury's daily curve for \
 `rates.curve_as_of`, published after that day's close, and each `chg_bp` in it is \
@@ -2587,28 +3222,31 @@ read, a thin London, no Japan prints) and do not lean on a figure it left stale.
 THE ENGINE HAS ALREADY WEIGHED THE DRIVERS. `engine_driver_board` is, per \
 book, every macro and structure read as a vote with its threshold and its \
 reason, grouped into `families`, each with its weight for this session and its \
-own score (dealer gamma and event risk are listed with them and are "not a \
-side": neither votes). `score` runs from -100 to +100 across the reads that can vote; \
-`coverage` is how much of this session's weight that is. A vote with \
+own score (event risk is listed with them and is "not a side": it does not vote, \
+it lowers the ceiling). `score` runs from -100 to +100 over the whole of this \
+session's weight: a family that cannot vote at this hour counts as no lean, so a \
+score on little of the weight sits near zero by itself and is never to be scaled \
+again; `coverage` is how much of the weight can vote. A vote with \
 `can_vote_now` false has no market or no input behind it at this hour: it neither \
-agrees nor disagrees, so do not count it either way, and say the read is thin \
-when `coverage` is low. There is a `treatment` line, and a `conflict` flag when \
-the macro families and the structure families disagree. Read it first and cite \
-the score and the families that carry it: the call's `conviction` may not exceed \
+agrees nor disagrees, so do not count it either way. There is a `conflict` flag \
+when the macro families and the structure families disagree. \
+Read it first. THE PAGE DRAWS THIS SCORE ON A SCALE BESIDE YOUR CALL, so never \
+print the score, the coverage or a count of votes: name the one family or vote \
+that carries the call, with its figure. The call's `conviction` may not exceed \
 the book's `max_conviction`, and may not exceed 3 when the call runs against the \
 board's `bias` — the server enforces both, so rank inside that ceiling. Where you \
 disagree with a vote, say which and why, with the figure; never re-derive the \
-score. Two structure votes are the 200 EMAs — "Daily 200" (the daily chart's \
-regime) and "10m trend" (the strategy's side filter on ten-minute bars): when \
-either runs against a call, the call's `why` names it, and a call against both is \
-capped at 2 by you even where the board allows 3.
+score. No trend line or moving average votes: do not argue a call from one.
 
-THE PAGE IS ALREADY BUILT AROUND YOUR WORDS. The snapshot, the levels ladder, \
-the dealer gamma card, the catalyst list, the ratio table and the headline \
-list are printed from `brief_tables`, `catalysts` and `headlines` exactly as \
-the data has them. Do not rebuild those tables in prose. Write the read that \
-sits beside them, point at rows by `key` or `id` where a field asks for one, \
-and take any level you name from `brief_tables.ladders`.
+THE PAGE IS A REPORT, AND THE ENGINE FILLS ITS TABLE. Under each call the page \
+prints one row for every factor the bias weighs in this session \
+(`factors_on_the_page`): its name, its share of the score and the engine's own tag \
+(Bullish, Bearish, Mixed, Neutral, Not live yet). You write the comment beside \
+each. The page also draws the engine's score on a scale, a ruler of the key levels \
+(`key_levels`: the prior session's high and low, its value area and point of \
+control, the handover range and the last price), the calendar and the headline \
+list. Never restate a tag or a weight, and take every level you name from \
+`key_levels`, as it is printed there.
 
 {_live_framing(session, prog)}
 {_weighting(session, prog)}
@@ -2618,86 +3256,117 @@ that printed, what is priced for the Fed, the policy path, the dollar and the \
 curve are why the market wants to go somewhere, and the call is anchored there \
 whenever any of it is live today. Structure sets the PATH: where the session \
 opened against prior value, the profile's shape and second node, the session \
-ranges and the gamma map decide whether the macro lean is being ACCEPTED or \
+ranges decide whether the macro lean is being ACCEPTED or \
 REJECTED by the tape, and they supply every level the call names. Read them \
 together, never one without the other — a bearish print with price accepted \
-above prior value and above the flip is a CONFLICT, and a conflict lowers \
+above prior value is a CONFLICT, and a conflict lowers \
 conviction rather than picking a side. On a day with no print and no speaker, \
 say so and let structure lead: macro that is not moving today does not anchor \
-a call by reputation. Gamma's weight follows the session — decisive in New \
-York where the hedging flow is real, a reference elsewhere.
+a call by reputation.
+
+THIS BRIEF IS SHORT, AND SHORT IS THE JOB. The reader has the tables beside your \
+words and reads your part in under a minute before trading. What they need from \
+you is the judgement no table makes: what actually moves this market in this \
+session, which way, where, and what proves it wrong. A long brief is one that has \
+not decided.
+
+  * LEAD WITH WHAT MOVES PRICE. Rank everything you read by how far it can move \
+the book in THIS session: a print with a consensus to miss, what is priced for the \
+Fed, a heavyweight's results, a story the wire ranks HIGH, a level whose break \
+changes how the day trades. Write the top of that ranking and nothing below it. A \
+true fact that would not change a trade is left out.
+  * EVERY SENTENCE IS A CAUSE AND WHAT IT DOES TO THE BOOK, with the figure. Never \
+a figure alone, never an effect with no figure behind it.
+  * SAY EACH FACT ONCE, where it does the most work. One factor, one comment; a \
+level in `plan` is not named again in `wrong_if` unless it is the invalidation \
+itself; `risks` never restates a comment or `wrong_if`.
+  * NO MOVING AVERAGES. The bias does not weigh a trend line, so the report does \
+not argue from one: never write "EMA", "SMA", "200-day" or "trend line".
+  * NO PREAMBLE, NO HEDGE, NO NARRATION. Not "it is worth noting", "could \
+potentially", "remains to be seen", "investors will watch", "amid", "as markets \
+digest", "overall". Not a sentence about what the data is or what you are about to \
+say. Plain words, active verbs, short sentences; a bullet may be a fragment.
+  * FIGURES AS THE PAGE PRINTS THEM: copied from the data, never more than two \
+decimals (an exchange rate as it is given), a level exactly as \
+`key_levels` has it, no arithmetic of your own.
+  * AN ID IS NEVER PROSE. `h3` or `c2` goes in an `id` field and nowhere else; in \
+a sentence, name the story or the release.
+  * THE WORD LIMITS BELOW ARE HARD, AND SO IS "ONCE". An answer over a limit, or \
+with a risk that says a comment again, is sent back.
 
 Field by field:
-  thesis          One or two plain sentences: the single idea that explains \
-today across the books, and the one figure to watch. It is the page's headline.
-  calls           Exactly one per book in scope. `open_bias` is the call for \
-the start of the session and `conviction` its strength, 1-5. `rest_of_day` is \
-a short label for how the session evolves after the open ("Neutral to leaning \
-bearish", "Leaning bearish, conditional") and `rest_of_day_bias` its \
-direction. `wrong_if` is the price condition that kills the call, under 60 \
-characters. `why` is two to four bullets that justify the bias, EACH PREFIXED \
-WITH ITS LAYER — "Macro:", "Positioning:", "Structure:", "Session:" — in that \
-order where they apply: the macro driver with its figure; the positioning read \
-(the gamma regime, spot against the flip); the structure read (opened above or \
-below prior value, the profile's shape, which range level is holding); and what \
-the session does to the weighting. Name the conflict if there is one. This is \
-the part the reader argues with, so it has to be concrete enough to argue with.
-  snapshot_watch  Up to five `brief_tables.snapshot` keys that matter most \
-today, each with a few words on why.
-  gamma_read      One or two sentences: what the regime, the flip and the \
-expected move mean for how far today's ranges run.
-  catalysts_intro One or two sentences framing the calendar: what today is \
-positioning for.
-  catalyst_notes  Notes on the catalyst ids that matter, each saying what the \
-print or event means (a miss, a beat, what is priced). Skip the rest. A data \
-catalyst's `also` lists the other series of the same release (core and \
-headline, monthly and annual): one note covers the release.
-  catalyst        On each call: one sentence naming the heavyweight print or \
-the event moving THAT book, with its figure from `heavyweights` (weight, move, \
-its share of the index's move, the print) or `event_risk` (the story and what it reaches), and \
-its ids in `catalyst_ids` — only there, never written into the sentence. When \
-a heavyweight has just reported or an event is on the board, the thesis names \
-it too — it is the largest scheduled macro an index future has. Empty when \
-neither is on the board; never invent one.
-  reads           Exactly one per book in scope:
-    regime        The regime in a few words ("Hike repricing / inflation \
-scare", "Real-yield primacy").
-    chain         The macro transmission as 3-5 links from cause to effect, \
-each a few words carrying its figure: "Oil +26% in a month", "Inflation \
-impulse", "Hike priced for tomorrow", "Real yields up (10Y real +17bp wk)", \
-"Discount-rate squeeze on megacaps". Only transmissions the data shows.
-    at_open       Two to four sentences: where price sits against the levels \
-at the start and why that is the lean.
-    wrong_if      The full invalidation: acceptance beyond which ladder level, \
-and what that opens.
-    rest_of_day   Two to four sentences: the conditional path, what breaks \
-next and where it targets.
-    flips         One to three events or prints, not levels, that would \
-reverse the view.
-    drivers       Four to eight rows: a short `label` ("10Y", "DXY", \
-"Rotation", "Vol", "Megacaps", "Geopolitics"), a few words of `text` with the \
-figure, and a `tone` for THIS book: bear, bull, mixed or neutral. THE TONE IS \
-WHAT THE ROW DOES TO THE BOOK'S PRICE, NEVER THE SIGN OF ITS FIGURE: a 10-year \
-or a dollar that is UP is bear for NQ, ES and gold and DOWN is bull; a VIX that \
-is up is bear for NQ and ES; a hot inflation print is bear and a cold one bull; \
-megacaps or breadth rising is bull for the index they are in. A row that is not \
-a side is neutral: a gamma regime, a vol level that has not moved, a figure that \
-last printed at its close or on another day, a story with no channel to the book.
-  rotation_read   One or two sentences on what the ratio table says about the \
-tape: broadening, concentration, defensive, a rate scare.
-  ratio_reads     A few words on each ratio id that matters.
-  rotation_notes  Up to three extra observations with figures (the megacaps, \
-the gold complex).
-  headlines       Three to six headline ids that move price today, each with \
-the books it moves and one line on why.
-  cross_asset     One or two sentences: are the books moving on one driver or \
-diverging, and what to watch because of it.
-  risks           Up to four short ways the read dies.
+  thesis     The day in one or two sentences, {LIMITS["thesis"]} words at most: the \
+single force driving the books in scope in this session, and the figure or level \
+that decides it. It is the page's headline. With nothing live, say so in one \
+sentence and name the range. Never the last price for its own sake: the page \
+prints it.
+  calls      Exactly one per book in scope.
+    open_bias, conviction   The side and its strength, 1-5. THE CALL IS THE CALL: \
+the thesis, the comments and `wrong_if` argue the side named here and no other. If \
+the words say a book leans short, `open_bias` is leaning bearish; if the call is \
+neutral, nothing in the brief calls it a lean.
+    factors  One comment for EVERY row of `factors_on_the_page` for this book, by \
+its `key`, {LIMITS["factor"]} words at most: what that factor is saying right now, \
+with its figure, in words a trader reads at a glance. Macro: the yield and the \
+dollar and which way they push this book. News & data: the print or the result and \
+its surprise, or what is awaited and when. Volume profile & structure: where price \
+sits against the prior session's value area and range. Geopolitics & events \
+(`event`): the story and the channel it reaches this book by, or that the tape is \
+quiet. A factor with no live read says what it \
+is waiting for. Never the engine's tag or weight: the page prints them.
+    plan     One line, {LIMITS["plan"]} words at most: the map, from `key_levels`. \
+The level that has to hold or break, and where that carries.
+    wrong_if One line, {LIMITS["wrong_if"]} words at most: the price that kills the \
+call (acceptance beyond one of the `key_levels`) or the print that would.
+  today      Up to three things on the clock that can move these books in this \
+session, the most important first, each by its `catalysts` id with a note of \
+{LIMITS["today"]} words at most: what is priced and what a miss or a beat does; \
+once printed, what it did. The row already prints the time and the name, so the \
+note repeats neither. A release's `also` series are one item. Nothing that lands \
+after this session closes, and nothing that matters is an empty list: never a \
+routine release to fill it.
+  risks      Up to three, {LIMITS["risks"]} words each at most: what is NOT in the \
+call and could break it: something that can HAPPEN in this session. A story, an \
+event, a crowded position giving way. Not the state of the clock, not a gap in the \
+data, not a reason said again.
+  headlines  Up to three headline ids that are moving price now, each with the \
+books it moves and {LIMITS["headlines"]} words at most on the channel it reaches \
+them by. Often one. None is an empty list.
 
 Be concrete and unhedged in the direction call. Do not use disclaimers, do not \
 mention that you are an AI, and do not recommend position sizes or give \
 financial advice — describe conditions and levels, which is what a desk brief \
-does."""
+does.""" + _etf_rules(asset)
+
+
+def _etf_rules(asset: str) -> str:
+    """What changes for the Stocks report: read last, so it overrides the per-book
+    rules above where the two differ. Empty for every other subject. Pure."""
+    if resolve_asset(asset) != ETF_ASSET:
+        return ""
+    return f"""
+
+THIS REPORT IS THE STOCKS DESK'S: SPY, QQQ AND IWM FOR NEW YORK, AND FOUR THINGS \
+ABOVE ARE DIFFERENT FOR IT. Where this section and the text above disagree, this \
+section is right.
+  1. ONE BIAS FOR ALL THREE. There is no `engine_driver_board`: the bias is \
+`stocks_tape_count`, the stocks desk's tape count, and the page draws it once, on a \
+scale, above the three calls. Each call's `conviction` may not exceed its \
+`max_conviction`, and may not exceed 3 when the call runs against its `bias`; the \
+server enforces both. The three funds may still differ: QQQ under its PML while IWM \
+holds its range is a call each, and the difference is the read.
+  2. THE FACTORS ARE WRITTEN ONCE, AT THE TOP. The page prints one table, \
+`factors_on_the_page.market`, above the calls. Put one comment for EVERY row of it in \
+the top-level `factors`, by its `key`, {LIMITS["factor"]} words at most (Index levels, \
+`levels`: where SPY and QQQ sit against their levels; Risk appetite: the VIX, its \
+curve and credit; Macro: yields and the dollar; Participation: the sectors, equal \
+weight, volume and the leaders; Geopolitics & events, `event`). A call has no \
+`factors` of its own.
+  3. EACH FUND'S LEVELS ARE ITS OWN. `plan` and `wrong_if` name that fund's PDH, PDL, \
+PMH, PML or previous close from `key_levels` and `index_funds`, exactly as printed. \
+Never a futures level, a value area or a point of control: those are NQ's and ES's \
+(`futures_blocks`).
+  4. NEW YORK ONLY. The report is for the regular session, 09:30 to 16:00 ET."""
 
 
 _FENCE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.S)
@@ -2764,20 +3433,82 @@ def _text(v: Any) -> str:
     return v.strip() if isinstance(v, str) else ""
 
 
-# "catalyst_ids: w8, w10." written into the sentence — the first live note
-# did it (2026-10-30 02:46 ET) despite the ids having their own field. The
-# ids are the sanitiser's to check, not the reader's to see; cut the tail.
-_IDS_TAIL = re.compile(r"\s*\(?\bcatalyst_ids?\s*:.*$", re.IGNORECASE | re.DOTALL)
+# AN ID WRITTEN INTO A SENTENCE: "h1 Iran-Europe attack story can gap crude" was a
+# risk in the first short brief (2026-11-15), as "catalyst_ids: w8, w10." had been in
+# the first long one. The ids are the sanitiser's to join on, not the reader's to see.
+# Lower case only: "H1" is the first half of a year.
+_ID_IN_PROSE = re.compile(r"\(?\b[hcwe]\d{1,3}\b\)?[:,]?\s*")
 
 
-def _catalyst_text(v: Any) -> str:
-    return _IDS_TAIL.sub("", _text(v)).rstrip(" ;,—-").strip()
+#: The trend in the report's words (owner, 2026-11-15, of the EMAs: "i dont think we
+#: need to include about the ema's"). The prompt asks for it; a model that has just
+#: read "200-day EMA" in its data writes it back.
+_PLAIN_TREND: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b10[- ]?(?:minute|min|m) 200[- ]?EMA\b", re.I), "10-minute trend line"),
+    (re.compile(r"\b200[- ]?day (?:EMA|SMA)\b", re.I), "200-day average"),
+    (re.compile(r"\b(\d{1,3})[- ]?day (?:EMA|SMA)\b", re.I), r"\1-day average"),
+    (re.compile(r"\b200[- ]?EMA\b", re.I), "trend line"),
+    (re.compile(r"\b(?:EMA|SMA)s\b"), "averages"),
+    (re.compile(r"\b(?:EMA|SMA)\b"), "average"),
+)
+
+
+# WHAT A MODEL LEAVES ON A SENTENCE (the first real market report, 2026-11-15): the
+# summary came back as "... Iran-Bahrain strikes cap conviction. (39 words){" (its own
+# count against the limit, and a brace from the JSON around it), and every risk began
+# "> ". A list mark in front (a quote mark, a dash, a bullet, "1.") and a count or a
+# brace behind are not the sentence. A leading "-1.65%" or "10Y" is: the mark must be
+# followed by a space. The second real report's risks began ": " (an id and a colon,
+# the id taken out), so a stray colon, semicolon or comma in front goes the same way,
+# and a sentence that lost its front starts with a capital.
+_LIST_MARK = re.compile(r"^\s*(?:[>*•–—:;,-]+|\d{1,2}[.)])\s+")
+_TAIL_NOISE = re.compile(r"(?:\s*\(\s*\d{1,3}\s+words?\s*\))?[\s{}]*$", re.I)
+
+
+def _prose(v: Any) -> str:
+    """A sentence the model wrote, with any row id it carried taken out, and neither a
+    list mark in front of it nor its own word count behind. Pure."""
+    raw = _text(v)
+    t = _ID_IN_PROSE.sub("", raw)
+    for pat, plain in _PLAIN_TREND:
+        t = pat.sub(plain, t)
+    t = _TAIL_NOISE.sub("", _LIST_MARK.sub("", t))
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    if t and not raw.lstrip().startswith(t[:1]):
+        t = t[:1].upper() + t[1:]
+    return t
+
+
+# THE TAG IS THE ENGINE'S AND IS PRINTED BESIDE THE COMMENT (the second real report,
+# 2026-11-15): told not to write it, the model opened every comment with it all the
+# same: "Bullish; NQ above Friday VAH", "Not live yet; 10Y closed 5.15%". On the page
+# that is the row's tag twice, and where the model's word differs from the engine's it
+# is a second opinion nobody asked for. The opening word goes; the comment stays.
+_TAG_LEAD = re.compile(
+    r"^(?:bullish|bearish|mixed|neutral|nothing yet|not live yet|quiet)\s*[;:,.—–-]+\s+", re.I)
+
+
+def _no_tag(line: str) -> str:
+    rest = _TAG_LEAD.sub("", line)
+    return rest[:1].upper() + rest[1:] if rest and rest != line else line
 
 
 def _texts(v: Any, cap: int) -> list[str]:
     if not isinstance(v, list):
         return []
-    return [x.strip() for x in v if isinstance(x, str) and x.strip()][:cap]
+    return [t for x in v if (t := _prose(x))][:cap]
+
+
+def _factor_lines(v: Any, allowed: set[str]) -> list[dict[str, str]]:
+    """The model's comments, each on a factor the page has a row for, one a row."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for x in _dicts(v):
+        k, line = x.get("key"), _no_tag(_prose(x.get("line")))
+        if isinstance(k, str) and k in allowed and k not in seen and line:
+            seen.add(k)
+            out.append({"key": k, "line": line})
+    return out[:8]
 
 
 def _dicts(v: Any) -> list[dict[str, Any]]:
@@ -2811,7 +3542,7 @@ def _picks(
         k, text = x.get(field), _text(x.get(text_field))
         if isinstance(k, str) and k in allowed and k not in seen and text:
             seen.add(k)
-            out.append({field: k, text_field: text})
+            out.append({field: k, text_field: _prose(text) if text_field == "note" else text})
     return out[:cap]
 
 
@@ -2822,22 +3553,26 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     mode below enforces nothing — so the shape is checked here rather than
     assumed. And more than the shape: a note on a catalyst id that does not
     exist, or a call on a book the brief is not about, is dropped here, so the
-    panel can join on ids without guarding every one.
+    panel can join on ids without guarding every one. The counts are held here
+    too (three reasons, three items on the clock, three risks, three headlines);
+    the words are held by `too_long`, which asks again.
 
-    None when what is left is not a brief: no thesis, a book in scope without a
-    call, or no read at all.
+    None when what is left is not a brief: no thesis, or a book in scope without
+    a call.
     """
     if not isinstance(obj, dict):
         return None
     books: list[str] = list(facts.get("books") or BOOKS)
-    catalyst_ids = {r["id"] for rows in (facts.get("heavyweights") or {}).values()
-                    for r in rows if isinstance(r, dict) and r.get("id")}
-    catalyst_ids |= {e["id"] for e in facts.get("event_risk") or []
-                     if isinstance(e, dict) and e.get("id")}
+    # THE STOCKS REPORT (`_etf_facts`): one board, the tape, for every fund, and its
+    # factors commented once at the top rather than under each call.
+    shared = "market_factors" in facts
+    market = facts.get("market") if shared else None
 
     calls: dict[str, dict[str, Any]] = {}
     for c in _dicts(obj.get("calls")):
-        book, bias = c.get("book"), norm_bias(c.get("open_bias"))
+        book = c.get("book")
+        book = book.strip().upper() if isinstance(book, str) else book
+        bias = norm_bias(c.get("open_bias"))
         if not isinstance(book, str) or book not in books or book in calls or bias is None:
             continue
         try:
@@ -2847,7 +3582,7 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
         # THE BOARD'S CEILING (module docstring): the engine's max for the
         # book, and 3 against its lean. A bias is "against" when it points the
         # other way from the count's side; neutral is never against.
-        board = (facts.get("drivers") or {}).get(book) or {}
+        board = (market or {}) if shared else (facts.get("drivers") or {}).get(book) or {}
         cap = board.get("max_conviction")
         if isinstance(cap, int):
             conviction = min(conviction, cap)
@@ -2859,47 +3594,21 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
             "book": book,
             "open_bias": bias,
             "conviction": min(5, max(1, conviction)),
-            "rest_of_day": _text(c.get("rest_of_day")),
-            # The chip's colour only — the label beside it carries the words —
-            # so an unreadable direction falls back to the open call's.
-            "rest_of_day_bias": norm_bias(c.get("rest_of_day_bias")) or bias,
-            "wrong_if": _text(c.get("wrong_if")),
-            "why": _texts(c.get("why"), 4),
-            # The catalyst, and only ids that point at a heavyweight row or an
-            # event on the board — a cited id that exists is the whole point.
-            "catalyst": _catalyst_text(c.get("catalyst")),
-            "catalyst_ids": [x for x in (c.get("catalyst_ids") or []) if isinstance(x, str)
-                             and x in catalyst_ids][:3]
-            if isinstance(c.get("catalyst_ids"), list) else [],
+            # A comment for a factor the page has no row for is dropped: the row is
+            # the engine's, and a comment with no row would have nowhere to sit. A fund
+            # on the Stocks report has no table of its own: the market's is at the top.
+            "factors": [] if shared else _factor_lines(c.get("factors"), {
+                r["key"] for r in (facts.get("factors") or {}).get(book) or []
+                if isinstance(r, dict) and r.get("key")} or set(FACTOR_KEYS)),
+            "plan": _prose(c.get("plan")),
+            "wrong_if": _prose(c.get("wrong_if")),
         }
 
-    reads: dict[str, dict[str, Any]] = {}
-    for r in _dicts(obj.get("reads")):
-        book = r.get("book")
-        if not isinstance(book, str) or book not in books or book in reads:
-            continue
-        reads[book] = {
-            "book": book,
-            "regime": _text(r.get("regime")),
-            "chain": _texts(r.get("chain"), 6),
-            "at_open": _text(r.get("at_open")),
-            "wrong_if": _text(r.get("wrong_if")),
-            "rest_of_day": _text(r.get("rest_of_day")),
-            "flips": _texts(r.get("flips"), 3),
-            "drivers": [
-                {
-                    "label": _text(d.get("label")),
-                    "text": _text(d.get("text")),
-                    "tone": d.get("tone") if d.get("tone") in TONES else "neutral",
-                }
-                for d in _dicts(r.get("drivers"))[:8]
-                if _text(d.get("label"))
-            ],
-        }
-
-    thesis = _text(obj.get("thesis"))
-    if not thesis or not reads or any(b not in calls for b in books):
+    thesis = _prose(obj.get("thesis"))
+    if not thesis or any(b not in calls for b in books):
         return None
+    rows = {c["id"]: c for c in facts.get("catalysts") or []
+            if isinstance(c, dict) and c.get("id")}
 
     headline_ids = {h["id"] for h in facts.get("headlines") or []}
     headlines: list[dict[str, Any]] = []
@@ -2909,37 +3618,179 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
             continue
         if any(x["id"] == hid for x in headlines):
             continue
-        # "Gold" is what a model writes for GC more often than not.
-        named = {str(x).strip().upper().replace("GOLD", "GC") for x in h.get("books") or []
+        # "Gold" is what a model writes for GC more often than not, and "silver",
+        # "crude", "oil" or "WTI" for the two newer books.
+        named = {_BOOK_WORDS.get(w, w) for w in (str(x).strip().upper()
+                                                 for x in h.get("books") or [])
                  } if isinstance(h.get("books"), list) else set()
         headlines.append({
-            "id": hid, "books": [b for b in BOOKS if b in named], "note": _text(h.get("note")),
+            "id": hid, "books": [b for b in (*BOOKS, *ETF_BOOKS) if b in named],
+            "note": _prose(h.get("note")),
         })
 
+    out_top: dict[str, Any] = {}
+    if shared:
+        out_top["factors"] = _factor_lines(obj.get("factors"), {
+            r["key"] for r in facts.get("market_factors") or []
+            if isinstance(r, dict) and r.get("key")} or set(TAPE_FACTOR_KEYS))
     return {
         "thesis": thesis,
+        **out_top,
         "calls": [calls[b] for b in books],
-        "snapshot_watch": _picks(
-            obj.get("snapshot_watch"), "key",
-            {row["key"] for row in facts.get("snapshot") or []}, "note", 5,
-        ),
-        "gamma_read": _text(obj.get("gamma_read")),
-        "catalysts_intro": _text(obj.get("catalysts_intro")),
-        "catalyst_notes": _picks(
-            obj.get("catalyst_notes"), "id",
-            {c["id"] for c in facts.get("catalysts") or []}, "note", 14,
-        ),
-        "reads": [reads[b] for b in books if b in reads],
-        "rotation_read": _text(obj.get("rotation_read")),
-        "ratio_reads": _picks(
-            obj.get("ratio_reads"), "id",
-            {r["id"] for r in (facts.get("rotation") or {}).get("ratios") or []}, "read", 8,
-        ),
-        "rotation_notes": _texts(obj.get("rotation_notes"), 3),
-        "headlines": headlines[:6],
-        "cross_asset": _text(obj.get("cross_asset")),
-        "risks": _texts(obj.get("risks"), 4),
+        # What is on the clock, and only ids that are rows of the calendar the
+        # page prints: the note is joined onto its row there, so it does not say
+        # the row's time and name again (`_drop_clock`).
+        "today": [
+            {"id": t["id"], "note": _drop_clock(t["note"], rows.get(t["id"]) or {})}
+            for t in _picks(obj.get("today"), "id", set(rows), "note", 3)
+            # A row listed to say it does not matter is not on the clock: "lands after
+            # this session closes; not in play" was the third item of a real report.
+            if not _NOT_IN_PLAY.search(t["note"])
+        ],
+        "risks": _texts(obj.get("risks"), 3),
+        "headlines": headlines[:3],
     }
+
+
+# THE ROW SAYS WHEN AND WHAT; THE NOTE SAYS WHAT IT DOES (2026-11-15). Two real short
+# briefs in a row opened each note with its row: "Barr speaks Mon 05:00 ET pre-market;
+# hawkish tone would press gold before the bell", printed under "Mon 05:00 ET · FOMC
+# Member Barr Speaks", the second after the prompt said not to. So the opening clause
+# goes when it holds nothing but the row's own words and the clock's. One word of
+# anything else ("Priced for a hold at 14:00; a cut lifts gold") and it stays.
+_CLOCK_WORDS = frozenset({
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun", "monday", "tuesday", "wednesday",
+    "thursday", "friday", "saturday", "sunday", "today", "tomorrow", "tonight", "et",
+    "premkt", "pre-market", "premarket", "session", "bell", "open", "close", "before",
+    "after", "during", "ahead", "due", "lands", "prints", "speaks", "reports", "ny",
+    "london", "asia", "morning", "afternoon", "evening", "am", "pm",
+})
+_FIRST_CLAUSE = re.compile(r"^(.{1,90}?)(?:;\s|:\s|\s[—–-]\s)(.+)$", re.DOTALL)
+_NOT_IN_PLAY = re.compile(
+    r"\bnot in play\b|\bafter (?:this|the) session (?:closes|ends|has closed)\b", re.I)
+
+
+def _drop_clock(note: str, row: dict[str, Any]) -> str:
+    """A note on a calendar row without the row's time and name in front of it. Pure."""
+    m = _FIRST_CLAUSE.match(note)
+    if not m:
+        return note
+    own = _content_words(row.get("title")) | _content_words(row.get("when")) | _CLOCK_WORDS
+    if _content_words(m.group(1)) - own:
+        return note
+    rest = m.group(2).strip()
+    return rest[:1].upper() + rest[1:] if rest else note
+
+
+_WORD = re.compile(r"\S+")
+
+
+def word_count(text: Any) -> int:
+    return len(_WORD.findall(text)) if isinstance(text, str) else 0
+
+
+def brief_words(b: dict[str, Any]) -> int:
+    """How many words the model wrote in a sanitised brief. Pure."""
+    return sum(word_count(x) for x in brief_prose(b))
+
+
+def too_long(b: dict[str, Any]) -> list[str]:
+    """The parts of a brief over their word limit, as the re-ask names them. Pure.
+
+    Past LIMIT_SLACK only. Nothing is cut here: half a sentence is worse than a long
+    one, so an over-long part is sent back to its author once and then printed as it
+    came."""
+    over: list[str] = []
+
+    def check(what: str, text: Any, key: str) -> None:
+        n, cap = word_count(text), LIMITS[key]
+        if n > cap * LIMIT_SLACK:
+            over.append(f"{what} is {n} words (limit {cap})")
+
+    check("thesis", b.get("thesis"), "thesis")
+    # The Stocks report's comments, written once for the market (`sanitize_brief`).
+    for f in b.get("factors") or []:
+        check(f"market {f.get('key')}", f.get("line"), "factor")
+    for c in b.get("calls") or []:
+        book = c.get("book")
+        for f in c.get("factors") or []:
+            check(f"{book} {f.get('key')}", f.get("line"), "factor")
+        check(f"{book} plan", c.get("plan"), "plan")
+        check(f"{book} wrong_if", c.get("wrong_if"), "wrong_if")
+    for x in b.get("today") or []:
+        check(f"today {x.get('id')}", x.get("note"), "today")
+    for i, r in enumerate(b.get("risks") or [], 1):
+        check(f"risk {i}", r, "risks")
+    for x in b.get("headlines") or []:
+        check(f"headline {x.get('id')}", x.get("note"), "headlines")
+    return over
+
+
+# SAY IT ONCE, CHECKED (2026-11-15). The first real short brief was inside every word
+# limit and still gave NQ and ES one sentence each, the same sentence: "No live macro
+# print, Fed speaker, or prior RTH profile exists for Monday's open." Two index books
+# share their macro on most days, so this is the commonest way a short note is longer
+# than what it says. A reason is a repeat when three quarters of the shorter one's
+# words are in the other; the thesis and every reason are held to it, across books.
+# The plan and the invalidation are not: they are meant to name the same levels.
+#
+# A RISK IS HELD TIGHTER, at half. It is by definition what is not in the call, and
+# the second real brief listed "Crowded NQ longs (6,114 contracts, 98th pct) can flush
+# on a break" under a call whose third reason was the same position and the same two
+# figures in other words.
+REPEAT_SHARE = 0.75
+RISK_REPEAT_SHARE = 0.5
+_STOP = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "for", "from", "if", "in",
+    "into", "is", "it", "its", "nor", "not", "of", "on", "or", "over", "so", "than", "that",
+    "the", "then", "this", "to", "under", "was", "were", "while", "with",
+})
+_TOKEN = re.compile(r"[a-z0-9][a-z0-9.,%+-]*")
+
+
+def _content_words(text: Any) -> set[str]:
+    if not isinstance(text, str):
+        return set()
+    return {w for t in _TOKEN.findall(text.lower()) if (w := t.strip(".,")) and w not in _STOP}
+
+
+def repeats(b: dict[str, Any]) -> list[str]:
+    """What says a thing the report has already said, as the re-ask names it. Pure.
+
+    Inside one book, two comments that are one comment; and a risk that restates the
+    thesis or any comment. Two books' comments on the same market-wide factor are
+    not a repeat: the dollar is the dollar for both, and each card is read alone."""
+    out: list[str] = []
+    said: list[tuple[str, set[str]]] = [("the thesis", _content_words(b.get("thesis")))]
+    # The Stocks report's market comments are one more "book" here: read together, and
+    # held against the risks, as a book's are.
+    groups = ([{"book": "market", "factors": b["factors"]}] if b.get("factors") else []) \
+        + list(b.get("calls") or [])
+    for c in groups:
+        book = c.get("book")
+        parts = [(f"{book} {f.get('key')}", _content_words(f.get("line")))
+                 for f in c.get("factors") or []]
+        for i, (first, a) in enumerate(parts):
+            for later, bb in parts[i + 1:]:
+                small = min(len(a), len(bb))
+                # Four words and up: two short fragments share their nouns by chance.
+                if small >= 4 and len(a & bb) / small >= REPEAT_SHARE:
+                    out.append(f"{later} repeats {first}")
+        said += parts
+    for i, risk in enumerate(b.get("risks") or [], 1):
+        r = _content_words(risk)
+        for name, a in said:
+            small = min(len(a), len(r))
+            if small >= 4 and len(a & r) / small >= RISK_REPEAT_SHARE:
+                out.append(f"risk {i} repeats {name}")
+                break
+    return out
+
+
+def faults(b: dict[str, Any]) -> list[str]:
+    """What sends a brief back besides a figure: a part over its limit, a reason
+    said twice. Pure."""
+    return [*too_long(b), *repeats(b)]
 
 
 # --------------------------------------------------------------------------
@@ -3000,21 +3851,13 @@ def numerals_in(text: str) -> list[str]:
 def brief_prose(b: dict[str, Any]) -> list[str]:
     """Every string the model wrote in a sanitised brief — what the guard reads. Pure."""
     out: list[str] = [b.get("thesis") or ""]
+    out += [f.get("line") or "" for f in b.get("factors") or []]
     for c in b.get("calls") or []:
-        out += [*c.get("why", []), c.get("rest_of_day") or "", c.get("wrong_if") or ""]
-    out += [x.get("note") or "" for x in b.get("snapshot_watch") or []]
-    out += [b.get("gamma_read") or "", b.get("catalysts_intro") or ""]
-    out += [x.get("note") or "" for x in b.get("catalyst_notes") or []]
-    for r in b.get("reads") or []:
-        out += [r.get("regime") or "", *r.get("chain", []), r.get("at_open") or "",
-                r.get("wrong_if") or "", r.get("rest_of_day") or "", *r.get("flips", [])]
-        for d in r.get("drivers") or []:
-            out += [d.get("label") or "", d.get("text") or ""]
-    out += [b.get("rotation_read") or ""]
-    out += [x.get("read") or "" for x in b.get("ratio_reads") or []]
-    out += list(b.get("rotation_notes") or [])
+        out += [*(f.get("line") or "" for f in c.get("factors") or []),
+                c.get("plan") or "", c.get("wrong_if") or ""]
+    out += [x.get("note") or "" for x in b.get("today") or []]
+    out += list(b.get("risks") or [])
     out += [x.get("note") or "" for x in b.get("headlines") or []]
-    out += [b.get("cross_asset") or "", *b.get("risks", [])]
     return [x for x in out if x]
 
 
@@ -3060,12 +3903,30 @@ def guard_retry(bad: list[str]) -> str:
     )
 
 
+def length_retry(long: list[str]) -> str:
+    """The re-ask for a brief over its limits or saying a thing twice (`faults`)."""
+    return (
+        f"Your answer breaks the brief's limits: {'; '.join(long[:10])}. Cut every "
+        "over-long part to its limit: keep the strongest reason and drop what the tables "
+        "already print. Say each fact once: a reason two books share belongs in the "
+        "thesis, and the bullet that repeated it is dropped or replaced by something "
+        "that is that book's own. Add nothing new. Return the whole JSON object again."
+    )
+
+
+def retry_text(bad: list[str], long: list[str]) -> str:
+    """One re-ask for both faults: a second answer costs the same either way."""
+    return " ".join(x for x in (guard_retry(bad) if bad else "",
+                                length_retry(long) if long else "") if x)
+
+
 def _reask(payload: dict[str, Any], key: str, content: str, bad: list[str],
-           facts: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+           facts: dict[str, Any], long: list[str] | None = None,
+           ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     """One corrective re-ask on the same model and mode → (brief, doc, outcome)."""
     retry = dict(payload)
     retry["messages"] = [*payload["messages"], {"role": "assistant", "content": content},
-                         {"role": "user", "content": guard_retry(bad)}]
+                         {"role": "user", "content": retry_text(bad, long or [])}]
     try:
         doc = _post(retry, key)
         msg = doc["choices"][0]["message"]
@@ -3079,7 +3940,41 @@ def _reask(payload: dict[str, Any], key: str, content: str, bad: list[str],
     return fixed, doc, "re-asked"
 
 
-def loose_ask(messages: list[dict[str, str]]) -> dict[str, str]:
+LOOSE_SHAPE = f"""{{
+  "thesis": "one or two sentences, {LIMITS['thesis']} words at most",
+  "calls": [ {{ "book": one of the books in scope ("NQ", "ES", "GC", "SIL", "CL"),
+               "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
+                           "leaning bearish" | "bearish",
+               "conviction": integer 1-5,
+               "factors": [ {{ "key": "rates", "line": "{LIMITS['factor']} words at most" }} ],
+                                    // one for EVERY row of factors_on_the_page for the book
+               "plan": "one line, {LIMITS['plan']} words at most",
+               "wrong_if": "one line, {LIMITS['wrong_if']} words at most" }} ],  // one per book
+  "today": [ {{ "id": "c2", "note": "{LIMITS['today']} words at most" }} ],   // 0-3 catalyst ids
+  "risks": [ "{LIMITS['risks']} words at most" ],                           // 0-3
+  "headlines": [ {{ "id": "h3", "books": [ "NQ" ],
+                   "note": "{LIMITS['headlines']} words at most" }} ]        // 0-3
+}}"""
+
+
+LOOSE_SHAPE_ETFS = f"""{{
+  "thesis": "one or two sentences, {LIMITS['thesis']} words at most",
+  "factors": [ {{ "key": "levels", "line": "{LIMITS['factor']} words at most" }} ],
+                // one for EVERY row of factors_on_the_page.market: the market's, written once
+  "calls": [ {{ "book": one of "SPY", "QQQ", "IWM",
+               "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
+                           "leaning bearish" | "bearish",
+               "conviction": integer 1-5,
+               "plan": "one line, {LIMITS['plan']} words at most",
+               "wrong_if": "one line, {LIMITS['wrong_if']} words at most" }} ],  // all three
+  "today": [ {{ "id": "c2", "note": "{LIMITS['today']} words at most" }} ],   // 0-3 catalyst ids
+  "risks": [ "{LIMITS['risks']} words at most" ],                           // 0-3
+  "headlines": [ {{ "id": "h3", "books": [ "QQQ" ],
+                   "note": "{LIMITS['headlines']} words at most" }} ]        // 0-3
+}}"""
+
+
+def loose_ask(messages: list[dict[str, str]], shape: str = LOOSE_SHAPE) -> dict[str, str]:
     """The user turn, with the schema spelled out for the no-schema pass.
 
     In `json_object` mode the provider guarantees valid JSON and NOTHING about
@@ -3093,30 +3988,7 @@ def loose_ask(messages: list[dict[str, str]]) -> dict[str, str]:
         "content": (
             messages[-1]["content"]
             + "\n\nReturn ONLY a JSON object, no prose around it, exactly this shape:\n"
-            + """{
-  "thesis": "one or two sentences",
-  "calls": [ { "book": "NQ" | "ES" | "GC",
-               "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
-                           "leaning bearish" | "bearish",
-               "conviction": integer 1-5,
-               "rest_of_day": "short label", "rest_of_day_bias": one of the same five,
-               "wrong_if": "under 60 characters" } ],            // one per book in scope
-  "snapshot_watch": [ { "key": "US10Y", "note": "..." } ],       // 0-5
-  "gamma_read": "...",
-  "catalysts_intro": "...",
-  "catalyst_notes": [ { "id": "c2", "note": "..." } ],
-  "reads": [ { "book": "NQ", "regime": "...", "chain": [ "...", "..." ],
-               "at_open": "...", "wrong_if": "...", "rest_of_day": "...",
-               "flips": [ "..." ],
-               "drivers": [ { "label": "10Y", "text": "...",
-                              "tone": "bear" | "bull" | "mixed" | "neutral" } ] } ],
-  "rotation_read": "...",
-  "ratio_reads": [ { "id": "QQQ/IWM", "read": "..." } ],
-  "rotation_notes": [ "..." ],
-  "headlines": [ { "id": "h3", "books": [ "NQ", "GC" ], "note": "..." } ],
-  "cross_asset": "...",
-  "risks": [ "..." ]
-}"""
+            + shape
         ),
     }
 
@@ -3193,18 +4065,22 @@ def generate(
     session: str = "auto",
     asset: str = "all",
     now: datetime | None = None,
+    scan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the digest, ask the model, store and return the report.
 
     `now` is the moment the note is dated from; the job runner passes the one
-    it minted the job id from (api.py), so the report's id is the job's.
+    it minted the job id from (api.py), so the report's id is the job's. `scan` is
+    the scanner's payload, which the Stocks report (`ETF_ASSET`) reads its tape and
+    its funds' levels from.
     """
     key = _key()
     now = now or datetime.now(UTC)
     et = now.astimezone(ET)
     model = model or DEFAULT_MODEL
-    sess = resolve_session(snap.get("clock") or {}, session)
     book = resolve_asset(asset)
+    # The Stocks report is New York's alone, whatever was asked.
+    sess = "ny" if book == ETF_ASSET else resolve_session(snap.get("clock") or {}, session)
 
     base: dict[str, Any] = {
         "ok": False,
@@ -3221,6 +4097,9 @@ def generate(
         # "brief" since 2026-09-16. Reports stored before then have no format
         # and the old note's shape, and the panel still renders those.
         "format": "brief",
+        # 2 is the short brief (2026-11-15, SCHEMA). The page reads this to choose
+        # its layout; a note without it has the longer shape it was written in.
+        "brief_version": BRIEF_VERSION,
         "facts": None,
         "report": None,
         "error": None,
@@ -3239,8 +4118,18 @@ def generate(
         )
         return base
 
-    facts = build_facts(snap, sess, book)
-    digest = build_digest(snap, sess, book, facts)
+    if book == ETF_ASSET:
+        # An Indexes report's tables and digest, with the funds, the tape and their
+        # levels in the futures' place (`_etf_facts`, `etf_view`).
+        base_facts = build_facts(snap, sess, "indexes")
+        facts = _etf_facts(snap, scan, base_facts)
+        digest = etf_view(shown(build_digest(snap, sess, "indexes", base_facts)), facts)
+    else:
+        facts = build_facts(snap, sess, book)
+        # As the model is shown it (`shown`): what is stored is what was read.
+        # And as the REPORT is to read it: no dealer gamma, the key levels, the rows the
+        # page prints (`report_view`).
+        digest = report_view(shown(build_digest(snap, sess, book, facts)), facts)
     base["digest"] = digest
     base["facts"] = facts
     # ONE progress reading shared by the prompt and the envelope, taken off the
@@ -3332,7 +4221,8 @@ def generate(
             break
         payload: dict[str, Any] = {
             "model": candidate,
-            "messages": messages if mode == "schema" else [*messages[:-1], loose_ask(messages)],
+            "messages": messages if mode == "schema" else [*messages[:-1], loose_ask(
+                messages, LOOSE_SHAPE_ETFS if book == ETF_ASSET else LOOSE_SHAPE)],
             # Low but not zero: the schema already constrains the shape, and a
             # touch of variation keeps the prose from reading like a template.
             "temperature": 0.3,
@@ -3367,7 +4257,7 @@ def generate(
         if mode == "schema":
             payload["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": "session_bias", "strict": True, "schema": SCHEMA},
+                "json_schema": {"name": "session_bias", "strict": True, "schema": schema_for(book)},
             }
         else:
             payload["response_format"] = {"type": "json_object"}
@@ -3454,8 +4344,8 @@ def generate(
         if brief is None:
             attempts.append({
                 "model": candidate, "mode": mode,
-                "error": "JSON did not match the brief shape (needs a thesis, a readable "
-                         f"call for each of {', '.join(facts['books'])}, and a read)",
+                "error": "JSON did not match the brief shape (needs a thesis and a "
+                         f"readable call for each of {', '.join(facts['books'])})",
             })
             base["raw"] = content[:2000]
             continue
@@ -3465,19 +4355,30 @@ def generate(
         # come from.
         seen = messages[-1]["content"]
         bad = unverified(brief, seen)
-        if bad:
-            note = f"unverified numerals: {', '.join(bad[:8])}"
+        # AND THE LIMITS AND THE REPEATS (`faults`), in the same single re-ask: they
+        # are named together with any figure, and the second answer is judged on all.
+        long = faults(brief)
+        if bad or long:
+            note = " · ".join(x for x in (
+                f"unverified numerals: {', '.join(bad[:8])}" if bad else "",
+                f"over its limits: {'; '.join(long[:4])}" if long else "",
+            ) if x)
             if (time.monotonic() - started) + _ATTEMPT_RESERVE <= BUDGET_SEC:
-                fixed, doc2, outcome = _reask(payload, key, content, bad, facts)
+                fixed, doc2, outcome = _reask(payload, key, content, bad, facts, long)
                 if fixed is not None and doc2 is not None:
-                    bad2 = unverified(fixed, seen)
-                    outcome = ("ok after re-ask" if not bad2
-                               else f"re-ask still unverified: {', '.join(bad2[:8])}")
-                    if len(bad2) < len(bad):
+                    bad2, long2 = unverified(fixed, seen), faults(fixed)
+                    left = " · ".join(x for x in (
+                        f"still unverified: {', '.join(bad2[:8])}" if bad2 else "",
+                        f"still over: {'; '.join(long2[:4])}" if long2 else "",
+                    ) if x)
+                    outcome = f"re-ask {left}" if left else "ok after re-ask"
+                    # Figures first: a shorter note is not worth an invented number.
+                    if (len(bad2), len(long2)) < (len(bad), len(long)):
                         brief, bad, doc = fixed, bad2, doc2
                 note += f" · {outcome}"
             attempts.append({"model": candidate, "mode": mode, "note": note})
         base["unverified"] = bad
+        base["words"] = brief_words(brief)
 
         base["ok"] = True
         base["report"] = brief
@@ -3582,6 +4483,101 @@ def load(report_id: str) -> dict[str, Any] | None:
 def latest() -> dict[str, Any] | None:
     h = history(1)
     return load(h[0]["id"]) if h and h[0].get("id") else None
+
+
+# ---- the Dashboard's report card and the 09:00 write (2026-11-16) --------------------
+#
+# WHY (owner, of the Dashboard: "the pre market card is a bit redundant or could be
+# merged into the today game plan one, and then also market overview", then "do waht you
+# recommend best"). The Market overview card read a note written at 22:23 ET on a
+# Saturday, two days before the Monday it was about, which still argued from the
+# ten-minute 200 EMA and dealer gamma. Its place is the Stocks report's (`ETF_ASSET`):
+# the market report sheet for SPY, QQQ and IWM, and the 09:00 ET write is that report's
+# now, so the card is the morning's own by the open.
+
+#: The 09:00 write: from 09:00 ET on a trading day until the bell, two tries at most,
+#: five minutes apart (the overview's rule, overview.auto_due).
+AUTO_AT = dtime(9, 0)
+AUTO_UNTIL = dtime(9, 30)
+AUTO_TRIES = 2
+AUTO_GAP_MIN = 5.0
+
+
+def auto_due(now: datetime, hist: list[dict[str, Any]], tried: list[datetime],
+             asset: str = ETF_ASSET) -> bool:
+    """Whether the 09:00 Stocks report should be written now. Pure.
+
+    A trading day, between 09:00 and the bell, with no report about `asset` written
+    since 09:00, and fewer than AUTO_TRIES tries since 09:00, the last AUTO_GAP_MIN ago."""
+    et = now.astimezone(ET)
+    if not is_trading_day(et.date()) or not (AUTO_AT <= et.time() < AUTO_UNTIL):
+        return False
+    start = datetime.combine(et.date(), AUTO_AT, tzinfo=ET)
+    for h in hist:
+        try:
+            t = datetime.fromisoformat(str(h.get("created_et")))
+        except ValueError:
+            continue
+        if h.get("asset") == asset and t >= start:
+            return False
+    mine = [t for t in tried if t >= start]
+    if len(mine) >= AUTO_TRIES:
+        return False
+    return not (mine and (now - max(mine)).total_seconds() < AUTO_GAP_MIN * 60.0)
+
+
+def card_of(rep: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A stored Stocks report → the Dashboard's card: when it was written, the summary,
+    the market's bias, each fund's call and up to three risks. None for anything else.
+    Pure."""
+    if not isinstance(rep, dict) or rep.get("asset") != ETF_ASSET or not rep.get("ok"):
+        return None
+    b = rep.get("report")
+    if not isinstance(b, dict):
+        return None
+    m = (rep.get("facts") or {}).get("market") or {}
+    return {
+        "id": rep.get("id"), "et_label": rep.get("et_label"), "created_et": rep.get("created_et"),
+        "auto": rep.get("label") == "auto", "underway": bool(rep.get("session_underway")),
+        "thesis": b.get("thesis") or "",
+        "market": {k: m.get(k) for k in ("bias", "score", "basis", "grade")} if m else None,
+        "calls": [{k: c.get(k) for k in ("book", "open_bias", "conviction")}
+                  for c in b.get("calls") or [] if isinstance(c, dict)],
+        "risks": [r for r in b.get("risks") or [] if isinstance(r, str)][:3],
+    }
+
+
+_ASSET_OF: dict[str, tuple[float, str | None]] = {}
+_CARD: dict[str, Any] = {"key": None, "card": None}
+
+
+def latest_card(asset: str = ETF_ASSET) -> dict[str, Any] | None:
+    """The newest stored report about `asset` as the Dashboard's card, or None. Each file's
+    subject is remembered by its time on disk, so a poll reads one file at most."""
+    try:
+        files = sorted((f for f in os.listdir(REPORTS_DIR) if f.endswith(".json")),
+                       reverse=True)
+    except OSError:
+        return None
+    for f in files[:40]:
+        try:
+            mt = os.path.getmtime(os.path.join(REPORTS_DIR, f))
+        except OSError:
+            continue
+        key = f"{f}:{mt}"
+        known = _ASSET_OF.get(f)
+        if known is not None and known[0] == mt and known[1] != asset:
+            continue
+        if known is not None and known[0] == mt and _CARD["key"] == key:
+            return _CARD["card"]  # type: ignore[no-any-return]
+        rep = load(f[:-5])
+        got = rep.get("asset") if isinstance(rep, dict) else None
+        _ASSET_OF[f] = (mt, got)
+        if got == asset:
+            card = card_of(rep)
+            _CARD.update(key=key, card=card)
+            return card
+    return None
 
 
 def remove(report_id: str) -> bool:

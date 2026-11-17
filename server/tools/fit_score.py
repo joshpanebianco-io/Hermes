@@ -33,9 +33,29 @@ settled (L) and (E) signals, and reports:
      rank against the rest of its top fifty by the day each then had (range and move
      in daily ATRs), and promoted names against the rest.
 
-READ ONLY WHAT IS ON THE CURRENT WEIGHTS. `--since 2026-11-13` reads the signals from
-that day on, when the quant audit's reweight went live; every earlier score is on older
-rules. Run it weekly and keep a change only if it holds on both halves.
+AND, from 2026-11-14, the entry gate: signals with an entry to take against those
+without, then section 4 again on the first group alone (`entry_lines`). A part is worth
+its weight for what it tells apart among trades that can be taken, so that table is
+the one to move a weight on.
+
+THE TEST IS TRENDING, AND IT IS PRINTED FIRST (owner, 2026-11-14: "the whole purpose of
+the scanner is to identify stocks that are more likely to be strong trenders"). A list
+that picks trades which reach +1R and then stall is not doing its job, and on that day's
+read it was: the top five (L) retests a day held +0.13 R against +0.11 for the average
+one. So `trend_lines` leads the report: +2R reached and R held, every day counting the
+same, for every signal, the top five and the top and bottom thirds of each day's list,
+the gap between the thirds, and that gap on each half of the days. Move a weight on
+that table and the valid-entry one, not on the +1R lines under them. The news table
+gained the groups the same day's changes need: a story that reads against the side
+(paid since then), one the tape overruled, a name with a major story the session
+before (`prior`, logged and unscored), and how big the model read the story to be
+(`size`, the same).
+
+READ ONLY WHAT IS ON THE CURRENT WEIGHTS. `--since 2026-11-16` reads the signals from
+the first session on the weights of 2026-11-14 (the entry gate, the news paid either
+way, RS at 10); `--since 2026-11-13` adds the one session on the quant audit's reweight
+before them. Every earlier score is on older rules. Run it weekly and keep a change
+only if it holds on both halves.
 
 TWO MEASURES, BOTH WITH THE STOP KEPT. "At +1R" is a trade that takes +1R, is
 stopped at -1R, or is out at the close. "Held" is a trade held to the close,
@@ -222,6 +242,112 @@ def equal_day_lines(scored: list[dict[str, Any]]) -> list[str]:
             line("top third", lambda r: r[:len(r) // 3])]
 
 
+def trend_lines(scored: list[dict[str, Any]]) -> list[str]:
+    """Does the list pick the trades that RUN? The report's first table (module docstring).
+
+    +2R reached and R held with the stop kept, +1R beside them, every day counting the
+    same, in the order the list was ranked on (`rank_score`): every signal, the top
+    five, and the top and bottom thirds of each day with six signals or more. Then the
+    gap between the thirds with the days the top was ahead, and the same gap on each
+    half of the days: a gap that holds on one half only is that fortnight's market."""
+    days = by_day(scored)
+    order = sorted(days)
+    lists = {d: sorted(days[d], key=rank_score, reverse=True) for d in order}
+
+    def stats(evs: list[dict[str, Any]]) -> tuple[float, float, float]:
+        return (win_2r(evs) or 0.0, mean([held(e) for e in evs]) or 0.0, win(evs) or 0.0)
+
+    def avg(rows: list[tuple[float, float, float]], i: int) -> float:
+        return sum(r[i] for r in rows) / len(rows) if rows else 0.0
+
+    def thirds_of(keys: list[str]) -> tuple[list[tuple[float, float, float]],
+                                            list[tuple[float, float, float]]]:
+        top: list[tuple[float, float, float]] = []
+        bottom: list[tuple[float, float, float]] = []
+        for d in keys:
+            n = len(lists[d]) // 3
+            if n >= 2:
+                top.append(stats(lists[d][:n]))
+                bottom.append(stats(lists[d][-n:]))
+        return top, bottom
+
+    def row(label: str, rows: list[tuple[float, float, float]]) -> str:
+        if not rows:
+            return f"  {label:<13} too few signals a day"
+        return f"  {label:<13} {_pct(avg(rows, 0))}  {_signed(avg(rows, 1))}  {_pct(avg(rows, 2))}"
+
+    def gap(keys: list[str]) -> str:
+        top, bottom = thirds_of(keys)
+        if not top:
+            return "too few signals a day to split"
+        g2 = (avg(top, 0) - avg(bottom, 0)) * 100
+        gh = avg(top, 1) - avg(bottom, 1)
+        a2 = sum(1 for t, b in zip(top, bottom, strict=True) if t[0] > b[0])
+        ah = sum(1 for t, b in zip(top, bottom, strict=True) if t[1] > b[1])
+        # A plain bar: a Windows console without the code page turns a middle dot to "?".
+        return (f"+2R {g2:+5.1f} pts, ahead on {a2} of {len(top)} days | "
+                f"held {gh:+.2f} R, ahead on {ah} of {len(top)}")
+
+    top, bottom = thirds_of(order)
+    half = len(order) // 2
+    return ["Trending, what the list is for: +2R reached and R held, every day counting the same:",
+            "                    +2R    held     +1R",
+            row("every signal", [stats(lists[d]) for d in order]),
+            row("top 5 a day", [stats(lists[d][:5]) for d in order]),
+            row("top third", top),
+            row("bottom third", bottom),
+            f"  top third less bottom third: {gap(order)}",
+            f"    first half of the days:  {gap(order[:half])}",
+            f"    second half of the days: {gap(order[half:])}",
+            *side_lines(scored)]
+
+
+def side_lines(scored: list[dict[str, Any]]) -> list[str]:
+    """The same test on each side's own signals: a trend is a trend both ways.
+
+    Owner, 2026-11-14: "when i say trending i mean both bullish and bearish trends". The
+    score is mirrored for a short (below its levels, weak against SPY, a falling tape),
+    but a mirrored rule need not work as well both ways, and on that day's read it did
+    not: among the longs the top third of each day beat the bottom third at +2R by 20
+    points, among the shorts by none, and the shorts were carried by a few sessions
+    (held +0.60 R pooled, -0.10 R with every day counting the same). So each side is
+    printed apart, ranked among its own signals inside each day: read both before a
+    weight is moved, and do not let the longs' gap pass for the list's."""
+    lines = ["  By side, each ranked among its own signals inside each day:"]
+    for side in ("long", "short"):
+        evs = [e for e in scored if e.get("side") == side]
+        if not evs:
+            lines.append(f"    {side + 's':<7} none")
+            continue
+        days = by_day(evs)
+        order = sorted(days)
+        lists = [sorted(days[d], key=rank_score, reverse=True) for d in order]
+
+        def avg(rows: list[list[dict[str, Any]]], f: Callable[[list[dict[str, Any]]], float | None]) -> float:
+            vals = [f(r) or 0.0 for r in rows if r]
+            return sum(vals) / len(vals) if vals else 0.0
+
+        def held_of(r: list[dict[str, Any]]) -> float | None:
+            return mean([held(e) for e in r])
+
+        split = [(x[:len(x) // 3], x[-(len(x) // 3):]) for x in lists if len(x) // 3 >= 2]
+        tops, bots = [t for t, _ in split], [b for _, b in split]
+        head = (f"    {side + 's':<7} {len(evs):>4} signals, {len(order)} days | every signal +2R "
+                f"{_pct(avg(lists, win_2r))} held {_signed(avg(lists, held_of))} | top 5 +2R "
+                f"{_pct(avg([x[:5] for x in lists], win_2r))} held "
+                f"{_signed(avg([x[:5] for x in lists], held_of))}")
+        if not split:
+            lines.append(head + " | too few a day to split")
+            continue
+        g2 = (avg(tops, win_2r) - avg(bots, win_2r)) * 100
+        gh = avg(tops, held_of) - avg(bots, held_of)
+        a2 = sum(1 for t, b in split if (win_2r(t) or 0.0) > (win_2r(b) or 0.0))
+        ah = sum(1 for t, b in split if (held_of(t) or 0.0) > (held_of(b) or 0.0))
+        lines.append(head + f" | thirds' gap +2R {g2:+5.1f} pts ({a2} of {len(split)} days), "
+                            f"held {gh:+.2f} R ({ah} of {len(split)})")
+    return lines
+
+
 def _earned(e: dict[str, Any], key: str) -> bool:
     """Whether a signal earned at least half of a part."""
     v = e["parts"].get(key) or {}
@@ -256,6 +382,37 @@ def same_day_lines(with_parts: list[dict[str, Any]]) -> list[str]:
         lines.append(f"  {k:<11}              {ahead[0]:<5} {ahead[1]:<5} {ahead[2]:<5} |"
                      f"               {(mean(g1) or 0.0) * 100:+5.1f} pts {(mean(g2) or 0.0) * 100:+5.1f} pts {mean(gh) or 0.0:+.2f} R")
     return lines
+
+
+def at_entry(e: dict[str, Any]) -> bool:
+    """Whether a signal had an entry to take: its `location` part earned anything. The
+    part is all or nothing from 2026-11-14 (scanscore.W_ENTRY); before that a graded
+    part above zero was the same setups. A signal logged with no such part counts."""
+    v = e["parts"].get("location")
+    return not isinstance(v, dict) or (v.get("pts") or 0) > 0
+
+
+def entry_lines(with_parts: list[dict[str, Any]]) -> list[str]:
+    """The entry gate, then every part again on the signals that passed it.
+
+    The whole record flatters a part that is high where the entry is bad and hides one
+    that only matters once there is a trade to take: read on every signal the catalyst
+    showed nothing, and on the valid (L) entries it was ahead on 5 days of 7 (2026-11-14).
+    These are the lines to read before a weight is moved."""
+    valid = [e for e in with_parts if at_entry(e)]
+    rest = [e for e in with_parts if not at_entry(e)]
+
+    def row(label: str, evs: list[dict[str, Any]]) -> str:
+        return (f"  {label:<15} {len(evs):>4}  {_pct(win(evs))}  {_pct(win_2r(evs))}  "
+                f"{_signed(mean([held(e) for e in evs]))}")
+
+    lines = ["The entry gate (a setup with an entry to take against one without):",
+             "                     n     +1R     +2R    held",
+             row("valid entry", valid), row("no entry", rest), ""]
+    table = same_day_lines(valid)
+    table[0] = ("Only signals at a valid entry: inside each day, signals earning at least half "
+                "of a part against the rest of that day:")
+    return lines + table
 
 
 def penalty_lines(with_parts: list[dict[str, Any]]) -> list[str]:
@@ -315,17 +472,31 @@ def news_lines(evs: list[dict[str, Any]]) -> list[str]:
     def news(e: dict[str, Any]) -> dict[str, Any]:
         return e["ctx"]["news"]
 
+    def paid(e: dict[str, Any]) -> bool:
+        return (news(e).get("pts") or 0) > 0
+
+    def prior(e: dict[str, Any]) -> bool:
+        return isinstance(news(e).get("prior"), dict)
+
     return [
         *_split_lines(f"News inside each day ({len(with_news)} signals carry it):", with_news, [
             ("with the side", lambda e: news(e).get("with") is True),
-            ("against the side", lambda e: news(e).get("with") is False),
-            ("none", lambda e: news(e).get("with") is None),
+            # Paid its grade since 2026-11-14; it cost points before (scanscore.W_CATALYST).
+            ("reads against it", lambda e: news(e).get("with") is False),
+            ("tape overruled it", lambda e: news(e).get("src") == "overruled"),
+            ("none", lambda e: news(e).get("tier") is None),
+            ("any major", lambda e: news(e).get("tier") == 1 and paid(e)),
             ("major with it", lambda e: news(e).get("with") is True and news(e).get("tier") == 1),
             ("by the move", lambda e: news(e).get("src") == "move"),
             ("by the words", lambda e: news(e).get("src") == "words"),
             ("by the tape", lambda e: news(e).get("src") == "tape"),
-            ("a report", lambda e: news(e).get("src") == "report"),
-            ("tape set aside", lambda e: (news(e).get("set_aside") or 0) > 0),
+            ("a report", lambda e: news(e).get("tag") == "Report"),
+            # Logged and unscored (2026-11-14): a major story the session before, with and
+            # without news today; and how big the model read today's story to be.
+            ("day 2, no news", lambda e: prior(e) and not paid(e)),
+            ("day 2, any", prior),
+            ("read as big", lambda e: news(e).get("size") == "big"),
+            ("read as ordinary", lambda e: news(e).get("size") == "ordinary"),
         ]),
         "",
         *_split_lines("The RVOL gate inside each day:", with_news, [
@@ -451,8 +622,10 @@ def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] |
     if len(evs) < MIN_TOTAL:
         lines.append(f"  under the {MIN_TOTAL}-signal guard: read as a hint, change no weight on it")
     lines.append("")
-    lines.append("By score band          n   win +1R   at +1R   held")
     scored = [e for e in evs if isinstance(e.get("score"), (int, float))]
+    lines += trend_lines(scored)
+    lines.append("")
+    lines.append("By score band          n   win +1R   at +1R   held")
     for lo, hi in BANDS:
         band = [e for e in scored if lo <= e["score"] < hi]
         lines.append(f"  {lo:>3}–{hi - 1:<3}            {len(band):>4}   {_pct(win(band))}   "
@@ -494,6 +667,8 @@ def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] |
                      f"{len(lo):>4}  {wl * 100:5.1f}%  | {(wh - wl) * 100:+.1f} pts")
     lines.append("")
     lines += same_day_lines(with_parts)
+    lines.append("")
+    lines += entry_lines(with_parts)
     lines.append("")
     lines += penalty_lines(with_parts)
     lines.append("")

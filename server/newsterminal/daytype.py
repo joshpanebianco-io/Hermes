@@ -90,6 +90,16 @@ VOTE_MIN = 50
 RANGE_LIFT = 0.10
 TREND_LIFT = 1.5
 TREND_FLOOR = 0.10
+#: A condition votes AGAINST a trend day ("no_trend") when its trend rate is under this
+#: share of the base (owner, 2026-11-16: "why are the nq and es both the same amount of
+#: bias points but nq says no lean and es says trend say mor eposisble", then "do what you
+#: recommend"). That morning ES read "Trend day more possible" on one condition (after a
+#: normal day, 24 trend days in 189 against 41 in 573) while Monday, 3 trend days in 105,
+#: under half the base, was printed and ignored: it only voted if its RANGE rate was ten
+#: points up as well. A halved trend rate is a vote against the trend call, so the two
+#: together read "Mixed record". Alone it calls nothing: fewer trend days is not a range
+#: day.
+TREND_DROP = 0.5
 CALL_WORD = {"range": "Range day likely", "trend": "Trend day more possible",
              "mixed": "Mixed record", "none": "No lean"}
 #: The backfill tool's file (tools/daytype_backfill.py), the record's larger half.
@@ -395,9 +405,11 @@ def _phrase(h: dict[str, Any]) -> str:
 def lean(card: dict[str, Any], table: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """What the record says about a session that looks like `card`: every condition
     that holds today with its count, which of them vote, and the call. A vote needs
-    VOTE_MIN sessions and a lift worth the name (RANGE_LIFT, TREND_LIFT); the call is
-    the side the votes agree on, "mixed" when they do not, "none" when nothing in
-    the record separates the day. Counts, never a probability. Pure."""
+    VOTE_MIN sessions and a lift worth the name (RANGE_LIFT, TREND_LIFT), or a trend
+    rate under TREND_DROP of the base ("no_trend", against a trend call); the call is
+    the side the votes agree on, "mixed" when a trend vote meets a range or no_trend
+    vote, "none" when nothing in the record separates the day. Counts, never a
+    probability. Pure."""
     base = table.get("every session") or {"n": 0}
     holds: list[dict[str, Any]] = []
     for name, test in CONDITIONS:
@@ -410,13 +422,19 @@ def lean(card: dict[str, Any], table: dict[str, dict[str, Any]]) -> dict[str, An
                 vote = "range"
             elif r["trend"] >= max(base["trend"] * TREND_LIFT, TREND_FLOOR):
                 vote = "trend"
+            elif r["trend"] < base["trend"] * TREND_DROP:
+                vote = "no_trend"
         holds.append({"condition": name, "shown": _shown(name, card), "n": int(r.get("n", 0)),
                       "trend": int(r.get("trend_n", 0)), "range": int(r.get("range_n", 0)),
                       "vote": vote})
     votes = {h["vote"] for h in holds if h["vote"]}
-    call = ("range" if votes == {"range"} else "trend" if votes == {"trend"}
-            else "mixed" if votes else "none")
+    against = bool(votes & {"range", "no_trend"})
+    call = ("mixed" if "trend" in votes and against else "trend" if "trend" in votes
+            else "range" if "range" in votes else "none")
     why = " · ".join(_phrase(h) for h in holds if h["vote"])
+    if call == "none" and why:
+        # Only votes against a trend day: fewer trend days than usual, and no range call.
+        why = f"fewer trend days than usual, not a range call: {why}"
     if not why:
         why = ("nothing in the record separates today" if base.get("n")
                else "no record yet: run tools/daytype_backfill.py")

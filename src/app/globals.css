@@ -1580,6 +1580,16 @@
 .ui-qt .qt-band:first-child {
   border-top-width: 0;
 }
+/* The Macro board's group headings: a shorter band, so the calendar above the board
+   has the room (owner, 2026-11-14: "reduce the size of the macro board a bit"). */
+/* Shorter again on 2026-11-15, when the board came to sit under Earnings ("decrease the
+   macro board a bit and increase the earnings card"): 23px on screen where it was 27,
+   then 19 ("slightly again"). */
+.ui-qt .qt-band.qt-band-tight {
+  padding-top: 2px;
+  padding-bottom: 1px;
+  line-height: 14px;
+}
 /* A band that sticks needs a ground, or the rows scroll through it. */
 .ui-qt .qt-band.qt-sticky {
   background: var(--bg);
@@ -2111,6 +2121,15 @@
 .ui-lum .qt-col > :last-child {
   flex-grow: 1;
 }
+/*
+ * A CARD THAT FILLS TAKES THAT ROOM INSTEAD (2026-11-14). Macro's calendar scrolls
+ * inside itself, so it is the card that should grow (`qt-fill`, with `flex-1` on it),
+ * and the board under it stays the height of its rows instead of stretching a blank
+ * foot while the calendar above shows three lines.
+ */
+.ui-lum .qt-col:has(> .qt-fill) > :last-child:not(.qt-fill) {
+  flex-grow: 0;
+}
 .ui-lum .qt-col > * + * {
   border-top: 0;
 }
@@ -2349,62 +2368,6 @@
 .ui-lum .qt-mast + .qt-frame > :first-child > :first-child > .qt-bar:first-child:has(+ .qt-sheet) {
   box-shadow: none;
 }
-/*
- * THE FUTURES OVERVIEW'S BOOKS ARE COLUMNS OF ONE CARD, so the band has a card to be the
- * top of. They were five cards with air between, each a book's whole read; side by side
- * under one band they are that read in five columns, parted by the short rule a stat
- * row's figures are, and a column still lights and opens its book. Only where the five
- * sit in one row (Tailwind's 2xl, the grid's own breakpoint): narrower, the grid wraps,
- * and they stay cards under a band that stays a card.
- */
-@media (min-width: 96rem) {
-  .ui-lum .qt-frame .qt-books {
-    gap: 0;
-    padding: 0;
-    margin: 0 0 var(--lum-gap);
-    background: var(--lum-glass);
-    border: 1px solid var(--lum-ring);
-    border-radius: 16px;
-    box-shadow: inset 0 1px 0 var(--lum-edge), var(--lum-shadow);
-    backdrop-filter: blur(10px);
-    overflow: hidden;
-  }
-  .ui-lum .qt-frame .qt-books > * {
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-  }
-  .ui-lum .qt-frame .qt-books > *:not(:last-child) {
-    background-image: var(--lum-part);
-    background-position: right center;
-    background-size: 1px 56%;
-    background-repeat: no-repeat;
-  }
-  /* A column is a button that opens its book: with no card of its own to say so, it lights. */
-  .ui-lum .qt-frame .qt-books > *:hover,
-  .ui-lum .qt-frame .qt-books > *:focus-visible {
-    background-color: var(--lum-sheet-hover);
-  }
-  .ui-lum .qt-frame .qt-books > *:focus-visible {
-    outline-offset: -3px;
-    border-radius: 10px;
-  }
-  .ui-lum .qt-mast:has(+ .qt-frame > :first-child > .qt-books:first-child) {
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-    box-shadow: inset 0 1px 0 var(--lum-edge);
-  }
-  .ui-lum .qt-mast + .qt-frame:has(> :first-child > .qt-books:first-child) {
-    margin-top: 0;
-  }
-  .ui-lum .qt-mast + .qt-frame > :first-child > .qt-books:first-child {
-    border-top: 0;
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
-    box-shadow: var(--lum-shadow);
-  }
-}
-
 /* ---- fewer lines ---------------------------------------------------------------------- */
 .ui-lum .qt-sheet tbody tr > td {
   border-bottom-color: rgba(255, 255, 255, 0.028);
@@ -2687,14 +2650,8 @@
 
 /* ---- the cards: a step less round, as the screenshots' are ----------------------------- */
 .ui-side :is(.qt-mast, .qt-bar, .qt-sheet, .qt-card, .qt-wait, .qt-slab, .module, .qt-crawl, .qt-stats,.qt-tally, .qt-drawer),
-.ui-side .qt-tiles > *,
-.ui-side .qt-frame .qt-books {
+.ui-side .qt-tiles > * {
   border-radius: 12px;
-}
-/* The Futures overview's five books are columns of one card (Luminous, above): the
-   card is round, its columns are not. */
-.ui-side .qt-frame .qt-books > * {
-  border-radius: 0;
 }
 
 /* ---- the shell: the sidebar, and beside it the header, the page and the status rail ---- */

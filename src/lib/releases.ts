@@ -80,6 +80,8 @@ const ALIASES: Record<string, string> = {
 const FAMILY_LEAD: Record<string, RegExp> = {
   jobs: /nonfarm payrolls|employment change/i,
   claims: /\binitial\b/i,
+  // The growth rate itself, not one of its parts: "GDP q/q", "German GDP y/y".
+  gdp: /(?:^|\s)gdp\s+(?:q\/q|m\/m|y\/y|qoq|mom|yoy)(?:\s|$)/i,
 };
 
 const INFLATION = new Set(["cpi", "ppi", "pce", "hicp"]);
@@ -95,6 +97,13 @@ function base(event: string): string {
 /** The release an event name belongs to. "Initial Jobless Claims" → "claims". */
 export function family(event: string): string {
   const b = base(event);
+  // GDP'S PARTS ARE ONE RELEASE (2026-11-14). Japan's quarterly GDP came as six rows
+  // (the growth rate, annualised, the price index, capital expenditure, private
+  // consumption, external demand), each its own family because each is named
+  // differently, and they filled the Macro calendar's window on their own. Anything
+  // named "GDP …" at one minute from one country is the GDP release; the growth rate
+  // leads it (FAMILY_LEAD).
+  if (b.startsWith("gdp ")) return "gdp";
   return ALIASES[b] ?? b;
 }
 

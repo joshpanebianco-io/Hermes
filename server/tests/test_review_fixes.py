@@ -152,7 +152,7 @@ def test_an_index_name_is_not_a_figure_but_its_price_still_is() -> None:
 
 def test_the_guard_names_a_rounded_and_an_invented_figure() -> None:
     brief = {"thesis": "Gold at 4,329.3, up 0.25%, eyeing 5% and 4400",
-             "calls": [{"why": ["10Y at 4.96%"], "rest_of_day": "", "wrong_if": "above 4345"}]}
+             "calls": [{"why": ["10Y at 4.96%"], "plan": "", "wrong_if": "above 4345"}]}
     assert report.unverified(brief, "gold 4329.3 +0.25% · 10Y 4.96 · flip 4345") == ["5", "4400"]
 
 
@@ -165,8 +165,7 @@ def test_generate_reasks_once_and_stores_what_survives(monkeypatch: pytest.Monke
         body = json.dumps({
             "thesis": thesis,
             "calls": [{"book": "NQ", "open_bias": "bullish", "conviction": 3,
-                       "rest_of_day": "x", "wrong_if": "y", "why": []}],
-            "reads": [{"book": "NQ", "regime": "r"}],
+                       "plan": "x", "wrong_if": "y", "why": []}],
         })
         return {"choices": [{"message": {"content": body}, "finish_reason": "stop"}]}
 

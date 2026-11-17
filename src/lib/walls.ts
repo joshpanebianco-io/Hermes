@@ -10,7 +10,8 @@
  * bigger", "i dont like the dip shape", then "do option 3"). A font offers a solid flat
  * triangle at 11px (▲) or 6px (▴) and nothing between that is not a dipped arrowhead (⮝),
  * so the chart draws the wall's label itself (ScanChart's Overlays) with triangles of its
- * own size, and the overview sets them in a smaller type. This says what to draw.
+ * own size (the Futures Overview, which set them in a smaller type, went on 2026-11-14).
+ * This says what to draw.
  */
 
 const WALL = /^(Call|Put) wall(?: ([123]))?$/i;

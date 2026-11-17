@@ -196,8 +196,12 @@ def test_the_filters_narrow_it_and_a_theme_reads_the_industry() -> None:
     [(et(2026, 11, 8, 22, 0), date(2026, 11, 6)),    # Sunday night: Friday's cards
      (et(2026, 11, 9, 3, 0), date(2026, 11, 6)),
      (et(2026, 11, 9, 7, 0), date(2026, 11, 6)),     # the pre-market: still Friday's ETF moves
-     (et(2026, 11, 9, 9, 44), date(2026, 11, 6)),
-     (et(2026, 11, 9, 9, 45), date(2026, 11, 9)),    # the feed has reached the open
+     (et(2026, 11, 9, 9, 29), date(2026, 11, 6)),
+     # From the bell (2026-11-16): the funds' moves are live and today's, and until the
+     # feed reaches the open at 09:45 the counts are the stocks' pre-market, today's too.
+     (et(2026, 11, 9, 9, 30), date(2026, 11, 9)),
+     (et(2026, 11, 9, 9, 44), date(2026, 11, 9)),
+     (et(2026, 11, 9, 9, 45), date(2026, 11, 9)),
      (et(2026, 11, 9, 17, 0), date(2026, 11, 9)),
      (et(2026, 11, 9, 21, 0), date(2026, 11, 9))],
 )

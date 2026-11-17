@@ -51,7 +51,10 @@ async function call(method: "GET" | "POST" | "DELETE", timeoutMs: number, qs = "
  * still a proxy, not a tunnel.
  */
 const SESSIONS = new Set(["auto", "asia", "london", "ny"]);
-const ASSETS = new Set(["all", "NQ", "ES", "GC"]);
+// The Futures tab's report is about one book (NQ, ES, GC, SIL, CL) since 2026-11-16, the
+// Stocks tab's about SPY, QQQ and IWM together ("etfs"); "indexes" and "all" stay for an
+// old page.
+const ASSETS = new Set(["indexes", "GC", "SIL", "CL", "all", "NQ", "ES", "etfs"]);
 
 function pickQuery(req: Request): string {
   const u = new URL(req.url);

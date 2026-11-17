@@ -11,10 +11,21 @@ the contract's own bars from Yahoo and hands the chart the shape the Scanner's
 chart already draws, with the overnight standing where the pre-market stands:
 
     pdh / pdl   the prior regular session's high and low (09:30-16:00 ET)
-    pmh / pml   the overnight's high and low, the 18:00 reopen to 09:30;
-                "forming" until 09:30, as a stock's pre-market range is
-    lines       the gamma flip and walls, the prior settle, the opening range
+    pmh / pml   the pre-market's high and low, 04:00 to 09:30 ET, as on a stock;
+                "forming" until 09:30
+    lines       the gamma flip and walls
     em          the expected move's band
+
+THE FOUR LEVELS ARE THE CONTRACT'S OWN BARS', DRAWN AS THE PINE DRAWS THEM (owner,
+2026-11-14: "i dont think the pmh/l levels are showing on the futures charts which
+should also be from 4:00am-9:30am est"). They were read off the live ladder: the PMH
+and PML were its "ON high" and "ON low", the whole overnight from the 18:00 reopen,
+which is another range and is empty whenever the ladder is (every weekend, so the
+chart showed none), and the PDH and PDL were one pair drawn across every day in view.
+`day_levels` works all four out off the bars, 04:00 to 09:30 for the pre-market, for
+the last futures day with a bar: ONE named set, each line from that day's start on to
+the chart's right edge, and no other day's. A day that has not opened has no levels.
+The ladder still carries the overnight range, for the Levels card, Hermes and the brief.
 
 VWAP IS ANCHORED, AND CARRIES ITS BANDS (owner, 2026-11-10: "for futures have
 vwap anchored at 18:00 with the 1st and 2nd deviation bands with options to
@@ -50,7 +61,7 @@ testable parts.
 from __future__ import annotations
 
 import math
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Any
 
 from .holidays import is_trading_day
@@ -83,6 +94,8 @@ ANCHORS = ("globex", "london", "rth", "week")
 LINE_KINDS = {"flip": "flip", "call": "call", "put": "put"}
 
 RTH_OPEN, RTH_CLOSE, HALT, REOPEN = time(9, 30), time(16, 0), time(17, 0), time(18, 0)
+#: Where the pre-market range starts, on a future as on a stock (`day_levels`).
+PM_OPEN = time(4, 0)
 
 
 def parse(doc: Any) -> list[Bar]:
@@ -198,6 +211,72 @@ def anchored(src: list[Bar], shown: list[Bar], step: int, anchor: str) -> dict[s
     return {"vwap": vwap, "sd": sd, "starts": starts}
 
 
+def day_levels(src: list[Bar], now: datetime,
+               since: int = 0) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """(the chart's own four levels, the earlier days') off the contract's own bars, as
+    the owner's Pine script draws them (the module's note; scan.chart_levels). Pure.
+
+    A DAY IS A FUTURES DAY, the 18:00 reopen to the 17:00 halt (sessions
+    .globex_trade_date), which is where the script's day changes on a future. Its PDH
+    and PDL are the regular session's (09:30 to 16:00 ET) of the futures day before it
+    in the download; its PMH and PML its own 04:00 to 09:30. THE NAMED SET IS THE LAST
+    DAY'S WITH A BAR, and there is one: a day that has not opened has no levels, so over
+    a weekend the chart shows Friday's (Thursday's cash range, Friday's pre-market)
+    until the Sunday reopen. `pd_from` is that day's first bar and `pm_from` its 04:00:
+    where the chart starts each pair, run on to its right edge.
+
+    NO EARLIER DAY'S LEVELS ARE KEPT ON A FUTURE'S CHART: the second value is always
+    empty. The chart had none before, the owner asked for the pre-market range and not
+    for more lines ("you now have double ups of the levels"), and an hour view holds
+    three weeks of days. `since` is kept for the stock chart's shape of the call."""
+    rth: dict[date, list[float]] = {}
+    pre: dict[date, list[float]] = {}
+    first: dict[date, int] = {}
+    now_ts = int(now.timestamp())
+    for b in src:
+        if b.t > now_ts:
+            continue
+        dt = datetime.fromtimestamp(b.t, ET)
+        g = globex_trade_date(dt)
+        first.setdefault(g, b.t)
+        if dt.date() != g:
+            continue        # the evening before: the overnight, neither range
+        if PM_OPEN <= dt.time() < RTH_OPEN:
+            pre.setdefault(g, []).extend((b.high, b.low))
+        elif RTH_OPEN <= dt.time() < RTH_CLOSE:
+            rth.setdefault(g, []).extend((b.high, b.low))
+
+    def at(d: date, tm: time) -> int:
+        return int(datetime.combine(d, tm, tzinfo=ET).timestamp())
+
+    def four(d: date, prior: date | None) -> dict[str, float]:
+        out: dict[str, float] = {}
+        if prior is not None:
+            out["PDH"], out["PDL"] = round(max(rth[prior]), 4), round(min(rth[prior]), 4)
+        if d in pre:
+            out["PMH"], out["PML"] = round(max(pre[d]), 4), round(min(pre[d]), 4)
+        return out
+
+    days = sorted(first)
+    levels: dict[str, Any] = {"pdh": None, "pdl": None, "pmh": None, "pml": None,
+                              "pm_done": True, "pd_from": None, "pm_from": None, "day": None}
+    if not days:
+        return levels, []
+    sets: dict[date, dict[str, float]] = {}
+    prior: date | None = None
+    for d in days:
+        sets[d] = four(d, prior)
+        if d in rth:
+            prior = d
+    cur = days[-1]
+    got = sets[cur]
+    levels.update(pdh=got.get("PDH"), pdl=got.get("PDL"), pmh=got.get("PMH"), pml=got.get("PML"),
+                  # The pre-market is final once the cash session opens.
+                  pm_done=now.astimezone(ET) >= datetime.combine(cur, RTH_OPEN, tzinfo=ET),
+                  pd_from=first[cur], pm_from=at(cur, PM_OPEN), day=cur.isoformat())
+    return levels, []
+
+
 def series(bars: list[Bar], tf: str, now: datetime, ladder: dict[str, Any] | None,
            book: str = "") -> dict[str, Any]:
     """One view of a book: the bars, the averages, VWAP from each reopen, the
@@ -242,15 +321,17 @@ def series(bars: list[Bar], tf: str, now: datetime, ladder: dict[str, Any] | Non
         else:
             sessions.append({"kind": kind, "from": b.t, "to": b.t + step})
 
-    et_now = now.astimezone(ET).time()
-    levels = {
-        "pdh": _row(ladder, "Prior RTH high"),
-        "pdl": _row(ladder, "Prior RTH low"),
-        "pmh": _row(ladder, "ON high"),
-        "pml": _row(ladder, "ON low"),
-        # The overnight is final once the cash session opens.
-        "pm_done": RTH_OPEN <= et_now < REOPEN,
-    }
+    # The four levels, each day's own, off the bars (`day_levels`). A daily bar cannot
+    # say what the pre-market or the cash session did, so the daily view keeps the
+    # ladder's prior session and draws no pre-market range.
+    history: list[dict[str, Any]] = []
+    if tf == "D":
+        levels: dict[str, Any] = {
+            "pdh": _row(ladder, "Prior RTH high"), "pdl": _row(ladder, "Prior RTH low"),
+            "pmh": None, "pml": None, "pm_done": True, "pd_from": None, "pm_from": None,
+            "day": None}
+    else:
+        levels, history = day_levels(src, now, held[start].t)
     lines: list[dict[str, Any]] = []
     for r in (ladder or {}).get("rows") or []:
         label = str(r.get("label") or "")
@@ -281,7 +362,7 @@ def series(bars: list[Bar], tf: str, now: datetime, ladder: dict[str, Any] | Non
         "vwaps": vwaps,
         "opens": opens,
         "levels": levels,
-        "history": [],
+        "history": history,
         "sessions": sessions,
         "signals": [],
         "lines": lines,

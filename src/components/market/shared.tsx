@@ -3,6 +3,7 @@ import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { groupReleases, subLabel, type Release } from "@/lib/releases";
 import { scoreText } from "@/lib/bias";
+import { wholeScore } from "@/lib/biasScale";
 
 /**
  * The conviction board's small parts, shared by the Market tab and the Game
@@ -36,8 +37,9 @@ export function votesTip(c: Conviction): string {
  */
 export function readFigure(c: Conviction): string {
   if (c.score == null) return `${c.agree} of ${c.total} agree`;
-  // A thin read says how thin: "+100" on two reads of eleven is not the tape agreeing.
-  return c.thin ? `${scoreText(c.score)} on ${c.live ?? 0} of ${c.total}` : scoreText(c.score);
+  // Over the whole weight, so "+100" on two reads of eleven prints as the +35 it is
+  // (lib/biasScale: a plan stored before 2026-11-15 is converted, not reprinted).
+  return scoreText(wholeScore(c) ?? c.score);
 }
 
 /** The grade's ink: strong carries the side's hue, weak and none step back. */

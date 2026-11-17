@@ -1,14 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
-import type { CalendarRow, HolidayNotice, Impact, Region } from "@/types/terminal";
+import { useMemo, useState } from "react";
+import type { AuctionEvent, CalendarRow, FedEvent, HolidayNotice, Impact, Region } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { cn } from "@/lib/cn";
 import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { segItem } from "@/lib/seg";
 import { isPending } from "@/lib/events";
 import { countryCode, groupReleases, subLabel, type Release } from "@/lib/releases";
+import { oneSchedule, tierLit, toggleTier as nextTiers } from "@/lib/schedule";
 import { useNow } from "@/lib/useNow";
+import { aheadShown } from "@/lib/calendarAhead";
 import { PrintPopover, READ_WORD, readTone } from "@/components/vol/PrintRead";
 
 /**
@@ -45,10 +47,14 @@ function tierOf(score: number): Impact {
  * THE TIERS ARE TOGGLES THAT COMBINE, exactly as on the wire and for the same
  * reason (owner, 2026-09-22) — see IMPACTS in Wire.tsx. One vocabulary means one
  * behaviour too: two rows of identical chips where one row is pick-one and the
- * other is pick-several would be a trap. None lit is ALL; all three lit is ALL.
+ * other is pick-several would be a trap.
+ *
+ * LIT IS WHAT YOU SEE, AND THERE IS NO "ALL" AMONG THEM (2026-11-14; lib/schedule).
+ * The card had "All 23" here and "All 23" again on the region row. All three lit is
+ * the whole calendar.
  */
-const TIERS: { key: Impact | "all"; label: string; hue: string; title: string }[] = [
-  { key: "all", label: "All", hue: "var(--ink-3)", title: "Every release on the calendar — clears the tiers" },
+const TIER_KEYS = ["high", "medium", "low"] as const;
+const TIERS: { key: Impact; label: string; hue: string; title: string }[] = [
   {
     key: "high",
     label: "High",
@@ -108,12 +114,22 @@ const MINE: Record<CalendarScope, { sub: string; on: string; off: string; keep: 
 
 export function Calendar({
   rows,
+  fed = NO_FED,
+  auctions = NO_AUCTIONS,
   holidays = NO_HOLIDAYS,
   ageMin,
   error,
   scope = "futures",
 }: {
   rows: CalendarRow[];
+  /**
+   * The Fed's diary and the Treasury's coupon auctions (owner, 2026-11-14, of a review
+   * of the Macro cards: "do what you recommend"). They were a card of their own a
+   * screen below this one; their decisions, minutes, Beige Books and auctions are rows
+   * of this list now, less whatever the calendar already lists (lib/schedule).
+   */
+  fed?: FedEvent[];
+  auctions?: AuctionEvent[];
   /**
    * The days a market is shut or shuts early (owner, 2026-11-12: "macro section doesnt
    * list bank holidays etc?"). Neither calendar feed carries them, so they are the
@@ -135,12 +151,7 @@ export function Calendar({
     [],
     manyOf("high", "medium", "low"),
   );
-  const toggleTier = (k: Impact | "all") =>
-    setTiers((prev) => {
-      if (k === "all") return [];
-      const next = prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k];
-      return next.length === TIERS.length - 1 ? [] : next;
-    });
+  const toggleTier = (k: Impact) => setTiers((prev) => nextTiers(prev, k, TIER_KEYS));
   /*
    * MINE IS ON BY DEFAULT, and it is the filter that makes this panel usable.
    * The raw calendar is 220 rows a day, most of it Korean industrial
@@ -161,12 +172,22 @@ export function Calendar({
   // — the filters, the counts, Ahead and Just printed — works on releases, so
   // a count is the number of lines a chip would show, and the lead's tier,
   // region and `core` speak for the release (its series share all three).
-  const releases = useMemo(() => groupReleases(rows, calFields).map(asCal), [rows]);
+  // The diary's rows join first, so they are filtered, counted and dated as releases are.
+  const releases = useMemo(
+    () => groupReleases(oneSchedule(rows, fed, auctions), calFields).map(asCal),
+    [rows, fed, auctions],
+  );
 
   // The minute clock, so a passed row leaves Ahead on time rather than when
   // the calendar next refetches (every ten minutes) — see lib/events.
   const nowMs = useNow(60_000);
-  const { upcoming, recent, counts, regionCounts } = useMemo(() => {
+  // SEE MORE (owner, 2026-11-16: "add a bit more of the future things that show up in
+  // the calendar? and have a see more if we do want to see more"). Off, the first day
+  // is whole and the rest of the fortnight is its big releases, one line each
+  // (lib/calendarAhead); on, every release the filters leave, unfolded. Not remembered:
+  // the card opens trimmed.
+  const [more, setMore] = useState(false);
+  const { pending, recent, counts, regionCounts } = useMemo(() => {
     const now = (nowMs ?? Date.now()) / 1000;
     const pool = coreOnly ? releases.filter((x) => mine.keep(x.lead)) : releases;
 
@@ -188,13 +209,16 @@ export function Calendar({
     return {
       counts: c,
       regionCounts: rc,
-      upcoming: keep.filter((x) => isPending(x, now)).slice(0, 20),
+      // Two weeks of what reaches the books is fifty-odd lines; the cap is for "everything".
+      pending: keep.filter((x) => isPending(x, now)).slice(0, 160),
       recent: keep
         .filter((x) => x.released)
         .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
         .slice(0, 8),
     };
   }, [releases, tiers, coreOnly, region, mine, nowMs]);
+  const ahead = useMemo(() => aheadShown(pending, (x) => etDay(x.lead), (x) => x.lead.score, more), [pending, more]);
+  const upcoming = ahead.shown;
 
   // The holidays the filters leave: the region chip narrows them as it does the releases,
   // and the stocks desk's Mine keeps the US ones (it trades New York only). Yesterday's
@@ -207,6 +231,14 @@ export function Calendar({
       .filter((x) => x.days >= -1)
       .slice(0, 5);
   }, [holidays, region, coreOnly, scope, nowMs]);
+  // A HOLIDAY IS A ROW WHEN IT IS NEAR AND A LINE WHEN IT IS NOT (2026-11-14). Three
+  // holidays ten days out took a third of the card and left room for three releases.
+  // Inside `HOLIDAY_NEAR_DAYS` each keeps its row, because that is when it changes the
+  // session being traded; further out they share one line, in full on the hover.
+  // With every region in view a release from abroad is its lead line alone (Rows).
+  const foldAbroad = region === "all";
+  const nearHols = hols.filter((x) => x.days <= HOLIDAY_NEAR_DAYS);
+  const farHols = hols.filter((x) => x.days > HOLIDAY_NEAR_DAYS);
 
   return (
     <Module
@@ -216,16 +248,18 @@ export function Calendar({
       error={error}
       bodyClassName="px-0 py-0"
       /*
-       * CAPPED, WITH ITS OWN SCROLL. This feed carries 221 rows. Unfiltered and
-       * uncapped it was not a panel, it was a wall: every live panel below it in
-       * the column sat behind a fortnight of macro events, which is how sector
-       * rotation ended up six panels down and effectively unreachable.
+       * ITS OWN SCROLL, AND THE ROOM THE COLUMN HAS LEFT. This feed carries 221
+       * rows; unfiltered and uncapped it was a wall that pushed every panel under
+       * it out of reach, so it was capped at 340px. That cap is why it showed three
+       * releases at a time (2026-11-14). It is the only card in its column that can
+       * scroll inside itself, so now it takes whatever the board beneath leaves
+       * (`qt-fill`, globals.css) and never less than the old 340: the board is whole
+       * and the calendar is as tall as the window allows.
        *
-       * The cap is safe precisely because the rows are sorted by time — the ones
-       * you cannot see without scrolling are the ones furthest away, and the
-       * next few events are always the ones on screen. The filters live in the
-       * module head, which is outside the scrolling body, so narrowing the list
-       * never scrolls out of reach.
+       * The rows are sorted by time — the ones you cannot see without scrolling
+       * are the ones furthest away, and the next few events are always the ones
+       * on screen. The filters live in the module head, which is outside the
+       * scrolling body, so narrowing the list never scrolls out of reach.
        */
       /*
        * A CONTAINER, so the rows answer to the panel's own width rather than
@@ -234,7 +268,7 @@ export function Calendar({
        * 2026-10-13: 15 of 19 names truncated at 1280); there the figures move
        * under the name instead and the session column goes.
        */
-      className="@container max-h-[340px]"
+      className="qt-fill @container min-h-[340px] flex-1 basis-0"
       scroll
       right={
         <div className="flex items-center gap-1.5">
@@ -250,7 +284,7 @@ export function Calendar({
           </span>
           <span className="seg">
           {TIERS.map((t) => {
-            const on = t.key === "all" ? tiers.length === 0 : tiers.includes(t.key);
+            const on = tierLit(tiers, t.key);
             return (
               <button
                 key={t.key}
@@ -287,11 +321,29 @@ export function Calendar({
         })}
       </div>
 
-      {hols.length > 0 && (
+      {farHols.length > 0 && (
+        <div
+          className="flex items-baseline gap-2 border-b border-ring/40 px-3 py-1"
+          title={farHols.map(({ h }) => `${dayLong(h.date)}: ${h.label} (${h.name}). ${h.note}`).join("\n")}
+        >
+          <span className="eyebrow shrink-0 text-[9px]">Holidays ahead</span>
+          <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-3">
+            {farHols.map(({ h, days }, i) => (
+              <span key={`${h.date}-${h.market}`}>
+                {i > 0 && " · "}
+                <span className="fig">{dayWord(days, h.date)}</span>{" "}
+                <span className={h.score >= 5 ? "text-ink" : "text-ink-2"}>{h.label}</span>
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+
+      {nearHols.length > 0 && (
         <>
           <Head plain>Holidays and early closes</Head>
           <ul>
-            {hols.map(({ h, days }) => (
+            {nearHols.map(({ h, days }) => (
               <li
                 key={`${h.date}-${h.market}`}
                 title={`${h.name}, ${dayLong(h.date)}. ${h.note}`}
@@ -322,12 +374,40 @@ export function Calendar({
         <>
           {upcoming.length > 0 && (
             <>
-              <Head>Ahead</Head>
+              {/* See more sits in the sticky band, so it is in view however far down the
+                  fortnight the list is scrolled. */}
+              <Head
+                extra={
+                  (ahead.hidden > 0 || more) && (
+                    <button
+                      type="button"
+                      onClick={() => setMore((v) => !v)}
+                      className="text-[9.5px] text-call hover:underline qt:text-ink-2"
+                      title={
+                        more
+                          ? "Back to the first day in full and only the big releases after it"
+                          : `${ahead.hidden} more release${ahead.hidden === 1 ? "" : "s"} the filters leave${ahead.lastDay ? `, to ${ahead.lastDay}` : ""}`
+                      }
+                    >
+                      {more ? "See less" : <>See more <span className="fig text-ink-3">{ahead.hidden}</span></>}
+                    </button>
+                  )
+                }
+              >
+                Ahead{ahead.lastDay ? ` to ${ahead.lastDay}` : ""}
+              </Head>
               <ul>
                 {upcoming.map((x, i) => (
-                  <Days key={`${x.lead.event}-${x.lead.utc}-${i}`} rel={x} prev={upcoming[i - 1]?.lead} />
+                  <Days
+                    key={`${x.lead.event}-${x.lead.utc}-${i}`}
+                    rel={x}
+                    prev={upcoming[i - 1]?.lead}
+                    fold={(foldAbroad && x.lead.region !== "us") || ahead.folded(etDay(x.lead))}
+                    trimmed={!ahead.whole(etDay(x.lead))}
+                  />
                 ))}
               </ul>
+
             </>
           )}
           {recent.length > 0 && (
@@ -335,7 +415,7 @@ export function Calendar({
               <Head>Just printed</Head>
               <ul>
                 {recent.map((x, i) => (
-                  <Rows key={`${x.lead.event}-${x.lead.utc}-p${i}`} rel={x} />
+                  <Rows key={`${x.lead.event}-${x.lead.utc}-p${i}`} rel={x} fold={foldAbroad && x.lead.region !== "us"} />
                 ))}
               </ul>
             </>
@@ -359,7 +439,7 @@ export function Calendar({
  * calendar's own UTC day, and a 22:00 ET release belongs to the following UTC
  * date, which would put the rule in the wrong place.
  */
-function Days({ rel, prev }: { rel: CalRelease; prev?: CalendarRow }) {
+function Days({ rel, prev, fold, trimmed }: { rel: CalRelease; prev?: CalendarRow; fold?: boolean; trimmed?: boolean }) {
   const day = etDay(rel.lead);
   const changed = !prev || etDay(prev) !== day;
   return (
@@ -367,10 +447,12 @@ function Days({ rel, prev }: { rel: CalRelease; prev?: CalendarRow }) {
       {changed && (
         <li className="flex items-center gap-2 px-3 pt-1.5 pb-0.5">
           <span className="eyebrow text-[9px] text-ink-3">{day}</span>
+          {/* A day past the first two shows its big releases alone until See more. */}
+          {trimmed && <span className="text-[9px] text-ink-4">high impact only</span>}
           <span className="h-px flex-1 bg-ring/50" aria-hidden />
         </li>
       )}
-      <Rows rel={rel} />
+      <Rows rel={rel} fold={fold} />
     </>
   );
 }
@@ -398,20 +480,44 @@ function asCal(rel: Release<CalendarRow>): CalRelease {
  * it, its figures in the same three columns. The index levels and unadjusted
  * twins are named on the hover only — see lib/releases.
  */
-function Rows({ rel }: { rel: CalRelease }) {
+/*
+ * A RELEASE FROM ABROAD IS ONE LINE (2026-11-14). Japan's GDP was six lines and the
+ * UK's CPI four, on a card that shows nine: for the books traded here a foreign
+ * release is an event with a time and a headline figure, and its other series are
+ * detail. So with the region chips on All, a release that is not America's draws its
+ * lead alone, with a count, and the rest are on the hover with their figures. A US
+ * release keeps every series beneath it, and picking a region's chip unfolds that
+ * region's too: that is asking for the detail.
+ */
+function Rows({ rel, fold }: { rel: CalRelease; fold?: boolean }) {
+  const hidden = fold ? rel.subs : [];
+  const also = hidden.length
+    ? `Also in this release: ${hidden.map((s) => `${subLabel(s.event, rel.lead.event)}${figures(s)}`).join("; ")}`
+    : null;
   const folded = rel.levels.length
     ? `Also published, not shown: ${rel.levels.map((r) => r.event).join(", ")}`
     : null;
-  const tip = [rel.lead.note, folded].filter(Boolean).join("\n\n") || undefined;
+  const tip = [rel.lead.note, also, folded].filter(Boolean).join("\n\n") || undefined;
   return (
     <>
-      <Row r={rel.lead} tip={tip} />
+      <Row r={rel.lead} tip={tip} more={hidden.length} />
       {/* By position too: the UK's GDP comes as four series all named "GDP". */}
-      {rel.subs.map((s, i) => (
-        <Row key={`${s.event}-${i}`} r={s} sub={subLabel(s.event, rel.lead.event)} />
-      ))}
+      {!fold &&
+        rel.subs.map((s, i) => (
+          <Row key={`${s.event}-${i}`} r={s} sub={subLabel(s.event, rel.lead.event)} />
+        ))}
     </>
   );
+}
+
+/** A folded series' figures for the hover: " (actual 0.4%, consensus 0.1%, previous 0.3%)". */
+function figures(r: CalendarRow): string {
+  const parts = [
+    r.released && r.actual_raw ? `actual ${r.actual_raw}` : null,
+    r.consensus_raw ? `consensus ${r.consensus_raw}` : null,
+    r.previous_raw ? `previous ${r.previous_raw}` : null,
+  ].filter(Boolean);
+  return parts.length ? ` (${parts.join(", ")})` : "";
 }
 
 /** The ET calendar day a release falls on — "Mon 1 Sep". */
@@ -419,7 +525,8 @@ function etDay(r: CalendarRow): string {
   if (!r.utc) return "Unscheduled";
   const d = new Date(r.utc);
   if (Number.isNaN(d.getTime())) return "Unscheduled";
-  return d.toLocaleDateString("en-US", {
+  // en-GB, as the holidays above it are written: "Mon 16 Nov", not "Mon, Nov 16".
+  return d.toLocaleDateString("en-GB", {
     weekday: "short",
     day: "numeric",
     month: "short",
@@ -427,13 +534,16 @@ function etDay(r: CalendarRow): string {
   });
 }
 
-function Head({ children, plain }: { children: React.ReactNode; plain?: boolean }) {
+function Head({ children, plain, extra }: { children: React.ReactNode; plain?: boolean; extra?: React.ReactNode }) {
   return (
     // Sticky inside the panel's own scroll, so the column names stay in view
     // down a long day. `plain` is a band over rows with no figures (the holidays):
     // it scrolls away with them rather than sitting over the releases.
     <div className={cn("qt-band flex items-baseline justify-between border-y border-ring/40 bg-surface-2 px-3 py-1 first:border-t-0", !plain && "qt-sticky sticky top-0 z-[2]")}>
-      <span className="eyebrow text-[9px]">{children}</span>
+      <span className="flex items-baseline gap-2.5">
+        <span className="eyebrow text-[9px]">{children}</span>
+        {extra}
+      </span>
       {/* Names the three figure columns once, instead of three tooltips a
           reader has to discover. Order matches the rows: what printed, what
           was expected, what it was last time. */}
@@ -447,6 +557,11 @@ function Head({ children, plain }: { children: React.ReactNode; plain?: boolean 
 }
 
 const NO_HOLIDAYS: HolidayNotice[] = [];
+const NO_FED: FedEvent[] = [];
+const NO_AUCTIONS: AuctionEvent[] = [];
+
+/** A holiday this many days off or nearer has a row of its own; further out it is on the one line. */
+const HOLIDAY_NEAR_DAYS = 3;
 
 /** New York's calendar day as "2026-11-11"; null until the page's clock has ticked. */
 function etToday(nowMs: number | null): string | null {
@@ -475,7 +590,7 @@ function dayWord(days: number, iso: string): string {
  * beside its lead ("y/y", "Core y/y") and the line is a size smaller — the
  * figures keep their columns so they read straight down.
  */
-function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
+function Row({ r, sub, tip, more = 0 }: { r: CalendarRow; sub?: string; tip?: string; more?: number }) {
   // Amber when the print is meaningfully away from consensus. "Meaningful" is
   // relative to the consensus itself, so a 0.2 miss on a 3.0 CPI counts and a
   // 0.2 miss on a 57.8 PMI does not.
@@ -484,6 +599,33 @@ function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
       ? Math.abs(r.surprise) / Math.max(0.1, Math.abs(r.consensus))
       : 0;
   const surprised = r.surprise !== null && (rel > 0.05 || Math.abs(r.surprise) >= 0.2);
+  /*
+   * WHOSE FIGURE IT IS (owner, 2026-11-15: "the most reputable sources as possible and
+   * most official"). The calendar is an aggregator's; for the US releases the agencies
+   * publish where a program can read, the collector takes the agency's own figure and
+   * the row carries its name: BLS, Census, BEA, EIA. A tag after the name, in ink (a
+   * source is not a side), and amber only when the feed had printed something else,
+   * which is then the hover. A row with no tag is the feed's alone.
+   */
+  const off = r.official ?? null;
+  const offTitle = off
+    ? `${off.text}: ${OFFICIAL_NAME[off.by]}'s own figure for ${off.period}` +
+      (off.agrees === false
+        ? `. The calendar feed said ${off.feed}; the agency's is the one shown.`
+        : off.agrees
+          ? ", and the calendar feed says the same."
+          : ", in before the calendar feed had it.")
+    : undefined;
+  const offTag = off && (
+    <span
+      className={cn("fig text-[8.5px] tracking-[0.04em]", off.agrees === false ? "text-flip" : "text-ink-3")}
+      title={offTitle}
+    >
+      {" "}
+      {off.by.toUpperCase()}
+      {off.agrees === false ? " ≠ FEED" : ""}
+    </span>
+  );
 
   return (
     <li
@@ -503,9 +645,17 @@ function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
       </span>
       <span className="min-w-0 flex-1">
         {sub ? (
-          <span className="block truncate pl-2 text-[10px] text-ink-3 @max-[470px]:whitespace-normal">{sub}</span>
+          <span className="block truncate pl-2 text-[10px] text-ink-3 @max-[470px]:whitespace-normal">
+            {sub}
+            {offTag}
+          </span>
         ) : (
-          <span className="block truncate text-[11px] text-ink-2 @max-[470px]:whitespace-normal">{r.event}</span>
+          <span className="block truncate text-[11px] text-ink-2 @max-[470px]:whitespace-normal">
+            {r.event}
+            {/* The release's other series, folded: how many, and on the hover which. */}
+            {more > 0 && <span className="fig text-[9.5px] text-ink-3"> +{more}</span>}
+            {offTag}
+          </span>
         )}
         {/* Narrow panel: the figures under the name, labelled, so the name
             keeps the width. Only what exists — an unscheduled speech has none. */}
@@ -543,7 +693,7 @@ function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
           "fig w-[46px] shrink-0 text-right text-[10.5px] @max-[470px]:hidden",
           r.released ? (surprised ? "text-flip" : "text-ink") : "text-ink-3",
         )}
-        title={r.released ? "Actual" : "Not printed yet"}
+        title={offTitle ?? (r.released ? "Actual" : "Not printed yet")}
       >
         {r.actual_raw ?? "—"}
       </span>
@@ -568,3 +718,11 @@ function Row({ r, sub, tip }: { r: CalendarRow; sub?: string; tip?: string }) {
 
 /** The release's country in two letters (lib/releases, where the Futures cards read it too). */
 const country = countryCode;
+
+/** The agency behind a figure, as the hover says it (server sources/official.py). */
+const OFFICIAL_NAME: Record<NonNullable<CalendarRow["official"]>["by"], string> = {
+  BLS: "the Bureau of Labor Statistics",
+  Census: "the Census Bureau",
+  BEA: "the Bureau of Economic Analysis",
+  EIA: "the Energy Information Administration",
+};

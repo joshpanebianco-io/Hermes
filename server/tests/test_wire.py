@@ -304,7 +304,6 @@ def test_an_actual_invasion_still_ranks_high(title: str) -> None:
         # A general-news feed's paper, with nothing economic in the line.
         ("Rays punish error to beat Guardians 3-1 and level series", "Japan Times", "Japan"),
         ("Hakkaku’s complex legacy looms over sumo’s next chapter", "Japan Times", "Japan"),
-        ("Guess Which European Country Is Tolerating Child Marriages?", "ZeroHedge", "Markets"),
         ("No black-footed ferrets found in Meeteetse, 40 years after a rescue saved the species",
          "AP", "Economy"),
     ],

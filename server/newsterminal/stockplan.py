@@ -964,8 +964,10 @@ tagged rating / earnings / filing / news, and its recent SEC filings. `macro` at
 the day's macro moves and the market's high-impact headlines. The regime block is the weather: \
 VIX and its band, the curve shape, the tape's bias and whether VIX confirms it, SPY's implied \
 one-day move. `tape_count` is the engine's score of the tape from -100 to +100: eleven reads, each \
-long, short, flat or unable to vote yet, weighed by family (`families`) for this hour, with its \
-grade, how many reads are `live` and how much of the weight that is (`coverage`). `breadth` is \
+long, short, flat or unable to vote yet, weighed by family (`families`) for this hour over the \
+whole weight (a family that cannot vote yet counts as no lean, so a score on few reads is a small \
+one), with its grade, how many reads are `live` and how much of the weight that is (`coverage`). \
+`breadth` is \
 sectors up and down, equal weight against SPY and the index leaders; `fuel` is how much of its \
 implied one-day move SPY, QQQ and IWM have already used (room / normal / stretched); \
 `prints` are the session's US releases against \

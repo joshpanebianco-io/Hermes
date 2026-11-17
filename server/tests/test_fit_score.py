@@ -57,6 +57,80 @@ def test_every_day_counts_the_same_however_busy_it_was() -> None:
     assert lines[4] == "  top third      50.0%   50.0%  +0.50"
 
 
+def test_the_report_leads_with_whether_the_list_picks_the_trades_that_run() -> None:
+    # Owner, 2026-11-14: the list is for stocks more likely to trend. Two days of six
+    # signals: on the first the top of the list runs and the bottom is stopped, on the
+    # second the other way round. +1R says nothing between them; +2R and R held do.
+    def day(d: str, top_runs: bool) -> list[dict[str, Any]]:
+        run = dict(hit=True, two=True, close=3.0)
+        out = dict(hit=True, two=False, close=-1.0, stopped=False)
+        return [ev(d, 90 - i, **(run if (i < 2) == top_runs else out)) for i in range(6)]
+
+    lines = fit.trend_lines(day("2026-11-16", True) + day("2026-11-17", True))
+    assert lines[1].split() == ["+2R", "held", "+1R"]
+    assert lines[2].split()[:5] == ["every", "signal", "33.3%", "+0.33", "100.0%"]
+    assert lines[4].split()[:5] == ["top", "third", "100.0%", "+3.00", "100.0%"]
+    assert lines[5].split()[:5] == ["bottom", "third", "0.0%", "-1.00", "100.0%"]
+    assert "+2R +100.0 pts, ahead on 2 of 2 days" in lines[6]
+    assert "held +4.00 R, ahead on 2 of 2" in lines[6]
+    # A gap that holds on one half only is said to: here the second day runs backwards.
+    mixed = fit.trend_lines(day("2026-11-16", True) + day("2026-11-17", False))
+    assert "+2R  +0.0 pts, ahead on 1 of 2 days" in mixed[6]
+    assert "first half" in mixed[7] and "+2R +100.0 pts" in mixed[7]
+    assert "second half" in mixed[8] and "+2R -100.0 pts" in mixed[8]
+    # It is the report's first table, and a thin day is a line, not a failure.
+    text = fit.report(day("2026-11-16", True), 30)
+    assert text.index("Trending, what the list is for") < text.index("By score band")
+    assert "too few signals a day" in "\n".join(fit.trend_lines([ev("2026-11-16", 50)]))
+
+
+def test_each_side_is_read_apart_so_the_longs_cannot_pass_for_the_list() -> None:
+    # Owner, 2026-11-14: "when i say trending i mean both bullish and bearish trends".
+    # Six longs whose top third runs and six shorts whose top third is stopped: together
+    # the list looks fine at the top; apart, the shorts' rank is upside down.
+    def one(d: str, score: int, side: str, runs: bool) -> dict[str, Any]:
+        e = ev(d, score, hit=True, two=runs, close=3.0 if runs else -1.0)
+        e["side"] = side
+        return e
+
+    evs: list[dict[str, Any]] = []
+    for d in ("2026-11-16", "2026-11-17"):
+        evs += [one(d, 95 - i, "long", i < 2) for i in range(6)]
+        evs += [one(d, 80 - i, "short", i >= 4) for i in range(6)]
+    lines = fit.side_lines(evs)
+    longs = next(x for x in lines if x.strip().startswith("longs"))
+    shorts = next(x for x in lines if x.strip().startswith("shorts"))
+    assert "12 signals, 2 days" in longs and "thirds' gap +2R +100.0 pts (2 of 2 days)" in longs
+    assert "held +4.00 R (2 of 2)" in longs
+    assert "thirds' gap +2R -100.0 pts (0 of 2 days)" in shorts
+    assert "held -4.00 R (0 of 2)" in shorts
+    # It rides under the Trending table, and a side with nothing says so.
+    assert any("By side" in x for x in fit.trend_lines(evs))
+    only = fit.side_lines([one("2026-11-16", 50, "long", True)])
+    assert "too few a day to split" in only[1] and only[2].strip() == "shorts  none"
+
+
+def test_the_news_table_reads_what_is_logged_and_unscored() -> None:
+    def e(day: str, hit: bool, news: dict[str, Any]) -> dict[str, Any]:
+        x = ev(day, 60, hit=hit, two=hit, close=2.0 if hit else -1.0, stopped=not hit)
+        x["ctx"] = {"news": {"pts": 0, "tier": None, "with": None, "src": None, "tag": None,
+                             "prior": None, "size": None, **news}}
+        return x
+
+    evs: list[dict[str, Any]] = []
+    for d in ("2026-11-16", "2026-11-17"):
+        evs += [e(d, True, {"prior": {"tag": "Earnings", "tier": 1, "age_min": 1500.0}})
+                for _ in range(3)]
+        evs += [e(d, True, {"pts": 20, "tier": 1, "with": False, "src": "words", "size": "big"})
+                for _ in range(3)]
+        evs += [e(d, False, {}) for _ in range(4)]
+    text = "\n".join(fit.news_lines(evs))
+    by = {x.strip().rsplit("  ", 1)[0].split("  ")[0]: x for x in text.splitlines()}
+    for label in ("reads against it", "day 2, no news", "day 2, any", "read as big", "any major"):
+        assert label in by and "2/2" in by[label], label
+    assert "no day with 3 or more on each side" in by["read as ordinary"]
+
+
 def test_inside_the_day_a_busy_day_cannot_pass_for_a_good_input() -> None:
     hi = {"rs": {"pts": 20, "max": 25}, "fuel": {"pts": -10, "max": 0}}
     lo = {"rs": {"pts": 0, "max": 25}}
@@ -87,6 +161,31 @@ def test_the_report_reads_the_rank_the_penalties_and_the_morning_list() -> None:
     assert "clock       fired on 2, too few to read" in text
     # No morning on file is a line, not a failure.
     assert "no morning on file yet" in fit.report(evs, 30, None)
+
+
+def test_the_parts_are_read_again_on_the_valid_entries_alone() -> None:
+    # 2026-11-14: the entry part is a gate, so a part is judged among the signals that
+    # passed it. A graded part above zero (the old weights) passes as the full one does.
+    def parts(loc: int, cat: int) -> dict[str, Any]:
+        return {"location": {"pts": loc, "max": 25}, "catalyst": {"pts": cat, "max": 20}}
+
+    evs: list[dict[str, Any]] = []
+    for day in ("2026-11-16", "2026-11-17"):
+        evs += [ev(day, 80, hit=True, close=2.0, parts=parts(25, 20)) for _ in range(3)]
+        evs += [ev(day, 60, hit=i < 2, stopped=i == 2, close=-1.0 if i == 2 else 1.0,
+                   parts=parts(7, 0)) for i in range(3)]
+        # News on the wrong side of VWAP: it drags the catalyst down on the whole record.
+        evs += [ev(day, 40, stopped=True, close=-1.0, parts=parts(0, 20)) for _ in range(4)]
+    assert fit.at_entry(evs[0]) and fit.at_entry(evs[3]) and not fit.at_entry(evs[6])
+    assert fit.at_entry(ev("d", 50))
+    lines = fit.entry_lines(evs)
+    assert lines[2].split()[:4] == ["valid", "entry", "12", "83.3%"]
+    assert lines[3].split()[:4] == ["no", "entry", "8", "0.0%"]
+    cat = next(x for x in lines if x.strip().startswith("catalyst"))
+    assert cat.split()[1] == "2/2"
+    whole = next(x for x in fit.same_day_lines(evs) if x.strip().startswith("catalyst"))
+    assert whole.split()[1] == "0/2"
+    assert "Only signals at a valid entry" in fit.report(evs, 30)
 
 
 # ---- the quant audit's phase 3 (2026-11-13) ------------------------------------------

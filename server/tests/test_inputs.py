@@ -1,5 +1,5 @@
 """The driver board's new inputs, parsed and read: the CFTC rows, Cboe's daily
-ratios, Yahoo's short interest, Nasdaq's report history — and the print read
+ratios, Yahoo's short interest, EDGAR's report history — and the print read
 with its per-book implication, and the profile's sentence."""
 
 from __future__ import annotations
@@ -110,20 +110,162 @@ def test_short_interest_parse_and_flag() -> None:
 # ---------------------------------------------------------- report history
 
 
-def test_earnings_history_parse_orders_newest_first() -> None:
-    doc = {"data": {"earningsSurpriseTable": {"rows": [
-        {"fiscalQtrEnd": "Jun 2026", "dateReported": "8/4/2026", "eps": 1.44,
-         "consensusForecast": "1.35", "percentageSurprise": "6.67"},
-        {"fiscalQtrEnd": "Sep 2025", "dateReported": "11/4/2025", "eps": 0.97,
-         "consensusForecast": "0.97", "percentageSurprise": "0"},
-        {"fiscalQtrEnd": "Mar 2026", "dateReported": "5/5/2026", "eps": 1.11,
-         "consensusForecast": "1.06", "percentageSurprise": "4.72"},
-    ]}}}
-    rows = earnhist.parse(doc)
-    assert [r["date"] for r in rows] == ["2026-08-04", "2026-05-05", "2025-11-04"]
-    assert rows[0]["eps"] == 1.44 and rows[0]["consensus"] == 1.35
-    assert rows[0]["surprise_pct"] == 6.67
-    assert earnhist.parse({}) == []
+def _edgar(rows: list[tuple[str, ...]]) -> dict[str, Any]:
+    """A submissions JSON from (form, items, acceptanceDateTime[, filingDate]),
+    newest first; the filing date is the stamp's own day unless given."""
+    return {"filings": {"recent": {
+        "form": [r[0] for r in rows], "items": [r[1] for r in rows],
+        "acceptanceDateTime": [r[2] for r in rows],
+        "filingDate": [r[3] if len(r) > 3 else r[2][:10] for r in rows],
+    }}}
+
+
+def test_edgar_202_after_the_1730_cutoff_is_the_next_days_pre_market() -> None:
+    doc = _edgar([
+        # PepsiCo's real stamp: 17:57 ET on the 7th, public (and filed) on the 8th.
+        ("8-K", "2.02,9.01", "2026-10-07T21:57:44.000Z", "2026-10-08"),
+        # Duke's: 17:56 EST on the 4th, filed the 5th.
+        ("8-K", "2.02,9.01", "2026-11-04T22:56:27.000Z", "2026-11-05"),
+        # 17:40 ET with the same filing date (bad data): the stamp's own day stands.
+        ("8-K", "2.02", "2026-06-10T21:40:00.000Z", "2026-06-10"),
+    ])
+    assert earnhist.parse_edgar(doc) == [
+        {"date": "2026-11-05", "when": "pre"},
+        {"date": "2026-10-08", "when": "pre"},
+        {"date": "2026-06-10", "when": "after"},
+    ]
+
+
+def test_edgar_202s_are_dated_by_the_et_acceptance() -> None:
+    doc = _edgar([
+        # 16:30 ET in winter is 21:30 UTC; in summer 20:30 UTC (AAPL's real stamps).
+        ("8-K", "2.02,9.01", "2026-11-02T21:30:23.000Z"),
+        ("8-K/A", "2.02,9.01", "2026-10-31T13:00:00.000Z"),   # an amendment: skipped
+        ("10-Q", "", "2026-10-31T12:00:00.000Z"),
+        ("8-K", "5.02", "2026-10-15T20:00:00.000Z"),           # not results
+        # 21:10 ET on the 21st is 01:10 UTC on the 22nd: the ET day is the day (with a
+        # filing date that does not move it on; past 17:30 it usually would).
+        ("8-K", "2.02", "2026-07-22T01:10:00.000Z", "2026-07-21"),
+        ("8-K", "2.02,9.01", "2026-07-21T17:00:00.000Z"),     # same ET day, older: one a day
+        ("8-K", "2.02,7.01,9.01", "2026-05-06T12:59:53.000Z"),  # 08:59 EDT
+        ("8-K", "1.01, 2.02", "2026-02-03T17:00:00.000Z"),      # 12:00 EST, spaced items
+    ])
+    rows = earnhist.parse_edgar(doc)
+    assert rows == [
+        {"date": "2026-11-02", "when": "after"},
+        {"date": "2026-07-21", "when": "after"},
+        {"date": "2026-05-06", "when": "pre"},
+        {"date": "2026-02-03", "when": "during"},
+    ]
+    assert earnhist.parse_edgar({}) == []
+    missing = _edgar([("8-K", "2.02", "")])
+    missing["filings"]["recent"]["filingDate"] = ["2026-08-04"]
+    assert earnhist.parse_edgar(missing) == [{"date": "2026-08-04", "when": "unspecified"}]
+
+
+def test_reports_pass_over_a_202_that_previews_a_later_one() -> None:
+    # Tesla: deliveries under 2.02 on the 2nd, results three weeks later.
+    filed = [{"date": d, "when": w} for d, w in (
+        ("2027-01-02", "pre"), ("2026-10-21", "after"), ("2026-10-02", "pre"),
+        ("2026-07-22", "after"), ("2026-07-02", "pre"), ("2026-04-22", "after"))]
+    dates = [r["date"] for r in earnhist.reports(filed, "2027-02-03")]
+    assert dates == ["2026-10-21", "2026-07-22", "2026-04-22"]
+    # With no next report known, the newest 2.02 stands until its results land.
+    assert earnhist.reports(filed)[0]["date"] == "2027-01-02"
+    # A next date not rolled on yet is the newest report itself, not a later one.
+    same = [{"date": "2026-11-17", "when": "after"}, {"date": "2026-08-26", "when": "after"}]
+    assert [r["date"] for r in earnhist.reports(same, "2026-11-17")] == ["2026-11-17",
+                                                                          "2026-08-26"]
+    assert len(earnhist.reports([{"date": f"20{y:02d}-01-15", "when": "pre"}
+                                 for y in range(10, 26)])) == earnhist.KEEP
+
+
+def _tv_reply() -> dict[str, Any]:
+    noon = int(datetime(2027, 2, 4, 12, tzinfo=UTC).timestamp())        # placeholder
+    pre = int(datetime(2026, 11, 19, 12, tzinfo=UTC).timestamp())
+    last = int(datetime(2026, 10, 21, 20, 6, tzinfo=UTC).timestamp())   # 16:06 ET
+    return {"totalCount": 4, "data": [
+        {"s": "NASDAQ:AAPL", "d": ["AAPL", "stock", ["common"], noon, 0, last, 1]},
+        {"s": "NASDAQ:WMT", "d": ["WMT", "stock", ["common"], pre, -1, None, None]},
+        {"s": "AMEX:SPY", "d": ["SPY", "fund", ["etf"], None, None, None, None]},
+        {"s": "NYSE:JPM/PC", "d": ["JPM/PC", "stock", ["preferred"], pre, -1, last, 1]},
+        {"s": "NYSE:BAD", "d": ["BAD", "stock"]},
+    ]}
+
+
+def test_tradingview_reply_gives_next_and_last() -> None:
+    got = earnhist.parse_tv(_tv_reply())
+    assert got["AAPL"] == {"next": {"date": "2027-02-04", "when": "unspecified"},
+                           "last": {"date": "2026-10-21", "when": "after"}}
+    assert got["WMT"] == {"next": {"date": "2026-11-19", "when": "pre"}, "last": None}
+    assert got["SPY"] == {"next": None, "last": None}
+    assert "JPM/PC" not in got and "BAD" not in got
+    q = earnhist.next_query(["MSFT", "AAPL"])
+    assert q["filter"][0] == {"left": "name", "operation": "in_range", "right": ["AAPL", "MSFT"]}
+    assert q["columns"] == earnhist.NEXT_COLUMNS
+
+
+def test_store_joins_edgar_and_tradingview(monkeypatch: Any) -> None:
+    import json as _json
+
+    from newsterminal.http import FetchResult
+    asked: list[str] = []
+
+    def fake_fetch(url: str, **kw: Any) -> FetchResult:
+        asked.append(kw["key"])
+        return FetchResult(True, _json.dumps(_tv_reply()).encode(), "live", 0.0, None)
+
+    monkeypatch.setattr(earnhist, "fetch", fake_fetch)
+    store = earnhist.EarnHistStore()
+    filed = {"AAPL": [{"date": "2026-11-02", "when": "after"},
+                      {"date": "2026-07-30", "when": "after"}],
+             "TSM": []}                    # read, no 2.02: a foreign filer
+    now = datetime(2026, 11, 17, 14, tzinfo=UTC)
+    st = store.tick(["AAPL", "TSM", "WMT", "MSFT"], filed, now)
+    assert store.view()["AAPL"] == filed["AAPL"]
+    assert "TSM" not in store.view()           # no TradingView row for it either
+    assert "WMT" not in store.view()           # not read yet, no last report on TradingView
+    assert store.view_next() == {"AAPL": {"date": "2027-02-04", "when": "unspecified"},
+                                 "WMT": {"date": "2026-11-19", "when": "pre"}}
+    assert st.ok and st.items == 1 and st.error is None
+    assert "waiting on EDGAR: WMT, MSFT" in st.notes
+    assert "no report found: TSM" in st.notes
+    # The same list inside NEXT_SEC asks nothing; a new name asks at once.
+    store.tick(["AAPL", "TSM", "WMT", "MSFT"], filed, now)
+    assert len(asked) == 1
+    store.tick(["AAPL", "TSM", "WMT", "MSFT", "NVDA"], filed, now)
+    assert len(asked) == 2 and asked[0] != asked[1]
+
+
+def test_store_stands_in_tradingviews_last_and_keeps_its_error(monkeypatch: Any) -> None:
+    import json as _json
+
+    from newsterminal.http import FetchResult
+    reply = _tv_reply()
+    reply["data"][1]["d"][5:7] = [int(datetime(2026, 8, 20, 11, tzinfo=UTC).timestamp()), -1]
+    good = FetchResult(True, _json.dumps(reply).encode(), "live", 0.0, None)
+    results = [good, FetchResult(False, None, "unavailable", None, "HTTP 429")]
+    monkeypatch.setattr(earnhist, "fetch", lambda url, **kw: results.pop(0))
+    store = earnhist.EarnHistStore()
+    now = datetime(2026, 11, 17, 14, tzinfo=UTC)
+    # WMT has no 2.02 at all; AAPL's stop a year short of TradingView's last (Oklo's case).
+    old = [{"date": "2025-03-24", "when": "after"}, {"date": "2024-11-14", "when": "after"}]
+    st = store.tick(["WMT", "AAPL"], {"WMT": [], "AAPL": old}, now)
+    assert store.view()["WMT"] == [{"date": "2026-08-20", "when": "pre"}]
+    assert store.view()["AAPL"] == [{"date": "2026-10-21", "when": "after"}]
+    assert st.notes[0] == "0 of 2 from EDGAR's 8-Ks, 2 from TradingView's last report"
+    # A week's difference or less is the same report, and EDGAR's stays.
+    close = [{"date": "2026-10-15", "when": "after"}, *old]
+    store.tick(["WMT", "AAPL"], {"WMT": [], "AAPL": close}, now)
+    assert store.view()["AAPL"] == close
+    results.insert(0, good)                       # the list changes below: one more read
+    st = store.tick(["WMT"], {"WMT": []}, now)
+    # A failed read keeps the last good one and says why, on every tick until it heals.
+    later = datetime.fromtimestamp(now.timestamp() + earnhist.NEXT_SEC + 1, UTC)
+    st = store.tick(["WMT"], {"WMT": []}, later)
+    assert st.ok and st.error == "TradingView: HTTP 429"
+    st = store.tick(["WMT"], {"WMT": []}, later)
+    assert st.error == "TradingView: HTTP 429" and results == []
 
 
 # ------------------------------------------------------- the print's meaning
@@ -180,12 +322,7 @@ def test_profile_reads_name_the_failed_break_and_the_rotation() -> None:
     assert profile.reads({"rows": [], "last": None}) == {"text": None}
 
 
-def test_next_report_parse_and_row_shape() -> None:
-    doc = {"data": {"reportText": "Advanced Micro Devices, Inc. Common Stock is expected* to "
-                                  "report earnings on  11/03/2026 after market close.  The report "
-                                  "will be for the fiscal Quarter ending Sep 2026."}}
-    assert earnhist.parse_next(doc) == {"date": "2026-11-03", "when": "after"}
-    assert earnhist.parse_next({"data": {"reportText": "no date here"}}) is None
+def test_next_report_row_shape() -> None:
     from newsterminal.scanscore import next_report
     row = next_report({"date": "2026-11-03", "when": "after"}, date(2026, 10, 22))
     assert row == {"date": "2026-11-03", "when": "after", "days": 12, "eps_forecast": None,

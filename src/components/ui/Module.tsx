@@ -22,6 +22,8 @@ export function Module({
   sub,
   right,
   ageMin,
+  every,
+  ageNote,
   error,
   className,
   bodyClassName,
@@ -33,6 +35,18 @@ export function Module({
   sub?: string;
   right?: React.ReactNode;
   ageMin?: number | null;
+  /**
+   * Minutes between this module's reads, when that is slower than the chip's ten.
+   *
+   * THE CHIP WARNED ABOUT WORKING SOURCES (2026-11-14). Amber at ten minutes is right
+   * for the wire and the board, which are read every minute or two. The curve and the
+   * earnings are read every half hour and the Fed diary every hour, so their chips sat
+   * amber for most of every cycle with nothing wrong. With the cadence given, the chip
+   * is quiet until a read has been MISSED: amber past two cadences, red past six.
+   */
+  every?: number;
+  /** Why the age is what it is, for the chip's hover: a source showing its last good copy says so here. */
+  ageNote?: string | null;
   /** A degradation to state on the module's own face, never swallowed. */
   error?: string | null;
   className?: string;
@@ -63,7 +77,7 @@ export function Module({
         )}
         <div className="ml-auto flex items-center gap-2">
           {right}
-          {ageMin !== undefined && ageMin !== null && <AgeChip m={ageMin} />}
+          {ageMin !== undefined && ageMin !== null && <AgeChip m={ageMin} every={every} note={ageNote} />}
         </div>
       </div>
       {error && (
@@ -93,9 +107,14 @@ export function Module({
  * would make every module faintly alarming all the time, which trains you to
  * ignore the one that matters.
  */
-function AgeChip({ m }: { m: number }) {
+function AgeChip({ m, every, note }: { m: number; every?: number; note?: string | null }) {
+  // A slow source is late once it has missed a read, not ten minutes after its last one.
+  const warnAt = every ? Math.max(10, every * 2) : 10;
+  const errAt = every ? Math.max(60, every * 6) : 60;
   const tone =
-    m >= 60 ? "text-err border-err/40" : m >= 10 ? "text-warn border-warn/40" : "text-ink-3 border-ring";
+    m >= errAt ? "text-err border-err/40" : m >= warnAt ? "text-warn border-warn/40" : "text-ink-3 border-ring";
+  const when = m < 1 ? "Fetched in the last minute" : `Fetched ${age(m)} ago`;
+  const cadence = every ? ` · read every ${every >= 60 ? `${every / 60}h` : `${every} min`}` : "";
   return (
     <span
       className={cn(
@@ -104,7 +123,7 @@ function AgeChip({ m }: { m: number }) {
         "qt:border-0 qt:px-0 qt:text-[11px]",
         tone,
       )}
-      title={m < 1 ? "Fetched in the last minute" : `Fetched ${age(m)} ago`}
+      title={note ? `${when}${cadence} · ${note}` : `${when}${cadence}`}
     >
       {age(m)}
     </span>

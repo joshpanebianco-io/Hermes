@@ -237,7 +237,10 @@ def test_the_boards_speeches_are_rows_in_nasdaqs_words() -> None:
         ("FOMC Member Bowman Speaks", "2026-11-10", "15:30"),
         ("FOMC Chair Powell Testifies", "2026-11-12", "10:00"),
     ]
-    assert all(r["score"] == 5 and r["country"] == "United States" for r in got)
+    # A member speaking is watched (3); the Chair is the High tier's lower step (4). Every
+    # one of them was a five, beside CPI, until 2026-11-14. All still reach the books.
+    assert [r["score"] for r in got] == [3, 3, 4]
+    assert all(r["country"] == "United States" and r["core"] for r in got)
     assert got[0]["note"] == "Economic Outlook" and got[0]["released"] is False
     # A speaker the rows already name at that minute is not listed twice.
     have = [{"utc": "2026-11-10T09:00:00+00:00", "event": "Fed Waller Speaks"}]
@@ -355,3 +358,92 @@ def test_one_slow_day_does_not_change_the_feed(feeds: Feeds,
     monkeypatch.setattr(cal, "fetch", one_bad)
     cal.collect(today=TODAY)
     assert cal.source() == "nasdaq" and "tradingview" not in feeds.asked
+
+
+# --- a week ahead, the far days thinned ----------------------------------------
+#
+# The collector read three days ahead, so on Friday 13 Nov 2026 the Macro calendar
+# ended on the Monday. It reads a week now, and a day past the third keeps only what
+# reaches the books or scores three and up.
+
+
+def _at(day: date, hour: int, **kw: Any) -> dict[str, Any]:
+    from datetime import datetime
+
+    ts = datetime(day.year, day.month, day.day, hour, 30, tzinfo=cal.ET).timestamp()
+    return {"event": "x", "ts": ts, "core": False, "score": 1, **kw}
+
+
+def test_the_collector_reads_a_week_and_keeps_the_near_days_whole() -> None:
+    assert cal.WEEK_AHEAD == 7
+    today = date(2026, 11, 13)
+    near = [_at(date(2026, 11, 13), 8), _at(date(2026, 11, 16), 8), _at(date(2026, 11, 12), 8)]
+    # The third day ahead is still whole, to its last minute.
+    edge = _at(date(2026, 11, 16), 23)
+    assert cal.thin_far([*near, edge], today) == [*near, edge]
+
+
+def test_a_far_day_keeps_what_reaches_the_books_and_drops_the_tail() -> None:
+    today = date(2026, 11, 13)
+    far = date(2026, 11, 18)
+    tail = _at(far, 8)                               # impact one, reaches nothing
+    core = _at(far, 8, core=True, region="apac")     # reaches the books, whatever the country
+    us3 = _at(far, 10, score=3, region="us")         # housing starts: the stocks desk keeps it
+    us2 = _at(far, 10, score=2, region="us")         # context: gone a week out
+    eu3 = _at(far, 10, score=3, region="eu")         # watched over there, reaches nothing here
+    untimed = {"event": "x", "ts": None, "core": False, "score": 1}
+    assert cal.thin_far([tail, core, us3, us2, eu3, untimed], today) == [core, us3, untimed]
+    # The first day past the edge is already thinned.
+    assert cal.thin_far([_at(date(2026, 11, 17), 0)], today) == []
+
+
+def test_the_week_after_keeps_only_the_releases_that_stop_the_tape() -> None:
+    # Owner, 2026-11-16: "add a bit more of the future things that show up in the
+    # calendar". The read is two weeks; past the first, only a score of four or more that
+    # reaches the books or is America's.
+    assert cal.DAYS_AHEAD == 14 and cal.FAR_SCORE == 4
+    today = date(2026, 11, 16)
+    week2 = date(2026, 11, 25)
+    cpi = _at(week2, 8, score=5, region="us")                 # stays
+    us3 = _at(week2, 10, score=3, region="us")                # a week out it stayed; not now
+    ecb = _at(week2, 8, score=4, region="eu", core=True)      # reaches the books: stays
+    eu4 = _at(week2, 9, score=4, region="eu")                 # big over there, reaches nothing
+    assert cal.thin_far([cpi, us3, ecb, eu4], today) == [cpi, ecb]
+    # The seventh day is still the first week's rule.
+    day7 = _at(date(2026, 11, 23), 10, score=3, region="us")
+    assert cal.thin_far([day7], today) == [day7]
+
+
+# --- a Fed official speaking is watched, not a print ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("event", "want"),
+    [
+        ("FOMC Member Barr Speaks", 3),
+        ("FOMC Member Bowman Speaks", 3),
+        ("Fed Vice Chair Jefferson Speaks", 3),          # a vice chair is a member
+        ("FOMC Chair Warsh Speaks", 4),
+        ("Fed Chair Powell Testifies", 4),               # no "FOMC" in it: it scored two
+        ("Fed Chairman Warsh Speaks", 4),
+        # What is not a speech keeps its tier: the decision, the minutes, the prints.
+        ("FOMC Statement", 5),
+        ("Fed Interest Rate Decision", 5),
+        ("FOMC Meeting Minutes", 5),
+        ("Core CPI m/m", 5),
+        ("Beige Book", 3),
+    ],
+)
+def test_a_speech_is_watched_and_the_chair_is_a_step_above(event: str, want: int) -> None:
+    assert cal.score("United States", event) == want
+
+
+def test_the_chairman_is_the_chair_and_a_vice_chair_is_not() -> None:
+    """ "Chairman Kevin Warsh" was listed as "FOMC Member Warsh": the test was `\bchair\b`."""
+    fed = [
+        {"kind": "Speech", "title": "Speech - Chairman Kevin Warsh", "ts": 1794301200.0},
+        {"kind": "Speech", "title": "Speech - Vice Chair Philip N. Jefferson", "ts": 1794342600.0},
+    ]
+    got = cal.fed_speech_rows(fed, LO, HI)
+    assert [(r["event"], r["score"]) for r in got] == [
+        ("FOMC Chair Warsh Speaks", 4), ("FOMC Member Jefferson Speaks", 3)]

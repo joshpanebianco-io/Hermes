@@ -80,17 +80,43 @@ FEEDS: list[tuple[str, str, str, str, str]] = [
     ("markets", "https://feeds.bloomberg.com/markets/news.rss", "Bloomberg", "Markets", "global"),
     ("macro", "https://feeds.bloomberg.com/economics/news.rss",
      "Bloomberg", "Economics", "global"),
+    # FIVE MORE FROM THE TOP OUTLETS (owner, 2026-11-15: "all the top reputable places
+    # for stock market and finance news?"). Thirty of their feeds the wire did not read
+    # were run through its own filters against the tape that day. The tape was strong
+    # on markets, the economy and the world and thin on COMPANIES, which is where a
+    # stock's story comes from: these five were the ones that added reporting of their
+    # own. Left out with their counts in the session's notes: Bloomberg Business (TV
+    # round-ups), Fox Business (five low-impact stories and personal finance), IBD
+    # (stock-picking lists), Reuters Business through Google (quote pages), and the
+    # sections that only repeated what the tape already had.
+    ("corp", "https://feeds.bloomberg.com/technology/news.rss",
+     "Bloomberg", "Technology", "global"),
+    ("geo", "https://feeds.bloomberg.com/politics/news.rss", "Bloomberg", "Politics", "global"),
+    ("corp", "https://feeds.content.dowjones.io/public/rss/WSJcomUSBusiness",
+     "WSJ", "Business", "us"),
+    ("corp", "https://www.ft.com/companies?format=rss", "FT", "Companies", "global"),
+    ("corp", "https://www.cnbc.com/id/15839135/device/rss/rss.html",
+     "CNBC", "Earnings", "us"),
     ("markets", "https://www.ft.com/markets?format=rss", "FT", "Markets", "global"),
-    # THE INDEX HEADLINES, NOT THE OLD TOP STORIES (2026-11-06): Yahoo retired
-    # finance.yahoo.com/news/rssindex and /rss/topstories, which answer 404 to anyone.
-    # This one is the S&P 500, Nasdaq and Dow's own headlines.
-    ("markets", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,%5EIXIC,%5EDJI"
-                "&region=US&lang=en-US", "Yahoo Finance", "Indices", "us"),
-    ("markets", "https://www.investing.com/rss/news.rss", "Investing.com", "News", "global"),
     ("macro", "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml", "NYT", "Economy", "us"),
     ("markets", "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
      "NYT", "Business", "us"),
-    ("markets", "https://feeds.feedburner.com/zerohedge/feed", "ZeroHedge", "Markets", "us"),
+    # THREE FEEDS WENT (owner, 2026-11-15: "the most reputable sources as possible and
+    # most official"), each read line by line on the tape that day first. Yahoo
+    # Finance's index headlines were fourteen stories of syndication: "REET vs RWR:
+    # Global Versus U.S. REIT ETF Which Is Better", "Micron Technology (MU): Does a Low
+    # Earnings Multiple Understate Its AI Opportunity?". Investing.com's four were
+    # insider-filing notices for companies nobody trades here ("ACNB director Frank
+    # Elsner III buys $250 in stock"). ZeroHedge is commentary under a pseudonym. What
+    # any of them reported that mattered was on the tape already from a newsroom.
+    # ---- the statistical agencies, in their own words ------------------------
+    # The release itself at the minute it lands, with the agency's sentence and
+    # its figure as the summary and a link to the release. Each is cut to the
+    # releases this desk reads (OFFICIAL_ONLY): the BEA also publishes the outdoor
+    # recreation account, the Census Bureau the rental vacancy rate.
+    ("macro", "https://apps.bea.gov/rss/rss.xml", "BEA", "Releases", "us"),
+    ("macro", "https://www.census.gov/economic-indicators/indicator.xml",
+     "Census Bureau", "Indicators", "us"),
     # ---- Asia-Pacific --------------------------------------------------------
     ("markets", "https://asia.nikkei.com/rss/feed/nar", "Nikkei Asia", "Asia", "apac"),
     ("markets", "https://www.cnbc.com/id/19832390/device/rss/rss.html",
@@ -100,6 +126,9 @@ FEEDS: list[tuple[str, str, str, str, str]] = [
     ("macro", "https://www.japantimes.co.jp/feed/", "Japan Times", "Japan", "apac"),
     ("macro", "https://www.abc.net.au/news/feed/51892/rss.xml", "ABC", "Australia", "apac"),
     ("policy", "https://www.rba.gov.au/rss/rss-cb-media-releases.xml", "RBA", "Policy", "apac"),
+    # The Bank of Japan's own page, cut to its decisions, its outlook and what its
+    # board says (OFFICIAL_ONLY): most of the feed is the daily accounts.
+    ("policy", "https://www.boj.or.jp/en/rss/whatsnew.xml", "Bank of Japan", "Policy", "apac"),
     ("macro", gnews("(Bank of Japan OR PBOC OR RBA OR Nikkei OR Hang Seng) markets"),
      "Google News", "Asia", "apac"),
     # ---- Europe and the UK ---------------------------------------------------
@@ -120,6 +149,9 @@ FEEDS: list[tuple[str, str, str, str, str]] = [
     ("energy", gnews("OPEC OR crude oil OR natural gas OR refinery"),
      "Google News", "Energy", "global"),
     ("energy", "https://www.theguardian.com/business/oil/rss", "Guardian", "Oil", "global"),
+    # The Energy Information Administration's press releases: the monthly outlook
+    # and what it changed. Its daily "Today in Energy" is features, and is not read.
+    ("energy", "https://www.eia.gov/rss/press_rss.xml", "EIA", "Press", "us"),
     # ---- policy: the institutions' own words --------------------------------
     ("policy", "https://www.federalreserve.gov/feeds/press_monetary.xml",
      "Federal Reserve", "Monetary", "us"),
@@ -189,6 +221,22 @@ NOISE = re.compile(
 # Words that promote an item's category regardless of which feed carried it.
 # Ordered by priority — the first hit wins, so a headline about an oil facility
 # being struck lands in energy rather than geo.
+# THE JOBS PRINT, AS A COUNT (2026-11-15). The macro words were the release's own
+# ("payrolls", "jobs report", "unemployment"), and half the newsrooms write the print
+# as what it says: "US economy adds 165,000 jobs in October, blowing past
+# expectations", "US employers added 165,000 jobs", "Hiring surged in October". Those
+# named nothing a market trades on and were dropped whoever filed them. The count has
+# to be a national one (ten thousand and up): a plant that adds 300 jobs is not a print.
+_JOBS_COUNT = (
+    r"\b(?:adds?|added|gains?|gained|creates?|created|loses?|lost|sheds?|shed)\s+"
+    r"(?:\d{2,3},\d{3}|\d{2,3}k|\d(?:\.\d+)?\s?million)\s+jobs\b"
+)
+_JOBS = (
+    _JOBS_COUNT + r"|\bemployers (?:add|added|cut|shed|hired)\b|\bjob growth\b|"
+    r"\bhiring (?:surges?|surged|slows?|slowed|cools?|cooled|stalls?|stalled|picks? up|"
+    r"picked up|rebounds?|rebounded|jumps?|jumped)\b"
+)
+
 PROMOTE: list[tuple[str, re.Pattern[str]]] = [
     ("policy", re.compile(
         r"\bFOMC\b|\bFed\b|Federal Reserve|Powell|rate (?:cut|hike|decision|path)|"
@@ -197,7 +245,7 @@ PROMOTE: list[tuple[str, re.Pattern[str]]] = [
     ("macro", re.compile(
         r"\bCPI\b|\bPCE\b|inflation|payrolls?|\bjobs? report\b|unemployment|jobless claims|"
         r"\bGDP\b|retail sales|\bISM\b|\bPMI\b|consumer confidence|housing starts|"
-        r"durable goods|trade deficit|recession|stagflation|deflation", re.I)),
+        r"durable goods|trade deficit|recession|stagflation|deflation|" + _JOBS, re.I)),
     ("energy", re.compile(
         r"\bOPEC\b|crude|\bWTI\b|\bBrent\b|refiner|pipeline|natural gas|\bLNG\b|"
         r"barrel|oil (?:price|output|supply|demand|field)|gasoline|diesel|"
@@ -422,7 +470,10 @@ _PRINT = re.compile(
     r"(?:\bCPI\b|\bPCE\b|consumer prices|\binflation\b|\bpayrolls?\b|unemployment rate|"
     r"\bGDP\b|retail sales|jobless claims|jobs report)[^.;:?]{0,30}?"
     r"\b(?:rose|fell|jumped|cooled|climbed|slowed|eased|accelerat\w+|came in|comes? in|"
-    r"runs?|ran|grew|shrank|contracted|surged|dropped|unexpectedly|tops?|topped)\b", re.I)
+    r"runs?|ran|grew|shrank|contracted|surged|dropped|unexpectedly|tops?|topped)\b|"
+    # The same print as a count, where the headline says whose it is: the economy's
+    # or employers', not a company's ("Amazon adds 100,000 jobs" is hiring, not data).
+    r"\b(?:U\.?S\.?|America\w*|economy|employers)\b[^.;:?]{0,40}?" + _JOBS_COUNT, re.I)
 #: Somebody else's number: a print abroad is read, and is not this desk's event.
 _ABROAD = re.compile(
     r"\b(?:German\w*|UK|U\.K\.|Brit\w+|Japan\w*|Chin(?:a|ese)|euro ?zone|Eurozone|French|"
@@ -690,7 +741,6 @@ GENERAL_FEEDS: frozenset[tuple[str, str]] = frozenset({
     ("Japan Times", "Japan"),
     ("SCMP", "China"),
     ("AP", "Economy"),
-    ("ZeroHedge", "Markets"),
     ("ABC", "Australia"),
 })
 
@@ -757,26 +807,57 @@ def is_off_market(title: str, publisher: str, section: str) -> bool:
 #: stories that morning from the rest were EnergyNow re-dating months-old EIA releases
 #: ("US Crude Oil Output Fell in May …" filed as today's), forecast pages, a Yakima
 #: paper's Veterans Day feature. Lower case.
+#:
+#: TIGHTENED 2026-11-15 with the feed table (the note there): Yahoo Finance and
+#: Investing.com (syndication and filing notices), Forbes (its contributor pages
+#: carry the masthead), Business Insider, Benzinga, TheStreet and TradingView are no
+#: longer taken from a search. The newsrooms that stay answer for what they print.
 NEWSROOMS: frozenset[str] = frozenset({
     "reuters", "ap news", "ap", "associated press", "bloomberg", "bloomberg.com", "cnbc", "wsj",
     "the wall street journal", "financial times", "ft", "marketwatch", "barron's", "barrons",
-    "yahoo finance", "nikkei asia", "scmp", "south china morning post", "the new york times",
+    "nikkei asia", "scmp", "south china morning post", "the new york times",
     "nyt", "the washington post", "bbc", "the guardian", "guardian", "axios", "politico",
-    "the economist", "morningstar", "investing.com", "cnn", "npr", "al jazeera", "the telegraph",
-    "japan times", "the japan times", "kyodo news", "fortune", "forbes", "semafor", "abc news",
-    "business insider", "the times", "sky news", "nbc news", "cbs news", "the hill",
-    # The market's own trade press, and the agencies that assess what oil costs.
-    "benzinga", "tradingview", "thestreet", "s&p global", "argus media", "rigzone",
+    "the economist", "morningstar", "cnn", "npr", "al jazeera", "the telegraph",
+    "japan times", "the japan times", "kyodo news", "fortune", "semafor", "abc news",
+    "the times", "sky news", "nbc news", "cbs news", "the hill",
+    # The agencies that assess what oil costs, and the oil patch's own paper.
+    "s&p global", "argus media", "rigzone",
 })
 #: The institutions' own feeds: policy by construction, whatever the title says ("Waller,
 #: The Economic Outlook and Some Thoughts on Labor Market Dynamism" names no bank).
 INSTITUTIONS: frozenset[str] = frozenset({"Federal Reserve", "ECB", "Bank of England", "RBA"})
 
+#: AN OFFICIAL FEED THAT IS MOSTLY NOT FOR THIS DESK (2026-11-15), and the titles of
+#: it that are. The BEA's feed is forty-nine items of which three kinds are read (GDP,
+#: personal income and outlays, trade); the Census Bureau's lists the rental vacancy
+#: rate beside retail sales; the Bank of Japan's is its daily accounts with a policy
+#: statement among them. An agency's release names no bank and no index, so the
+#: market test below would drop every one, and letting the whole feed through as
+#: the central banks' are would bury the three that matter. So each is an allowlist:
+#: on it, the item is news by construction; off it, it is not read.
+OFFICIAL_ONLY: dict[str, re.Pattern[str]] = {
+    "BEA": re.compile(
+        r"^(?:GDP|Gross Domestic Product)\b(?!.*\b(?:County|State|Metropolitan|Industry|"
+        r"Puerto Rico|Guam|Samoa|Virgin Islands|Mariana|Local Area)\b)|"
+        r"^Personal Income and Outlays\b|^U\.S\. International Trade in Goods and Services\b",
+        re.I),
+    "Census Bureau": re.compile(
+        r"^Advance Monthly Sales for Retail|^Advance Monthly Manufacturers|"
+        r"^Manufacturers' Shipments, Inventories, and Orders|^New Residential Construction|"
+        r"^New Home Sales|^Construction Spending|^U\.S\. International Trade in Goods|"
+        r"^Advance U\.S\. International Trade in Goods|^Manufacturing and Trade Inventories",
+        re.I),
+    "Bank of Japan": re.compile(
+        r"Statement on Monetary Policy|Monetary Policy Meeting|Summary of Opinions|"
+        r"Outlook for Economic Activity and Prices|\bTankan\b|"
+        r"^(?:Speech|Remarks|Statement) by (?:Governor|Deputy Governor|Board Member)",
+        re.I),
+}
+
 
 def is_newsroom(outlet: str) -> bool:
     """Is the outlet a Google News suffix names one of the newsrooms? Pure."""
-    o = (outlet or "").strip().lower()
-    return o in NEWSROOMS or o.startswith("yahoo finance")
+    return (outlet or "").strip().lower() in NEWSROOMS
 
 
 #: A page or a template that arrives looking like a story.
@@ -862,10 +943,17 @@ BIG = re.compile(
 #: takeover, a failure, or a figure in billions beside a deal.
 _H_EVENT = re.compile(
     r"\bIPO\b|\bmerger\b|\btakeover\b|\bbuyout\b|\bbankrupt\w*|\bChapter 11\b|"
-    r"\b(?:acqui(?:res?|red|sition)|buyback|repurchase|invests?|investment|deal|stake)\b"
+    # A DEAL IN BILLIONS, HOWEVER IT IS WORDED (2026-11-15). "DoorDash agrees to acquire
+    # Instacart in $17 billion deal" stayed and "DoorDash to buy Instacart for $17
+    # billion" and "DoorDash strikes $17B deal for rival Instacart" did not: the verbs
+    # were acquire, invest and deal, and the figure before its noun had to be spelt
+    # "bn" or "billion". Buying, merging, bidding and spending are the same event, and
+    # "$17B" is the same figure.
+    r"\b(?:acqui(?:res?|red|sition)|buys?|bought|purchases?|merges?|bids?|spends?|buyback|"
+    r"repurchase|invests?|investment|deal|stake)\b"
     r"[^.]{0,70}[$£€]\s?\d[\d.,]*\s?(?:bn|billion|b\b)|"
-    r"[$£€]\s?\d[\d.,]*\s?(?:bn|billion)\b[^.]{0,70}\b(?:acquisition|takeover|merger|buyback|"
-    r"deal|stake|investment|rescue)\b", re.I)
+    r"[$£€]\s?\d[\d.,]*\s?(?:bn|billion|b)\b[^.]{0,70}\b(?:acquisition|takeover|merger|buyback|"
+    r"deal|stake|investment|rescue|bid|offer)\b", re.I)
 #: An analyst's housekeeping. On a company that moves no index it is the newswire's
 #: volume and nobody's event: ten of them arrived in two minutes that morning ("Needham
 #: reiterates Thryv stock rating at Buy with $6 target").
@@ -889,7 +977,7 @@ MEDIUM_MORE = re.compile(
     r"\binflation\b|consumer prices|\bCPI\b|\bPCE\b|payrolls?|\bGDP\b|unemployment|"
     r"export (?:controls?|curbs?)|chip (?:rules|ban|curbs|controls)|\bFDA\b|"
     r"\bTreasur(?:y|ies)\b.{0,30}\b(?:auction|slide|slides|retreat|sell)|\bbond sale\b|"
-    r"credit rating|\bprobe\b|\bantitrust\b|\bsubpoena", re.I)
+    r"credit rating|\bprobe\b|\bantitrust\b|\bsubpoena|" + _JOBS, re.I)
 
 
 def market_hooks(title: str) -> list[str]:
@@ -936,6 +1024,9 @@ def off_tape(title: str, publisher: str, section: str, outlet: str | None = None
     """
     if publisher in INSTITUTIONS:
         return None
+    only = OFFICIAL_ONLY.get(publisher)
+    if only is not None:
+        return None if only.search(title) else "not a release this desk reads"
     if outlet is not None and not is_newsroom(outlet):
         return "not a newsroom"
     if NOT_A_STORY.search(title):

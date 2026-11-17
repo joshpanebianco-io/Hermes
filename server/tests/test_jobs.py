@@ -97,8 +97,7 @@ def _brief() -> dict[str, Any]:
     body = json.dumps({
         "thesis": "NQ holds 30707",
         "calls": [{"book": "NQ", "open_bias": "bullish", "conviction": 3,
-                   "rest_of_day": "x", "wrong_if": "y", "why": []}],
-        "reads": [{"book": "NQ", "regime": "r"}],
+                   "plan": "x", "wrong_if": "y", "why": []}],
     })
     return {"choices": [{"message": {"content": body}, "finish_reason": "stop"}],
             "usage": {"completion_tokens": 1}}

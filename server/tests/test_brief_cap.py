@@ -14,9 +14,7 @@ def _obj(bias: str, conviction: int) -> dict[str, Any]:
     return {
         "thesis": "One idea.",
         "calls": [{"book": "NQ", "open_bias": bias, "conviction": conviction,
-                   "rest_of_day": "Lean", "rest_of_day_bias": bias, "wrong_if": "x", "why": ["a"]}],
-        "reads": [{"book": "NQ", "regime": "r", "chain": ["a"], "at_open": "o", "wrong_if": "w",
-                   "rest_of_day": "d", "flips": [], "drivers": []}],
+                   "plan": "p", "wrong_if": "x", "why": ["a"]}],
     }
 
 

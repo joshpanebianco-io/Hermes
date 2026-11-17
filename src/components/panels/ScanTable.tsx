@@ -607,7 +607,7 @@ function OverviewRow({
       </td>
       <td className={TD}>
         {r.catalyst ? (
-          <CatalystCell c={r.catalyst} width={380} />
+          <CatalystCell c={r.catalyst} width={380} read={r.news_read} />
         ) : r.flags[0] ? (
           <span className="block max-w-[380px] truncate text-[11.5px] text-ink-3" title={r.flags.map((f) => f.text).join("\n")}>
             {r.flags[0].text}
@@ -990,8 +990,14 @@ function flagShort(kind: ScanRow["flags"][number]["kind"], text: string): string
       // "Insider buy: CEO … bought $1.2M at …" → "Insider buy".
       return /^insider sale/i.test(text) ? "Insider sale" : "Insider buy";
     case "catalyst":
-      // 'Against: Reuters: "Jefferies downgrades …" (2h)' → "Against: Jefferies downgrades".
+      // 'Headline reads against the long: Reuters: "Jefferies downgrades …" (2h)' → "Reads against".
+      // The story still earned its grade (2026-11-14); this says which way its words read.
+      if (/^Headline reads against/i.test(text)) return "Reads against";
+      // 'Against: offering filed: Prospectus' → "Against: offering filed": a filing still costs.
       return `Against: ${(text.replace(/^Against:\s*/, "").replace(/^[^"]*"/, "").split(/[\s"]+/).slice(0, 2).join(" ")) || "news"}`.slice(0, 22);
+    case "prior":
+      // 'Previous session's story · Guidance: Reuters: "…"' → "Day 2 · Guidance".
+      return `Day 2 · ${text.match(/·\s*([^:]+):/)?.[1] ?? "news"}`.slice(0, 20);
     case "short_interest":
       // "Squeeze risk: 22% of the float is short …" → "22% short".
       return `${text.match(/(\d+)%/)?.[1] ?? ""}% short`.trim();

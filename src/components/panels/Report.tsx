@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   Bias,
   Report as ReportT,
@@ -9,6 +9,8 @@ import type {
   ReportSession,
 } from "@/types/terminal";
 import type { ReportController } from "@/lib/useReport";
+import { DESK_REPORT, SESSION_PICKS, assetWord, covers, deskOf, subjectFor, type ReportDesk } from "@/lib/reportDesk";
+import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { Brief } from "@/components/panels/Brief";
 import { Module } from "@/components/ui/Module";
 import { PastList } from "@/components/panels/PastList";
@@ -37,24 +39,37 @@ import { NoteAge } from "@/components/ui/NoteAge";
  */
 
 /**
- * Which session the note is written for.
+ * Which session the report is for: Asia, London or New York.
  *
- * THIS DESK TRADES THREE OF THEM, so the note cannot assume New York. `Auto`
- * resolves from the ET clock to the session that is trading or about to — what
- * pressing Generate almost always means — and the three explicit choices are
- * for writing tomorrow's Asia note this afternoon.
+ * THIS DESK TRADES THREE OF THEM, so a report cannot assume New York. The row opens on
+ * the session the clock says is trading or about to (there is no "Auto" pill: the lit
+ * one IS the clock's, until another is picked), and the other two are for writing
+ * tomorrow's Asia report this afternoon.
  *
  * The choice reaches the model as a different SYSTEM PROMPT, not as a filter on
  * the data: what leads a session, what hands over to it and how it behaves are
  * all different, and a New York framing at 20:00 ET produces a note about the
  * Fed when the reader is about to trade the Nikkei.
  */
-const SESSION_PICKS: { key: ReportSession | "auto"; label: string; title: string }[] = [
-  { key: "auto", label: "Auto", title: "Whichever session is trading or about to — from the ET clock" },
-  { key: "asia", label: "Asia", title: "18:00–03:00 ET · Nikkei, Hang Seng, USD/JPY" },
-  { key: "london", label: "London", title: "03:00–08:00 ET · FTSE, DAX, EUR/USD, Bunds" },
-  { key: "ny", label: "NY", title: "09:30–16:00 ET · NQ, ES, the curve, the dollar" },
-];
+/*
+ * WHAT THE REPORT IS ABOUT, BY DESK (owner, 2026-11-16: "in both futures and stocks lets
+ * add Market Report tab with the generate funcitonality next to cl and then next to
+ * charts", lib/reportDesk has the rest). This panel is the Futures tab's Market Report
+ * view, with a pill for each of NQ, ES, GC, SIL and CL and one for each session, and the
+ * Stocks tab's, with SPY · QQQ · IWM and New York. It was one page from 2026-11-15, with
+ * Indexes (NQ and ES together), Gold, Silver and Oil; a report stored then opens under
+ * each book it carries.
+ *
+ * Picking a book narrows the ladder, the session ranges and the drivers in the digest to
+ * it, and swaps the prompt's driver block: told to write about crude, a model handed the
+ * equity blocks would otherwise work through technology's relative strength on the way
+ * to a call that has nothing to do with it.
+ *
+ * THE STOCKS REPORT IS NOT THE MARKET OVERVIEW. The 09:00 ET overview (server
+ * overview.py) still writes itself for the Dashboard's card; the report here is the
+ * market report sheet, the Futures one's design, for the three funds (server
+ * report._etf_facts).
+ */
 
 /**
  * STATE LIVES IN `useReport`, ABOVE THE TAB SWITCH, and that is a fix rather
@@ -64,35 +79,18 @@ const SESSION_PICKS: { key: ReportSession | "auto"; label: string; title: string
  * previous report as though nothing had happened. A generation takes two to
  * three minutes on a free model, which is exactly long enough that switching
  * tabs while it runs is the normal thing to do.
- */
-/**
- * Which book the note is about.
  *
- * `All` is the right default when you are deciding WHAT to trade; the three
- * single-asset choices are for when you have already decided and want the
- * note's whole attention on one instrument. Picking one narrows the gamma
- * ladder, the session ranges and the index movers in the digest, and swaps the
- * prompt's driver block — told to write about gold, a model handed the equity
- * blocks will otherwise work through technology's relative strength on the way
- * to a call that has nothing to do with it.
- *
- * It is still ONE request either way, so a focused note costs no more of the
- * free tier's daily allowance than the combined one.
+ * THE PILLS CHOOSE WHAT IS READ, NOT ONLY WHAT IS WRITTEN. The page shows the newest
+ * stored report for the pair that is lit, opening it from the list if the one in hand
+ * is another pair's; a pair with none says so and offers Generate. A report picked from
+ * Past reports lights its own pair and stays up until the pills move or a new one is
+ * written. A generation that failed is not stored, so it is shown where it happened
+ * and goes when the pills move.
  */
-const ASSET_PICKS: { key: ReportAsset; label: string; title: string }[] = [
-  { key: "all", label: "All", title: "NQ, ES and GC together — where they agree and where they do not" },
-  { key: "NQ", label: "NQ", title: "NQ futures and QQQ · cap-weighted, long duration, the heavy names are the story" },
-  { key: "ES", label: "ES", title: "ES futures and SPY · broader, sector rotation and breadth carry more" },
-  { key: "GC", label: "GC", title: "GC futures and GLD · real yields, the dollar and geopolitics — not the equity blocks" },
-];
-
 export function Report({
-  pick,
-  setPick,
-  book,
-  setBook,
   feed,
   busy,
+  writing,
   viewing,
   generate,
   open,
@@ -101,21 +99,92 @@ export function Report({
   discardAll,
   retry,
   startedAt,
-}: ReportController) {
+  clockSession,
+  desk,
+}: ReportController & {
+  /** The session the clock says is trading or about to: the pill lit until one is picked. */
+  clockSession: ReportSession;
+  /** Which tab this is: the Futures desk's report or the Stocks desk's (lib/reportDesk). */
+  desk: ReportDesk;
+}) {
   const quiet = useQuiet();
   const [showDigest, setShowDigest] = useState(false);
-  const rep = feed?.latest ?? null;
   const enabled = feed?.config?.enabled ?? false;
+  const cfg = DESK_REPORT[desk];
+  // One report is written at a time, for either desk: this view waits on its own and
+  // says so of the other's.
+  const mine = busy && (writing == null || deskOf(writing) === desk);
+  const theirs = busy && !mine;
   /** The loader is what the card holds: the one state that is stood in the middle of it. */
-  const waiting = enabled && busy;
+  const waiting = enabled && mine;
+
+  // What it is about, remembered per desk; the session is not remembered (2026-11-15: a
+  // session kept from last night left a page opened in the New York morning on Asia).
+  const [subject, setSubject] = usePersisted<ReportAsset>(
+    `report.${desk}.asset`,
+    cfg.subjects[0].key,
+    oneOf(...cfg.subjects.map((s) => s.key)),
+  );
+  const [pick, setPick] = useState<ReportSession | "auto">("auto");
+  const session: ReportSession =
+    cfg.sessions.length === 1
+      ? cfg.sessions[0]
+      : pick !== "auto"
+        ? pick
+        : cfg.sessions.includes(clockSession)
+          ? clockSession
+          : cfg.sessions[0];
+  const all = useMemo(() => feed?.history ?? [], [feed?.history]);
+  // Each desk's Past reports are its own.
+  const history = useMemo(() => all.filter((h) => deskOf(h.asset) === desk), [all, desk]);
+  /** A past report the reader opened by hand, while it is still kept. */
+  const [chosen, setChosen] = useState<string | null>(null);
+  /** A failed generation the reader has moved on from. */
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const kept = chosen && history.some((h) => h.id === chosen) ? chosen : null;
+  const pair = history.find((h) => covers(h.asset, subject) && h.session === session) ?? null;
+  const wantId = kept ?? pair?.id ?? null;
+  const latest = feed?.latest ?? null;
+  // Not stored, so not in the list: the envelope of a generation that failed, on its own desk.
+  const failed =
+    latest && latest.error && deskOf(latest.asset) === desk && !all.some((h) => h.id === latest.id) && latest.id !== dismissed
+      ? latest
+      : null;
+  const rep = failed ?? (wantId && latest?.id === wantId ? latest : null);
+  /** The pair has a stored report and it is not the one in hand yet. */
+  const opening = !failed && wantId !== null && latest?.id !== wantId;
+  useEffect(() => {
+    if (!failed && !mine && wantId && latest?.id !== wantId && viewing !== wantId) open(wantId);
+  }, [failed, mine, wantId, latest?.id, viewing, open]);
+
+  const move = () => {
+    setChosen(null);
+    if (failed) setDismissed(failed.id);
+  };
+  const write = () => {
+    move();
+    generate(session, subject);
+  };
+  const openPast = (id: string) => {
+    const h = history.find((x) => x.id === id);
+    if (h) {
+      setSubject(subjectFor(h.asset, subject, desk));
+      if (h.session && cfg.sessions.includes(h.session)) setPick(h.session);
+    }
+    if (failed) setDismissed(failed.id);
+    setChosen(id);
+  };
+  const subjectLabel = cfg.subjects.find((s) => s.key === subject)?.label ?? subject;
+  const what = `${subjectLabel} · ${SESSION_PICKS.find((x) => x.key === session)?.label ?? ""}`;
+
   /*
    * LUMINOUS DRAWS A BRIEF AS A BOARD OF CARDS (panels/Brief, LUM): the report's card is
-   * then only its bar (the title, which book, which session, Generate), which stays put,
-   * and the brief's own cards scroll under it. Every other state (the loader, a failure,
-   * no key, an old note) is still one card that fills the column.
+   * then only its bar (the title, what it is about, which session, Generate), which stays
+   * put, and the brief's own cards scroll under it. Every other state (the loader, a
+   * failure, no key, an old note) is still one card that fills the column.
    */
   const lum = useLum();
-  const board = lum && enabled && !busy && Boolean(rep && !rep.error && rep.report && rep.format === "brief" && rep.facts);
+  const board = lum && enabled && !mine && Boolean(rep && !rep.error && rep.report && rep.format === "brief" && rep.facts);
 
   return (
     <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
@@ -123,7 +192,7 @@ export function Report({
           one (the report was drawn under Past calls on a window narrower than xl). */}
       <div className={cn("flex min-w-0 flex-col gap-2 lum:gap-[var(--lum-gap)] xl:min-h-0", board ? "xl:overflow-hidden" : "xl:overflow-y-auto")}>
         <Module
-          title="Session report"
+          title="Market report"
           large
           /*
            * THE CARD RUNS TO THE FOOT OF ITS COLUMN WHATEVER IT HOLDS (owner, 2026-11-12:
@@ -134,13 +203,7 @@ export function Report({
            * and scroll the column, not be cut to it.
            */
           className={board ? "shrink-0" : "xl:grow"}
-          sub={
-            rep
-              ? [rep.asset_label, rep.session_label, rep.et_label]
-                  .filter(Boolean)
-                  .join(" · ")
-              : undefined
-          }
+          sub={rep ? [assetWord(rep.asset), rep.session_label, rep.et_label].filter(Boolean).join(" · ") : what}
           bodyClassName={board ? "hidden" : cn("px-0 py-0", waiting && "flex flex-col justify-center")}
           /*
            * A FAILED TRIP IS STATED, NOT DRESSED AS SOMETHING ELSE. It used to
@@ -153,29 +216,35 @@ export function Report({
               : null
           }
           right={
-            <div className="flex items-center gap-1.5">
-              <div className="seg">
-                {ASSET_PICKS.map((ap) => (
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <div className="seg" role="group" aria-label="What the report is about">
+                {cfg.subjects.map((ap) => (
                   <button
                     key={ap.key}
                     type="button"
-                    onClick={() => setBook(ap.key)}
+                    onClick={() => {
+                      move();
+                      setSubject(ap.key);
+                    }}
                     title={ap.title}
-                    {...segItem(book === ap.key, { className: "text-[11px] leading-[17px]" })}
+                    {...segItem(subject === ap.key, { className: "text-[11px] leading-[17px]" })}
                   >
                     {ap.label}
                   </button>
                 ))}
               </div>
               <span aria-hidden className="h-3.5 w-px bg-ring qt:hidden" />
-              <div className="seg">
-                {SESSION_PICKS.map((sp) => (
+              <div className="seg" role="group" aria-label="Which session the report is for">
+                {SESSION_PICKS.filter((sp) => cfg.sessions.includes(sp.key)).map((sp) => (
                   <button
                     key={sp.key}
                     type="button"
-                    onClick={() => setPick(sp.key)}
-                    title={sp.title}
-                    {...segItem(pick === sp.key, { className: "text-[11px] leading-[17px]" })}
+                    onClick={() => {
+                      move();
+                      setPick(sp.key);
+                    }}
+                    title={pick === "auto" && sp.key === clockSession ? `${sp.title} · the session the clock says is next` : sp.title}
+                    {...segItem(session === sp.key, { className: "text-[11px] leading-[17px]" })}
                   >
                     {sp.label}
                   </button>
@@ -192,11 +261,15 @@ export function Report({
                 * report, and `data-busy` is what stops that reading as dead.
                 */}
               <GenerateButton
-                onClick={generate}
+                onClick={write}
                 busy={busy}
                 enabled={enabled}
-                busyTitle="Reading the terminal and generating the report — usually one to three minutes"
-                idleTitle="Read the terminal as it stands now and generate a fresh report"
+                busyTitle={
+                  theirs
+                    ? `The ${desk === "futures" ? "Stocks" : "Futures"} tab's report is being written: one report at a time`
+                    : "Reading the terminal and generating the report — usually one to three minutes"
+                }
+                idleTitle={`Read the terminal as it stands now and write the ${what} report`}
               />
             </div>
           }
@@ -205,10 +278,12 @@ export function Report({
             <Offline reason={feed.offline.reason} api={feed.offline.api} onRetry={retry} />
           ) : !enabled ? (
             <NoKey model={feed?.config?.model} />
-          ) : busy ? (
+          ) : mine ? (
             <Working startedAt={startedAt} model={feed?.config?.model} />
+          ) : opening ? (
+            <p className="px-4 py-8 text-center text-[11.5px] text-ink-3">Opening the {what} report…</p>
           ) : !rep ? (
-            <Empty />
+            <Empty what={what} />
           ) : rep.error ? (
             <Failed error={rep.error} raw={rep.raw} />
           ) : rep.report ? (
@@ -222,7 +297,7 @@ export function Report({
               />
             </>
           ) : (
-            <Empty />
+            <Empty what={what} />
           )}
         </Module>
         {board && rep && (
@@ -245,12 +320,12 @@ export function Report({
             Only at xl, where the two sit side by side; stacked, it is as tall
             as its rows. */}
         <PastList
-          title="Past calls"
+          title="Past reports"
           noun="report"
-          items={feed?.history ?? []}
-          current={viewing ?? rep?.id ?? null}
+          items={history}
+          current={rep?.id ?? wantId}
           empty="Nothing yet. Reports are kept so you can check the calls against how the session actually went."
-          onOpen={open}
+          onOpen={openPast}
           onDiscard={discard}
           onDiscardMany={discardMany}
           onDiscardAll={discardAll}
@@ -258,11 +333,11 @@ export function Report({
             <>
               <span className="flex w-full items-baseline gap-2">
                 <span className="fig shrink-0 text-[11px] text-ink-3">{h.et_label}</span>
-                {h.asset_label && h.asset !== "all" && h.asset_label !== "All three books" && (
-                  <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3 qt:border qt:border-ring-2 qt:bg-transparent">
-                    {h.asset_label}
-                  </span>
-                )}
+                {/* What it is about, as the pill says it; one stored before the pills keeps
+                    its own label beside that when it was about a single index. */}
+                <span className="fig shrink-0 rounded bg-ink/10 px-1 text-[10px] text-ink-3 qt:border qt:border-ring-2 qt:bg-transparent">
+                  {assetWord(h.asset)}
+                </span>
                 {/* The one part of this line that may give way: on a narrow
                     column the date, the book and the call all matter more
                     than which session it was, so this is what truncates. */}
@@ -469,10 +544,10 @@ export function Working({
   );
 }
 
-function Empty() {
+function Empty({ what }: { what: string }) {
   return (
     <p className="px-4 py-8 text-center text-[11.5px] text-ink-3">
-      No report yet — press <span className="fig text-flip">Generate</span>.
+      No {what} report yet — press <span className="fig text-flip">Generate</span>.
     </p>
   );
 }
@@ -686,6 +761,14 @@ function Provenance({
           <>
             <span aria-hidden>·</span>
             <span className="fig">{rep.usage.total_tokens} tok</span>
+          </>
+        )}
+        {/* What the model wrote, counted by the collector (a short brief's limit is in
+            words): the page's tables are not in it. */}
+        {typeof rep.words === "number" && (
+          <>
+            <span aria-hidden>·</span>
+            <span className="fig">{rep.words} words written</span>
           </>
         )}
         <button

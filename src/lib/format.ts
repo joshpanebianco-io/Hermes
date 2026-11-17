@@ -105,10 +105,11 @@ export function dir(v: number | null | undefined): "up" | "down" | "flat" {
   return v > 0 ? "up" : "down";
 }
 
-/** Compact volume: 91,573 → "91.6K". */
+/** Compact volume or value: 91,573 → "91.6K", and a $3.9 trillion company "3.92T", not "3924.7B". */
 export function compact(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   const a = Math.abs(v);
+  if (a >= 1e12) return `${(v / 1e12).toFixed(2)}T`;
   if (a >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
   if (a >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
   if (a >= 1e3) return `${(v / 1e3).toFixed(1)}K`;

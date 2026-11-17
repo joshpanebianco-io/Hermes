@@ -102,6 +102,16 @@ PREOPEN_NAME = "scanner_preopen.jsonl"
 PREOPEN_AT = time(9, 25)
 #: A held trade's R is capped here, so one tiny stop cannot carry an average.
 HELD_CAP = 5.0
+#: A TOUCH TO THE CENT COUNTS (the both-sides audit, 2026-11-14). Yahoo's bars carry
+#: single-precision prices: 20.82 arrives as 20.81999969482422. HIMS's (E) long of 11 Nov
+#: 14:30, entry 20.66 and stop 20.50 (R 0.16), made a high of 20.82 at 15:00, +1R to the
+#: cent, and the bars said 0.15999969: it was filed as never reaching +1R and stopped at
+#: 15:25 (whose low, 20.50, is a number a float holds exactly). The same trade turned
+#: upside down came out a winner, which is how it was found. The target and the stop are
+#: reached within this share of the price: a single-precision price is out by at most
+#: 6e-8 of itself and a difference of two by twice that, and a quarter of a millionth of
+#: the price is 0.0005c on a $20 stock and 0.025c on a $1,000 one, under any tick.
+TOUCH_REL = 2.5e-7
 KEEP_DAYS = 30
 LIVE_LAG_SEC = 2 * BAR_SEC  # found within two bars of the bar closing
 #: A day whose last bars never arrived settles anyway this long after its
@@ -226,12 +236,19 @@ def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None
     return out
 
 
-def news_ctx(score: dict[str, Any] | None) -> dict[str, Any] | None:
+def news_ctx(score: dict[str, Any] | None,
+             read_of: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """What the catalyst part read, as the log keeps it: its points, the item that decided
     it (grade, tier, direction, whether with the side, where the direction came from —
     the name's move, the event's words, the tape, a report or a filing — and its age), how
-    many headlines were in the window and how many the tape set aside. None without a
-    catalyst part. Pure."""
+    many headlines were in the window and how many the tape overruled. None without a
+    catalyst part. Pure.
+
+    AND, from 2026-11-14, two things that are logged and never scored, so the record can
+    say whether they should be: `prior`, the previous session's major story (its grade and
+    age; scanscore.prior_story), and `size`, how big the model read the deciding story to
+    be (`read_of` is the row's `news_read`; newsread.py). `with` is None for a story that
+    reads no way, which pays since the same day."""
     parts = (score or {}).get("parts") if isinstance(score, dict) else None
     part = next((p for p in parts or [] if isinstance(p, dict) and p.get("key") == "catalyst"),
                 None)
@@ -241,10 +258,14 @@ def news_ctx(score: dict[str, Any] | None) -> dict[str, Any] | None:
     read: dict[str, Any] = raw_read if isinstance(raw_read, dict) else {}
     raw_item = read.get("item")
     item: dict[str, Any] = raw_item if isinstance(raw_item, dict) else {}
+    raw_prior = read.get("prior")
+    prior = ({k: raw_prior.get(k) for k in ("tag", "tier", "age_min")}
+             if isinstance(raw_prior, dict) else None)
+    size = read_of.get("size") if isinstance(read_of, dict) else None
     return {"pts": part.get("pts"), "tag": item.get("tag"), "tier": item.get("tier"),
             "dir": item.get("dir"), "with": item.get("with"), "src": item.get("src"),
             "age_min": item.get("age_min"), "fresh": read.get("fresh"),
-            "set_aside": read.get("set_aside")}
+            "set_aside": read.get("set_aside"), "prior": prior, "size": size}
 
 
 def shape_ctx(r: dict[str, Any]) -> dict[str, Any]:
@@ -293,7 +314,7 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
                # held the name back, and what the catalyst read (news_ctx) go with it.
                "raw": (r.get("score") or {}).get("raw"),
                "gated": bool((r.get("score") or {}).get("gated")),
-               "news": news_ctx(r.get("score"))}
+               "news": news_ctx(r.get("score"), r.get("news_read"))}
         out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts, ctx)
         if session != "rth" or r.get("last") is None:
             continue
@@ -402,6 +423,7 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
     out["r"] = round(r, 4)
     out["floored"] = r > dist + 1e-9
     s = 1.0 if ev["side"] == "long" else -1.0
+    tol = abs(entry) * TOUCH_REL
     t0 = int(ev["t"])
     start = t0 if ev["kind"] == "E" else t0 + BAR_SEC
     ref = t0 + BAR_SEC  # the 30/60-minute marks run from the signal bar's close
@@ -424,18 +446,19 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
         fav = (b.high - entry) if s > 0 else (entry - b.low)
         adv = (entry - b.low) if s > 0 else (b.high - entry)
         mfe, mae = max(mfe, fav), max(mae, adv)
-        stop_hit = adv >= r
+        # A TOUCH TO THE CENT COUNTS, BY THE RULE AND NOT BY THE FEED'S ROUNDING (`TOUCH_REL`).
+        stop_hit = adv >= r - tol
         if hit1 is None and stopped is None:
             if stop_hit:  # including the bar that also made +1R
                 stopped, hit1, hit2 = True, False, False
-            elif fav >= r:
+            elif fav >= r - tol:
                 hit1, stopped = True, False
-                if fav >= 2 * r:
+                if fav >= 2 * r - tol:
                     hit2 = True
         elif hit1 and hit2 is None:
             if stop_hit:
                 hit2 = False
-            elif fav >= 2 * r:
+            elif fav >= 2 * r - tol:
                 hit2 = True
         if ret30 is None and end >= ref + 1800:
             ret30 = s * (b.close - entry) / r

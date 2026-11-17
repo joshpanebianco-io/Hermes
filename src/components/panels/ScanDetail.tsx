@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { isBool, usePersisted } from "@/lib/usePersisted";
-import type { Catalyst, ScanRow, Side } from "@/types/scanner";
-import { CARD, Glyph, capShort, gapOf } from "@/components/panels/ScanWide";
+import type { Catalyst, NewsRead, ScanRow, Side } from "@/types/scanner";
+import { CARD, Glyph, capShort, gapOf, readWord } from "@/components/panels/ScanWide";
 import { ago, compact, dir, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -375,9 +375,33 @@ function NewsCard({ r, now }: { r: ScanRow; now: number | null }) {
         <span className="flex items-center gap-1.5"><Glyph name="clock" size={11} />News</span>
         <span className="fig normal-case">{r.news.length} in 3d</span>
       </p>
+      {r.news_read && readWord(r.news_read) && <ModelRead read={r.news_read} />}
       {r.catalyst && !inList && <TopStory c={r.catalyst} />}
       {r.news.length === 0 ? <p className="text-[12px] text-ink-3">No headlines found for this name.</p> : <Headlines news={r.news} now={now} top={r.catalyst} />}
     </section>
+  );
+}
+
+/**
+ * WHAT THE MODEL MADE OF THE STORY THE SCORE COUNTED (owner, 2026-11-14: "does it take
+ * into consideration the content of the news not just the heading?"). The score grades a
+ * headline by rule, which says what a story is and not how big; the model reads the
+ * headline, the feed's summary and the report's figures once and says big or ordinary
+ * in a line (server newsread.py). Context only: it earns no points until the record can
+ * show that big stories run further. No colour: how big is not which way.
+ */
+function ModelRead({ read }: { read: NewsRead }) {
+  const size = read.size === "big" ? "Big" : read.size === "ordinary" ? "Ordinary" : "Unclear";
+  return (
+    <div
+      className="mb-3 rounded-[3px] border border-ring-2 p-2.5"
+      title={`A model's read of the story the score counted${read.headline ? `: "${read.headline}"` : ""}. Context only: it earns no points.`}
+    >
+      <span className="qt-cap text-[9.5px] text-ink-2">Model&apos;s read</span>
+      <span className={cn("qt-cap ml-2 rounded-[2px] border px-1 text-[9.5px] leading-[14px]", read.size === "big" ? "border-ring-2 text-ink" : "border-ring text-ink-3")}>{size}</span>
+      <span className="ml-2 text-[10.5px] text-ink-3">context, not scored</span>
+      {read.line && <span className="mt-1 block text-[12.5px] leading-[1.4] text-ink">{read.line}</span>}
+    </div>
   );
 }
 

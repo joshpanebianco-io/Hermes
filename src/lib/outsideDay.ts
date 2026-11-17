@@ -49,3 +49,42 @@ export function outsideDay(last: number | null, lv: OutsideLevels): "up" | "down
 export function throughDay(last: number | null, lv: Pick<OutsideLevels, "pdh" | "pdl">): boolean {
   return last != null && lv.pdh != null && lv.pdl != null && (last > lv.pdh || last < lv.pdl);
 }
+
+/**
+ * Where a print stands against its levels, as one state: a futures contract's Levels
+ * card (owner, 2026-11-15, of the card that printed the distance to the nearest level:
+ * "is there anything mor euseful we can replace day range and nearest levels with?").
+ * The distance is on the chart beside the card; what the card can add is the read the
+ * Stocks chips already give a name, in the same words:
+ *
+ *   outside   through both ranges the same way (`outsideDay`)
+ *   through   beyond the previous day's high or low, and not an outside day
+ *   inside    the whole day so far inside the previous day's range (the Stocks chip
+ *             "Inside Day": "today's range so far inside the previous day's")
+ *   back      between the previous day's levels now, having traded beyond one of them
+ *             earlier in the day: the break did not hold
+ *   between   between them, with the day's own high and low not known, so it cannot be
+ *             said which of the two above it is
+ *
+ * A print sitting on a level is not through it, as in `outsideDay`. `day` is the day's
+ * own range so far (a future's since its 18:00 reopen). Null with no print or no
+ * previous day's range.
+ */
+export type DayState =
+  | { kind: "outside"; dir: "up" | "down" }
+  | { kind: "through"; dir: "up" | "down" }
+  | { kind: "inside" }
+  | { kind: "back"; over: boolean; under: boolean }
+  | { kind: "between" };
+
+export function dayState(last: number | null | undefined, lv: OutsideLevels | null | undefined, day?: { high: number | null; low: number | null } | null): DayState | null {
+  if (last == null || !Number.isFinite(last) || !lv || lv.pdh == null || lv.pdl == null) return null;
+  const out = outsideDay(last, lv);
+  if (out) return { kind: "outside", dir: out };
+  if (last > lv.pdh) return { kind: "through", dir: "up" };
+  if (last < lv.pdl) return { kind: "through", dir: "down" };
+  if (day?.high == null || day.low == null) return { kind: "between" };
+  const over = day.high > lv.pdh;
+  const under = day.low < lv.pdl;
+  return over || under ? { kind: "back", over, under } : { kind: "inside" };
+}

@@ -57,18 +57,23 @@ LADDER = {"dp": 0, "rows": [
 ]}
 
 
-def test_a_view_carries_the_overnight_as_its_forming_range_and_the_ladder_as_lines() -> None:
+def test_a_view_carries_the_pre_market_as_its_forming_range_and_the_ladder_as_lines() -> None:
     start = ts(2026, 11, 8, 18, 0)
     bars = [Bar(start + i * 300, 100, 101, 99, 100 + i % 3, 50) for i in range(200)]
     pre = f.series(bars, "10m", datetime(2026, 11, 9, 8, 0, tzinfo=ET), LADDER, "NQ")
     assert pre["ok"] and pre["tf"] == "10m" and len(pre["bars"]) == 85  # 18:00 to 08:00, ten-minute
-    assert pre["levels"] == {"pdh": 28129.0, "pdl": 27316.0, "pmh": 28109.0, "pml": 28018.0,
-                             "pm_done": False}
+    # THE LEVELS ARE THE BARS' OWN (2026-11-14; they were the ladder's prior session and
+    # its overnight range). No cash session before Monday is in this download, so no
+    # PDH or PDL; the pre-market is 04:00 to 08:00 so far, and forming.
+    assert pre["levels"] == {"pdh": None, "pdl": None, "pmh": 101.0, "pml": 99.0,
+                             "pm_done": False, "pd_from": start,
+                             "pm_from": ts(2026, 11, 9, 4, 0), "day": "2026-11-09"}
+    assert pre["history"] == []
     # The gamma levels alone: the settle and the opening range left the chart 2026-11-14.
     assert {x["label"] for x in pre["lines"]} == {"Put wall 3", "Gamma flip"}
     assert pre["em"] == {"lo": 27613.0, "hi": 28485.0, "label": "EM ±436"}
     assert [s["kind"] for s in pre["sessions"]] == ["pre"]
-    # Once the cash session opens, the overnight is final.
+    # Once the cash session opens, the pre-market is final.
     later = f.series(bars, "10m", datetime(2026, 11, 9, 10, 0, tzinfo=ET), LADDER)
     assert later["levels"]["pm_done"]
     # The 20 and the 50 ride with the wave, one figure a bar; an average with fewer
@@ -97,7 +102,11 @@ def test_vwap_starts_again_at_each_reopen_and_the_first_cut_off_day_is_blank() -
     assert got["vwap"] == g["vwap"]
     # The chart marks each reopen in the download, not the cut-off start.
     assert got["opens"] == [ts(2026, 11, 5, 18, 0), ts(2026, 11, 8, 18, 0)]
-    assert got["levels"]["pdh"] is None and got["lines"] == [] and got["em"] is None
+    # Thursday's is the last cash session in the download: Monday's PDH, drawn from
+    # Monday's first bar, the Sunday reopen.
+    assert got["levels"]["pdh"] == 70.0 and got["levels"]["day"] == "2026-11-09"
+    assert got["levels"]["pd_from"] == ts(2026, 11, 8, 18, 0)
+    assert got["lines"] == [] and got["em"] is None
 
 
 def test_the_bands_are_the_volume_weighted_deviation() -> None:

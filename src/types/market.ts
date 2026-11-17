@@ -42,8 +42,10 @@ export interface ScoreFamily {
 
 export interface Conviction {
   bias: Side | null;
-  /** -100 to +100 across the reads that can vote. A plan stored before 2026-11-05 has none. */
+  /** -100 to +100 over the whole of the session's weight (bias.py, 2026-11-15). A plan stored before 2026-11-05 has none. */
   score?: number;
+  /** "whole" on a read scored by that rule; a plan stored before it was scored over the live weight alone (lib/biasScale wholeScore). */
+  basis?: "whole";
   coverage?: number;
   weight_label?: string;
   families?: ScoreFamily[];
@@ -56,7 +58,7 @@ export interface Conviction {
   grade: "strong" | "moderate" | "weak" | "none";
   /** The highest conviction a plan may carry on this tape. */
   max_conviction: 1 | 2 | 3 | 4 | 5;
-  /** A lean with under half the session's weight able to vote: weak at most, and printed with its count. */
+  /** A lean with under half the session's weight able to vote: its grade is weak at most. No page draws it since 2026-11-15: the score says it. */
   thin?: boolean;
   votes: Vote[];
 }

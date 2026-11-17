@@ -89,11 +89,35 @@ def _beat_spy(rows: list[dict[str, Any]], n: int) -> list[dict[str, Any]]:
             for r in out[:n]]
 
 
+def pre_market_rows(rows: list[dict[str, Any]], ext: dict[str, dict[str, Any]],
+                    day: str) -> list[dict[str, Any]]:
+    """The funds as they trade before the bell (2026-11-16): each row's day is its
+    pre-market move against the last close (quotes.collect_extended) and its distance
+    from SPY's; a fund with no trade yet this morning has neither. The owner, of the
+    Sectors cards holding Friday's moves at 07:00 on a Monday: "make the app update as
+    to what they're actually doing". Pure."""
+    def pre(key: Any) -> float | None:
+        x = ext.get(str(key))
+        return float(x["pct"]) if x and x.get("kind") == "pre" and x.get("day") == day else None
+
+    base = pre("SPY")
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        p = pre(r.get("key"))
+        out.append({**r, "day_pct": p,
+                    "rs_day": (p - base) if p is not None and base is not None else None})
+    return out
+
+
 def _leaders_clause(focus: list[dict[str, Any]], themes: list[dict[str, Any]], session: str,
-                    day: date) -> str:
+                    day: date, pre: bool = False) -> str:
     """"Technology and Bitcoin Miners led Friday." Pure."""
     when = day.strftime("%A")
     names = [x["label"] for x in (focus[:1] + themes[:1])]
+    if pre:
+        if not names:
+            return "Nothing is ahead of SPY in the pre-market"
+        return f"{' and '.join(names)} {'leads' if len(names) == 1 else 'lead'} the pre-market"
     if not names:
         return f"Nothing beat SPY {'today' if session in ('rth', 'post') else when}"
     who = " and ".join(names)
@@ -103,14 +127,14 @@ def _leaders_clause(focus: list[dict[str, Any]], themes: list[dict[str, Any]], s
 
 
 def read_lines(regime: dict[str, Any], focus: list[dict[str, Any]], themes: list[dict[str, Any]],
-               breadth: dict[str, Any], session: str, day: date) -> list[str]:
+               breadth: dict[str, Any], session: str, day: date, pre: bool = False) -> list[str]:
     """The card's two sentences. Pure."""
     conv = _d(regime.get("conviction"))
     side = conv.get("bias") if conv else regime.get("bias")
     vix = _d(regime.get("vix"))
     weather, caution = weather_words(_num(vix.get("last")), regime.get("band"), vix.get("shape"))
     first = f"{lean_words(side)}{', but' if caution and side else ';'} {weather}."
-    second = f"{_leaders_clause(focus, themes, session, day)}."
+    second = f"{_leaders_clause(focus, themes, session, day, pre)}."
     adv, dec = breadth.get("advancers"), breadth.get("decliners")
     if isinstance(adv, int) and isinstance(dec, int):
         word = breadth_word(adv, dec)
@@ -184,15 +208,24 @@ def in_play(ranked: list[dict[str, Any]], view: dict[str, Any], *,
 
 def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: dict[str, Any],
           stories: list[dict[str, Any]], *, session_day: date,
-          inplay: dict[str, Any] | None = None) -> dict[str, Any]:
+          inplay: dict[str, Any] | None = None,
+          pre_day: str | None = None) -> dict[str, Any]:
     """The page. `session_day` is the session the cards' moves are about
     (universe.cards_day), which before the open is the last one; `inplay` is
-    `in_play`'s card, None when the pool has not been read."""
+    `in_play`'s card, None when the pool has not been read. `pre_day` is today's date
+    while the funds are trading before the bell (universe.cards_phase "pre"): the focus
+    lists, the rotation row and the read's leaders clause are then the pre-market's
+    (`pre_market_rows`), as the Sectors cards are."""
     rows = [r for r in _list(scan.get("rows")) if r.get("ok")]
     regime = _d(scan.get("regime"))
     session = str(scan.get("session") or "closed")
     trading_day = str(scan.get("trading_day") or "")
     sectors, themes = _list(snap.get("sectors")), _list(snap.get("themes"))
+    pre = pre_day is not None
+    if pre:
+        ext = _d(snap.get("sector_ext"))
+        sectors = pre_market_rows(sectors, ext, str(pre_day))
+        themes = pre_market_rows(themes, ext, str(pre_day))
     wide = _d(snap.get("breadth_all"))
     leaders = _d(wide.get("leaders"))
     focus = _beat_spy(sectors, FOCUS)
@@ -210,7 +243,7 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
         "trading_day": trading_day,
         "read": {
             "title": _TITLE.get(session, "Market closed"),
-            "lines": read_lines(regime, focus, hot, wide, session, session_day),
+            "lines": read_lines(regime, focus, hot, wide, session, session_day, pre),
             "foot": f"{len(scored)} active setups · {moving} names moving {MOVING_PCT:.0f}%+",
             "reports": _reports(_list(snap.get("earnings")), trading_day),
         },
@@ -246,4 +279,7 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
         "stories": stories,
         "news_live": bool(status.get("ok")),
         "rotation": _rotation(sectors, leaders),
+        # What the focus lists and the rotation row are moves of: the pre-market's
+        # before the bell, else the session's (the last one before the open).
+        "sectors_basis": "pre" if pre else "session",
     }

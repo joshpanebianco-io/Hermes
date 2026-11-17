@@ -712,6 +712,9 @@ class Tech:
     atr_d: float | None = None
     atr_b: float | None = None
     mv_day: float | None = None
+    #: The move the side's lean reads: `mv_day`, or overnight the last session and
+    #: after hours together (see where it is set).
+    mv_lean: float | None = None
     mv_roll: float | None = None
     pdh: float | None = None
     pdl: float | None = None
@@ -1046,6 +1049,19 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     tech.atr_d = daily_atr(dl[-DAILY_ATR_SESSIONS:]) if dl else None
     if tech.atr_d and pdc is not None:
         tech.mv_day = (last - pdc) / tech.atr_d
+    # THE MOVE A LEAN READS (lean_of): the day's, except overnight. From 20:00 to 04:00
+    # and on a closed day the trading day has rolled, so `pdc` is the session just ended
+    # and `mv_day` is the after-hours drift alone: META, the weekend of 14 Nov 2026, up
+    # 2.9% on Friday and 0.2 ATR lower after hours with the whole market, read short.
+    # Until the pre-market trades the lean reads the last session and after hours
+    # together, from the close before. Over ten nights (884 names inside the session's
+    # range at 21:00) nothing said which side the levels had a name on by 10:05 the next
+    # morning: after hours alone 50%, the two together 52%, the old RS lean 44%. So this
+    # is chosen to read as the row does, not for an edge; the gap takes over at 04:00,
+    # as it does on the Scanner's own lists (scratchpad side_overnight.py).
+    tech.mv_lean = tech.mv_day
+    if tech.atr_d and ppdc and clock.session == "closed" and not rth:
+        tech.mv_lean = (last - ppdc) / tech.atr_d
 
     # ---- levels against price ------------------------------------------------
     pmh_live = tech.pmh if tech.pm_done else None
@@ -1129,33 +1145,30 @@ def _empty_chart(tf: str, error: str) -> dict[str, Any]:
             "history": [], "sessions": [], "signals": []}
 
 
+def _at(d: date, minute: int) -> int:
+    """Epoch seconds of `minute` past midnight on `d`, New York time."""
+    return int(datetime(d.year, d.month, d.day, tzinfo=ET).timestamp()) + minute * 60
+
+
 def _levels_out(tech: Tech) -> dict[str, Any]:
+    """The trading day's four levels with no start: the daily view's, lines across the
+    days. An intraday view's come from `chart_levels`."""
     return {"pdh": _r(tech.pdh), "pdl": _r(tech.pdl), "pmh": _r(tech.pmh),
-            "pml": _r(tech.pml), "pm_done": tech.pm_done}
+            "pml": _r(tech.pml), "pm_done": tech.pm_done,
+            "pd_from": None, "pm_from": None, "day": None}
 
 
-def history_levels(bars5: list[Bar], trading_day: date, since: int,
-                   daily: list[DayBar] | None = None, daily_asof: float | None = None,
-                   today_cal: date | None = None) -> list[dict[str, Any]]:
-    """Each EARLIER session's four levels, over that session's regular hours —
-    the Pine script's "keep previous days' levels". Pure.
-
-    WHY (owner, 2026-10-14: "ensure that the chart in the scanner includes the
-    pre market highs and lows"). The chart drew only the trading day's four,
-    and the trading day's PMH / PML do not exist until 04:00 — so overnight,
-    when a plan is read, the chart showed yesterday's session and none of the
-    levels it traded against. Each earlier day in view now carries its own
-    PMH / PML (its 04:00–09:30 high and low) and PDH / PDL (the session before
-    it), drawn across that day's 09:30 to its close.
-
-    `since` is the first bar the chart ships; days before it are not drawn.
+def day_sets(bars5: list[Bar], daily: list[DayBar] | None = None,
+             daily_asof: float | None = None,
+             today_cal: date | None = None) -> dict[date, dict[str, float]]:
+    """Every day's four levels off the bars, {day: {"PDH", "PDL", "PMH", "PML"}}: its
+    PMH / PML are its own 04:00–09:30 high and low, its PDH / PDL the regular session
+    before it in the bars. A day with neither behind it has an empty set. Pure.
 
     `daily` widens each PDH / PDL to the official day's, by the rule the row's own
     levels go by (`technicals`), so an earlier day's lines sit where that day's
-    scanner had them. `today_cal` is the calendar date the copy is read on.
-    """
+    scanner had them. `today_cal` is the calendar date the copy is read on."""
     rows = {d.day: d for d in daily or []}
-    cal = today_cal or trading_day
     days: dict[date, dict[str, list[float]]] = {}
     for b in bars5:
         dt = datetime.fromtimestamp(b.t, ET)
@@ -1163,29 +1176,87 @@ def history_levels(bars5: list[Bar], trading_day: date, since: int,
         if kind in ("pre", "rth"):
             slot = days.setdefault(dt.date(), {"pre": [], "rth": []})
             slot[kind].extend((b.high, b.low))
-    order = sorted(d for d in days if days[d]["rth"])
+    out: dict[date, dict[str, float]] = {}
+    prior: date | None = None   # the latest earlier day with a regular session
+    for d in sorted(days):
+        found: dict[str, float] = {}
+        if prior is not None:
+            done = daily_row(rows, prior, daily_asof, today_cal or d)
+            rth = days[prior]["rth"]
+            found["PDH"], found["PDL"] = ((done.high, done.low) if done is not None
+                                          else (max(rth), min(rth)))
+        if days[d]["pre"]:
+            found["PMH"], found["PML"] = max(days[d]["pre"]), min(days[d]["pre"])
+        out[d] = found
+        if days[d]["rth"]:
+            prior = d
+    return out
+
+
+def history_levels(bars5: list[Bar], before: date, since: int,
+                   daily: list[DayBar] | None = None, daily_asof: float | None = None,
+                   today_cal: date | None = None) -> list[dict[str, Any]]:
+    """Each day's four levels for the days BEFORE `before`, over that day's own bars —
+    the Pine script's "keep previous days' levels". Pure.
+
+    WHY (owner, 2026-10-14: "ensure that the chart in the scanner includes the
+    pre market highs and lows"): each earlier day in view carries its own PMH / PML
+    (its 04:00–09:30 high and low) and PDH / PDL (the session before it).
+
+    AS THE PINE DRAWS THEM (2026-11-14, `chart_levels`): a day's lines start at its
+    first bar, 04:00, and run to its last, the end of its after-hours, with no name on
+    them; only the last day's are named. They ran 09:30 to 16:00.
+
+    `since` is the first bar the chart ships; days that end before it are not drawn.
+    """
     out: list[dict[str, Any]] = []
-    for i, d in enumerate(order):
-        if d >= trading_day:
+    for d, found in day_sets(bars5, daily, daily_asof, today_cal or before).items():
+        if d >= before:
             continue
-        t0 = int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
-        t1 = t0 + (rth_end(d) - RTH_START) * 60
+        t0, t1 = _at(d, PM_START), _at(d, post_end(d))
         if t1 <= since:
             continue
-        pre = days[d]["pre"]
-        prior = days[order[i - 1]]["rth"] if i > 0 else []
-        found: dict[str, float] = {}
-        if prior:
-            done = daily_row(rows, order[i - 1], daily_asof, cal)
-            found["PDH"], found["PDL"] = ((done.high, done.low) if done is not None
-                                          else (max(prior), min(prior)))
-        if pre:
-            found["PMH"], found["PML"] = max(pre), min(pre)
-        for key in ("PDH", "PDL", "PMH", "PML"):
-            if key in found:
-                out.append({"key": key, "v": _r(found[key]), "from": t0, "to": t1,
-                            "day": d.isoformat()})
+        out += [{"key": key, "v": _r(found[key]), "from": t0, "to": t1, "day": d.isoformat()}
+                for key in ("PDH", "PDL", "PMH", "PML") if key in found]
     return out
+
+
+def chart_levels(bars5: list[Bar], last_t: int, tech: Tech, trading_day: date, since: int,
+                 daily: list[DayBar] | None = None, daily_asof: float | None = None,
+                 today_cal: date | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """(the chart's own four levels, the earlier days') as the owner's Pine script draws
+    them on the same bars. Pure.
+
+    THE NAMED LEVELS ARE THE LAST DAY'S ON THE CHART, AND THERE IS ONE SET (owner,
+    2026-11-14: "i think there is a bug with the pdh/l and pmh/l levels on the stocks
+    charts", then, of the first fix, "you now have double ups of the levels"). The
+    script starts a day's lines at that day's first bar and names the lines of the day
+    the last bar is in; a day with no bar yet has none. This chart drew the TRADING
+    day's, and the trading day rolls at 20:00: all weekend, and every night, it showed
+    Friday's candles under Monday's levels, so "PDH" and "PDL" sat on Friday's own high
+    and low and there was no PMH or PML at all, where TradingView had Thursday's range
+    and Friday's pre-market. The first fix kept both sets on the chart, each named.
+
+    So: once the trading day has a bar (from 04:00) the levels are the row's own, the
+    pre-market range forming until 09:30. Until then they are the last session's: its
+    PDH / PDL (the session before it) and its PMH / PML, as it traded against them.
+    `pd_from` and `pm_from` are that day's 04:00, where the chart starts each line (it
+    runs them on to its right edge); `day` is whose they are. The row beside the chart
+    still plans the next session against the trading day's levels (scan.setup_of).
+
+    `last_t` is the open of the last bar shown; `since` the first."""
+    last_day = datetime.fromtimestamp(last_t, ET).date()
+    if last_day >= trading_day:
+        day = trading_day
+        levels = _levels_out(tech)
+    else:
+        day = last_day
+        found = day_sets([b for b in bars5 if b.t <= last_t], daily, daily_asof,
+                         today_cal or trading_day).get(day, {})
+        levels = {"pdh": _r(found.get("PDH")), "pdl": _r(found.get("PDL")),
+                  "pmh": _r(found.get("PMH")), "pml": _r(found.get("PML")), "pm_done": True}
+    levels.update(pd_from=_at(day, PM_START), pm_from=_at(day, PM_START), day=day.isoformat())
+    return levels, history_levels(bars5, day, since, daily, daily_asof, today_cal or trading_day)
 
 
 def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
@@ -1226,12 +1297,15 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
     e200 = ema(closes, structure.EMA_LEN) if len(closes) >= structure.EMA_LEN else []
     extra = _chart_emas(closes)
 
-    # From the previous session's 09:30 (the PDH/PDL day) — or the start of the
-    # download if that day is not in it — and never more than CHART_MAX bars.
+    # From the previous session's 04:00 (the PDH/PDL day) — or the start of the
+    # download if that day is not in it — and never more than CHART_MAX bars. FROM ITS
+    # PRE-MARKET, NOT ITS 09:30 (2026-11-14): that day's PMH and PML are drawn on the
+    # chart, and the candles that made them were not: a PMH sat above every bar shown
+    # (NVDA, Fri 13 Nov: 171.48 over a session whose high was 170.00). The Pine's chart
+    # has extended hours on for the same reason.
     start = 0
     if tech.pdh_day is not None:
-        d = tech.pdh_day
-        t0 = int(datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET).timestamp())
+        t0 = _at(tech.pdh_day, PM_START)
         start = next((i for i, b in enumerate(bars) if b.t >= t0), 0)
     start = max(start, len(bars) - CHART_MAX)
 
@@ -1286,6 +1360,9 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         # the bar the ten-minute signal falls inside.
         return (t + BAR_SEC - 1) // step * step if step < BAR_SEC else t - t % step
 
+    levels, history = chart_levels(bars5, bars[-1].t, tech, td, bars[start].t, daily,
+                                   daily_asof, clock.now.astimezone(ET).date())
+
     return {
         "ok": True,
         "tf": tf,
@@ -1296,9 +1373,8 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         "ema200": cut(e200),
         "vwap": vwap,
         "vwap_sd": vwap_sd,
-        "levels": _levels_out(tech),
-        "history": history_levels(bars5, td, bars[start].t, daily, daily_asof,
-                                  clock.now.astimezone(ET).date()),
+        "levels": levels,
+        "history": history,
         "sessions": sessions,
         "signals": [{"t": at(x["t"]), "kind": x["kind"], "side": x["side"], "price": x["price"]}
                     for x in tech.signals if x.get("t") is not None],
@@ -1397,16 +1473,78 @@ def _pairs(c: float | None, pdh: float | None, pdl: float | None, pmh: float | N
 # ------------------------------------------------------------------- the setup
 
 
-def side_of(lvl_state: int, rs: float | None) -> str | None:
-    """Long above a level, short below one; inside, the side relative strength
-    leans to — and no side at all when it barely leans. Pure."""
+# A NAME NO LEVEL HAS DECIDED LEANS TO THE NEARER TRIGGER, NOT TO RELATIVE STRENGTH
+# (owner, 2026-11-15, of an audit of the sides: "do what you recommend"). Until then an
+# inside name took the side RS against SPY leaned to. Over the eleven sessions in the
+# cache (30 Oct to 13 Nov, about a hundred names a session, 2,103 inside reads):
+#   - a name inside its levels has barely moved, so SPY's own move decided the lean:
+#     with SPY 0.25 ATR or more from its close, 91% of the leans pointed against it;
+#   - of the reads where a trigger then went on a five-minute close, the lean had named
+#     it 50.5% of the time (45.5% in the first half hour). The nearer trigger named it
+#     77%, and 81% leaving out the middle fifth, on all eleven days, longs and shorts
+#     alike; where the two disagreed the lean was right one time in five;
+#   - 181 leans were filed away from a level the name was 90% of the way to (so the row
+#     read "chop"), and that level went first on 135 of them;
+#   - before the bell the lean was right 48% of the time about the side the levels had
+#     put the name on by 10:05, the name's own gap 60%.
+# No way of leaning said where a name closed. The lean's job is which break to watch.
+# So: in the session, the nearer of the two triggers (the lowest high above price, the
+# highest low under it), and no side in the middle fifth between them; before the bell
+# and overnight, where the pre-market pair is not set, the name's own move from the
+# previous close, the lean the Scanner's lists already give a name the engine does not
+# track. The scratchpad's side_candidates.py prints every figure above.
+LEAN_MID = 0.20  # the middle of the gap between the two triggers, as a share of it: no side
+LEAN_MIN = 0.10  # daily ATRs of the name's own move; scanscore.GAP_MIN, kept equal by a test
+
+
+def lean_of(last: float | None, pdh: float | None, pdl: float | None, pmh: float | None,
+            pml: float | None, own: float | None, in_session: bool) -> str | None:
+    """The side of a name no level has decided, or None. Pure.
+
+    `pmh` / `pml` must already be None until the pre-market is done, as for
+    `lvl_state_of`; `own` is the name's move in its daily ATRs (Tech.mv_lean: the day's
+    move, and overnight the last session and after hours together); `in_session` is
+    whether the regular session has begun today (Tech.rth_today).
+
+    IN THE SESSION, INSIDE ALL ITS LEVELS: the nearer trigger. A name 0.3 under PDH
+    and 3.7 over PML leans long; one in the middle fifth of the gap has no side.
+
+    OTHERWISE THE NAME'S OWN MOVE, 0.1 ATR OR MORE: before the bell and overnight;
+    with a level missing; and for a name above one high and below one low. That last
+    is always the previous day's level one way and the pre-market's the other (above
+    PDH and under PML, or under PDL and over PMH), and a name past the previous day's
+    level is up or down on the day with it, so the previous day's level decides.
+    """
+    if last is None:
+        return None
+    highs = [x for x in (pdh, pmh) if x is not None]
+    lows = [x for x in (pdl, pml) if x is not None]
+    inside = (bool(highs) and bool(lows) and all(last <= x for x in highs)
+              and all(last >= x for x in lows))
+    if in_session and inside:
+        up, down = min(highs) - last, last - max(lows)
+        gap = up + down
+        if gap <= 0:
+            return None
+        pos = down / gap  # 0 on the low trigger, 1 on the high one
+        if abs(pos - 0.5) * 2.0 < LEAN_MID:
+            return None
+        return "long" if pos > 0.5 else "short"
+    if own is None or abs(own) < LEAN_MIN:
+        return None
+    return "long" if own > 0 else "short"
+
+
+def side_of(lvl_state: int, last: float | None, pdh: float | None, pdl: float | None,
+            pmh: float | None, pml: float | None, own: float | None,
+            in_session: bool) -> str | None:
+    """Long above a level, short below one; otherwise the lean (`lean_of`), which is no
+    side at all when the name sits in the middle or has not moved. Pure."""
     if lvl_state > 0:
         return "long"
     if lvl_state < 0:
         return "short"
-    if rs is None or abs(rs) < 0.1:
-        return None
-    return "long" if rs > 0 else "short"
+    return lean_of(last, pdh, pdl, pmh, pml, own, in_session)
 
 
 def setup_of(t: Tech, side: str | None, clock: Clock) -> dict[str, Any]:
@@ -1434,7 +1572,7 @@ def setup_of(t: Tech, side: str | None, clock: Clock) -> dict[str, Any]:
     if not t.rth_today:
         out["state"] = "forming"
         if side is None:
-            out["note"] = "Inside yesterday's range with no relative-strength lean — no plan yet"
+            out["note"] = "Inside yesterday's range and flat — no plan yet"
             return out
         cands = long_lv if side == "long" else short_lv
         pm_word = "forming" if not t.pm_done else ""
@@ -1585,7 +1723,10 @@ def row_of(sym: str, t: Tech, spy: Tech | None, qqq: Tech | None,
     Score, flags, earnings, news and filings are joined on read. Pure."""
     rs_spy, rs1_spy = rs_pair(t, spy)
     rs_qqq, rs1_qqq = rs_pair(t, qqq)
-    side = side_of(t.lvl_state, rs_spy)
+    # The pre-market pair counts once it is set, as it does for the level state.
+    side = side_of(t.lvl_state, t.last, t.pdh, t.pdl, t.pmh if t.pm_done else None,
+                   t.pml if t.pm_done else None,
+                   t.mv_lean if t.mv_lean is not None else t.mv_day, t.rth_today)
     setup = setup_of(t, side, clock) if t.ok else {
         "side": None, "state": "chop", "level": None, "entry": None, "note": t.error or ""}
     return {

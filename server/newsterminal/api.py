@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import RequestResponseEndpoint
 
 from . import ask as ask_mod
-from . import config, jobs, optcalc
+from . import config, jobs, newsread, optcalc
 from . import overview as overview_mod
 from . import report as report_mod
 from . import stockplan as plan_mod
@@ -45,6 +45,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     COLLECTOR.start()
     stop = threading.Event()
     threading.Thread(target=_overview_clock, args=(stop,), name="overview-0900",
+                     daemon=True).start()
+    threading.Thread(target=_newsread_clock, args=(stop,), name="news-read",
                      daemon=True).start()
     try:
         yield
@@ -293,7 +295,7 @@ def report_delete_many(
 def report_generate(
     label: str = Query("manual", max_length=40),
     session: str = Query("auto", pattern="^(auto|asia|london|ny)$"),
-    asset: str = Query("all", pattern="^(all|NQ|ES|GC)$"),
+    asset: str = Query("indexes", pattern="^(indexes|GC|SIL|CL|all|NQ|ES|etfs)$"),
 ) -> dict[str, Any]:
     """Start writing a report against the collector's current snapshot and
     answer at once with the job; the page polls `/api/report/job/{id}` for the
@@ -305,10 +307,20 @@ def report_generate(
     always means. The snapshot is taken HERE, on the request, so the note
     describes the terminal as it stood when Generate was pressed.
     """
+    job = _start_report(datetime.now(UTC), session, asset, label)
+    return {**_report_feed(), "job": job}
+
+
+def _start_report(now: datetime, session: str, asset: str, label: str) -> dict[str, Any]:
+    """Start writing a report on the job runner (the button's and the 09:00 clock's), or
+    hand back the one already being written."""
     snap = COLLECTOR.snapshot()
-    now = datetime.now(UTC)
-    sess = report_mod.resolve_session(snap.get("clock") or {}, session)
     book = report_mod.resolve_asset(asset)
+    # The Stocks report (SPY, QQQ, IWM) is New York's alone, and reads the scanner's
+    # tape and the funds' levels, taken here with the snapshot (report._etf_facts).
+    etfs = book == report_mod.ETF_ASSET
+    sess = "ny" if etfs else report_mod.resolve_session(snap.get("clock") or {}, session)
+    scan = COLLECTOR.scanner_payload() if etfs else None
     # What the page may show while it waits, and what a crash envelope is
     # captioned with (jobs.Runner): the same fields the note itself carries.
     meta = {
@@ -317,11 +329,12 @@ def report_generate(
         "asset": book, "asset_label": report_mod.ASSETS[book]["label"],
         "et_label": now.astimezone(report_mod.ET).strftime("%a %d %b, %H:%M ET"),
     }
-    job = _REPORTS.start(
+    job: dict[str, Any] = _REPORTS.start(
         report_mod.note_id(now), meta,
-        lambda: report_mod.generate(snap, label=label, session=session, asset=asset, now=now),
+        lambda: report_mod.generate(snap, label=label, session=session, asset=asset, now=now,
+                                    scan=scan),
     )
-    return {**_report_feed(), "job": job}
+    return job
 
 
 @app.get("/api/ranges")
@@ -476,9 +489,11 @@ def scanner_sectors() -> dict[str, Any]:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict[str, Any]:
-    """The Dashboard tab, whole, with the latest market overview's card (overview.py),
-    which took the In play card's place on 2026-11-13."""
-    return {**COLLECTOR.dashboard(), "overview": overview_mod.latest_card()}
+    """The Dashboard tab, whole, with the latest Stocks report's card (report.latest_card),
+    which took the market overview card's place on 2026-11-16. The overview's card is still
+    served, for an older page."""
+    return {**COLLECTOR.dashboard(), "report": report_mod.latest_card(),
+            "overview": overview_mod.latest_card()}
 
 
 @app.get("/api/scanner/extended")
@@ -725,23 +740,78 @@ def plan_generate(top: int = Query(plan_mod.TOP_DEFAULT, ge=plan_mod.TOP_MIN,
 _AUTO_TRIED: list[datetime] = []
 
 
+#: Not within this long of the collector's start: a report written on a half-filled
+#: snapshot carries its gaps (2026-11-14, one written ten seconds after a restart).
+AUTO_SETTLE_SEC = 180.0
+
+
 def _overview_clock(stop: threading.Event) -> None:
-    """Write the market overview by itself at 09:00 ET on a trading day. Waits for
-    the scanner to hold rows after a restart, and never starts while a press of
-    the button is already writing one. Never fatal."""
+    """Write the STOCKS REPORT by itself at 09:00 ET on a trading day (report.auto_due):
+    SPY, QQQ and IWM for New York, what the Dashboard's Market report card shows. It
+    wrote the market overview until 2026-11-16, when the owner had the overview card
+    replaced ("do waht you recommend best"); the overview is still written on its button
+    (`/api/plan`). Waits for the scanner to hold rows and the collector to have run three
+    minutes, and never starts while a report is already being written. Never fatal."""
     while not stop.wait(20.0):
         try:
             now = datetime.now(UTC)
-            if not overview_mod.auto_due(now, plan_mod.history(5), _AUTO_TRIED):
+            if not report_mod.auto_due(now, report_mod.history(10), _AUTO_TRIED):
                 continue
-            if _PLANS.running() is not None:
+            if _REPORTS.running() is not None:
+                continue
+            started = datetime.fromisoformat(COLLECTOR.started_utc)
+            if (now - started).total_seconds() < AUTO_SETTLE_SEC:
                 continue
             rows = COLLECTOR.scanner_payload().get("rows") or []
             if not any(isinstance(r, dict) and r.get("ok") for r in rows):
                 continue
             _AUTO_TRIED.append(now)
-            _start_overview(now, auto=True)
-            print(f"overview: the 09:00 write started at {now:%H:%M:%S} UTC", flush=True)
+            _start_report(now, "ny", report_mod.ETF_ASSET, "auto")
+            print(f"report: the 09:00 Stocks report started at {now:%H:%M:%S} UTC", flush=True)
         except Exception as e:  # noqa: BLE001 — a clock must not die on one bad tick
             with contextlib.suppress(Exception):
-                print(f"overview: the 09:00 clock skipped a tick: {e!r}", flush=True)
+                print(f"report: the 09:00 clock skipped a tick: {e!r}", flush=True)
+
+
+def _newsread_clock(stop: threading.Event) -> None:
+    """Have the model read the list's major stories it has not read yet (newsread.py):
+    a few at a time, a request every five minutes at most, a capped number a day, and
+    never while a brief or an overview is being written on the same key. The read is
+    context on the row and in the signal log; a failure is a missing line. Never fatal."""
+    while not stop.wait(45.0):
+        try:
+            key = report_mod._key()
+            store = COLLECTOR.newsread
+            now = datetime.now(UTC).timestamp()
+            if not key or not store.due(now):
+                continue
+            if _REPORTS.running() is not None or _PLANS.running() is not None:
+                continue
+            rows = COLLECTOR.scanner_payload().get("rows") or []
+            summaries = COLLECTOR.story_summaries()
+
+            def summary_of(title: str, held: dict[str, str] = summaries) -> str | None:
+                return held.get(newsread.norm(title))
+
+            todo = store.pending(newsread.candidates(rows, summary_of), now)
+            if not todo:
+                continue
+            store.asked(todo, now)
+            got, attempts = newsread.ask(todo, key)
+            store.put(got, todo, datetime.now(UTC).timestamp(), attempts)
+            if config.TICK_LOG:
+                last = attempts[-1] if attempts else {}
+                print(f"news read: {len(got)} of {len(todo)} stories read"
+                      f" ({last.get('model', 'no model')}, {last.get('sec', '?')}s"
+                      f"{', ' + str(last['error']) if last.get('error') else ''})", flush=True)
+        except Exception as e:  # noqa: BLE001 — a clock must not die on one bad tick
+            with contextlib.suppress(Exception):
+                print(f"news read: the clock skipped a tick: {e!r}", flush=True)
+
+
+@app.get("/api/scanner/news-reads")
+def scanner_news_reads() -> dict[str, Any]:
+    """How the model's reads of the list's major stories stand: how many are kept, the
+    day's requests against the cap, and what the last request's attempts said."""
+    return {"enabled": bool(report_mod._key()),
+            **COLLECTOR.newsread.health(datetime.now(UTC).timestamp())}

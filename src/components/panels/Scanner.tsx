@@ -7,24 +7,23 @@ import { useSide } from "@/components/state/UiMode";
 import { ScanBreakouts } from "@/components/panels/ScanBreakouts";
 import { ScanExtended } from "@/components/panels/ScanExtended";
 import { ScanDay23 } from "@/components/panels/ScanDay23";
-import { Choice, Chips, Glyph, Menu, Showing, StatCard, capWord, gapOf, isNum, isStr } from "@/components/panels/ScanWide";
+import { BiasStat, Choice, Chips, Glyph, Menu, STAT_BOX, Showing, StatCard, capWord, gapOf, isNum, isStr } from "@/components/panels/ScanWide";
 import { ScanTable, sortValue, type ColSet, type SortKey } from "@/components/panels/ScanTable";
 import { ChartControls, useChartPrefs } from "@/components/panels/ScanChart";
 import { ScanMulti } from "@/components/panels/ScanMulti";
-import { liveLine, scoreText } from "@/lib/bias";
-import { inMin, num, pct } from "@/lib/format";
+import { liveLine } from "@/lib/bias";
+import { wholeScore } from "@/lib/biasScale";
+import { inMin, pct } from "@/lib/format";
 import { CHART_SLOTS, NO_HELD, TOP_N, isHeldSlots, topScores, type HeldSlots } from "@/lib/multiChart";
 import { OUTSIDE_DAY_TITLE, outsideDay } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
 import { cn } from "@/lib/cn";
 import { oneOf, persist, usePersisted } from "@/lib/usePersisted";
 import { setAskFocus } from "@/lib/ask/open";
-import { openSearch, openTicker, useTicker } from "@/lib/ticker";
+import { BENCHMARKS, openSearch, openTicker, useTicker } from "@/lib/ticker";
 import { stripViews, type ScanView } from "@/lib/tabs";
 import { useLegacyViews } from "@/lib/legacyViews";
 import type { PhaseKey, TodayPayload, TodayPhase } from "@/types/today";
-import { BAND_LABEL, bandChip, curveOverride } from "@/lib/vix";
-import { VixPopover } from "@/components/vol/VixBands";
 import { etDay, useNextPrint } from "@/lib/nextPrint";
 import type { CalendarRow } from "@/types/terminal";
 import { usePinsChanged } from "@/lib/usePinsChanged";
@@ -45,10 +44,18 @@ import { usePinsChanged } from "@/lib/usePinsChanged";
  * (RS), and where is the entry right now (the setup column).
  *
  * THE RANK IS A HEURISTIC, AND SAYS SO. The score is a sum of named parts —
- * structure, relative strength, entry location, volume (before the bell, how
+ * structure, relative strength, whether there is an entry, volume (before the bell, how
  * far the name is in play: gap, pre-market volume, catalyst), the market — each one
  * listed in the detail pane with the points it earned. It orders the list; it
  * is not a measured probability, and nothing on this page calls it one.
+ *
+ * WHAT THE LIST IS FOR IS STOCKS THAT TREND (owner, 2026-11-14), and the engine is
+ * judged on +2R reached and R held, not +1R. Since that day a story earns its grade
+ * whichever side the setup is on (news is fuel, the price picks the side; a headline
+ * that reads against the side is a flag here, not minus points) and RS is 10 of the
+ * score, not 20. Two things ride on a row as context and earn nothing: the previous
+ * session's major story (a flag) and a model's read of how big today's story is (a
+ * "Big" chip beside the story and a line in the slide-out's News card).
  *
  * VIX IS THE WEATHER, NOT A SIGNAL. It sits in the strip above the table and
  * reaches each score only through the tape's bias (SPY / QQQ against their own
@@ -81,6 +88,11 @@ const PRESET: Record<SideFilter, (r: ScanRow, ctx: PresetCtx) => boolean> = {
   long: (r) => r.score.side === "long",
   short: (r) => r.score.side === "short",
   mag7: (r) => MAG7.has(r.sym),
+  // The three index funds (owner, 2026-11-14: "can we add a filter in the pill for
+  // Index"). A set of names, as MAG7 is: SPY, QQQ and IWM are always on the list
+  // (lib/ticker BENCHMARKS), ranked among forty stocks, and this is the three alone
+  // with their levels and scores, which the Index view showed until it went.
+  index: (r) => BENCHMARKS.has(r.sym),
   pinned: (r, c) => c.pinned.has(r.sym),
   news: (r) => r.catalyst != null,
   gaps: (r) => Math.abs(gapOf(r) ?? 0) >= 2,
@@ -115,10 +127,11 @@ const PRESET_NAME: ReadonlyArray<{ key: SideFilter; label: string; title?: strin
   { key: "long", label: "Long" },
   { key: "short", label: "Short" },
   { key: "mag7", label: "MAG7", title: "The Magnificent Seven: Apple, Microsoft, Alphabet, Amazon, Nvidia, Meta, Tesla" },
-  { key: "news", label: "Has news", title: "A story about this name in the last thirty hours" },
+  { key: "index", label: "Index", title: "The index funds: SPY (S&P 500), QQQ (Nasdaq 100) and IWM (Russell 2000)" },
+  { key: "news", label: "Has News", title: "A story about this name in the last thirty hours" },
   { key: "gaps", label: "Gaps", title: "Opened, or is trading pre-market, 2% or more from the previous close" },
-  { key: "outside", label: "Outside day", title: OUTSIDE_DAY_TITLE },
-  { key: "inside", label: "Inside day", title: "Today's range so far inside the previous day's" },
+  { key: "outside", label: "Outside Day", title: OUTSIDE_DAY_TITLE },
+  { key: "inside", label: "Inside Day", title: "Today's range so far inside the previous day's" },
   { key: "day23", label: "Day 2/3", title: "Day 2 or later of a multi-day move" },
   {
     key: "insiders",
@@ -129,7 +142,7 @@ const PRESET_NAME: ReadonlyArray<{ key: SideFilter; label: string; title?: strin
 const POLL_SEC = 20;
 const LIVE_POLL_SEC = 5;
 
-type SideFilter = "all" | "top10" | Side | "mag7" | "pinned" | "news" | "gaps" | "outside" | "inside" | "day23" | "insiders";
+type SideFilter = "all" | "top10" | Side | "mag7" | "index" | "pinned" | "news" | "gaps" | "outside" | "inside" | "day23" | "insiders";
 type Bench = "SPY" | "QQQ";
 
 /**
@@ -145,6 +158,7 @@ const CONFIRM_LABEL: Record<NonNullable<Regime["confirm"]>, string> = {
   confirm: "SPY up, VIX down — confirmed",
   divergence: "SPY up, VIX up — divergence",
   risk_off: "SPY down, VIX up — risk-off",
+  divergence_down: "SPY down, VIX down — divergence",
   chop: "Both flat — chop",
 };
 
@@ -175,19 +189,19 @@ export function Scanner({
   calendar = NO_ROWS,
   view,
   onView,
-  plan = null,
   prices = null,
+  report = null,
 }: {
   now?: number | null;
   calendar?: CalendarRow[];
   view: ScanView;
   onView: (v: ScanView) => void;
   /**
-   * The Game plan view: the written pre-open plan, which was the stocks half of the
-   * Analysis tab until 2026-11-11. Built by the Terminal, which holds its state so a
-   * plan being written goes on being written while another page is open.
+   * The Market Report view after Charts (2026-11-16): SPY, QQQ and IWM for New York,
+   * built by the Terminal, which holds the report's state so a report being written
+   * survives a change of page.
    */
-  plan?: React.ReactNode;
+  report?: React.ReactNode;
   /**
    * SPY, QQQ, IWM and VIX in the masthead, on every view (owner, 2026-11-10: the
    * header's prices moved to "there appropriate places"): what a stock is read
@@ -226,14 +240,16 @@ export function Scanner({
     "all",
     // "both" was the Both ranges chip, which is Outside day now, and "through" the
     // previous day's level alone: a browser that had either saved opens on All, once.
-    oneOf("all", "top10", "long", "short", "mag7", "pinned", "news", "gaps", "outside", "inside", "day23", "insiders"),
+    oneOf("all", "top10", "long", "short", "mag7", "index", "pinned", "news", "gaps", "outside", "inside", "day23", "insiders"),
   );
   // Multicharts: six charts of the list's ten highest scores, a view of its own since
   // 2026-11-13 (lib/tabs.ts). Which names hold which chart, and the one toolbar they
   // all follow, are kept here, above the grid, so they are read from storage before
   // the grid first draws. (It was a switch on the Setups bar, `scan.multi`, for a day;
   // a browser that had it on opens the table, and the charts are one tab along.)
-  const [held, setHeld] = usePersisted<HeldSlots>("scan.multi.slots", NO_HELD, isHeldSlots);
+  // A new key on 2026-11-15, when the ten became the Scanner list's: what a browser held
+  // was six of the engine's tracked names, filled in by the page and not by the reader.
+  const [held, setHeld] = usePersisted<HeldSlots>("scan.multi.slots2", NO_HELD, isHeldSlots);
   const chartPrefs = useChartPrefs("multi");
   const [bench, setBench] = usePersisted<Bench>("scan.bench", "SPY", oneOf("SPY", "QQQ"));
   const [sort, setSort] = usePersisted<SortKey>(
@@ -272,22 +288,35 @@ export function Scanner({
    * columns, the colours and the slide-out are the ones this table has always had.
    */
   const [today, setToday] = useState<TodayPayload | null>(null);
+  // The list was asked for and did not come: the charts then fall back to the engine's
+  // rows, and until it is known which, they wait (see `pool`).
+  const [todayMiss, setTodayMiss] = useState(false);
   const todaySeq = useRef(0);
   const loadToday = useCallback(async () => {
     const mine = ++todaySeq.current;
     try {
       const r = await fetch("/api/scanner/today", { cache: "no-store" });
       const next = (await r.json()) as TodayPayload & { offline?: unknown };
-      if (mine === todaySeq.current && !next.offline && next.phase) setToday(next);
+      if (mine !== todaySeq.current) return;
+      if (!next.offline && next.phase) {
+        setToday(next);
+        setTodayMiss(false);
+      } else {
+        setTodayMiss(true);
+      }
     } catch {
       /* the engine's payload still carries the page; the next read tries again */
+      if (mine === todaySeq.current) setTodayMiss(true);
     }
   }, []);
   const isToday = view === "today";
+  const charts = view === "multi";
+  // The Scanner's list is the table's rows and the charts' ten: both views read it.
+  const wantToday = isToday || charts;
   const refresh = useCallback(() => {
     void load();
-    if (isToday) void loadToday();
-  }, [load, loadToday, isToday]);
+    if (wantToday) void loadToday();
+  }, [load, loadToday, wantToday]);
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
   usePinsChanged(refresh);
 
@@ -299,11 +328,11 @@ export function Scanner({
   }, [load, live]);
   const todayPhase = today?.phase?.key ?? "overnight";
   useEffect(() => {
-    if (!isToday) return;
+    if (!wantToday) return;
     void loadToday();
     const id = setInterval(loadToday, TODAY_POLL_SEC[todayPhase] * 1000);
     return () => clearInterval(id);
-  }, [isToday, loadToday, todayPhase]);
+  }, [wantToday, loadToday, todayPhase]);
 
   /*
    * TODAY'S FILTERS, BESIDE COLUMNS (owner, 2026-11-13: "i cant see filters anymore? next
@@ -317,18 +346,21 @@ export function Scanner({
   const [fSector, setFSector] = usePersisted<string>("today.sector", "", isStr);
   const rvolOn = data?.session === "rth" || data?.session === "post";
 
+  // The Scanner's list in its own order, as its Filters leave it.
+  const todayRows = useMemo<ScanRow[]>(
+    () =>
+      (today?.rows ?? [])
+        .map((t) => t.row)
+        .filter(
+          (r) =>
+            (!fCap || (r.market_cap ?? 0) >= fCap) &&
+            (!fRvol || !rvolOn || (r.rvol ?? 0) >= fRvol) &&
+            (!fSector || r.sector === fSector),
+        ),
+    [today?.rows, fCap, fRvol, fSector, rvolOn],
+  );
   // The rows the table and its chips read: Today's in its order, else the engine's.
-  const listRows = useMemo<ScanRow[]>(() => {
-    if (!isToday) return data?.rows ?? [];
-    return (today?.rows ?? [])
-      .map((t) => t.row)
-      .filter(
-        (r) =>
-          (!fCap || (r.market_cap ?? 0) >= fCap) &&
-          (!fRvol || !rvolOn || (r.rvol ?? 0) >= fRvol) &&
-          (!fSector || r.sector === fSector),
-      );
-  }, [isToday, today?.rows, data?.rows, fCap, fRvol, fSector, rvolOn]);
+  const listRows = useMemo<ScanRow[]>(() => (isToday ? todayRows : (data?.rows ?? [])), [isToday, todayRows, data?.rows]);
   const filterWord =
     [fCap ? capWord(fCap) : null, fRvol ? `RVol ${fRvol}×+` : null, fSector || null].filter(Boolean).join(" · ") || "all";
 
@@ -361,14 +393,29 @@ export function Scanner({
   // narrow the list. The box went; the list is the chips' and the filters'.
   const rows = ranked;
 
-  const charts = view === "multi";
-  // The charts' ten: the ten highest scores on the whole list, best first, whatever
-  // chip the Setups table was left on.
-  const pool = useMemo(() => {
+  /*
+   * THE CHARTS' TEN ARE THE SCANNER'S TOP TEN (owner, 2026-11-15: "the charts wsection is
+   * bugging it's not actually showing from the top 10 picks, its showing from mag7"). They
+   * were the ten highest scores among the ENGINE's rows, which was the whole list until
+   * 2026-11-13. Since then the Scanner view is Today's list, ranked for the hour: the
+   * evening's movers, what is in play into the open, then the session's setups. The
+   * engine tracks only the benchmarks and the MAG 7 until the pool promotes names at
+   * 06:00, so overnight and at a weekend the charts were the MAG 7 while the Scanner led
+   * with something else. Now they are the list's first ten as its Filters leave it, the
+   * same ten its Top 10 chip keeps, whatever chip the table was left on. A name the
+   * engine does not track draws like any other: its chart is read on the request.
+   *
+   * null while the list is still being read, so six charts of the wrong names are not
+   * drawn and then held (lib/multiChart: a chart keeps its name). If the list cannot be
+   * read at all, the engine's ten as before.
+   */
+  const pool = useMemo<ScanRow[] | null>(() => {
+    if (today) return todayRows.slice(0, TOP_N);
+    if (!todayMiss) return null;
     const all = data?.rows ?? [];
     const by = new Map(all.map((r) => [r.sym, r]));
     return topScores(all).flatMap((s) => by.get(s) ?? []);
-  }, [data?.rows]);
+  }, [today, todayRows, todayMiss, data?.rows]);
 
   // The selection survives a re-poll by symbol; it falls back to the top row
   // when the name it pointed at is filtered out or dropped from the list.
@@ -426,14 +473,14 @@ export function Scanner({
 
       {/* The page sits in one framed card under the band, as in the screenshots. */}
       <div className="qt-frame mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[6px] border border-ring">
-      {view === "breakouts" ? (
+      {view === "report" ? (
+        report
+      ) : view === "breakouts" ? (
         <ScanBreakouts onTrackChanged={load} />
       ) : view === "extended" ? (
         <ScanExtended onTrackChanged={load} onDay23={() => onView("day23")} />
       ) : view === "day23" ? (
         <ScanDay23 onTrackChanged={load} />
-      ) : view === "plan" ? (
-        plan
       ) : (
       <div className="flex min-h-0 flex-1 flex-col">
         {/* ---- the ranked list: the whole width, the name opens over it --- */}
@@ -467,10 +514,14 @@ export function Scanner({
             <div className="qt-bar flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ring px-4 py-2">
               {/* One toolbar for the six: a chart in the grid has no toolbar of its own. */}
               <ChartControls prefs={chartPrefs} hasBands={chartPrefs.tf !== "D"} shared />
-              <p className="fig ml-auto shrink-0 text-right text-[10.5px] leading-[1.25] text-ink-3" title="A chart keeps its name until you change it from its Change menu, or the name leaves the ten">
-                <span className="text-ink-2">{Math.min(CHART_SLOTS, pool.length)}</span> charts
+              <p
+                className="fig ml-auto shrink-0 text-right text-[10.5px] leading-[1.25] text-ink-3"
+                title={`The first ${TOP_N} names on the Scanner's list${filterWord === "all" ? "" : `, as its Filters leave it (${filterWord})`}. A chart keeps its name until you change it from its Change menu, or the name leaves the ten`}
+              >
+                <span className="text-ink-2">{Math.min(CHART_SLOTS, pool?.length ?? 0)}</span> charts
                 <br />
-                the {TOP_N} highest scores
+                the Scanner&apos;s top {TOP_N}
+                {filterWord === "all" ? "" : ` · ${filterWord}`}
               </p>
             </div>
           ) : (
@@ -512,7 +563,7 @@ export function Scanner({
           )}
 
           {charts ? (
-            data && !data.offline && data.rows.length > 0 ? (
+            data && !data.offline && data.rows.length > 0 && pool ? (
               <ScanMulti
                 pool={pool}
                 // Another day is another list: its six start from its top.
@@ -527,7 +578,7 @@ export function Scanner({
             ) : (
               // The charts' page never falls back to the table: it waits, or says why not.
               <div className="qt-sheet min-h-0 flex-1 overflow-auto">
-                {!data ? (
+                {!data || (!data.offline && data.rows.length > 0 && !pool) ? (
                   <TableSkeleton />
                 ) : (
                   <p className="px-6 py-10 text-center text-[12px] text-ink-3">
@@ -774,20 +825,12 @@ function SetupStats({
   const regime = data.regime;
   // No release with the calendar not loading is a gap, and the card says so.
   const calendarDown = regime.calendar_ok === false && !regime.event && !later;
-  const v = regime.vix;
   const c = regime.conviction;
   const bias = c ? c.bias : regime.bias;
-  const biasHue = bias === "long" ? "text-call-fig" : bias === "short" ? "text-put-fig" : "text-ink-2";
   const biasTip = c
     ? `${liveLine(c)} · plans capped at ${c.max_conviction}\n` +
       c.votes.map((x) => `${x.live === false ? "·" : x.vote === "long" ? "▲" : x.vote === "short" ? "▼" : "–"} ${x.label}: ${x.value} — ${x.note}`).join("\n")
     : (regime.confirm ? CONFIRM_LABEL[regime.confirm] : "Which side the tape is paying");
-  const tape = (["SPY", "QQQ", "IWM"] as const)
-    .map((k) => {
-      const t = regime.tape[k];
-      return `${k} ${t ? trendGlyph(t.trend) : "·"}`;
-    })
-    .join("  ");
   return (
     <div className="qt-stats shrink-0 border-b border-ring">
       <div className="qt-stats-row flex flex-wrap">
@@ -803,6 +846,28 @@ function SetupStats({
             pop={{ label: "The Scanner through the day", panel: <PhaseGuide phase={phase} /> }}
           />
         )}
+        {/*
+          * THE TAPE IS DRAWN AS A FUTURES BOOK'S BIAS IS (owner, 2026-11-15: "instead of bias
+          * saying 6 of 14 reads or whatever, why dont we jus have a scale instead which shows
+          * how close to the extremes we are or how close to neutral", then of the first build
+          * "why does the scale on stock and futures look different though?"). The card's
+          * contents are ScanWide's BiasStat, the one the Futures bias card draws: the side
+          * and its score, "Tape" and the grade, and the scale under them. The count is on
+          * the hover, with every read.
+          *
+          * IT STANDS RIGHT OF THE PHASE CARD (owner, the same day: "can we all move the tape
+          * card nexct to overnight card on the right"): the hour the list is ranked for,
+          * then which way the market leans, then what the list itself holds. It was sixth,
+          * after the top mover.
+          *
+          * NO VIX CARD (owner, the same day: "i dont think we need the vix card since we
+          * already have it above"). It stood beside this one from that morning, when the
+          * VIX stopped being this card's third line. The masthead carries the VIX with its
+          * change on every view, and a click on it there opens the same bands.
+          */}
+        <div className={STAT_BOX} title={biasTip}>
+          <BiasStat what="Tape" side={bias} score={c ? wholeScore(c) : null} grade={c?.grade} />
+        </div>
         <StatCard glyph="up" tint="up" value={longs.length} hue="text-call-fig" label="Bullish signals" sub={`${longs.filter((r) => r.broken.pdh).length} breaking PDH`} />
         <StatCard glyph="down" tint="down" value={shorts.length} hue="text-put-fig" label="Bearish signals" sub={`${shorts.filter((r) => r.broken.pdl).length} breaking PDL`} />
         {topRvol?.rvol != null || topPm?.premkt?.pct_adv == null ? (
@@ -834,35 +899,6 @@ function SetupStats({
           hue="text-desk-policy"
           label="Top mover"
           sub={topMove ? `${topMove.sym} · ${where(topMove)}` : undefined}
-        />
-        <StatCard
-          glyph="tape"
-          value={
-            <>
-              {bias === "long" ? "▲ Long" : bias === "short" ? "▼ Short" : "No lean"}
-              {c &&
-                (c.thin ? (
-                  // Under half the weight can vote: the count, not a score that reads as certainty.
-                  <span className="ml-1.5 text-[12px] text-ink-3">
-                    {c.live ?? 0} of {c.total} reads
-                  </span>
-                ) : (
-                  <span className="ml-1.5">{c.score != null ? scoreText(c.score) : `${c.agree}/${c.total}`}</span>
-                ))}
-            </>
-          }
-          hue={biasHue}
-          label={c ? `Tape · ${c.grade}` : "Tape"}
-          title={biasTip}
-          sub={
-            <VixPopover facts={{ ...v, band: regime.band, sub: regime.sub ?? null, month: v.month ?? null }} className="-mx-1 px-1">
-              <span className="fig text-[11px]" title={`The weather, not a signal. Click for the bands.\n${v.shape !== "unknown" ? `The curve is in ${v.shape}. ` : ""}${tape}: SPY, QQQ and IWM against their own PDH / PMH and PDL / PML.`}>
-                VIX {num(v.last, 2)}
-                {regime.band ? ` ${bandChip(regime.band, regime.sub ?? null, curveOverride(regime.vix?.last, regime.band)) ?? BAND_LABEL[regime.band]}` : ""}
-                {regime.spy_em_pct != null ? ` · SPY ±${regime.spy_em_pct.toFixed(2)}%` : ""}
-              </span>
-            </VixPopover>
-          }
         />
         <StatCard
           glyph="clock"
@@ -905,5 +941,3 @@ function dayName(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 }
-
-const trendGlyph = (t: -1 | 0 | 1) => (t === 1 ? "▲" : t === -1 ? "▼" : "–");

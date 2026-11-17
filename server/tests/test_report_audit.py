@@ -11,6 +11,7 @@ across five paragraphs, two of them at odds about macro.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -91,17 +92,22 @@ PROG_LIVE = {"underway": True, "opened_et": "09:30", "phrase": "1h", "hours": "0
 
 
 @pytest.mark.parametrize(
-    ("session", "prog", "first", "gamma_role"),
+    ("session", "prog", "first", "positioning_role"),
     [("asia", PROG_LIVE, "Session tape", "a reference"),
      ("london", PROG_LIVE, "Session tape", "a reference"),
-     ("ny", PROG_PRE, "Macro", "sets how far"),
-     ("ny", PROG_LIVE, "Structure", "decisive")],
+     ("ny", PROG_PRE, "Macro", "who is crowded"),
+     ("ny", PROG_LIVE, "Structure", "who is crowded")],
 )
 def test_the_layers_weigh_by_session(session: str, prog: dict[str, Any], first: str,
-                                     gamma_role: str) -> None:
+                                     positioning_role: str) -> None:
     layers = report.session_layers(session, prog)
     assert layers[0][0] == first
-    assert next(role for name, role, _ in layers if name == "Positioning") == gamma_role
+    # Positioning is COT and put/call in every session: dealer gamma left the report
+    # (2026-11-15), so no row says it "sets how far" or is "decisive", and no row
+    # names a moving average.
+    assert next(role for name, role, _ in layers if name == "Positioning") == positioning_role
+    assert not any(re.search(r"\b(?:gamma|emas?|daily frame|200-day)\b",
+                             f"{name} {role} {what}", re.I) for name, role, what in layers)
     # Macro stays in every table: the owner's rule that the US is the anchor.
     assert any(name == "Macro" for name, _, _ in layers)
     text = report.system_prompt(session, "all", prog)

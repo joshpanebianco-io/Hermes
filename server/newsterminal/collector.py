@@ -59,7 +59,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import config, daytype, drivers, futfill, marketctx, structure
+from . import config, daytype, drivers, futfill, marketctx, newsread, structure
 from . import dashboard as dash_mod
 from . import futures as fut_mod
 from . import momentum as mom_mod
@@ -87,6 +87,7 @@ from .sources import fedcal as fed_src
 from .sources import gex as gex_src
 from .sources import history as hist_src
 from .sources import holdings as hold_src
+from .sources import official as off_src
 from .sources import options as opt_src
 from .sources import pool as pool_src
 from .sources import premarket as pre_src
@@ -164,6 +165,9 @@ class Collector:
             # per book, the CFTC's positioning, Cboe's daily put/call.
             "history": {"books": {}}, "cot": {"books": {}}, "putcall": None,
             "themes": [], "breadth_all": None,
+            # The agencies' own figures for the US releases (sources/official.py):
+            # by key here, and on the calendar rows they are the prints of.
+            "official": {},
         }
         # The benchmarks and the MAG 7 are on the list always (scanner.CORE, 2026-11-13).
         self.scan = scan_src.ScanStore(core=scan_src.CORE)
@@ -211,6 +215,9 @@ class Collector:
         self.stock_news.sure = scan_src.ALIASES.__contains__
         # A story that states a move is held to the name's real one (catalysts.STATED_MIN).
         self.stock_news.move = self._day_move
+        # What the model made of each name's major story (newsread.py): context on the
+        # row and in the signal log, never score. Asked for by a clock in api.py.
+        self.newsread = newsread.ReadStore()
         self.universe = uni_src.UniverseStore()
         # The scanner's pre-market range is checked against these two reads, which
         # are not Yahoo's bars (`_pm_range`; scan.technicals says why).
@@ -284,6 +291,10 @@ class Collector:
             # Cboe's daily file: a minute between ticks while the log backfills,
             # and the same minute catches today's file once it is published.
             "putcall": (self._do_putcall, 60.0, now + 8.5),
+            # The agencies' own figures. A minute between ticks: each agency is
+            # asked only when its copy on disk has aged out (six hours for the BLS,
+            # fifteen minutes for the rest), and often only while a release is due.
+            "official": (self._do_official, 60.0, now + 9.0),
         }
         # The scanner's own thread runs these (see the module docstring). Each
         # rotates its names inside a tick — sources/scanner.py has the budget.
@@ -303,7 +314,8 @@ class Collector:
         # whole timeout, and that must not hold up a chain or a quote.
         self._premarket_jobs: dict[str, Job] = {
             "premarket": (self._do_premarket, pre_src.TICK_SEC, now + 5.0),
-            # The same host: each name's past report dates, one a tick, daily.
+            # Each name's report dates: the past ones off the scanner's EDGAR read,
+            # the next from one TradingView POST every few hours (sources/earnhist.py).
             "scan_earnhist": (self._do_earnhist, eh_src.TICK_SEC, now + 7.5),
             # The pool: one POST to TradingView's screener every five minutes
             # in the morning, half-hourly otherwise; the tick is short so a
@@ -325,6 +337,9 @@ class Collector:
             "universe": (self._do_universe, uni_src.TICK_SEC, now + 5.0),
             "stock_news": (self._do_stock_news, 20.0, now + 6.5),
             "themes": (self._do_themes, config.QUOTES_SEC * 15, now + 9.0),
+            # The funds' extended hours for the Sectors cards (quotes.collect_extended):
+            # every minute while they can trade outside the session, else every 15.
+            "sector_ext": (self._do_sector_ext, 60.0, now + 10.0),
             "holdings": (self._do_holdings, hold_src.TICK_SEC, now + 2.5),
             "sparks": (self._do_sparks, uni_src.SPARK_TICK_SEC, now + 12.0),
             "stock_news_sym": (self._do_stock_news_sym, tvnews_src.SYM_TICK_SEC, now + 30.0),
@@ -351,13 +366,28 @@ class Collector:
         rows, st = quotes_src.collect()
         self._commit("quotes", rows if st.ok else None, st)
 
-    def _do_sectors(self) -> None:
+    def _do_sectors(self) -> float | None:
+        """The sector funds: each minute in the regular session (owner, 2026-11-16: "do
+        what you recommend", to reading them each minute where it was five), at the
+        job's own five minutes outside it, where the extended read has them."""
         rows, st = quotes_src.collect_sectors()
         self._commit("sectors", rows if st.ok else None, st)
+        return 60.0 if quotes_src.regular_now() else None
 
-    def _do_themes(self) -> None:
+    def _do_themes(self) -> float | None:
+        """The theme funds, on the sector funds' clock (`_do_sectors`)."""
         rows, st = quotes_src.collect_themes()
         self._commit("themes", rows if st.ok else None, st)
+        return 60.0 if quotes_src.regular_now() else None
+
+    def _do_sector_ext(self) -> float:
+        """The sector and theme funds' last trades outside the session, for the Sectors
+        cards (owner, 2026-11-16: "make the app update as to what they're actually
+        doing"). A minute apart while they can trade before the bell or after the close,
+        fifteen otherwise: overnight the after-hours read is final."""
+        rows, st = quotes_src.collect_extended()
+        self._commit("sector_ext", rows if st.ok else None, st)
+        return 60.0 if quotes_src.extended_now() else 900.0
 
     def _do_holdings(self) -> None:
         """One fund's list when one is due; the table of who is in what, every tick."""
@@ -443,7 +473,8 @@ class Collector:
         self._commit("scan_short", None, st)
 
     def _do_earnhist(self) -> None:
-        st = self.earnhist.tick(self.scan.watchlist())
+        names = [s for s in self.scan.watchlist() if s not in scan_src.BENCHMARKS]
+        st = self.earnhist.tick(names, dict(self.scan.reports))
         self._commit("scan_earnhist", None, st)
 
     def _reports_ahead(self, td: date) -> dict[str, date]:
@@ -497,15 +528,37 @@ class Collector:
         self._commit("wire", items if st.ok else None, st)
 
     def _do_calendar(self) -> None:
-        rows, st = cal_src.collect()
+        # Two weeks ahead since 2026-11-16 (a week before that, three days before that,
+        # which on a Friday ended on Monday): the days past the third thinned to what
+        # reaches the books, the week after to its big releases (calendar.thin_far).
+        rows, st = cal_src.collect(days_ahead=cal_src.DAYS_AHEAD)
         # TradingView's calendar, read while Nasdaq is refusing, lists no speeches:
         # the Board's own (the "fed" source) join its rows (sources/calendar.py).
         if st.ok:
             with self._lock:
                 fed = list(self._state.get("fed") or [])
-            rows = cal_src.with_fed_speeches(rows, fed)
+                figs = dict(self._state.get("official") or {})
+            rows = cal_src.thin_far(cal_src.with_fed_speeches(rows, fed), datetime.now(ET).date())
+            # And the agencies' own figures on the rows they are the prints of: a
+            # fresh read of the feed would otherwise print the feed's copy again.
+            rows = off_src.apply(rows, figs)
             st.items = len(rows)
         self._commit("calendar", rows if st.ok else None, st)
+
+    def _do_official(self) -> None:
+        with self._lock:
+            held = list(self._state.get("calendar") or [])
+        figs, st = off_src.collect(held)
+        self._commit("official", figs if st.ok else None, st)
+        if not st.ok:
+            return
+        # On the calendar now, not at its next read ten minutes on. `apply` makes
+        # a new row where one changes, so a reader holding the old list is not
+        # handed a row that changes under it.
+        with self._lock:
+            now_held = self._state.get("calendar")
+            if isinstance(now_held, list):
+                self._state["calendar"] = off_src.apply(now_held, figs)
 
     def _do_rates(self) -> None:
         data, st = rates_src.collect()
@@ -853,9 +906,10 @@ class Collector:
         """The Sectors page: the sector and theme ETFs joined to what their stocks did."""
         with self._lock:
             rows = [*(self._state.get("sectors") or []), *(self._state.get("themes") or [])]
+            ext = dict(self._state.get("sector_ext") or {})
         # SPY is on both lists.
         etfs = {str(e["key"]): e for e in rows if isinstance(e, dict) and e.get("key")}
-        return self.universe.heatmap(list(etfs.values()))
+        return self.universe.heatmap(list(etfs.values()), ext=ext)
 
     def group_rows(self, group: str) -> dict[str, Any] | None:
         """The table of one card: a sector or theme ETF, or an industry by name."""
@@ -919,9 +973,15 @@ class Collector:
             list(self.pool.ranked), view,
             verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked),
             price=price) if view.get("ok") else None
-        return dash_mod.build(self.scanner_payload(), self.snapshot(), self.breakouts(),
+        now = datetime.now(UTC)
+        snap = self.snapshot()
+        # Before the bell the sector figures are the funds' pre-market (the Sectors
+        # cards' rule, universe.cards_phase).
+        spy_ext = (snap.get("sector_ext") or {}).get("SPY")
+        pre_day = (spy_ext or {}).get("day") if uni_src.cards_phase(spy_ext, now) == "pre" else None
+        return dash_mod.build(self.scanner_payload(), snap, self.breakouts(),
                               self.day23(), self.top_stories(tracked),
-                              session_day=uni_src.cards_day(datetime.now(UTC)), inplay=inplay)
+                              session_day=uni_src.cards_day(now), inplay=inplay, pre_day=pre_day)
 
     # ---- the Today list (today.py) ----------------------------------------------
 
@@ -1480,6 +1540,21 @@ class Collector:
             status = {k: v.as_dict() for k, v in self._status.items()}
             updated = dict(self._updated)
 
+        # OUTSIDE THE SESSION, WHAT THE CASH MARKET IS ACTUALLY DOING (the audit of
+        # 2026-11-16, after the Sectors cards). The board's US-listed funds carry their
+        # extended-hours trade beside the regular price (quotes.with_ext), and before
+        # the bell the index movers carry each name's own pre-market move
+        # (constituents.with_pre). New objects, never the stored ones; the regular
+        # figures the engine reads are untouched.
+        at = datetime.now(UTC)
+        ext = state.get("sector_ext") or {}
+        if ext and isinstance(state.get("quotes"), list):
+            state["quotes"] = quotes_src.with_ext(state["quotes"], ext,
+                                                  at.astimezone(ET).date().isoformat())
+        if isinstance(state.get("constituents"), dict) and uni_src.basis_at(at) == "pre":
+            state["constituents"] = cons_src.with_pre(
+                state["constituents"], lambda s: self.universe.pre_move(s, at))
+
         now = time.time()
         ages = {k: round((now - t) / 60.0, 2) for k, t in updated.items()}
         ready = bool(state.get("quotes"))
@@ -1540,6 +1615,21 @@ class Collector:
     def scanner_payload(self) -> dict[str, Any]:
         """The Scanner tab's whole read — technicals joined with the macro now."""
         return self._payload()
+
+    def story_summaries(self) -> dict[str, str]:
+        """{a headline's key (newsread.norm): the feed's sentence or two about it}, from
+        the names' own feeds and the wire: what the model is shown beside a major
+        story's headline. Most stories have none."""
+        with self._lock:
+            own = self._state.get("scan_news") or {}
+            wire = self._state.get("wire") or []
+        out: dict[str, str] = {}
+        for rows in [*own.values(), wire]:
+            for r in rows if isinstance(rows, list) else []:
+                s = r.get("summary") if isinstance(r, dict) else None
+                if isinstance(s, str) and len(s) >= 40:
+                    out.setdefault(newsread.norm(str(r.get("title") or "")), s)
+        return out
 
     def _payload(self, watch: list[str] | None = None,
                  extra_rows: dict[str, dict[str, Any]] | None = None,
@@ -1615,6 +1705,7 @@ class Collector:
             top_story=self._catalyst,
             news_limit=news_limit,
             calendar_ok=bool(cal_st.ok) if cal_st is not None else None,
+            news_read=self.newsread.for_item,
         )
         # Which day of a multi-day move each name is on, for the Day 2/3 preset.
         stages = self._ctx().stage

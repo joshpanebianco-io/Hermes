@@ -8,6 +8,7 @@ import { Ago } from "@/components/ui/Ago";
 import { cn } from "@/lib/cn";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { segItem } from "@/lib/seg";
+import { tierLit, toggleTier } from "@/lib/schedule";
 
 /**
  * The wire — every desk's headlines on one tape.
@@ -60,13 +61,15 @@ const HUE: Record<Desk, string> = {
  * BUT THE TIERS COMBINE, because you say so, not because the filter assumes it
  * (owner, 2026-09-22). They used to be one-at-a-time, and the tape most worth
  * reading — everything that matters, none of the context — is HIGH and MED
- * together, which one-at-a-time could not show. Each tier is its own switch;
- * none lit is the whole tape, which is what ALL means and what it resets to.
- * Lighting all three is the same tape, so it collapses back to ALL rather than
- * leaving two different-looking states that mean one thing.
+ * together, which one-at-a-time could not show. Each tier is its own switch.
+ *
+ * LIT IS WHAT YOU SEE, AND THERE IS NO "ALL" AMONG THEM (2026-11-14; lib/schedule).
+ * There was one, and a second "All" on the desk row beneath, so the card read
+ * "All 254" unlit beside "All 101" lit. All three lit is the whole tape; the last
+ * one lit cannot be put out. The desk row keeps the card's one "All".
  */
-const IMPACTS: { key: Impact | "all"; label: string; hue: string; title: string }[] = [
-  { key: "all", label: "All", hue: "var(--ink-3)", title: "Every headline on the tape — clears the tiers" },
+const TIER_KEYS = ["high", "medium", "low"] as const;
+const IMPACTS: { key: Impact; label: string; hue: string; title: string }[] = [
   {
     key: "high",
     label: "High",
@@ -82,8 +85,6 @@ const IMPACTS: { key: Impact | "all"; label: string; hue: string; title: string 
   { key: "low", label: "Low", hue: "var(--ink-4)", title: "Context. Combines with the other tiers" },
 ];
 
-/** How many tiers there are — lighting every one of them is just ALL. */
-const TIERS = IMPACTS.length - 1;
 
 export function Wire({
   items,
@@ -111,12 +112,12 @@ export function Wire({
     ["high", "medium"],
     manyOf("high", "medium", "low"),
   );
-  const toggleImpact = (k: Impact | "all") =>
-    setImpacts((prev) => {
-      if (k === "all") return [];
-      const next = prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k];
-      return next.length === TIERS ? [] : next;
-    });
+  const toggleImpact = (k: Impact) => setImpacts((prev) => toggleTier(prev, k, TIER_KEYS));
+  // THE M IS FOR TELLING MEDIUM FROM LOW, so it is drawn only where low is in the
+  // list. On the tape this opens on (High and Med) 97 of 101 lines wore it, which is
+  // the "badge on every line" the note in Item warns against; there, only High is
+  // marked and every unmarked line is a Medium.
+  const markMedium = impacts.length === 0 || impacts.includes("low");
 
   // Counts are computed against the OTHER filter, so each row of chips shows
   // what you would actually get by clicking it rather than a total that goes
@@ -152,7 +153,7 @@ export function Wire({
       right={
         <div className="seg">
           {IMPACTS.map((im) => {
-            const on = im.key === "all" ? impacts.length === 0 : impacts.includes(im.key);
+            const on = tierLit(impacts, im.key);
             const n = impactCounts[im.key] ?? 0;
             return (
               <button
@@ -203,7 +204,7 @@ export function Wire({
       ) : (
         <ul className="divide-y divide-ring/40">
           {shown.map((h) => (
-            <Item key={`${h.url}-${h.ts ?? 0}`} h={h} />
+            <Item key={`${h.url}-${h.ts ?? 0}`} h={h} markMedium={markMedium} />
           ))}
         </ul>
       )}
@@ -211,7 +212,7 @@ export function Wire({
   );
 }
 
-function Item({ h }: { h: WireItem }) {
+function Item({ h, markMedium }: { h: WireItem; markMedium: boolean }) {
   return (
     <li className="wire-in">
       <a
@@ -229,9 +230,10 @@ function Item({ h }: { h: WireItem }) {
           {/*
            * ONLY HIGH AND MEDIUM CARRY A MARK. Low is most of the tape, and a
            * badge on every line is a badge on no line — the absence of a mark
-           * is what makes the two that have one findable.
+           * is what makes the two that have one findable. And Medium carries
+           * its M only where Low lines are in the list beside it (markMedium).
            */}
-          {h.impact !== "low" && (
+          {(h.impact === "high" || (h.impact === "medium" && markMedium)) && (
             <span
               className={cn(
                 "fig qt-pill shrink-0 rounded-sm px-1 text-[9px] leading-[13px]",

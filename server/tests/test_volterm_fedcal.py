@@ -156,3 +156,101 @@ def test_rows_sort_by_date_then_time_with_untimed_last() -> None:
 def test_a_malformed_day_is_skipped_not_fatal() -> None:
     rows = fedcal.parse([ev(days="31", month="2026-09"), ev(days="3")], TODAY)
     assert [r["date"] for r in rows] == ["2026-09-03"]
+
+
+# --- the meeting page: the schedule past December -----------------------------
+#
+# The events feed stops at 31 December. On 13 Nov 2026 it held one FOMC, so the Rates
+# card's path was one row while the strip priced fourteen months. The Board's meeting
+# page carries next year; these are its cells as the page prints them.
+
+
+def _block(year: int, *rows: tuple[str, str]) -> str:
+    cells = "".join(
+        f'<div class="row fomc-meeting">'
+        f'<div class="fomc-meeting__month col-xs-5"><strong>{month}</strong></div>\n'
+        f'<div class="fomc-meeting__date col-xs-4">{days}</div>'
+        f'<div class="col-xs-12 fomc-meeting__minutes"></div></div>\n'
+        for month, days in rows
+    )
+    return f'<div class="panel-heading"><h4><a id="1">{year} FOMC Meetings</a></h4></div>\n{cells}'
+
+
+# The order the page prints its blocks in: this year, older years, then next year last.
+PAGE = (
+    _block(2026, ("January", "27-28"), ("October", "27-28"), ("December", "8-9*"))
+    + _block(2025, ("August", "22 (notation vote)"), ("December", "9-10*"))
+    + _block(2027, ("January", "26-27"), ("March", "16-17"), ("April", "27-28"), ("June", "8-9"))
+)
+NOV13 = date(2026, 11, 13)
+
+
+def test_the_page_gives_the_meetings_still_to_decide_first_day_and_length() -> None:
+    assert fedcal.schedule_from_page(PAGE, NOV13) == [
+        {"date": "2026-12-08", "days": 2},
+        {"date": "2027-01-26", "days": 2},
+        {"date": "2027-03-16", "days": 2},
+        {"date": "2027-04-27", "days": 2},
+        {"date": "2027-06-08", "days": 2},
+    ]
+
+
+def test_a_two_day_meeting_is_still_ahead_on_its_decision_morning() -> None:
+    """The feed drops a meeting once its FIRST day has passed; the decision is the second."""
+    on_the_day = fedcal.schedule_from_page(PAGE, date(2026, 12, 9))
+    assert on_the_day[0] == {"date": "2026-12-08", "days": 2}
+    after = fedcal.schedule_from_page(PAGE, date(2026, 12, 10))
+    assert after[0] == {"date": "2027-01-26", "days": 2}
+
+
+def test_a_notation_vote_is_not_a_meeting_and_a_meeting_can_cross_a_month_end() -> None:
+    page = _block(2030, ("March", "19 (notation vote)"), ("Apr/May", "30-1"),
+                  ("June", "(cancelled)"), ("July", "30-31"), ("February", "30-31"))
+    rows = fedcal.schedule_from_page(page, date(2030, 1, 2), horizon_days=400)
+    # 30 April and 1 May; the decision is May's. February the 30th is not a day.
+    assert rows == [{"date": "2030-04-30", "days": 2}, {"date": "2030-07-30", "days": 2}]
+    assert fedcal._decision(rows[0]) == date(2030, 5, 1)
+
+
+def test_the_horizon_and_an_unreadable_page_both_give_nothing_rather_than_guess() -> None:
+    december = {"date": "2026-12-08", "days": 2}
+    assert fedcal.schedule_from_page(PAGE, NOV13, horizon_days=60) == [december]
+    assert fedcal.schedule_from_page("<html><body>Service unavailable</body></html>", NOV13) == []
+    assert fedcal._schedule_body(b"<html>Service unavailable</html>") is not None
+    assert fedcal._schedule_body(PAGE.encode()) is None
+
+
+def test_the_feed_keeps_its_own_meetings_and_the_page_adds_the_ones_past_december() -> None:
+    # The feed's December entry is one day, the 9th; the page's is the 8th and 9th.
+    # Same decision, so the feed's stands untouched and is not listed twice.
+    feed = [{"date": "2026-12-09", "days": 1}]
+    merged = fedcal.with_schedule(feed, fedcal.schedule_from_page(PAGE, NOV13))
+    assert merged == [
+        {"date": "2026-12-09", "days": 1},
+        {"date": "2027-01-26", "days": 2},
+        {"date": "2027-03-16", "days": 2},
+        {"date": "2027-04-27", "days": 2},
+        {"date": "2027-06-08", "days": 2},
+    ]
+    # No page: the schedule is the feed's alone, as it always was.
+    assert fedcal.with_schedule(feed, []) == feed
+    # No feed meetings left (late December): the page carries the schedule by itself.
+    january = {"date": "2027-01-26", "days": 2}
+    assert fedcal.with_schedule([], [january]) == [january]
+
+
+def test_the_path_reaches_past_december_once_the_page_is_read() -> None:
+    """The strip of 13 Nov 2026 and the merged schedule: five meetings priced, not one."""
+    from newsterminal.policy import meetings_priced
+
+    strip = {"2026-11": 3.878, "2026-12": 4.07, "2027-01": 4.165, "2027-02": 4.32, "2027-03": 4.395,
+             "2027-04": 4.49, "2027-05": 4.57, "2027-06": 4.645, "2027-07": 4.68}
+    rates = {"policy": {"EFFR": {"rate": 3.88}},
+             "strip": [{"month": k, "implied": v} for k, v in strip.items()]}
+    feed = [{"date": "2026-12-09", "days": 1}]
+    assert len(meetings_priced(rates, feed)["meetings"]) == 1
+    pm = meetings_priced(rates, fedcal.with_schedule(feed, fedcal.schedule_from_page(PAGE, NOV13)))
+    assert [(m["date"], round(m["move_bp"]), round(m["cum_bp"])) for m in pm["meetings"]] == [
+        ("2026-12-09", 27, 27), ("2027-01-27", 17, 44), ("2027-03-17", 17, 61),
+        ("2027-04-28", 8, 69), ("2027-06-09", 11, 80),
+    ]

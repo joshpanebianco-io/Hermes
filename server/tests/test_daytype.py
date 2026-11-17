@@ -252,6 +252,38 @@ def test_the_lean_is_the_records_counts_for_a_day_like_today() -> None:
     assert none["call"] == "none" and none["why"].startswith("no record yet")
 
 
+def _es_monday() -> dict[str, dict[str, Any]]:
+    """ES's record at 08:57 ET on Mon 16 Nov 2026, as rates: after a normal day 24 trend
+    days in 189, Mondays 3 in 105, every session 41 in 573."""
+    def rate(n: int, t: int, r: int) -> dict[str, Any]:
+        return {"n": n, "trend": t / n, "range": r / n, "trend_n": t, "range_n": r}
+    return {"every session": rate(573, 41, 341), "yesterday was a normal day": rate(189, 24, 96),
+            "Monday": rate(105, 3, 69)}
+
+
+def test_a_halved_trend_rate_votes_against_the_trend_call() -> None:
+    # Owner, 2026-11-16: NQ and ES both -40, NQ "No lean", ES "Trend day more possible"
+    # on one condition while Mondays (3 trend days in 105) were printed and ignored.
+    table = _es_monday()
+    tue = d.lean({"prev_type": "normal", "weekday": "Tue"}, table)
+    assert tue["call"] == "trend"
+    mon = d.lean({"prev_type": "normal", "weekday": "Mon"}, table)
+    by = {h["condition"]: h["vote"] for h in mon["holds"]}
+    assert by == {"yesterday was a normal day": "trend", "Monday": "no_trend"}
+    assert mon["call"] == "mixed" and mon["word"] == "Mixed record"
+    assert "Monday: 3 trend days in 105, 69 range" in mon["why"]
+    # Alone it calls nothing: fewer trend days is not a range day.
+    alone = d.lean({"prev_type": "trend", "weekday": "Mon"}, table)
+    assert [h["vote"] for h in alone["holds"] if h["vote"]] == ["no_trend"]
+    assert alone["call"] == "none"
+    assert alone["why"] == ("fewer trend days than usual, not a range call: "
+                            "Monday: 3 trend days in 105, 69 range")
+    # With a range vote it agrees: the call is range.
+    table["yesterday was a range day"] = {"n": 300, "trend": 0.03, "range": 0.8,
+                                          "trend_n": 9, "range_n": 240}
+    assert d.lean({"prev_type": "range", "weekday": "Mon"}, table)["call"] == "range"
+
+
 def test_the_backfills_rows_are_read_back_full_sessions_only(tmp_path: Any) -> None:
     path = os.path.join(str(tmp_path), "daytype_backfill.json")
     rows = [{"day": "2026-11-06", "type": "range", "prev_type": "normal", "half_day": False},

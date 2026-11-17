@@ -23,14 +23,25 @@ Book.
 DATES COME APART AND ARE PUT BACK TOGETHER. `month` is "2026-09" and `days` is a
 string that may be "3" or "3,4" for a two-day meeting — so a single entry can be
 several dates, and the first day is the one to schedule against.
+
+THE MEETINGS PAST DECEMBER COME FROM THE BOARD'S MEETING PAGE (2026-11-14). The
+events feed stops at the end of the current year, so from the last autumn meeting
+until January it held one FOMC, and the Rates card's "path" was a single row while
+the fed funds strip priced fourteen months of moves. `fomccalendars.htm` on the
+same site lists every meeting of this year and the next, a year to a block, so it
+is read beside the feed and adds the meetings the feed does not reach
+(`schedule_from_page`, `with_schedule`). The feed's own entries are left exactly
+as they were; if the page cannot be read the schedule is the feed's alone, as
+before, and the source says so in a note.
 """
 
 from __future__ import annotations
 
+import calendar as _cal
 import html
 import json
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -39,6 +50,7 @@ from ..http import SourceStatus, fetch, json_body
 
 ET = ZoneInfo("America/New_York")
 CALENDAR = "https://www.federalreserve.gov/json/calendar.json"
+SCHEDULE = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
 # The types worth a reader's attention, and what to call each on screen.
 KEEP: dict[str, str] = {
@@ -143,8 +155,86 @@ def fomc_ahead(doc: Any, today: date, horizon_days: int = 420) -> list[dict[str,
     ]
 
 
+# ---- the meeting page: next year's dates -------------------------------------
+
+# ">2027 FOMC Meetings<" opens a year's block; each meeting in it is a month cell
+# ("January", or "Apr/May" for one that crosses a month end) and a date cell
+# ("26-27", "17-18*" with projections, "22 (notation vote)" for what is no meeting).
+_YEAR_HEAD = re.compile(r">\s*(\d{4}) FOMC Meetings\s*<")
+_MEETING = re.compile(
+    r"fomc-meeting__month[^>]*>\s*(?:<strong>)?\s*([^<]+?)\s*(?:</strong>)?\s*</div>"
+    r".*?fomc-meeting__date[^>]*>\s*([^<]+?)\s*</div>",
+    re.S,
+)
+_DAY_RANGE = re.compile(r"^(\d{1,2})(?:\s*-\s*(\d{1,2}))?\s*\*?$")
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+# A feed meeting and a page meeting this close together are the same meeting.
+_SAME_MEETING_DAYS = 3
+
+
+def _decision(e: dict[str, Any]) -> date:
+    """The day a meeting decides: its last. `date` is its first, `days` its length."""
+    return date.fromisoformat(str(e["date"])) + timedelta(days=int(e.get("days") or 1) - 1)
+
+
+def schedule_from_page(page: str, today: date, horizon_days: int = 420) -> list[dict[str, Any]]:
+    """The Board's meeting page → the meetings still to decide, shaped as `fomc_ahead`. Pure.
+
+    Kept while the DECISION day is today or later (a two-day meeting is still ahead
+    on its second morning) and the meeting opens inside the horizon. A row whose
+    date cell is anything but a day or a day range (a notation vote, an unscheduled
+    call, a cancelled meeting) is not a scheduled decision and is skipped.
+    """
+    heads = sorted((m.start(), int(m.group(1))) for m in _YEAR_HEAD.finditer(page))
+    out: list[dict[str, Any]] = []
+    for i, (pos, year) in enumerate(heads):
+        end = heads[i + 1][0] if i + 1 < len(heads) else len(page)
+        for month_cell, date_cell in _MEETING.findall(page[pos:end]):
+            mon = _MONTHS.get(month_cell.split("/")[0].strip()[:3].lower())
+            rng = _DAY_RANGE.match(html.unescape(date_cell).strip())
+            if mon is None or rng is None:
+                continue
+            d1 = int(rng.group(1))
+            d2 = int(rng.group(2)) if rng.group(2) else d1
+            try:
+                first = date(year, mon, d1)
+            except ValueError:
+                continue
+            # "Apr/May 30-1": the second day is in the next month.
+            span = d2 - d1 + 1 if d2 >= d1 else _cal.monthrange(year, mon)[1] - d1 + 1 + d2
+            if span > 3:
+                continue  # No meeting runs longer; a range this wide is a misread.
+            last = first + timedelta(days=span - 1)
+            if last < today or (first - today).days > horizon_days:
+                continue
+            out.append({"date": first.isoformat(), "days": span})
+    out.sort(key=lambda e: e["date"])
+    return out
+
+
+def with_schedule(feed: list[dict[str, Any]], page: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The feed's meetings, plus the page's that the feed does not have. Pure.
+
+    THE FEED WINS WHERE BOTH HAVE A MEETING: its entries are what every reader has
+    always been given, so they are passed through untouched, and the page only adds
+    the ones beyond the feed's reach (next year's, until January).
+    """
+    have = [_decision(e) for e in feed]
+    extra = [e for e in page
+             if all(abs((_decision(e) - d).days) > _SAME_MEETING_DAYS for d in have)]
+    return sorted([*feed, *extra], key=lambda e: str(e["date"]))
+
+
+def _schedule_body(body: bytes) -> str | None:
+    """The meeting page, not an error page: it has year blocks with date cells."""
+    ok = b"FOMC Meetings" in body and b"fomc-meeting__date" in body
+    return None if ok else "the meeting page has no schedule in it"
+
+
 def collect() -> tuple[list[dict[str, Any]], list[dict[str, Any]], SourceStatus]:
-    """The next three weeks of Fed events, plus the year's decision dates."""
+    """The next three weeks of Fed events, plus the decision dates the strip reaches."""
     st = SourceStatus("Fed calendar")
     # Half a day. The Board publishes weeks ahead and amends rarely, and the
     # file is ~530 KB — polling it on the wire's cadence would be rude for
@@ -169,4 +259,19 @@ def collect() -> tuple[list[dict[str, Any]], list[dict[str, Any]], SourceStatus]
     st.settle(True, "file")
     if not rows:
         st.notes.append("nothing scheduled in the next three weeks")
+
+    # Next year's meetings, which the feed does not carry. NOT ABSORBED into the
+    # status: the diary is the feed's, and a meeting page served from its last copy
+    # must not date the diary's chip. A month of fallback is fine for a schedule the
+    # Board sets a year ahead; without the page the schedule is the feed's alone.
+    p = fetch(SCHEDULE, key="fed_fomc_page", ttl_sec=12 * 3600.0, ua=BROWSER_UA, timeout=40,
+              stale_max_sec=30 * 86400.0, validate=_schedule_body)
+    if p.ok and p.body is not None:
+        page = schedule_from_page(p.body.decode("utf-8", errors="replace"), today)
+        if page:
+            fomc = with_schedule(fomc, page)
+        else:
+            st.notes.append("meeting page: no dates read, the schedule is the feed's alone")
+    else:
+        st.notes.append(f"meeting page: {p.error or 'empty response'}")
     return rows, fomc, st

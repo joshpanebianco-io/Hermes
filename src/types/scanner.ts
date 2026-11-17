@@ -56,7 +56,8 @@ export interface Regime {
   spy_em_pct: number | null;
   tape: { SPY: TapeRow | null; QQQ: TapeRow | null; IWM: TapeRow | null };
   bias: Side | null;
-  confirm: "confirm" | "divergence" | "risk_off" | "chop" | null;
+  /** `divergence_down` (SPY down, VIX down) is the mirror of `divergence`, since 2026-11-14. */
+  confirm: "confirm" | "divergence" | "risk_off" | "divergence_down" | "chop" | null;
   event: { title: string; et: string; in_min: number; score: number } | null;
   /** False when the economic calendar is not loading: no `event` then is a gap, not a clear morning. */
   calendar_ok?: boolean | null;
@@ -92,8 +93,10 @@ export interface ScoreFamily {
 
 export interface Conviction {
   bias: Side | null;
-  /** -100 to +100 across the reads that can vote. A plan stored before 2026-11-05 has none. */
+  /** -100 to +100 over the whole of the session's weight (bias.py, 2026-11-15). A plan stored before 2026-11-05 has none. */
   score?: number;
+  /** "whole" on a read scored by that rule; a plan stored before it was scored over the live weight alone (lib/biasScale wholeScore). */
+  basis?: "whole";
   coverage?: number;
   weight_label?: string;
   families?: ScoreFamily[];
@@ -107,7 +110,8 @@ export interface Conviction {
   max_conviction: 1 | 2 | 3 | 4 | 5;
   /**
    * A lean with under half the session's weight able to vote (overnight: two reads of
-   * eleven). The grade is weak at most, and the page prints the count beside the score.
+   * eleven). The grade is weak at most. No page draws it since 2026-11-15: the score is
+   * over the whole weight, so the mark sits near the middle by itself (lib/biasScale).
    */
   thin?: boolean;
   votes: ConvictionVote[];
@@ -147,9 +151,23 @@ export interface ScanFlag {
     | "frame"
     | "short_interest"
     | "catalyst"
-    | "insider";
+    | "insider"
+    /** The previous session's major story (scanscore.prior_story): context, never score. */
+    | "prior";
   tone: "good" | "warn" | "info";
   text: string;
+}
+
+/**
+ * What the model made of the story that decided a name's catalyst part (server
+ * newsread.py): how big it is, in one line. Context on the row and in the signal log;
+ * it earns no points. `line` is empty where the model's words did not pass the guard.
+ */
+export interface NewsRead {
+  size: "big" | "ordinary" | "unclear";
+  line: string;
+  /** The headline it read. */
+  headline?: string | null;
 }
 
 /** An insider trade worth a line (server sources/insiders.py): an open-market buy of
@@ -316,6 +334,8 @@ export interface ScanRow {
   targets?: Target[];
   /** The most important story of the last day, graded (catalysts.py). Null when there is none. */
   catalyst?: Catalyst | null;
+  /** The model's read of the story the score counted, once it has read it. Absent from an older collector. */
+  news_read?: NewsRead | null;
   /** Which day of a multi-day move this is (momentum.py), when it is on one. */
   stage?: number | null;
   /** The day's closes, for the table's small chart. */
@@ -757,11 +777,30 @@ export interface ScanBars {
   vwap: Array<number | null>;
   /** A stock's VWAP deviation, volume-weighted from 09:30, for the bands (2026-11-11); a future carries its own in `vwaps`. */
   vwap_sd?: Array<number | null>;
-  levels: { pdh: number | null; pdl: number | null; pmh: number | null; pml: number | null; pm_done: boolean };
   /**
-   * Each earlier session's four levels over its own regular hours
-   * (scan.history_levels) — the Pine's "keep previous days' levels". Absent
-   * from a collector older than 2026-10-14.
+   * The chart's own four levels: ONE named set, the levels of the day the last bar is
+   * in, as the owner's Pine script draws them (scan.chart_levels, futures.day_levels).
+   * On a weekend they are Friday's, as it traded against them: its PDH and PDL the
+   * session before it, its PMH and PML its own 04:00 to 09:30 ET, on a stock and a
+   * future alike. `day` is whose they are; `pd_from` and `pm_from` the bar each pair
+   * starts at (epoch seconds), from where the chart draws it to its right edge. Null on
+   * the daily view and absent from a collector older than 2026-11-14, which draw them
+   * across; there they are the trading day's.
+   */
+  levels: {
+    pdh: number | null;
+    pdl: number | null;
+    pmh: number | null;
+    pml: number | null;
+    pm_done: boolean;
+    pd_from?: number | null;
+    pm_from?: number | null;
+    day?: string | null;
+  };
+  /**
+   * Each earlier day's four levels over its own bars (scan.history_levels,
+   * futures.day_levels) — the Pine's "keep previous days' levels": plain lines, no
+   * names. Absent from a collector older than 2026-10-14.
    */
   history?: Array<{ key: "PDH" | "PDL" | "PMH" | "PML"; v: number; from: number; to: number; day: string }>;
   sessions: Array<{ kind: "pre" | "rth" | "post"; from: number; to: number }>;

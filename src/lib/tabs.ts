@@ -27,9 +27,9 @@
  *              before the Scanner's (which stock, which level), so it sits on
  *              the bar between Macro and the Scanner, and on a side screen all session
  *   Scanner    the stocks desk's break-and-retest scanner
- *   Futures    every futures book traded, NQ, ES, GC, silver and crude: an
- *              overview of the five and a view per contract (its chart with the
- *              levels, the ladder, session ranges, the profile, gamma) and the
+ *   Futures    every futures book traded, NQ, ES, GC, silver and crude: a view
+ *              per contract (its chart with the levels, the news that reaches it,
+ *              session ranges, the profile, gamma; no overview since 2026-11-14) and the
  *              written brief (owner, 2026-11-10: "a seperate futures section").
  *              It took Structure's place; Structure's stocks half was the
  *              Scanner's Index view until 2026-11-13 (see SCAN_VIEWS)
@@ -45,11 +45,37 @@
  * the written plan is the Scanner's Game plan view, one click from the
  * Dashboard's card. The bar is seven pages (the number keys that reached them went on 2026-11-11).
  *
+ * AND THE TWO NOTES HAVE ONE PAGE AGAIN: MARKET REPORT (owner, 2026-11-15: "i want to
+ * remove the market section from stocks and brief section from futures and consolidate it
+ * all into one area", then "instead of Analysis lets call it Market Report and have it
+ * after the Futures on the right of it"). What sent Analysis away no longer holds: the
+ * stocks note writes itself every morning now, and the reader picks what a report is
+ * about (Indexes, Gold, Silver, Oil) and which session it is for (Asia, London, New York)
+ * from two rows of pills, where the old tab had a desk switch. The stocks overview is
+ * not on it: it was, under Indexes for New York, for an afternoon, until the owner had
+ * it taken off ("that info is easily seen in the stocks seciton"); it is read on the
+ * Dashboard's card. So the Stocks strip has no Market view and Futures no Brief view,
+ * and the bar is eight pages.
+ *
+ * AND THEN A VIEW ON EACH DESK (owner, 2026-11-16). That morning the page left the bar
+ * ("remove it form the nav bar, and then just utilise the pop up cards when you click on
+ * the bias"), and the Bias card's board became a slide-out. That afternoon the report
+ * came back, as a view of each desk rather than a page: "in both futures and stocks lets
+ * add Market Report tab with the generate funcitonality next to cl and then next to
+ * charts". Futures → Market Report writes one book (NQ, ES, GC, SIL or CL) for Asia,
+ * London or New York; Stocks → Market Report writes SPY, QQQ and IWM together for New
+ * York (lib/reportDesk). So "report" is no page key any more and the bar is seven pages;
+ * `?tab=report`, `plan` and `analysis` open the Futures view, the Stocks view for `plan`
+ * (`LEGACY`).
+ *
  * The desk therefore survives only as what a question to Hermes is labelled with:
  * the side of the terminal the reader was last on (Terminal.tsx). The keys are what
  * `?tab=` and storage hold; the old keys still resolve (`resolveTab`), so a link to
  * the report, the plan, Analysis or the Market tab opens the right place.
  */
+
+// Type-only, so the node tests that run this file never load it.
+import type { FutView } from "@/lib/futures";
 
 export type Desk = "futures" | "stocks";
 
@@ -67,6 +93,7 @@ export const TABS = [
   { key: "scanner", label: "Stocks" },
   // After the Scanner since 2026-11-11, at the owner's word; it sat after Macro.
   { key: "futures", label: "Futures" },
+  // No Market Report page since 2026-11-16: it is a view of Futures and of Stocks.
   { key: "hermes", label: "Hermes AI" },
   { key: "settings", label: "Settings" },
 ] as const;
@@ -98,8 +125,9 @@ export const TAB_KEYS: readonly Tab[] = TABS.map((t) => t.key);
  * Breakouts, Extended hours and Day 2/3 were four answers to "what should I look at
  * now", each ranked its own way. Today is one list that changes what it ranks by with
  * the clock (server today.py): the evening's movers, the pre-market's names in play, the
- * open's triggers, the session's setups. The strip is Scanner, Charts (the Multicharts
- * view) and Market (the overview). The four old
+ * open's triggers, the session's setups. The strip is Scanner and Charts (the Multicharts
+ * view); Market, the written overview, was a third until 2026-11-15, when it went to the
+ * Market Report page. The four old
  * views stay reachable for a week behind Settings → Interface (`group: "legacy"`,
  * lib/legacyViews.ts), then go. A browser that remembers one of them opens Today.
  */
@@ -107,13 +135,15 @@ export const SCAN_VIEWS = [
   // Called Today until 2026-11-13 ("i think we hsould rename 'today' to Scanner"); the key stays.
   { key: "today", label: "Scanner", group: "main", title: "The best stocks for the hour it is: the evening's movers, then what is in play into the open, then the session's setups from the bell" },
   { key: "multi", label: "Charts", group: "main", title: "Six live charts of the list's best names, three across and two down" },
+  // The written report, after Charts since 2026-11-16 (owner: "in both futures and stocks
+  // lets add Market Report tab with the generate funcitonality next to cl and then next to
+  // charts"): SPY, QQQ and IWM together, for New York (lib/reportDesk). It is not the
+  // 09:00 market overview, which still writes itself for the Dashboard's card.
+  { key: "report", label: "Market Report", group: "main", title: "The written report: SPY, QQQ and IWM together, for New York" },
   // No Record view since 2026-11-13 ("can we get rid of the record section completely"):
   // the signal log is still kept on the server, read by the score card and Hermes.
-  // The stocks half of what was the Analysis tab. Next to Record (owner, 2026-11-13: "can we
-  // move game plan next to Record?"); it was a button on Today for an hour. Later the same day
-  // the per-name plans gave way to a market overview, and the view was renamed Market (the
-  // key stays "plan": the routes, the store and Hermes's tab name are the plan's).
-  { key: "plan", label: "Market", group: "main", title: "The market overview, written at 09:00 ET: the indexes against their levels, the sectors, the macro, the news that matters and what it means for today's list" },
+  // No Market view since 2026-11-15: the written overview has no page (the Dashboard's
+  // Market overview card reads it). A link to "plan" opens the Market Report view.
   { key: "setups", label: "Setups", group: "legacy", title: "The list, ranked: levels, signals, the score and the options" },
   { key: "breakouts", label: "Breakouts", group: "legacy", title: "Every US stock against its levels" },
   { key: "extended", label: "Extended hours", group: "legacy", title: "The pre-market and after-hours gappers" },
@@ -153,33 +183,32 @@ export interface Landing {
   tab: Tab;
   /** The Scanner's view. */
   scan?: ScanView;
-  /** The Futures section's view; only the brief is ever named by a link. */
-  fut?: "brief";
+  /** The Futures tab's view. */
+  fut?: FutView;
 }
 
 /**
  * The keys the bar used to have, and where each opens now. A remembered tab
- * or a shared link from before still lands somewhere sensible: the report on
- * the Futures section's Brief, the plan on the Scanner's Game plan, the Market
- * tab on Macro.
+ * or a shared link from before still lands somewhere sensible: the report and
+ * Analysis on the Futures tab's Market Report view, the plan (the stocks note) on the
+ * Stocks tab's, the Market tab on Macro.
  */
 const LEGACY: Record<string, Landing> = {
   market: { tab: "terminal" },
   // Structure split on 2026-11-10: its link opens the futures half's new home.
   structure: { tab: "futures" },
-  report: { tab: "futures", fut: "brief" },
-  plan: { tab: "scanner", scan: "plan" },
+  report: { tab: "futures", fut: "report" },
+  analysis: { tab: "futures", fut: "report" },
+  plan: { tab: "scanner", scan: "report" },
 };
 
 /**
  * A `?tab=` value, current or old, as where it opens — null for one that is
- * neither. `desk` is the old `?desk=` beside `?tab=analysis`: the stocks half was
- * the plan, and with no desk named Analysis opened on the brief.
+ * neither.
  */
-export function resolveTab(raw: unknown, desk?: unknown): Landing | null {
+export function resolveTab(raw: unknown): Landing | null {
   if (typeof raw !== "string") return null;
   if (isTab(raw)) return { tab: raw };
-  if (raw === "analysis") return desk === "stocks" ? LEGACY.plan : LEGACY.report;
   return LEGACY[raw] ?? null;
 }
 
@@ -200,13 +229,13 @@ export function deskOf(t: Tab): Desk | null {
 
 /**
  * The key the collector's Ask context knows for a page (server ask.py), which
- * keeps the names it had: the futures digest is "structure", the two written
- * notes are "report" (the brief, Futures → Brief) and "plan" (the game plan, the
- * Scanner's Game plan view); everything else is its own key. ("tape", the stocks digest,
- * was the Scanner's Index view; no page asks as it since that view went.)
+ * keeps the names it had: the futures digest is "structure", and either desk's Market
+ * Report view is "report", the written brief's key, so Hermes is handed the latest
+ * report there; everything else is its own key too. ("plan", the stocks overview, and
+ * "tape", the stocks digest, were views no page asks as any more: Hermes reaches both
+ * through its tools.)
  */
-export function askTab(t: Tab, view?: ScanView, fut?: string): string {
-  if (t === "futures") return fut === "brief" ? "report" : "structure";
-  if (t === "scanner" && view === "plan") return "plan";
-  return t;
+export function askTab(t: Tab, scan?: ScanView, fut?: FutView): string {
+  if ((t === "futures" && fut === "report") || (t === "scanner" && scan === "report")) return "report";
+  return t === "futures" ? "structure" : t;
 }

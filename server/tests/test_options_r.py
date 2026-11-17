@@ -106,6 +106,37 @@ def test_realised_earnings_moves_pick_the_reaction_day_by_volume() -> None:
     assert optcalc.realised_earnings_moves([], [date(2026, 9, 15)]) == []
 
 
+def test_realised_earnings_moves_take_the_hour_over_the_volume() -> None:
+    # Apple's real bars round its 30 Apr 2026 after-close report: the report day
+    # traded MORE than the reaction, so the volume guess read the wrong session.
+    bars = [(date(2026, 4, 28), 270.71, 40.0), (date(2026, 4, 29), 270.17, 30.0),
+            (date(2026, 4, 30), 271.35, 91.8), (date(2026, 5, 1), 280.14, 79.9),
+            (date(2026, 5, 4), 276.83, 46.7)]
+    days = [DayBar(d, c, c + 1, c - 1, c, v * 1e6) for d, c, v in bars]
+    rep = [date(2026, 4, 30)]
+    guess = optcalc.realised_earnings_moves(days, rep)
+    assert guess[0]["reaction"] == "2026-04-30" and guess[0]["pct"] == pytest.approx(0.44, abs=0.01)
+    after = optcalc.realised_earnings_moves(days, rep, when={date(2026, 4, 30): "after"})
+    assert after[0]["reaction"] == "2026-05-01" and after[0]["pct"] == pytest.approx(3.24, abs=0.01)
+    pre = optcalc.realised_earnings_moves(days, [date(2026, 5, 1)], when={date(2026, 5, 1): "pre"})
+    assert pre[0]["reaction"] == "2026-05-01"
+    # After the close on a day with no session (a Saturday): the first session after it.
+    sat = optcalc.realised_earnings_moves(days, [date(2026, 5, 2)],
+                                          when={date(2026, 5, 2): "after"})
+    assert sat[0]["reaction"] == "2026-05-04"
+    # After the close on the last bar held: its reaction has not traded, so no move yet.
+    assert optcalc.realised_earnings_moves(days, [date(2026, 5, 4)],
+                                           when={date(2026, 5, 4): "after"}) == []
+
+
+def test_report_hours_keep_only_a_known_side_of_the_session() -> None:
+    from newsterminal.scanscore import report_hours
+    rows = [{"date": "2026-11-02", "when": "after"}, {"date": "2026-10-15", "when": "unspecified"},
+            {"date": "2026-08-20", "when": "pre"}, {"date": "bad", "when": "pre"}]
+    assert report_hours(rows) == {date(2026, 11, 2): "after", date(2026, 8, 20): "pre"}
+    assert report_hours(None) == {}
+
+
 def _row(side: str = "long") -> dict[str, Any]:
     return {"sym": "X", "last": 100.0, "atr_b": 0.5, "atr_d": 3.0,
             "setup": {"side": side, "state": "retest", "level": "PDH",

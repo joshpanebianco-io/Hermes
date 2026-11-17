@@ -4,12 +4,20 @@
  * the top 10 ... maybe start with 6 - lay it out so its 3 columns 2 rows etc and then have
  * the options to change what is displayed in those 6 charts from the top 10").
  *
- * THE TEN ARE THE TEN HIGHEST SCORES ON THE WHOLE LIST (`topScores`), long and short
- * together. They were the first ten of whichever chip was lit, so "Long" gave the ten
- * best longs; the owner then asked for Multicharts to "funciton like the pill bar it's
- * next too - eg not both things can be selected at the same time" (2026-11-12), and
- * the day after for it to be a view of its own, the tab after Game plan. The chips are
- * the Setups view's, so no chip is choosing the charts' list.
+ * THE TEN ARE THE SCANNER LIST'S FIRST TEN, long and short together: the ten its Top 10
+ * chip keeps, in the order the list is ranked for the hour (in play before the bell and
+ * overnight, the setup score in the session). The Scanner page hands them in. Until
+ * 2026-11-15 they were the ten highest scores among the engine's tracked names
+ * (`topScores`), which had been the whole list until the Scanner became Today's list on
+ * 2026-11-13; outside the session the engine tracks the benchmarks and the MAG 7, so the
+ * charts were the MAG 7 (owner: "its not actually showing from the top 10 picks, its
+ * showing from mag7"). `topScores` is still what they fall back to when the list cannot
+ * be read. They were once the first ten of whichever chip was lit, so "Long" gave the
+ * ten best longs; the owner then asked for Multicharts to "funciton like the pill bar
+ * it's next too - eg not both things can be selected at the same time" (2026-11-12), and
+ * the day after for it to be a view of its own. The chips are the table's, so no chip is
+ * choosing the charts' list; the list's Filters (market cap, RVOL, sector) do apply, as
+ * they do to its Top 10 chip, and the charts' bar says so when one is on.
  *
  * A CHART KEEPS ITS NAME. The rank moves every five seconds in the session, and six
  * charts that followed it would trade places under the reader all morning. So a name

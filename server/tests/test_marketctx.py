@@ -372,10 +372,10 @@ def test_macro_takes_the_2y_from_the_curve_and_the_10y_from_the_board() -> None:
     rates = {"curve": [{"key": "2Y", "value": 4.8, "chg_bp": 5.0},
                        {"key": "10Y", "value": 5.24, "chg_bp": 2.0}],
              "spreads": [{"key": "2s10s", "value": 44.0}]}
-    quotes = [_q("US2Y", 4.06, 0.2, 0.01), _q("US10Y", 5.211, -0.5, -0.029),
+    quotes = [_q("US3M", 4.06, 0.2, 0.01), _q("US10Y", 5.211, -0.5, -0.029),
               _q("DXY", 102.257, -0.32), _q("BTC", 83210.1, 1.78)]
     by = {m["key"]: m for m in mc.macro(quotes, rates)}
-    assert by["US2Y"]["text"] == "4.80% +5bp"  # the Treasury's, not ^IRX's 4.06
+    assert by["US2Y"]["text"] == "4.80% +5bp"  # the Treasury's, not ^IRX's 4.06 (the board's US3M)
     assert by["US10Y"]["text"] == "5.21% −2.9bp" and by["US10Y"]["move"] == -2.9
     assert by["2s10s"]["text"] == "+44bp (−3)" and by["2s10s"]["move"] == -3.0
     assert by["BTC"]["text"] == "83,210.10 +1.78%"

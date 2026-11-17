@@ -43,8 +43,12 @@ export function openSearch(): void {
   window.dispatchEvent(new Event(OPEN_SEARCH_EVENT));
 }
 
-/** Always on the list, and nobody's favourite (server sources/scanner.BENCHMARKS). */
-const BENCHMARKS = new Set(["SPY", "QQQ", "IWM"]);
+/**
+ * Always on the list, and nobody's favourite (server sources/scanner.BENCHMARKS): the
+ * funds on the S&P 500, the Nasdaq 100 and the Russell 2000. The Scanner's Index chip
+ * is this set.
+ */
+export const BENCHMARKS: ReadonlySet<string> = new Set(["SPY", "QQQ", "IWM"]);
 
 /**
  * Add a name to the favourites, or take it off. Null on success, or why not. The

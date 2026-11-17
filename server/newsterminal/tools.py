@@ -98,8 +98,17 @@ MAX_SIGNALS = 30
 MAX_PAST_NOTES = 10
 #: A calendar day with more releases than this loses its impact-1 rows.
 CALENDAR_ALL = 30
-#: The futures books, for a digest or a note asked without one.
-BOOKS = ("NQ", "ES", "GC")
+#: The futures books a tool can be asked about. Silver and crude since 2026-11-15, when
+#: the driver board came to score them and the brief to be written about them.
+BOOKS = ("NQ", "ES", "GC", "SIL", "CL")
+#: The books a digest asked without one covers: the brief's first three, which is what
+#: fits the cap. Silver's and crude's are a digest of their own, asked by book.
+DIGEST_BOOKS = ("NQ", "ES", "GC")
+
+
+def _digest_asset(book: str | None) -> str:
+    """Which report digest holds a book's sections: its own for silver and crude."""
+    return book if book in ("SIL", "CL") else "all"
 
 _STR: dict[str, Any] = {"type": "string"}
 
@@ -142,18 +151,30 @@ PANELS: dict[str, str] = {
     "macro_board": "Macro · every quote on the board by group: the global indices, rates, "
                    "volatility, FX, energy, metals and crypto, each with its day's change and "
                    "whether it is live",
-    "regime": "Stocks, the top strip · VIX and its band, the curve, SPY's implied day, the "
-              "tape's bias, the next high-impact event, and the desk's lines on how to trade "
-              "this band",
-    "driver_board": "Structure, futures · per book, the score weighed by family for this "
-                    "session, every vote with its threshold and reason, which reads can vote, "
-                    "the grade, conflicts, event risk and the ceiling on conviction",
-    "the_book": "Futures, Overview · the contracts the card lists (NQ, ES, GC, YM and RTY) "
-                "and, for reference, the ETFs it no longer shows (QQQ, SPY, GLD): last, change "
+    # The strip's VIX card went on 2026-11-15 (owner: "we already have it above"): the VIX
+    # is the masthead's figure, and its band and SPY's implied day are on its click.
+    "regime": "Stocks, the top strip (the Tape card and the next print) and the masthead's "
+              "VIX, whose click opens the bands · VIX and its band, the curve, SPY's implied "
+              "day, the tape's bias, the next high-impact event, and the desk's lines on how "
+              "to trade this band",
+    "driver_board": "Futures, the Bias card on each contract · per book (NQ, ES, GC, and since "
+                    "2026-11-15 SIL and CL: ask for silver or crude by `book`), the score weighed "
+                    "by family for this session, every vote with its threshold and reason, which "
+                    "reads can vote, the grade, conflicts, event risk and the ceiling on "
+                    "conviction. Silver reads rates, the dollar, gold and copper; crude the "
+                    "dollar, the products, credit and copper, its inventories and growth prints",
+    # The Futures Overview went on 2026-11-14 (owner: "lets remove it completely"), and
+    # with it the only page this, `session_type` and `volatility` were drawn on. The data
+    # is served as before. `session_type` is back on a page since 2026-11-15: a card on
+    # each scored contract's row.
+    "the_book": "Futures, on no page since the Overview went · the futures contracts (NQ, ES, "
+                "GC, YM and RTY) and, for reference, their ETFs (QQQ, SPY, GLD): last, change "
                 "and where price sits in the day's range",
     "session_ranges": "Structure, futures · the four session boxes per book (high, low, "
                       "change, range, levels taken out), the overnight, and fuel",
-    "session_type": "Futures, Overview · per book, will New York trend or range: the night "
+    "session_type": "Futures, the Session type card on NQ, ES and GC since 2026-11-15 (on no "
+                    "page between the Overview going and then) · per book, will New York "
+                    "trend or range: the night "
                     "so far in ATRs, yesterday's shape, every condition that holds today with "
                     "its count over two years of sessions, the call (a count, never a "
                     "probability), and once New York has closed what the day was",
@@ -161,7 +182,8 @@ PANELS: dict[str, str] = {
                       "and the developing session, the read, and yesterday's shape",
     "gamma": "Structure · dealer gamma per futures book (walls, flip, regime) and in ETF "
              "prices for QQQ, SPY and IWM",
-    "volatility": "Structure · VIX, VVIX, VXN, GVZ and MOVE with their day ranges, the VIX "
+    "volatility": "Futures, on no page since the Overview went (the header's VIX figure "
+                  "stays) · VIX, VVIX, VXN, GVZ and MOVE with their day ranges, the VIX "
                   "term structure and SKEW, and Cboe put/call",
     "expiry": "Structure · OpEx week, month end and the next expiries",
     "cot": "Structure, futures · CFTC Commitments of Traders per book: the net, its change "
@@ -188,10 +210,14 @@ PANELS: dict[str, str] = {
     "sector_rotation": "Sectors, and the Dashboard's rotation row · the eleven sector ETFs: "
                        "day, week and month change and excess return against SPY, and equal "
                        "weight against cap weight",
-    "index_movers": "Macro · all forty names on the map for NDX and SPX: weight, move and "
-                    "contribution, and what they add up to (book narrows it to one index)",
+    "index_movers": "Macro · all forty names on the map for NDX and SPX (the card's tabs "
+                    "QQQ and SPY, keyed NQ and ES): weight, move and contribution, and what "
+                    "they add up to (book narrows it to one index)",
     "sector_peers": "Macro, stocks · the watchlist's sector peers reporting this week",
-    "catalysts": "Futures, Brief · the brief's catalyst list: data, the Fed, auctions and "
+    # The Market Report is a view of Futures (after CL) and of Stocks (after Charts) since
+    # 2026-11-16 (web lib/reportDesk): the page it was for a day is gone.
+    "catalysts": "Futures or Stocks, the Market Report view · the brief's "
+                 "catalyst list: data, the Fed, auctions and "
                  "bellwether earnings, twelve hours back to three days out",
     "pool": "Stocks · the favourites (the starred names), the pool behind them, today's "
             "promotions and why, the names in play that missed, and the options expiry rule",
@@ -223,9 +249,12 @@ PANELS: dict[str, str] = {
                       "stocks",
     "themes": "Sectors · the theme ETFs (semis, software, cybersecurity, biotech, gold miners "
               "and the rest): day, week and month change and excess return against SPY",
-    "past_notes": "Futures, Brief and Stocks, Game plan · the stored briefs and game plans, "
-                  "newest first, with the ids "
-                  "note takes",
+    "past_notes": "Futures or Stocks, the Market Report view's Past reports list (each desk "
+                  "lists its own since 2026-11-16: Futures one book a report, Stocks SPY, QQQ "
+                  "and IWM together) · the stored briefs, each about one book (older ones "
+                  "about Indexes, NQ and ES together) or the three funds, for one session, and "
+                  "the stocks overviews (kept, and listed on no page since 2026-11-15), newest "
+                  "first, with the ids note takes",
     "sources": "The status rail · every data source's health: down, stale or on a cached "
                "copy, with the error and the age, and each wire feed the same way",
 }
@@ -323,7 +352,10 @@ SPEC: list[dict[str, Any]] = [
                    "sym": {**_STR, "description": "One ticker, e.g. ARM"}})),
     _tool("calendar",
           "The economic calendar for one ET day, one release per line: time, name, country, "
-          "actual, consensus, previous, impact and the session it lands in. A full day leaves "
+          "actual, consensus, previous, impact and the session it lands in. An actual followed "
+          "by an agency in brackets (BLS, Census, BEA, EIA) is that agency's own figure, and "
+          "where the calendar feed had printed something else the line says what; an actual "
+          "with no agency is the calendar feed's alone. A full day leaves "
           "out its impact-1 rows unless min_impact is given. It also lists the market holidays "
           "and early closes from that day through three weeks out: US stocks and the US bond "
           "market (shut on Columbus Day and Veterans Day while stocks trade), London, Tokyo.",
@@ -347,7 +379,12 @@ SPEC: list[dict[str, Any]] = [
           "A stored note: the latest futures brief or the latest Market overview (kind "
           "\"plan\": the stocks desk's note, a per-name game plan until 2026-11-13 and the "
           "AI market overview since), or one by id, with when it was written and how old it "
-          "is. A brief's reads are per book; name one to get just its read.",
+          "is. A brief's calls are per book; name one to get just its call (and its read, "
+          "in a brief stored before 2026-11-15, when briefs became the short market "
+          "report: the day, a call per book with every factor behind its bias (the "
+          "engine's tag and share of the score, and a comment), a plan and what makes it "
+          "wrong, what is on the clock, risks. No dealer gamma and no moving average: the "
+          "bias weighs neither).",
           _params({"kind": {"type": "string", "enum": ["brief", "plan"]},
                    "id": {**_STR, "description": "A note id like 20261029-093225; omit for "
                                                  "the latest"},
@@ -749,8 +786,15 @@ def _calendar(snap: dict[str, Any], day: str, floor: Any = None) -> dict[str, An
         rows = kept
     lines: list[str] = []
     for r in rows:
+        # Whose the actual is, when the agency's own figure is on the row
+        # (sources/official.py), and what the calendar feed said where it differed.
+        off = r.get("official") if isinstance(r.get("official"), dict) else None
+        whose = ""
+        if off:
+            whose = (f" ({off.get('by')}'s own figure; the calendar feed said {off.get('feed')})"
+                     if off.get("agrees") is False else f" ({off.get('by')}'s own figure)")
         line = (f"{r.get('et') or '—'} {r.get('event')} ({r.get('country')}) · "
-                f"act {_num(r.get('actual'))} · cons {_num(r.get('consensus'))} · "
+                f"act {_num(r.get('actual'))}{whose} · cons {_num(r.get('consensus'))} · "
                 f"prev {_num(r.get('previous'))}")
         if r.get("surprise") not in (None, ""):
             line += f" · surprise {_num(r.get('surprise'))}"
@@ -865,14 +909,14 @@ def _futures_digest(snap: dict[str, Any], book: str | None) -> dict[str, Any]:
     """The brief's digest, less the sections that have tools of their own, and
     only the book asked for where a section is keyed by book."""
     sess = report.resolve_session(snap.get("clock") or {}, "auto")
-    full = report.build_digest(snap, sess, "all")
+    full = report.build_digest(snap, sess, _digest_asset(book))
     own_tools = {"headlines", "heavyweights", "brief_tables", "catalysts", "event_risk",
                  "earnings", "index_movers"}
     # The book's own sections first: the cap drops from the end, and the
     # driver board is the last thing a question about a book can do without.
     first = ["engine_driver_board", "session_ranges", "session_type_lean", "volume_profile",
              "gamma_levels"]
-    books = (book,) if book else BOOKS
+    books = (book,) if book else DIGEST_BOOKS
     out: dict[str, Any] = {"books": list(books)}
     for k in [*first, *(k for k in full if k not in first)]:
         v = full.get(k)
@@ -940,8 +984,22 @@ def _note(got: dict[str, Any], kind: str, book: str | None,
     keep = ("thesis", "snapshot_watch", "gamma_read", "catalysts_intro", "catalyst_notes",
             "risks", "cross_asset", "rotation_read", "ratio_reads", "rotation_notes")
     body: dict[str, Any] = {k: note.get(k) for k in keep if note.get(k) not in (None, "", [])}
-    body["calls"] = calls
-    body["reads"] = reads
+    # The market report (2026-11-15) stores a call's comments by factor key; the row's
+    # name, tag and share of the score are the engine's and sit in the facts. Joined
+    # here into the line the page prints, every row, a comment or not.
+    rows_of = _d(_d(facts).get("factors"))
+    body["calls"] = [_with_factor_rows(c, rows_of.get(str(c.get("book")))) for c in calls]
+    # A read per book is the shape before 2026-11-15; the short brief has none, and
+    # says what is on the clock by the calendar row's id, joined to its row here.
+    if "reads" in note:
+        body["reads"] = reads
+    rows = {c.get("id"): c for c in _d(facts).get("catalysts") or [] if isinstance(c, dict)}
+    today = [f"{rows[t['id']].get('when') or ''} {rows[t['id']].get('title') or ''} — "
+             f"{t.get('note') or ''}".strip().rstrip(" —")
+             for t in note.get("today") or []
+             if isinstance(t, dict) and t.get("id") in rows]
+    if today:
+        body["today"] = today
     by_id = {h.get("id"): h for h in _d(facts).get("headlines") or [] if isinstance(h, dict)}
     picked = [f"{by_id[h['id']].get('title')} — {h.get('note') or ''}".rstrip(" —")
               for h in note.get("headlines") or []
@@ -949,6 +1007,24 @@ def _note(got: dict[str, Any], kind: str, book: str | None,
     if picked:
         body["headlines"] = picked
     return _cap({**head, "note": body}, NOTE_CHARS)
+
+
+def _with_factor_rows(call: dict[str, Any], rows: Any) -> dict[str, Any]:
+    """A call with its factor comments as the page's rows: "Macro (rates & dollar):
+    Bearish, 21% of the score. <the comment>". Without the facts' rows (a note stored
+    before them) the call is returned as stored. Pure."""
+    if not isinstance(rows, list) or not isinstance(call.get("factors"), list):
+        return call
+    said = {f.get("key"): f.get("line") for f in call["factors"] if isinstance(f, dict)}
+    out: list[str] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        name = f"{r.get('name')} ({r['sub']})" if r.get("sub") else str(r.get("name"))
+        share = f", {r['weight']}% of the score" if isinstance(r.get("weight"), int) else ""
+        line = said.get(r.get("key")) or "; ".join(str(x) for x in r.get("reads") or [])
+        out.append(f"{name}: {r.get('tag')}{share}. {line}".strip())
+    return {**call, "factors": out}
 
 
 # --------------------------------------------------------------------------
@@ -1182,10 +1258,29 @@ def _stocks_read(g: dict[str, Any]) -> str:
             f"{_pc(s.get('median'))}" + (f", led by {led}" if led else ""))
 
 
+def _hm(sec: Any) -> str:
+    """Epoch seconds as New York's HH:MM."""
+    if not isinstance(sec, int | float) or isinstance(sec, bool):
+        return "—"
+    return datetime.fromtimestamp(sec, ZoneInfo("America/New_York")).strftime("%H:%M")
+
+
 def _heatmap_body(g: dict[str, Any]) -> dict[str, Any]:
     """The Sectors view as the page shows it: every card, best first, one line each."""
+    phase = g.get("cards_phase")
+    # Outside the session the page shows each fund's extended-hours move (2026-11-16):
+    # before the bell as the card's day, after the close beside the session's.
+    ext_word = {"pre": "pre-market", "post": "after hours"}.get(str(phase))
+
     def card(c: dict[str, Any]) -> str:
-        return (f"{c.get('key')} {c.get('label')}: day {_pc(c.get('day_pct'))} "
+        ext = ""
+        if ext_word and c.get("ext_pct") is not None:
+            ext = (f"{ext_word} {_pc(c.get('ext_pct'))} ({_pc(c.get('rs_ext'))} vs SPY, last "
+                   f"trade {_hm(c.get('ext_at'))} ET), ")
+        elif ext_word:
+            ext = f"no {ext_word} trade yet, "
+        day = "session day" if ext_word else "day"
+        return (f"{c.get('key')} {c.get('label')}: {ext}{day} {_pc(c.get('day_pct'))} "
                 f"({_pc(c.get('rs_day'))} vs SPY), week {_pc(c.get('week_pct'))}, month "
                 f"{_pc(c.get('month_pct'))} · {_stocks_read(c)} · list: {c.get('list')}"
                 + (f" · under {c['parent']}" if c.get("parent") else ""))
@@ -1200,13 +1295,26 @@ def _heatmap_body(g: dict[str, Any]) -> dict[str, Any]:
                 f"{_pc(_d(i.get('month')).get('median'))}")
 
     def by_day(c: dict[str, Any]) -> float:
-        day = c.get("day_pct")
+        # Ranked as the page ranks them: by the pre-market move before the bell.
+        day = c.get("ext_pct") if phase == "pre" else c.get("day_pct")
         return -float(day) if isinstance(day, int | float) else 1e9
 
     cards = sorted((c for c in g.get("cards") or [] if isinstance(c, dict)), key=by_day)
     groups = sorted((i for i in g.get("industries") or [] if isinstance(i, dict)),
                     key=lambda i: -(_d(i.get("day")).get("median") or -1e9))
     return {"cards_show_the_session_of": g.get("cards_day"), "basis": g.get("basis"),
+            "cards_phase": {
+                "pre": "before the bell: each card's day on the page is the fund's pre-market "
+                       "move against the last close, and its stocks' up/down counts and the "
+                       "industries' medians are their own pre-market moves",
+                "post": "after the close: each card's day is the session's, with the fund's "
+                        "after-hours move beside it",
+                "rth": ("the regular session: each card's day is the fund's own move today; "
+                        "until 09:45 ET its stocks' up/down counts and the industries' medians "
+                        "are still their pre-market moves, because the stock screener runs "
+                        "fifteen minutes behind") if g.get("counts_pre") else "the regular session",
+            }.get(str(phase), "the last session, nothing traded outside it to show"),
+            "spy_extended_move": _d(g.get("spy")).get("ext"),
             "delayed_minutes": g.get("delayed_min"), "spy": g.get("spy"),
             "list_kinds": "sector and industry: every stock in the group; fund: partial, because "
                           "Yahoo publishes only a fund's top ten; hand: a short list of US-listed "
@@ -1270,7 +1378,7 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
     fd: dict[str, Any] = {}
     if name in _FUTURES_DIGEST_PANELS:
         sess = report.resolve_session(snap.get("clock") or {}, "auto")
-        fd = report.build_digest(snap, sess, "all")
+        fd = report.build_digest(snap, sess, _digest_asset(book))
     mk: dict[str, Any] = {}
     if name in _MARKET_PANELS:
         if scan is not None:

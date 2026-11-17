@@ -33,20 +33,26 @@ def test_headline_direction(title: str, want: str | None) -> None:
     assert scanscore.headline_direction(title) == want
 
 
-def test_catalyst_with_the_side_earns_and_against_it_costs_and_flags() -> None:
+def test_a_story_earns_its_grade_either_way_and_one_that_reads_against_is_flagged() -> None:
     hit = scanscore.catalyst_read("short", None, [_h("Jefferies downgrades X to Hold")], None)
     # A rating change is notable, not major: 12 of the 20 (catalysts.py).
-    assert hit["pts"] == 12 and hit["against"] is None
+    assert hit["pts"] == 12 and hit["against"] is None and hit["reads_against"] is None
     assert hit["note"] == ('with the short · Reuters: "Jefferies downgrades X to Hold" '
                            "(2h)")
+    # NEWS IS FUEL (owner, 2026-11-14): the same downgrade under a long cost six. On the
+    # record a story read as against the trade reached +1R as often as one read as with
+    # it, so it earns the same twelve, and the row says which way it reads.
     miss = scanscore.catalyst_read("long", None, [_h("Jefferies downgrades X to Hold")], None)
-    assert miss["pts"] == -6
-    assert miss["against"] == 'Reuters: "Jefferies downgrades X to Hold" (2h)'
-    assert miss["note"].startswith("against the long · Reuters:")
+    assert miss["pts"] == 12 and miss["against"] is None
+    assert miss["reads_against"] == 'Reuters: "Jefferies downgrades X to Hold" (2h)'
+    assert miss["item"]["with"] is False and miss["item"]["dir"] == "bear"
+    assert miss["note"] == ('news on the name · Reuters: "Jefferies downgrades X to Hold" (2h)'
+                            " · its headline reads against the long")
     flags = scanscore.flags_for({"setup": {"side": "long"}, "score": {"side": "long"}}, None,
                                 None, [], [], "rth", catalyst=miss)
     assert flags[0] == {"kind": "catalyst", "tone": "warn",
-                        "text": 'Against: Reuters: "Jefferies downgrades X to Hold" (2h)'}
+                        "text": 'Headline reads against the long: Reuters: "Jefferies '
+                                'downgrades X to Hold" (2h)'}
 
 
 def test_catalyst_reads_the_report_surprise_and_filings() -> None:
@@ -54,8 +60,10 @@ def test_catalyst_reads_the_report_surprise_and_filings() -> None:
     r = scanscore.catalyst_read("long", beat, [], None)
     assert r["pts"] == 20
     assert r["note"] == "with the long · reported after the close, EPS +3.2% vs estimate"
+    # A beat under a short: the report is the name's news either way, and is flagged.
     r = scanscore.catalyst_read("short", beat, [], None)
-    assert r["pts"] == -10
+    assert r["pts"] == 20
+    assert r["reads_against"] == "reported after the close, EPS +3.2% vs estimate"
     # No surprise figure: the report alone carries no direction.
     unknown = {"days": -1, "when": "after", "surprise_pct": None}
     assert scanscore.catalyst_read("long", unknown, [], None)["pts"] == 0
@@ -65,10 +73,30 @@ def test_catalyst_reads_the_report_surprise_and_filings() -> None:
     assert off_short["pts"] == 3
 
 
-def test_catalyst_against_wins_a_tie_and_stale_headlines_do_not_count() -> None:
+def test_a_filing_keeps_its_side_where_no_story_outweighs_it() -> None:
+    offering = [{"form": "424B5", "desc": "Prospectus"}]
+    # A form is not a headline's words: against a long it still costs, beside a tweak...
+    tweak = scanscore.catalyst_read("long", None, [_h("X price target raised to $50 by Y")],
+                                    offering)
+    assert tweak["pts"] == -6 and tweak["against"] == "offering filed: Prospectus"
+    assert "news on the name:" in tweak["note"]
+    # ...and a major story outweighs it, as it always did.
+    beat = scanscore.catalyst_read("long", None, [_h("X beats on revenue")], offering)
+    assert beat["pts"] == 20 and beat["against"] is None
+    # A bankruptcy 8-K against a long outweighs anything.
+    bk = [{"form": "8-K", "desc": "Bankruptcy or receivership"}]
+    gone = scanscore.catalyst_read("long", None, [_h("X beats on revenue")], bk)
+    assert gone["pts"] == -10 and gone["against"].startswith("8-K:")
+    assert scanscore.catalyst_read("short", None, [], bk)["pts"] == 20
+
+
+def test_the_flag_goes_to_the_story_against_on_a_tie_and_stale_headlines_do_not_count() -> None:
     both = scanscore.catalyst_read("long", None,
                                    [_h("Barclays upgrades X to Buy"), _h("UBS downgrades X")], None)
-    assert both["pts"] == -6 and "with it:" in both["note"]
+    # Twelve either way; of two as strong the note leads with the one that reads with the
+    # side, and the flag still names the one against it.
+    assert both["pts"] == 12 and both["note"].startswith("with the long · Reuters: \"Barclays")
+    assert "reads against the long:" in both["note"] and "UBS" in both["reads_against"]
     old = scanscore.catalyst_read("long", None, [_h("Barclays upgrades X to Buy", age_min=20 * 60)],
                                   None)
     assert old["pts"] == 0

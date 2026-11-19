@@ -80,16 +80,17 @@ def test_an_index_books_weights_are_the_sessions_own() -> None:
         assert bias.board_weights("ES", session) == base
 
 
-def test_gold_no_longer_carries_two_families_it_cannot_vote_in() -> None:
-    # In the New York session risk appetite and participation were a third of gold's
-    # hundred that no gold read could earn: over the whole weight its score topped out
-    # well short of the end. The families gold has a read in are shared out in proportion:
-    # three of them since the daily trend left the score (2026-11-15), 33 / 21 / 13 of the
-    # session's hundred becoming 49 / 31 / 20.
+def test_gold_silver_and_crude_each_have_their_own_table() -> None:
+    # Until 2026-11-19 each was the index table shared out in proportion. Gold is a
+    # rates-and-dollar market first in New York's hours, and in Asia and London only its
+    # structure and rates can speak (a print votes until its day's close).
     assert bias.board_weights("GC", "ny_live") == {
-        "structure": 49, "rates": 31, "risk": 0, "catalysts": 20, "participation": 0}
+        "rates": 45, "structure": 35, "catalysts": 20, "risk": 0, "participation": 0}
     assert bias.board_weights("GC", "asia") == {
-        "structure": 57, "rates": 22, "catalysts": 21, "risk": 0, "participation": 0}
+        "structure": 60, "rates": 40, "catalysts": 0, "risk": 0, "participation": 0}
+    # Crude's catalysts are Wednesday's inventories and the growth prints.
+    assert bias.board_weights("CL", "ny_live") == {
+        "structure": 35, "rates": 25, "catalysts": 25, "risk": 15, "participation": 0}
     # Every gold read on one side now reaches the end of the scale.
     votes = [{"key": k, "label": k, "value": "v", "vote": "short", "note": "n", "live": True}
              for k in ("yields", "dollar", "silver", "prints", "value", "session")]
@@ -101,9 +102,6 @@ def test_shared_out_weights_keep_their_order_and_break_a_tie_by_the_first_named(
     # 62.5 and 37.5: the half point goes to the family named first.
     assert bias.share_out({"a": 50, "b": 30, "c": 20}, ("a", "b")) == {"a": 63, "b": 37, "c": 0}
     assert bias.share_out({"a": 50, "b": 30, "c": 20}, ("b", "a")) == {"a": 62, "b": 38, "c": 0}
-    # Crude in the New York session: 33, 21, 20 and 13 of 87 (participation is not its).
-    assert bias.board_weights("CL", "ny_live") == {
-        "structure": 38, "rates": 24, "risk": 23, "catalysts": 15, "participation": 0}
     # No book has a daily-trend family to weigh, in any session.
     assert all("daily" not in bias.board_weights(b, s)
                for b in ("NQ", "GC", "SIL", "CL") for s in bias.BOARD_WEIGHTS)
@@ -130,7 +128,9 @@ def test_the_board_scores_five_books_and_finds_silver_and_crude_under_their_boar
 
 
 def test_silver_reads_rates_the_dollar_gold_and_copper_as_one_voice() -> None:
-    quotes = _with(US10Y=-0.06, DXY=-0.4, GC=0.9, COPPER=1.2)
+    # Each a usual day and a half or more (no history: the stated fallbacks), so each a
+    # full vote; gold and copper on a flat silver are all surprise.
+    quotes = _with(US10Y=-0.09, DXY=-0.6, GC=1.5, COPPER=2.0)
     sil = drivers.build(_snap(quotes), "rth", NOW)["books"]["SIL"]
     v = _votes(sil)
     assert [v[k]["vote"] for k in ("yields", "dollar", "gold", "copper")] == ["long"] * 4
@@ -140,18 +140,25 @@ def test_silver_reads_rates_the_dollar_gold_and_copper_as_one_voice() -> None:
     assert not {"vix_dir", "vix_curve", "credit", "sectors", "leaders", "hw_prints"} & set(v)
     fam = {f["key"]: f for f in sil["families"]}
     assert (fam["rates"]["score"], fam["rates"]["live"], fam["rates"]["total"]) == (100, 4, 4)
-    # 31 of the session's hundred, all of it long, and nothing else live.
-    assert (sil["bias"], sil["score"], sil["coverage"]) == ("long", 31, 31)
+    # 40 of the session's hundred, all of it long, and nothing else live.
+    assert (sil["bias"], sil["score"], sil["coverage"]) == ("long", 40, 40)
 
 
-@pytest.mark.parametrize(("pct", "vote"), [(0.4, "long"), (0.39, "neutral"), (-0.4, "short")])
-def test_gold_votes_for_silver_from_four_tenths_of_a_percent(pct: float, vote: str) -> None:
+@pytest.mark.parametrize(("pct", "vote"), [(0.6, "long"), (0.4, "neutral"), (-0.6, "short")])
+def test_gold_votes_for_silver_from_half_its_usual_day(pct: float, vote: str) -> None:
     v = _votes(drivers.build(_snap(_with(GC=pct)), "rth", NOW)["books"]["SIL"])
     assert v["gold"]["vote"] == vote
 
 
+def test_gold_moving_with_silver_is_silvers_own_echo() -> None:
+    # Silver up 2% and gold up 0.9%: about what silver's move explains (the stated beta,
+    # 0.45), so gold says nothing silver did not.
+    v = _votes(drivers.build(_snap(_with(SILVER=2.0, GC=0.9)), "rth", NOW)["books"]["SIL"])
+    assert v["gold"]["vote"] == "neutral" and "echo" in v["gold"]["note"]
+
+
 def test_gold_falling_and_copper_rising_cancel_inside_silvers_family() -> None:
-    sil = drivers.build(_snap(_with(GC=-1.0, COPPER=1.0)), "rth", NOW)["books"]["SIL"]
+    sil = drivers.build(_snap(_with(GC=-1.0, COPPER=1.3)), "rth", NOW)["books"]["SIL"]
     fam = {f["key"]: f for f in sil["families"]}
     assert fam["rates"]["score"] == 0 and sil["bias"] is None
 
@@ -160,11 +167,11 @@ def test_gold_falling_and_copper_rising_cancel_inside_silvers_family() -> None:
 
 
 def test_crude_reads_the_dollar_the_products_credit_and_copper_and_not_the_ten_year() -> None:
-    quotes = _with(DXY=0.5, RBOB=-1.5, HEATOIL=-0.5, HYG=-0.3, COPPER=-0.9, US10Y=0.10)
+    quotes = _with(DXY=0.6, RBOB=-3.5, HEATOIL=-1.9, HYG=-0.4, COPPER=-2.0, US10Y=0.10)
     cl = drivers.build(_snap(quotes), "rth", NOW)["books"]["CL"]
     v = _votes(cl)
     assert [v[k]["vote"] for k in ("dollar", "products", "credit", "copper")] == ["short"] * 4
-    assert v["products"]["value"] == "gasoline -1.50% · heating oil -0.50%"
+    assert v["products"]["value"] == "gasoline -3.50% · heating oil -1.90%"
     assert "demand" in v["copper"]["note"]
     # The 10-year moved ten basis points and crude has no row for it; nor the VIX.
     assert not {"yields", "vix_dir", "vix_curve", "sectors", "leaders"} & set(v)
@@ -177,11 +184,24 @@ def test_crude_reads_the_dollar_the_products_credit_and_copper_and_not_the_ten_y
 
 @pytest.mark.parametrize(
     ("rbob", "heat", "vote"),
-    [(1.0, 0.5, "long"), (1.0, 0.4, "neutral"), (-2.0, 0.5, "short"), (0.7, 0.7, "neutral")],
+    # Their average against a flat crude, in the products' usual day (1.8%, no history):
+    # from 0.9% it is a vote.
+    [(1.0, 0.9, "long"), (1.0, 0.7, "neutral"), (-2.0, -0.5, "short"), (0.7, 0.7, "neutral")],
 )
 def test_the_products_vote_on_their_average(rbob: float, heat: float, vote: str) -> None:
     v = _votes(drivers.build(_snap(_with(RBOB=rbob, HEATOIL=heat)), "rth", NOW)["books"]["CL"])
     assert v["products"]["vote"] == vote
+
+
+def test_products_moving_with_crude_are_not_a_second_vote_for_it() -> None:
+    # 2026-11-19: crude up 2% and the products up 1.6% is the barrel's own move told
+    # again (the stated beta, 0.8). The read is whether the products run AHEAD of it.
+    echo = _votes(drivers.build(_snap(_with(WTI=2.0, RBOB=1.6, HEATOIL=1.6)), "rth",
+                                NOW)["books"]["CL"])["products"]
+    assert echo["vote"] == "neutral" and "echo" in echo["note"]
+    ahead = _votes(drivers.build(_snap(_with(WTI=2.0, RBOB=4.5, HEATOIL=4.5)), "rth",
+                                 NOW)["books"]["CL"])["products"]
+    assert ahead["vote"] == "long" and "pulled through" in ahead["note"]
 
 
 def test_a_build_is_short_and_a_draw_is_long_against_consensus_where_there_is_one() -> None:

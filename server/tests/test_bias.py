@@ -42,23 +42,26 @@ def test_the_worked_example_reads_as_the_owner_saw_it() -> None:
     # +48 on 85% until 2026-11-12, when gamma's long vote (spot above the flip) was one of
     # the reads. It is in no family now: the same morning read +45 on seven reads, over
     # the 84% of the weight that was live. Over the whole weight (2026-11-15) it was +38,
-    # and with the trend reads out of the score the same day it is +28: structure is the
-    # profile (flat) and the session's range (long), half of London's 44, and the VIX
-    # curve all of risk's 6. The catalysts, 19 of the hundred, could not vote.
-    assert (r["bias"], r["score"], r["grade"], r["coverage"]) == ("long", 28, "weak", 81)
+    # and with the trend reads out of the score the same day +28. Since 2026-11-19 the VIX
+    # curve is no side either, and that evening the VIX's day left too: risk is credit
+    # alone, a cash read, so London's table is structure 59 / rates 41. Structure is the
+    # profile (flat) and the session's range (long), half of 59, +30 (29.5 rounded); rates
+    # (the dollar, flat) is live, so the whole weight is.
+    assert (r["bias"], r["score"], r["grade"], r["coverage"]) == ("long", 30, "moderate", 100)
     assert r["basis"] == "whole"
-    assert (r["live"], r["cannot_vote"], r["total"]) == (4, 7, 11)
+    assert (r["live"], r["cannot_vote"], r["total"]) == (3, 5, 8)
     assert r["weight_label"] == "London's weight"
     assert {f["short"]: f["score"] for f in r["families"] if f["score"] is not None} == {
-        "Structure": 50, "Rates & dollar": 0, "Risk": 100}
+        "Structure": 50, "Rates & dollar": 0}
     assert not {"positioning", "daily"} & {f["key"] for f in r["families"]}
-    assert next(v for v in r["votes"] if v["key"] == "gamma")["family"] is None
+    for loose in ("gamma", "vix_curve", "vix_dir", "hw_prints"):
+        assert next(v for v in r["votes"] if v["key"] == loose)["family"] is None
     # Heaviest first, as the strip prints them.
     assert [f["short"] for f in r["families"]][:2] == ["Structure", "Rates & dollar"]
-    # Weak's ceiling, a notch lower for the event on the tape.
-    assert r["event_risk"] is True and r["max_conviction"] == 2
+    # Moderate's ceiling, a notch lower for the event on the tape.
+    assert r["event_risk"] is True and r["max_conviction"] == 3
     assert "Event risk since the close (5)" in r["treatment"]
-    assert r["treatment"].startswith("Lean long ES, weak (score +28, 4 of 11 reads live): ")
+    assert r["treatment"].startswith("Lean long ES, moderate (score +30, 3 of 8 reads live): ")
 
 
 def test_a_trend_read_is_never_a_side() -> None:
@@ -124,25 +127,55 @@ def test_a_score_is_the_live_reads_agreement_times_the_weight_that_is_live() -> 
           *[_v(k, live=False) for k in ("yields", "dollar", "credit", "vix_dir", "prints",
                                         "hw_prints", "sectors", "leaders")]]
     r = bias.board_read("NQ", nq, "asia", regime="NEG", ny_open=False)
-    # Structure half long on 53 of the hundred, risk flat on 7: +26 of the whole hundred,
-    # where over the 60% that is live alone it would have read +44, moderate.
-    assert (r["bias"], r["score"], r["coverage"], r["grade"]) == ("long", 26, 60, "weak")
-    assert (r["live"], r["total"]) == (3, 11)
+    # Asia's table since 2026-11-19 is structure 70 / rates 30 (nothing else can speak
+    # before 03:00 ET). Structure half long on 70: +35 of the whole hundred, with rates
+    # shut. The VIX curve is no side.
+    assert (r["bias"], r["score"], r["coverage"], r["grade"]) == ("long", 35, 70, "moderate")
+    # Eight reads in families: the VIX's day is in none since the evening of 2026-11-19.
+    assert (r["live"], r["total"]) == (2, 8)
     # The shut reads live and flat instead: the same score, since shut and flat are both
     # no lean, and only the coverage says which it was.
     flat = bias.board_read("NQ", [dict(v, live=True) for v in nq], "asia", regime="NEG",
                            ny_open=False)
-    assert (flat["score"], flat["coverage"]) == (26, 100)
+    assert (flat["score"], flat["coverage"]) == (35, 100)
 
 
 def test_one_idea_has_one_voice() -> None:
-    # Three reads of risk against one read of rates, equally weighted: the three do
-    # not outvote the one, which is what a count let them do.
-    votes = [_v("vix_dir", "long"), _v("vix_curve", "long"), _v("credit", "long"),
-             _v("yields", "short")]
+    # Two reads of rates against one read of risk, equally weighted: the two do not
+    # outvote the one, which is what a count let them do.
+    votes = [_v("yields", "long"), _v("dollar", "long"), _v("credit", "short")]
     r = bias.read(votes, bias.BOARD_FAMILY, {"risk": 50, "rates": 50}, "session")
     assert r["score"] == 0 and r["bias"] is None
-    assert (r["agree"], r["against"]) == (3, 1)
+    assert (r["agree"], r["against"]) == (2, 1)
+
+
+def test_a_read_counts_by_its_size() -> None:
+    # 2026-11-19: a long read at 0.4 of a full vote and a flat one make a family +20, not
+    # +50; a read with no strength is a whole vote, as every read was.
+    fam = {"x": "a", "y": "a"}
+    r = bias.read([_v("x", "long", strength=0.4), _v("y")], fam, {"a": 100}, "session")
+    assert r["score"] == 20 and r["families"][0]["score"] == 20
+    assert r["families"][0]["points"] == 20.0
+    whole = bias.read([_v("x", "long"), _v("y")], fam, {"a": 100}, "session")
+    assert whole["score"] == 50
+    # A strength is clipped to a whole vote, and a flat read's strength is never read.
+    over = bias.read([_v("x", "short", strength=3.0), _v("y", strength=1.0)], fam, {"a": 100},
+                     "session")
+    assert over["score"] == -50
+
+
+def test_strong_needs_two_families_behind_it() -> None:
+    # 2026-11-19: gold read -57 strong on the one fact that it was under New York's range
+    # and value. One family is one fact, however far out it reaches.
+    one = bias.board_read("GC", [_v("value", "short"), _v("session", "short"),
+                                 _v("dollar"), _v("yields")], "asia", regime=None, ny_open=False)
+    assert (one["score"], one["coverage"], one["backers"], one["grade"]) == (-60, 100, 1,
+                                                                              "moderate")
+    # The dollar firm as well: a second family, 5 points or more on the same side.
+    two = bias.board_read("GC", [_v("value", "short"), _v("session", "short"),
+                                 _v("dollar", "short", strength=0.5), _v("yields")],
+                          "asia", regime=None, ny_open=False)
+    assert (two["score"], two["backers"], two["grade"]) == (-70, 2, "strong")
 
 
 def test_every_read_on_one_side_reaches_the_top_of_the_scale() -> None:
@@ -153,13 +186,15 @@ def test_every_read_on_one_side_reaches_the_top_of_the_scale() -> None:
 
 @pytest.mark.parametrize(
     ("agree", "reads", "coverage", "score", "bias_word", "grade", "cap"),
-    [(5, 6, 60, 50, "long", "strong", 5),        # five of six on 60% of the weight
+    # Every case is one live family, so none is strong: that takes two families since
+    # 2026-11-19 (test_strong_needs_two_families_behind_it).
+    [(5, 6, 60, 50, "long", "moderate", 4),      # five of six on 60% of the weight
      (49, 60, 60, 49, "long", "moderate", 4),
      (50, 59, 59, 50, "long", "moderate", 4),    # under 60% of the weight live: never strong
      (30, 100, 100, 30, "long", "moderate", 4), (29, 100, 100, 29, "long", "weak", 3),
      (10, 100, 100, 10, "long", "weak", 3), (9, 100, 100, 9, None, "none", 2),
      (-10, 100, 100, -10, "short", "weak", 3), (-9, 100, 100, -9, None, "none", 2),
-     (-50, 100, 100, -50, "short", "strong", 5),
+     (-50, 100, 100, -50, "short", "moderate", 4),
      # Every live read agrees, on a third of the weight: a third of the way out.
      (100, 100, 35, 35, "long", "moderate", 4), (100, 100, 9, 9, None, "none", 2),
      (0, 0, 0, 0, None, "none", 2)],
@@ -189,17 +224,30 @@ def test_a_conflict_takes_a_notch_off_the_grade_and_the_ceiling() -> None:
     r = bias.board_read("NQ", _conflicted(), "asia", regime="NEG", ny_open=False)
     assert r["conflict"] is True
     assert (r["macro_lean"], r["structure_lean"]) == ("short", "long")
-    # Structure's 53 long against rates' 20 short: +33 of the whole weight would be
+    # Structure's 70 long against rates' 30 short: +40 of the whole weight would be
     # moderate; the conflict takes it to weak, and its ceiling with it.
-    assert r["score"] == 33 and r["grade"] == "weak" and r["max_conviction"] == 3
+    assert r["score"] == 40 and r["grade"] == "weak" and r["max_conviction"] == 3
     assert r["treatment"].startswith("Macro leans short on NQ but structure accepts long")
-    # A small disagreement is not a conflict: a faint macro lean long against structure
-    # half short. Both sides have to be at least 25 from flat.
-    faint = [_v("vix_dir", "short"), _v("vix_curve"), _v("credit"), _v("yields", "long"),
-             _v("dollar"), _v("value", "short"), _v("session")]
+    # A small disagreement is not a conflict: rates leaning long at a fifth of a vote is
+    # 6 points against structure's 35 short. Both sides must put 10 on the score.
+    faint = [_v("yields", "long", strength=0.4), _v("dollar"), _v("value", "short"),
+             _v("session")]
     read = bias.board_read("NQ", faint, "asia", regime=None, ny_open=False)
     assert (read["macro_lean"], read["structure_lean"]) == ("long", "short")
     assert read["conflict"] is False
+
+
+def test_the_conflict_is_weighed_in_points_not_in_raw_family_scores() -> None:
+    # 18 Nov 2026, 23:10 ET: the VIX curve alone, 7 of Asia's hundred, scored its family
+    # -100 against structure's +100 on 53, and the raw scores called that a conflict and
+    # took NQ from moderate to weak. In points a family worth 6 is not a side of a
+    # conflict. In New York, risk at -80 (credit at 0.8 of a vote) is 8 of the score's
+    # points, on risk's 10, against structure's 35.
+    votes = [_v("credit", "short", strength=0.8), _v("value", "long"), _v("session", "long")]
+    r = bias.board_read("NQ", votes, "ny_live", regime=None, ny_open=True)
+    risk = next(f for f in r["families"] if f["key"] == "risk")
+    assert (risk["score"], risk["points"]) == (-80, -8.0)
+    assert r["conflict"] is False and r["grade"] == "weak" and r["score"] == 27
 
 
 def test_event_risk_takes_a_notch_off_the_ceiling_and_never_a_side() -> None:
@@ -242,11 +290,36 @@ def test_the_weights_follow_the_clock(when: tuple[int, int, int, int, int], key:
 
 def test_every_session_weighs_to_a_hundred_and_names_every_family() -> None:
     for table, family_of in ((bias.BOARD_WEIGHTS, bias.BOARD_FAMILY),
-                             (bias.TAPE_WEIGHTS, bias.TAPE_FAMILY)):
+                             (bias.TAPE_WEIGHTS, bias.TAPE_FAMILY),
+                             *((t, bias.BOARD_FAMILY) for t in bias.BOOK_WEIGHTS.values())):
         for name, weights in table.items():
             assert sum(weights.values()) == 100, name
             assert set(weights) == set(family_of.values()), name
             assert name in bias.WEIGHT_LABEL
+    # A metal or crude weighs only the families it has a read in.
+    for book, table in bias.BOOK_WEIGHTS.items():
+        for name, weights in table.items():
+            weighed = {k for k, w in weights.items() if w}
+            assert weighed <= set(bias.BOOK_FAMILIES[book]), (book, name)
+
+
+def test_each_session_weighs_only_what_can_speak_in_it() -> None:
+    # 2026-11-19. Credit and breadth are cash reads and a US print votes until that
+    # day's close: in Asia and London an index book is its structure and rates. The VIX
+    # is no side since that evening, so risk is credit alone and joins at the bell with
+    # breadth; the prints join in the New York pre-open.
+    live = {s: {k for k, w in t.items() if w} for s, t in bias.BOARD_WEIGHTS.items()}
+    assert live["asia"] == {"structure", "rates"}
+    assert live["london"] == {"structure", "rates"}
+    assert live["ny_pre"] == {"structure", "rates", "catalysts"}
+    assert live["ny_live"] == {"structure", "rates", "risk", "catalysts", "participation"}
+    for book, table in bias.BOOK_WEIGHTS.items():
+        assert table["asia"]["catalysts"] == table["london"]["catalysts"] == 0, book
+    # Gold is a rates market first in New York's hours; the index leans on its auction.
+    assert bias.board_weights("GC", "ny_live")["rates"] > bias.board_weights("GC", "ny_live")[
+        "structure"]
+    assert bias.board_weights("NQ", "ny_live")["structure"] > bias.board_weights(
+        "NQ", "ny_live")["rates"]
 
 
 # ---- the board and the tape read through it --------------------------------------------
@@ -265,7 +338,9 @@ def test_the_board_says_which_reads_cannot_vote_at_this_hour() -> None:
     assert votes["yields"]["live"] is False and votes["credit"]["live"] is False
     assert votes["sectors"]["live"] is False and votes["leaders"]["live"] is False
     assert votes["dollar"]["live"] is True      # inside its band: flat, not absent
-    assert nq["live"] == 1 and nq["total"] == 11
+    # Eight reads in families since the VIX's curve and day and the prints left them
+    # (2026-11-19).
+    assert nq["live"] == 1 and nq["total"] == 8
     assert nq["weight_label"] == "London's weight"
     # A dollar that has stopped printing cannot vote either.
     stopped = [dict(q, feed="closed") if q["key"] == "DXY" else q for q in quotes]
@@ -289,14 +364,16 @@ def test_the_tape_weighs_by_its_own_hour() -> None:
     rest = [_v(k) for k in ("yields", "dollar", "vix_dir", "vix_curve", "credit")]
     shut = [_v(k, live=False) for k in ("sectors", "equal_weight", "index_volume", "participation")]
     pre = marketctx.conviction([*levels, *rest, *shut], "pre")
-    assert (pre["score"], pre["coverage"], pre["grade"]) == (35, 100, "moderate")
-    assert (pre["live"], pre["cannot_vote"]) == (7, 4)
+    # Before the open: levels 50 / rates 35 / risk 15 (the evening of 2026-11-19). The
+    # VIX's curve and day are no side. One family behind it, so moderate, not strong.
+    assert (pre["score"], pre["coverage"], pre["grade"]) == (50, 100, "moderate")
+    assert (pre["live"], pre["cannot_vote"]) == (5, 4)
     assert pre["weight_label"] == "the pre-open's weight"
     # The same reads in the session, with participation live and flat.
     live = [*levels, *rest, *[_v(k) for k in ("sectors", "equal_weight", "index_volume",
                                               "participation")]]
     rth = marketctx.conviction(live, "rth")
-    assert (rth["score"], rth["coverage"], rth["grade"]) == (35, 100, "moderate")
+    assert (rth["score"], rth["coverage"], rth["grade"]) == (40, 100, "moderate")
     assert rth["weight_label"] == "the session's weight"
 
 
@@ -308,24 +385,25 @@ def test_a_lean_on_two_reads_is_a_thin_one() -> None:
              "index_volume", "participation")
     night = marketctx.conviction([*levels, *[_v(k, live=False) for k in names]], "closed")
     got = {k: night[k] for k in ("bias", "score", "coverage", "grade", "max_conviction", "thin")}
-    # +35, not +100: the two reads are 35% of the weight and the rest says nothing. On
-    # its own that is moderate, so the thin rule still holds the grade at weak.
-    assert got == {"bias": "long", "score": 35, "coverage": 35, "grade": "weak",
+    # +50, not +100: the two reads are 50% of the weight (since the evening of
+    # 2026-11-19) and the rest says nothing. On its own that is moderate, so the thin rule
+    # still holds the grade at weak.
+    assert got == {"bias": "long", "score": 50, "coverage": 50, "grade": "weak",
                    "max_conviction": 3, "thin": True}
-    assert (night["live"], night["total"]) == (2, 11)
-    # Once the VIX, credit and the curve can vote too it is 70% of the weight: not thin.
-    risk = [_v(k, "long") for k in ("vix_dir", "vix_curve", "credit")]
+    assert (night["live"], night["total"]) == (2, 9)
+    # Once credit can vote too it is 65% of the weight, two families: strong.
+    risk = [_v("credit", "long")]
     off = [_v(k, live=False) for k in ("yields", "dollar", "sectors", "equal_weight",
                                        "index_volume", "participation")]
     pre = marketctx.conviction([*levels, *risk, *off], "pre")
-    assert (pre["score"], pre["coverage"], pre["grade"], pre["thin"]) == (70, 70, "strong", False)
+    assert (pre["score"], pre["coverage"], pre["grade"], pre["thin"]) == (65, 65, "strong", False)
     # No lean at all is not a thin lean.
     flat = marketctx.conviction([_v("spy_levels"), _v("qqq_levels"),
                                  *[_v(k, live=False) for k in names]], "closed")
     assert (flat["bias"], flat["grade"], flat["thin"]) == (None, "none", False)
     # The futures board reads as it did: this is the tape's rule.
     board = bias.read([_v("value", "long")], bias.BOARD_FAMILY, bias.BOARD_WEIGHTS["asia"], "asia")
-    assert (board["score"], board["coverage"], board["grade"]) == (53, 53, "moderate")
+    assert (board["score"], board["coverage"], board["grade"]) == (70, 70, "moderate")
     assert "thin" not in board
 
 

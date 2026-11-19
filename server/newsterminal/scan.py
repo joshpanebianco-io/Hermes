@@ -42,6 +42,7 @@ those changes which bar fires, so they stay in this order.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, NamedTuple
@@ -577,16 +578,42 @@ class Replay:
     signals: list[dict[str, Any]] = field(default_factory=list)
 
 
+#: The charts the signals are read on (owner, 2026-11-19: "it should print signals ... if
+#: it happens on 3m, 5m and 10m"), and each one's bar in seconds. 10m is the Pine script's
+#: own; 5m runs on the store's 5-minute bars as they are; 3m on its 1-minute bars.
+TF_SEC: dict[str, int] = {"3m": 180, "5m": 300, "10m": 600}
+
+
 def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: dict[str, Lvl],
            atr10: list[float | None], w_top: list[float], w_bot: list[float],
-           pmh_live: float | None, pml_live: float | None) -> Replay:
-    """Today's (L) / (E) / breakout signals over confirmed regular-session bars.
+           pmh_live: float | None, pml_live: float | None,
+           vwap: list[float | None] | None = None, unit: list[float | None] | None = None,
+           tf: str = "10m") -> Replay:
+    """Today's (L) / (E) / (V) / breakout signals over confirmed regular-session bars.
 
     `rth_ix` are the CONFIRMED regular-session bars of the trading day, in order,
     as indices into `bars10` (so the EMA wave, the ATR and the previous close are
     the script's own series values at that bar). `forming` is the still-open
     bar, if any: levels never step on it — the script only steps confirmed bars —
     but an (E) trigger can fire on it, because a high only rises inside a bar.
+
+    ANY TIMEFRAME (2026-11-19). `bars10` may be 3-, 5- or 10-minute bars; `atr10` is then
+    that chart's ATR, which sets its retest buffer and stop floor, as the Pine script
+    does on whatever chart it is put on. `tf` names the chart on every signal.
+
+    THE EMA AND VWAP ENTRIES ARE FOR AN EXTENDED RUN ONLY (owner, 2026-11-19: "break of a
+    pmh or pml and then a retest of the level or if price is really extended, then retest
+    of the ema or vwap"). A side is EXTENDED from the bar whose close is more than
+    EXT_ATR ten-minute ATRs past the nearest broken level on its side (`unit`, the 10-min
+    ATR in force at each bar; `atr10` when None) — the line the setup's state already
+    draws (`setup_state`). It stays extended until price comes back to that level (a bar
+    within the buffer of it: the level is the entry again) or loses its levels. Only
+    while it was extended at the bar before can an (E) candle be set or a (V) fire:
+      (E)  a pullback into the 8/9/10 EMA wave, then a break of that candle (the Pine's
+           own mechanics; it fired on any pullback before this rule);
+      (V)  a retest of VWAP (`vwap`, the session's at each bar's close): armed once a
+           bar is clear of it, fired on a bar that comes back within the buffer and
+           closes on the far side, the bar's low (high) the stop idea, like the (L).
     """
     out = Replay(levels)
     pdh, pdl = levels["PDH"].price, levels["PDL"].price
@@ -594,6 +621,9 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
     e_trg: dict[str, float] = {"long": 0.0, "short": 0.0}
     e_stp: dict[str, float] = {"long": 0.0, "short": 0.0}
     e_arm: dict[str, bool] = {"long": False, "short": False}
+    ext: dict[str, bool] = {"long": False, "short": False}
+    ext_lv: dict[str, str] = {"long": "", "short": ""}
+    v_arm: dict[str, bool] = {"long": False, "short": False}
 
     def sig(kind: str, side: str, level: str | None, t: int, price: float, note: str,
             stop: float | None = None, floor: float | None = None) -> None:
@@ -603,7 +633,7 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
         out.signals.append({"kind": kind, "side": side, "level": level, "at_et": _hm(t),
                             "price": round(price, 4), "note": note, "t": t,
                             "stop": round(stop, 4) if stop is not None else None,
-                            "risk_min": round(floor, 4) if floor else None})
+                            "risk_min": round(floor, 4) if floor else None, "tf": tf})
 
     for n, i in enumerate(rth_ix):
         b = bars10[i]
@@ -624,6 +654,25 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
                     f"{fmt_px(levels[key].price)}")
 
         ok_l, ok_s = state > 0, state < 0
+        # THE EXTENSION (docstring): read on this bar's close, used from the next bar.
+        was = dict(ext)
+        u = (unit[i] if unit is not None else atr10[i]) or 0.0
+        for side, ok, keys in (("long", ok_l, ("PDH", "PMH")), ("short", ok_s, ("PDL", "PML"))):
+            s = 1.0 if side == "long" else -1.0
+            held: list[tuple[str, float]] = []
+            for k in keys:
+                p = levels[k].price
+                if levels[k].broken and p is not None and s * (b.close - p) > 0:
+                    held.append((k, p))
+            if not ok or not held:
+                ext[side] = False
+                continue
+            k, ref = (max if side == "long" else min)(held, key=lambda x: x[1])
+            if s * ((b.low if side == "long" else b.high) - ref) <= buf:
+                ext[side] = False  # back at the level: the level is the entry again
+            elif u > 0 and s * (b.close - ref) > EXT_ATR * u:
+                ext[side], ext_lv[side] = True, k
+
         l_long = ok_l and (res["PDH"][1] or res["PMH"][1])
         l_short = ok_s and (res["PDL"][1] or res["PML"][1])
         if l_long:
@@ -636,6 +685,26 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
             sig("L", "short", lv, b.t, b.close,
                 f"Retest of {lv} {fmt_px(levels[lv].price)} with the 8 EMA wave at the level"
                 f" · stop idea above {fmt_px(b.high)}", stop=b.high, floor=buf)
+
+        # ---- (V): the VWAP retest after an extended run (docstring) -------------
+        vw = vwap[i] if vwap is not None else None
+        if vw is not None:
+            for side, ok, fired in (("long", ok_l, l_long), ("short", ok_s, l_short)):
+                s = 1.0 if side == "long" else -1.0
+                zone = s * ((b.low if side == "long" else b.high) - vw) <= buf
+                if s * (b.close - vw) < -buf:
+                    v_arm[side] = False  # lost VWAP: armed again only once clear of it
+                elif v_arm[side] and was[side] and ok and not fired and zone \
+                        and s * (b.close - vw) > 0:
+                    v_stop = b.low if side == "long" else b.high
+                    word = "below" if side == "long" else "above"
+                    sig("V", side, "VWAP", b.t, b.close,
+                        f"Retest of VWAP {fmt_px(vw)} after a run of {EXT_ATR:g}+ ATR past "
+                        f"{ext_lv[side] or 'the level'} · stop idea {word} {fmt_px(v_stop)}",
+                        stop=v_stop, floor=buf)
+                    v_arm[side] = False
+                elif not zone:
+                    v_arm[side] = True
 
         conf = {"long": False, "short": False}
         for side in ("long", "short"):
@@ -653,15 +722,17 @@ def replay(bars10: list[Bar], rth_ix: list[int], forming: int | None, levels: di
                 e_bar[side] = None
 
         # ---- the sigBar block ------------------------------------------------
-        if e_bar["long"] is not None and (state <= 0 or b.close < wb):
+        # A pending (E) also goes once the run is no longer extended: back at the level,
+        # the (L) is the entry (the docstring's rule).
+        if e_bar["long"] is not None and (state <= 0 or b.close < wb or not ext["long"]):
             e_bar["long"] = None
-        if e_bar["short"] is not None and (state >= 0 or b.close > wt):
+        if e_bar["short"] is not None and (state >= 0 or b.close > wt or not ext["short"]):
             e_bar["short"] = None
-        if (ok_l and e_arm["long"] and not conf["long"] and not l_long
-                and b.low <= wt and b.close >= wb):
+        if (ok_l and was["long"] and ext["long"] and e_arm["long"] and not conf["long"]
+                and not l_long and b.low <= wt and b.close >= wb):
             e_bar["long"], e_trg["long"], e_stp["long"] = i, b.high, b.low
-        if (ok_s and e_arm["short"] and not conf["short"] and not l_short
-                and b.high >= wb and b.close <= wt):
+        if (ok_s and was["short"] and ext["short"] and e_arm["short"] and not conf["short"]
+                and not l_short and b.high >= wb and b.close <= wt):
             e_bar["short"], e_trg["short"], e_stp["short"] = i, b.low, b.high
         e_arm["long"] = b.low > wt
         e_arm["short"] = b.high < wb
@@ -750,6 +821,12 @@ class Tech:
     bar_high: float | None = None
     levels: dict[str, Lvl] = field(default_factory=dict)
     signals: list[dict[str, Any]] = field(default_factory=list)
+    #: The same signals read on the 3- and 5-minute charts (2026-11-19), each with its
+    #: `tf`. Apart from `signals`, which stays the ten-minute chart's: the score, the
+    #: record line and the contract helper read that one, as they always have.
+    signals_fast: list[dict[str, Any]] = field(default_factory=list)
+    #: Where each fast chart's bars are final, like `final_to` for the 10m.
+    final_to_tf: dict[str, int | None] = field(default_factory=dict)
     lvl_state: int = 0
     trend: int = 0
     progress: dict[str, float | None] = field(default_factory=dict)
@@ -834,11 +911,75 @@ def _vwap(bars: list[Bar]) -> float | None:
     return pv / v if v > 0 else None
 
 
+def vwap_series(bars: list[Bar], idx: list[int]) -> list[float | None]:
+    """The session's VWAP as of each bar's close, over the bars at `idx` (today's regular
+    session, in order); None at every other bar. Pure."""
+    out: list[float | None] = [None] * len(bars)
+    pv = v = 0.0
+    for k in idx:
+        b = bars[k]
+        if b.volume > 0:
+            pv += (b.high + b.low + b.close) / 3.0 * b.volume
+            v += b.volume
+        out[k] = pv / v if v > 0 else None
+    return out
+
+
+#: The bars a fast chart's replay reads back: enough for the wave to settle and for the
+#: previous session's regular bars to seed its ATR, not the store's twelve days.
+FAST_SPAN_SEC = 3 * 86400
+
+
+def tf_replay(src: list[Bar], tf: str, td: date, td_end: int,
+              prices: tuple[float | None, float | None, float | None, float | None],
+              final_ts: float, unit10: dict[int, float | None]
+              ) -> tuple[list[dict[str, Any]], int | None]:
+    """One faster chart's signals for the trading day `td`, and where its bars are final.
+    Pure.
+
+    `src` are the bars it is built from (5-minute bars for the 5m, 1-minute for the 3m);
+    `prices` the day's PDH, PDL, PMH and PML as the row has them (PMH/PML None until the
+    pre-market is done), so every chart breaks and retests the same levels. The wave and
+    the ATR are the chart's own; "extended" is measured in the ten-minute ATR of the last
+    finished ten-minute bar (`unit10`, by bar start), so it means one thing on every chart."""
+    step = TF_SEC[tf]
+    if not src:
+        return [], None
+    cut = src[-1].t - FAST_SPAN_SEC
+    bars = resample([b for b in src if b.t >= cut], step)
+    if not bars:
+        return [], None
+    stamps = [datetime.fromtimestamp(b.t, ET) for b in bars]
+    rth = [k for k, s in enumerate(stamps) if s.date() == td and RTH_START <= _mod(s) < td_end]
+    if not rth:
+        return [], None
+    closes = [b.close for b in bars]
+    e1, e2, e3 = ema(closes, WAVE_LEN), ema(closes, WAVE_LEN + 1), ema(closes, WAVE_LEN + 2)
+    w_top = [max(a, b, c) for a, b, c in zip(e1, e2, e3, strict=True)]
+    w_bot = [min(a, b, c) for a, b, c in zip(e1, e2, e3, strict=True)]
+    a_tf = atr(bars, sessions=rth_bar_days(bars, [s.date() for s in stamps],
+                                           [_mod(s) for s in stamps], step=step))
+    confirmed = [k for k in rth if bars[k].t + step <= final_ts]
+    pending = [k for k in rth if bars[k].t + step > final_ts]
+    pdh, pdl, pmh, pml = prices
+    levels = {"PDH": Lvl("PDH", True, pdh), "PDL": Lvl("PDL", False, pdl),
+              "PMH": Lvl("PMH", True, pmh), "PML": Lvl("PML", False, pml)}
+    unit = [unit10.get(b.t - b.t % BAR_SEC - BAR_SEC) for b in bars]
+    rp = replay(bars, confirmed, pending[0] if pending else None, levels, a_tf, w_top, w_bot,
+                pmh, pml, vwap=vwap_series(bars, rth), unit=unit, tf=tf)
+    return rp.signals, (bars[confirmed[-1]].t + step if confirmed else None)
+
+
 def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
                name: str | None = None, official: tuple[date, float] | None = None,
                asof: float | None = None, daily_asof: float | None = None,
-               pm_wide: tuple[float | None, float | None] | None = None) -> Tech:
+               pm_wide: tuple[float | None, float | None] | None = None,
+               bars1: list[Bar] | None = None, asof1: float | None = None) -> Tech:
     """Everything the script computes for one symbol, as of `clock.now`. Pure.
+
+    `bars1` are the name's one-minute bars, when held, for the 3m chart's signals, and
+    `asof1` when they were downloaded (the same rule as `asof`). Without them there are
+    no 3m signals, and `final_to_tf` says so (None), so nothing logged is withdrawn.
 
     `pm_wide` is the trading day's pre-market (high, low) from a read other than
     these bars, or None: PMH and PML take whichever reaches further (see where
@@ -1098,8 +1239,22 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     forming = pending[0] if pending else None
     tech.final_to = bars10[confirmed[-1]].t + BAR_SEC if confirmed else None
     if rth10:
-        rp = replay(bars10, confirmed, forming, levels, atr10, w_top, w_bot, pmh_live, pml_live)
+        rp = replay(bars10, confirmed, forming, levels, atr10, w_top, w_bot, pmh_live, pml_live,
+                    vwap=vwap_series(bars10, rth10), tf="10m")
         tech.signals = rp.signals
+        # THE SAME SIGNALS ON THE 5m AND 3m CHARTS (2026-11-19; TF_SEC). The same levels,
+        # each chart's own wave and ATR; 3m only when the one-minute bars are held.
+        unit10 = {b.t: a for b, a in zip(bars10, atr10, strict=True)}
+        prices = (tech.pdh, tech.pdl, pmh_live, pml_live)
+        fast, f5 = tf_replay(bars, "5m", td, td_end, prices, final_ts, unit10)
+        tech.final_to_tf = {"5m": f5, "3m": None}
+        if bars1:
+            final1 = now_ts if asof1 is None else min(now_ts, int(asof1) - CLOSE_LAG_SEC)
+            s3, f3 = tf_replay([b for b in bars1 if b.t < now_ts], "3m", td, td_end, prices,
+                               final1, unit10)
+            fast += s3
+            tech.final_to_tf["3m"] = f3
+        tech.signals_fast = sorted(fast, key=lambda s: (s["t"], TF_SEC.get(s["tf"], 0)))
     tech.levels = levels
     tech.ok = True
     return tech
@@ -1148,6 +1303,69 @@ def _empty_chart(tf: str, error: str) -> dict[str, Any]:
 def _at(d: date, minute: int) -> int:
     """Epoch seconds of `minute` past midnight on `d`, New York time."""
     return int(datetime(d.year, d.month, d.day, tzinfo=ET).timestamp()) + minute * 60
+
+
+#: The bars before the first pre-market bar the slide-out chart opens on (ScanChart:
+#: "today's pre-market and six bars of the evening before it").
+SPARK_LEAD = 6
+#: Its window with no pre-market in the last two days held: the newest eighty bars.
+SPARK_FALLBACK = 80
+#: The most points a spark carries: 04:00 to 20:00 is 192 five-minute bars, plus the lead.
+SPARK_MAX = 200
+
+
+def _day_of(t: int) -> date:
+    return datetime.fromtimestamp(t, ET).date()
+
+
+def spark_of(bars: list[Bar], now_ts: int, daily: list[DayBar] | None = None,
+             daily_asof: float | None = None) -> tuple[list[float], float | None]:
+    """(the small chart's closes, the last regular close before them). Pure.
+
+    THE SPARK IS THE CHART'S OPENING VIEW (owner, 2026-11-18: "can we make sure sparks are
+    accurate representations of the charts"). It was Yahoo's regular-session closes for
+    the one day Yahoo calls current: before 09:30 that is yesterday, so at 09:20 LOW's
+    line ran 224 to 220.46 while it traded 210.13, and no pre-market was ever drawn.
+    Now it is the five-minute closes the slide-out chart frames when it opens: the bars
+    before now (as `chart_series` cuts them), from the newest day with a pre-market bar,
+    its first one less SPARK_LEAD, pre-market and after hours included. The chart's own
+    fallback with no pre-market (the last eighty bars) is this one's too.
+
+    The reference colours the line: green at or above the close before the day, as the
+    % change beside it reads, not against the first point (the evening before's after
+    hours, which on a report night is already the move). `daily` gives the official close
+    once its copy has settled (`daily_row`, read with `daily_asof`); else the last
+    regular-session bar's close."""
+    n = bisect_left(bars, now_ts, key=lambda b: b.t)
+    if n == 0:
+        return [], None
+    start: int | None = None
+    i, days = n - 1, 0
+    while i >= 0 and days < 2:
+        d = _day_of(bars[i].t)
+        lo = bisect_left(bars, _at(d, 0), hi=i + 1, key=lambda b: b.t)
+        if _session_of(d, _mod(datetime.fromtimestamp(bars[lo].t, ET))) == "pre":
+            start = lo
+            break
+        i, days = lo - 1, days + 1
+    day = _day_of(bars[start].t) if start is not None else _day_of(bars[n - 1].t)
+    first = start if start is not None else bisect_left(bars, _at(day, 0), hi=n,
+                                                       key=lambda b: b.t)
+    lo = max(0, start - SPARK_LEAD) if start is not None else max(0, n - SPARK_FALLBACK)
+    pts = [round(b.close, 4) for b in bars[max(lo, n - SPARK_MAX):n]]
+    ref: float | None = None
+    if first > 0:
+        # The session before, as the bars have it; its official close when the daily
+        # copy holds that day finished.
+        prev = _day_of(bars[first - 1].t)
+        done = daily_row({x.day: x for x in daily or []}, prev, daily_asof, day)
+        if done is not None:
+            ref = done.close
+        else:
+            k = bisect_left(bars, _at(prev, rth_end(prev)), hi=first, key=lambda b: b.t) - 1
+            if k >= 0 and bars[k].t >= _at(prev, RTH_START):
+                ref = bars[k].close
+    return pts, (round(ref, 4) if ref is not None else None)
 
 
 def _levels_out(tech: Tech) -> dict[str, Any]:
@@ -1275,10 +1493,10 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
     left edge is the same wave the rest of the series runs on, not one
     re-seeded at the first bar shown.
 
-    SIGNALS ARE READ ON 10-MINUTE BARS WHATEVER THE VIEW. On a shorter one the
-    mark goes on the bar holding the signal bar's last minute — the close that
-    confirmed it — so a 1m chart shows the (L) where it was confirmed, not ten
-    minutes early.
+    EACH VIEW SHOWS ITS OWN CHART'S SIGNALS (2026-11-19): the 3m and 5m their own, the
+    1m the 3m's, the 10m and longer the ten-minute chart's. On a view shorter than the
+    signal's chart the mark goes on the bar holding the signal bar's last minute — the
+    close that confirmed it — so a 1m chart shows the (L) where it was confirmed.
     """
     if tf == "D":
         return _daily_chart(daily or [], bars5, clock, tech, daily_asof)
@@ -1355,10 +1573,17 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         # A list too short to hold the average (`_chart_emas`) ships as blanks.
         return [round(x, 4) for x in xs[start:]] if xs else [None] * (len(bars) - start)
 
+    # EACH VIEW ITS OWN CHART'S SIGNALS (2026-11-19): 3m and 5m their own, 1m the 3m's
+    # (the shortest read), 10m and longer the ten-minute chart's.
+    own = "3m" if step <= 180 else "5m" if step == 300 else "10m"
+    shown = tech.signals if own == "10m" else [x for x in tech.signals_fast
+                                                if x.get("tf") == own]
+    sig_sec = TF_SEC[own]
+
     def at(t: int) -> int:
         # A shorter view marks the bar holding the signal's last minute; a longer one
-        # the bar the ten-minute signal falls inside.
-        return (t + BAR_SEC - 1) // step * step if step < BAR_SEC else t - t % step
+        # the bar the signal falls inside.
+        return (t + sig_sec - 1) // step * step if step < sig_sec else t - t % step
 
     levels, history = chart_levels(bars5, bars[-1].t, tech, td, bars[start].t, daily,
                                    daily_asof, clock.now.astimezone(ET).date())
@@ -1376,8 +1601,8 @@ def chart_series(bars5: list[Bar], clock: Clock, tech: Tech, tf: str = "10m",
         "levels": levels,
         "history": history,
         "sessions": sessions,
-        "signals": [{"t": at(x["t"]), "kind": x["kind"], "side": x["side"], "price": x["price"]}
-                    for x in tech.signals if x.get("t") is not None],
+        "signals": [{"t": at(x["t"]), "kind": x["kind"], "side": x["side"], "price": x["price"],
+                     "tf": own} for x in shown if x.get("t") is not None],
     }
 
 
@@ -1769,6 +1994,9 @@ def row_of(sym: str, t: Tech, spy: Tech | None, qqq: Tech | None,
         "range_used": _r(t.range_used, 3),
         "setup": setup,
         "signals": t.signals,
+        # The 3m and 5m charts' signals, each with its `tf` (Tech.signals_fast).
+        "signals_fast": t.signals_fast,
+        "final_to_tf": t.final_to_tf,
         # Carried for the read path's tape and regime; not part of the contract.
         "pdh_day": t.pdh_day.isoformat() if t.pdh_day else None,
         # Where this row's bars are final (Tech.final_to) — the event log checks

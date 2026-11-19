@@ -68,6 +68,7 @@ export interface TodayRow {
   group?: number;
   status?: string;
   spark?: number[] | null;
+  spark_ref?: number | null;
   /** The row as the Setups table draws it (server today.scan_row): the engine's own for a
    *  tracked name, built from the wide read for the rest; its score is the phase's. */
   row: ScanRow;

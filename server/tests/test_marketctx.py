@@ -75,7 +75,8 @@ def test_votes_are_eleven_in_order_and_neutral_with_a_reason_when_inputs_are_mis
     assert not any(v["live"] for v in vs)
     c = mc.conviction(vs)
     assert (c["bias"], c["grade"], c["max_conviction"]) == (None, "none", 2)
-    assert (c["live"], c["cannot_vote"], c["total"], c["score"]) == (0, 11, 11, 0)
+    # Nine count: the VIX's curve and its day are read and are no side (2026-11-19).
+    assert (c["live"], c["cannot_vote"], c["total"], c["score"]) == (0, 9, 9, 0)
 
 
 def test_levels_vote_reads_the_state_and_names_the_levels_broken() -> None:
@@ -99,10 +100,31 @@ def test_levels_vote_pre_market_votes_on_the_gap(gap: float | None, vote: str) -
         assert v["value"].startswith("gap ")
 
 
-@pytest.mark.parametrize(("pct", "vote"), [
-    (-1.5, "long"), (-1.49, "neutral"), (1.49, "neutral"), (1.5, "short")])
-def test_vix_direction_threshold(pct: float, vote: str) -> None:
-    assert _one("vix_dir", quotes=[_q("VIX", 15.0, pct)])["vote"] == vote
+# SINCE 2026-11-19 a read is measured in its usual day (drivestats.py). With no history
+# here each is the stated fallback: the VIX 6%, credit 0.25%, the 10-year 6bp, the dollar
+# 0.4%. A read starts at half a usual day and counts in full at one and a half.
+@pytest.mark.parametrize("pct", [-8.0, -3.1, 3.1, 8.0])
+def test_the_vix_day_is_never_a_side(pct: float) -> None:
+    # Owner, the evening of 2026-11-19: "vix and gex are more regime context correct?",
+    # then "do what you recommend best". It voted long on a fall and short on a rise
+    # beyond what the S&P's move explains; it says how far moves run now, never which way.
+    v = _one("vix_dir", quotes=[_q("VIX", 15.0, pct)])
+    assert v["vote"] == "neutral" and "strength" not in v and v["live"] is True
+    assert v["aside"].startswith("never a side")
+    assert "vix_dir" not in mc.bias_mod.TAPE_FAMILY
+
+
+def test_the_vix_note_says_what_the_s_and_p_does_not_explain() -> None:
+    # ES down 1%: the VIX's usual answer is up about 4.5% (the stated beta). Up 4.5% is
+    # the same fact told twice; up 10% is protection bought beyond it, said as weather.
+    echo = _one("vix_dir", quotes=[_q("ES", 6000.0, -1.0), _q("VIX", 20.0, 4.5)])
+    assert echo["vote"] == "neutral" and "echo" in echo["note"]
+    fear = _one("vix_dir", quotes=[_q("ES", 6000.0, -1.0), _q("VIX", 20.0, 10.0)])
+    assert fear["vote"] == "neutral"
+    assert "beyond what the move explains — moves can run further" in fear["note"]
+    assert "counts" not in fear["note"]
+    calm = _one("vix_dir", quotes=[_q("ES", 6000.0, 1.0), _q("VIX", 20.0, -12.0)])
+    assert calm["vote"] == "neutral" and "a calmer tape" in calm["note"]
 
 
 def test_vix_direction_missing_or_not_yet_traded_is_neutral() -> None:
@@ -112,20 +134,22 @@ def test_vix_direction_missing_or_not_yet_traded_is_neutral() -> None:
     assert stale["vote"] == "neutral" and "not traded today" in stale["note"]
     today = datetime(2026, 10, 13, 12, 0, tzinfo=UTC).timestamp()
     fresh = _one("vix_dir", scan=_scan("pre"), quotes=[_q("VIX", 15.0, 4.0, qt=today)])
-    assert fresh["vote"] == "short"
+    assert fresh["vote"] == "neutral" and fresh["live"] is True
     # In the session a quote is today's by definition — no stamp check.
-    assert _one("vix_dir", quotes=[_q("VIX", 15.0, 4.0, qt=yesterday)])["vote"] == "short"
+    assert _one("vix_dir", quotes=[_q("VIX", 15.0, 4.0, qt=yesterday)])["live"] is True
 
 
-@pytest.mark.parametrize(("vix", "vix3m", "vote"), [
-    (15.0, 17.0, "long"),      # 0.88: steep contango
-    (16.0, 17.0, "neutral"),   # 0.94
-    (17.0, 17.0, "short"),     # 1.00: flat to inverted
-    (19.0, 17.0, "short"),     # backwardation
+@pytest.mark.parametrize(("vix", "vix3m", "word"), [
+    (15.0, 17.0, "calm tape"),             # 0.88: steep contango
+    (16.0, 17.0, "neither calm"),          # 0.94
+    (17.0, 17.0, "moves run, either way"),  # 1.00: flat to inverted
+    (19.0, 17.0, "moves run, either way"),  # backwardation
 ])
-def test_vix_curve_threshold(vix: float, vix3m: float, vote: str) -> None:
+def test_the_vix_curve_is_said_and_never_a_side(vix: float, vix3m: float, word: str) -> None:
+    # 2026-11-19: the curve's shape says how far moves run, as gamma's regime does.
     v = _one("vix_curve", quotes=[_q("VIX", vix), _q("VIX3M", vix3m)])
-    assert v["vote"] == vote
+    assert v["vote"] == "neutral" and word in v["note"]
+    assert v["aside"].startswith("never a side")
 
 
 def test_vix_curve_missing_leg_is_neutral() -> None:
@@ -159,22 +183,40 @@ def test_equal_weight_missing_or_pre_market_is_neutral() -> None:
 
 
 @pytest.mark.parametrize(("pct", "vote"), [
-    (0.15, "long"), (0.14, "neutral"), (-0.15, "short"), (None, "neutral")])
+    (0.13, "long"), (0.12, "neutral"), (-0.13, "short"), (None, "neutral")])
 def test_credit_threshold(pct: float | None, vote: str) -> None:
     assert _one("credit", quotes=[_q("HYG", 77.0, pct)])["vote"] == vote
 
 
 @pytest.mark.parametrize(("chg", "vote"), [
-    (0.04, "short"), (0.039, "neutral"), (-0.039, "neutral"), (-0.04, "long"), (None, "neutral")])
+    (0.031, "short"), (0.029, "neutral"), (-0.029, "neutral"), (-0.031, "long"), (None, "neutral")])
 def test_yields_threshold_in_bp(chg: float | None, vote: str) -> None:
     v = _one("yields", quotes=[_q("US10Y", 4.5, 0.0, chg)])
     assert v["vote"] == vote
-    if chg == 0.04:
-        assert v["value"] == "4.50% +4.0bp"
+    if chg == 0.031:
+        assert v["value"] == "4.50% +3.1bp"
+
+
+def test_a_read_counts_by_its_size_in_usual_days() -> None:
+    # The 10-year up 4bp and up 15bp were one vote each until 2026-11-19.
+    small = _one("yields", quotes=[_q("US10Y", 4.5, 0.0, 0.04)])
+    large = _one("yields", quotes=[_q("US10Y", 4.5, 0.0, 0.15)])
+    assert small["vote"] == large["vote"] == "short"
+    assert small["strength"] == 0.17 and large["strength"] == 1.0
+    assert "0.7× its usual day, counts 17%" in small["note"]
+
+
+def test_the_10_year_reads_the_note_future_while_the_cash_yield_is_shut() -> None:
+    shut = {**_q("US10Y", 4.5, 0.0, 0.05), "feed": "closed"}
+    zn = {**_q("ZN", 110.0, -0.4), "feed": "delayed"}
+    v = _one("yields", quotes=[shut, zn])
+    # The note down 0.4% is yields up, about 6bp: short, read from the future.
+    assert v["vote"] == "short" and v["value"] == "note fut −0.40% (≈ +6.2bp)"
+    assert "read from the 10-year note future" in v["note"]
 
 
 @pytest.mark.parametrize(("pct", "vote"), [
-    (0.25, "short"), (0.24, "neutral"), (-0.25, "long")])
+    (0.21, "short"), (0.19, "neutral"), (-0.21, "long")])
 def test_dollar_threshold(pct: float, vote: str) -> None:
     assert _one("dollar", quotes=[_q("DXY", 102.0, pct)])["vote"] == vote
 
@@ -226,13 +268,14 @@ def _votes(**sides: str) -> list[dict[str, Any]]:
 
 
 @pytest.mark.parametrize(("sides", "score", "bias", "grade", "cap"), [
-    # In the session: levels 35, participation 30, risk 20, rates 15.
+    # In the session: levels 40, participation 30, rates 20, risk 10 (the evening of
+    # 2026-11-19).
     ({k: "long" for k in TAPE_KEYS}, 100, "long", "strong", 5),
     ({k: "short" for k in TAPE_KEYS}, -100, "short", "strong", 5),
     ({"spy_levels": "long", "qqq_levels": "long", "sectors": "long", "participation": "long"},
-     50, "long", "strong", 5),
-    ({"spy_levels": "long", "qqq_levels": "long"}, 35, "long", "moderate", 4),
-    ({"yields": "long", "dollar": "long"}, 15, "long", "weak", 3),
+     55, "long", "strong", 5),
+    ({"spy_levels": "long", "qqq_levels": "long"}, 40, "long", "moderate", 4),
+    ({"yields": "long", "dollar": "long"}, 20, "long", "weak", 3),
     ({"spy_levels": "long", "qqq_levels": "short"}, 0, None, "none", 2),
     ({}, 0, None, "none", 2),
 ])
@@ -240,7 +283,8 @@ def test_grade_and_max_conviction(sides: dict[str, str], score: int, bias: str |
                                   cap: int) -> None:
     c = mc.conviction(_votes(**sides))
     assert (c["score"], c["bias"], c["grade"], c["max_conviction"]) == (score, bias, grade, cap)
-    assert c["agree"] + c["against"] + c["neutral"] == c["total"] == 11
+    # Nine in families: the VIX's curve and day are read and are no side.
+    assert c["agree"] + c["against"] + c["neutral"] == c["total"] == 9
 
 
 # ---------------------------------------------------------------------- breadth
@@ -455,13 +499,14 @@ def test_build_degrades_on_empty_inputs() -> None:
 def test_build_and_the_scanner_count_are_the_same_function() -> None:
     scan = _scan("rth", _row("SPY", state=2, last=102.0, rvol=1.5, chg=0.6),
                  _row("QQQ", state=1, last=100.7, rvol=1.5, chg=0.6))
-    quotes = [_q("VIX", 14.0, -3.0), _q("VIX3M", 17.0), _q("HYG", 77.0, 0.3),
+    quotes = [_q("VIX", 14.0, -4.0), _q("VIX3M", 17.0), _q("HYG", 77.0, 0.3),
               _q("US10Y", 4.5, 0.0, -0.05), _q("DXY", 102.0, -0.4)]
     sectors = _sectors(8, 3, rsp=0.9, spy=0.5)
     ctx = mc.build(scan, {"quotes": quotes, "sectors": sectors, "constituents": _cons(15, 5)}, NOW)
     c = ctx["conviction"]
+    # Nine reads in families agree; the VIX falling 4% is said beside them, no side.
     assert (c["bias"], c["agree"], c["against"], c["grade"], c["max_conviction"]) == (
-        "long", 11, 0, "strong", 5)
+        "long", 9, 0, "strong", 5)
     assert c == mc.conviction_for(scan, quotes, sectors, _cons(15, 5), NOW)
 
 

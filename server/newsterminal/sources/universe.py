@@ -72,7 +72,7 @@ from ..config import BROWSER_UA, CACHE_DIR
 from ..holidays import is_trading_day, prev_trading_day
 from ..http import SourceStatus, fetch, json_body
 from .holdings import US_LISTED
-from .pool import HEADERS, URL, pool_body, session_points
+from .pool import HEADERS, URL, company_key, pool_body, session_points
 from .quotes import SPARK
 from .quotes import THEMES as ETF_THEMES
 from .scanner import _SYM, SECTOR
@@ -504,6 +504,42 @@ def _passes(row: dict[str, Any], basis: str, cap: float, vol: float, rvol: float
     return not (sector and row["sector"] != sector)
 
 
+def spark_read(row: dict[str, Any],
+               now_ts: int) -> tuple[list[float], float | None, int | None]:
+    """One name of a spark response (two sessions, the extended hours in) → its spark, the
+    close it is coloured against, cut as the chart opens (`scan.spark_of`), and the time
+    of its last bar. A bar with no trade is a null close in Yahoo's list and is left out,
+    as the chart leaves it. Pure."""
+    resp = (row.get("response") or [None])[0] or {}
+    stamps = resp.get("timestamp") or []
+    quote = ((resp.get("indicators") or {}).get("quote") or [{}])[0]
+    closes = quote.get("close") or []
+    bars = [scan.Bar(int(t), c, c, c, c, 0.0) for t, c in zip(stamps, closes, strict=False)
+            if isinstance(t, int | float) and isinstance(c, int | float) and t < now_ts]
+    pts, ref = scan.spark_of(bars, now_ts)
+    return pts, ref, (bars[-1].t if bars and pts else None)
+
+
+def with_trade(pts: list[float], last_t: int | None,
+               trade: tuple[float, float] | None) -> list[float]:
+    """A read spark with the name's latest trade laid on, as `scan.with_live` lays it on the
+    chart's last candle: in the last bar's five minutes it is that bar's close, past them
+    it opens the next. A trade older than the last bar is already in it. Pure.
+
+    WHY (2026-11-18, the first live check): a name the scanner does not hold is drawn
+    from a read up to four minutes old, and at 09:40 MDLN's line ended green over a row
+    reading -0.11%, its chart already lower."""
+    if not pts or last_t is None or trade is None:
+        return pts
+    price, at = float(trade[0]), int(trade[1])
+    k = at - at % scan.SRC_SEC
+    if k < last_t:
+        return pts
+    if k == last_t:
+        return [*pts[:-1], round(price, 4)]
+    return [*pts, round(price, 4)][-scan.SPARK_MAX:]
+
+
 _SORTS: dict[str, Callable[[dict[str, Any]], float]] = {
     "rvol": lambda x: -(x["rvol"] or 0.0),
     "chg": lambda x: -abs(x["chg"] or 0.0),
@@ -534,8 +570,15 @@ class UniverseStore:
         self.vol_day: str | None = None
         self.pm_hist: dict[str, list[int]] = {}
         self.ah_hist: dict[str, list[int]] = {}
-        self.sparks: dict[str, tuple[float, list[float]]] = {}
+        #: {sym: (read at, closes, the close before them, the last bar's time)}:
+        #: `scan.spark_of` on Yahoo's bars.
+        self.sparks: dict[str, tuple[float, list[float], float | None, int | None]] = {}
         self.spark_want: list[str] = []
+        #: The collector's spark off the scanner's own bars (the ones the slide-out chart
+        #: draws), or None when it does not hold them fresh; this store's read is the rest's.
+        self.held_spark: Callable[[str], tuple[list[float], float | None] | None] | None = None
+        #: The stream's (price, epoch) of a name's latest trade, laid on a read spark.
+        self.live_trade: Callable[[str], tuple[float, float] | None] | None = None
         #: Each fund-defined theme's stocks (sources/holdings.py), set on the wide thread.
         self.members: dict[str, frozenset[str]] = {}
         self._load()
@@ -856,6 +899,57 @@ class UniverseStore:
         seen.update(dict.fromkeys(s for _, s in ranked))
         return list(seen)[:limit]
 
+    def rotation_finder(self, quote: Callable[[str], dict[str, Any] | None],
+                        skip: Iterable[str], limit: int, *,
+                        skip_companies: Iterable[str] = (), rvol_min: float = 1.0,
+                        only: Iterable[str] | None = None,
+                        now: datetime | None = None) -> list[dict[str, Any]]:
+        """The names off the Scanner list most worth scoring for a slot (rotation.py): $2bn+,
+        through a level on the stream's live price where it has one, an outside day first
+        (through the pre-market range and the previous day's the same way), then through the
+        previous day's level, then through the pre-market range alone; relative volume
+        breaks ties. In the session a name needs `rvol_min` and DEFAULT_VOL traded; from
+        09:30 to 09:45, while the screener's columns are still the pre-market's (`basis_at`),
+        the previous day's level alone counts and the pre-market's own RVOL orders them.
+        `skip` is the names on the list, `skip_companies` their companies (pool.company_key),
+        so a share class of a listed name is never a candidate. `only`, when given, is the
+        names that may be found at all: the collector passes the pool's qualified names, its
+        test of a tradable name ($10+, the turnover, the daily range: pool.qualify). Without
+        it, on 19 Nov the first half hour brought in BCE, TU, SKM and UGI, slow names with
+        tidy levels the pool would never pick. No sparks are wanted and nothing is stored,
+        unlike the tables."""
+        now = now or datetime.now(UTC)
+        basis = basis_at(now)
+        if basis not in ("pre", "rth"):
+            return []
+        sk, firms = set(skip), set(skip_companies)
+        allow = set(only) if only is not None else None
+        found: list[tuple[int, float, dict[str, Any]]] = []
+        for r in self.rows:
+            if r["sym"] in sk or (r["cap"] or 0) < DEFAULT_CAP:
+                continue
+            if allow is not None and r["sym"] not in allow:
+                continue
+            if firms and company_key(r["name"]) in firms:
+                continue
+            e = self._read(r, basis, quote(r["sym"]))
+            if e is None:
+                continue
+            rv = e["rvol"] or 0.0
+            if basis == "rth" and (rv < rvol_min or (e["vol"] or 0) < DEFAULT_VOL):
+                continue
+            if e["both"]:
+                tier = 0
+            elif e["pd_state"] != "inside":
+                tier = 1
+            elif e["pm_state"] in ("above", "below"):
+                tier = 2
+            else:
+                continue
+            found.append((tier, -rv, e))
+        found.sort(key=lambda x: (x[0], x[1]))
+        return [e for _, _, e in found[:limit]]
+
     # ---- sparks -------------------------------------------------------------
 
     def want_sparks(self, syms: Iterable[str]) -> None:
@@ -864,40 +958,60 @@ class UniverseStore:
             order.update(dict.fromkeys(self.spark_want))
             self.spark_want = list(order)[:400]
 
+    def spark_pair(self, sym: str) -> tuple[list[float] | None, float | None]:
+        """(the name's spark, the close it is coloured against): off the chart's own bars
+        when the scanner holds them fresh, else this store's read of Yahoo's."""
+        if self.held_spark is not None:
+            got = self.held_spark(sym)
+            if got is not None and got[0]:
+                return got
+        read = self.sparks.get(sym)
+        if not read:
+            return None, None
+        trade = self.live_trade(sym) if self.live_trade is not None else None
+        return with_trade(read[1], read[3], trade), read[2]
+
     def spark(self, sym: str) -> list[float] | None:
-        got = self.sparks.get(sym)
-        return got[1] if got else None
+        return self.spark_pair(sym)[0]
+
+    def fill_spark(self, row: dict[str, Any]) -> None:
+        """Lay the spark and its reference on a row (`spark`, `spark_ref`)."""
+        row["spark"], row["spark_ref"] = self.spark_pair(str(row.get("sym")))
 
     def tick_sparks(self, now: datetime | None = None) -> bool:
-        """One batched read of the sparks that are due, at most. True when one was made."""
+        """One batched read of the sparks that are due, at most. True when one was made.
+
+        TWO SESSIONS WITH THE EXTENDED HOURS (2026-11-18): the chart's opening view
+        reaches into the evening before today's pre-market (`scan.spark_of`), and a
+        one-day read without `includePrePost` had neither: before 09:30 it was
+        yesterday's regular session, drawn under a column headed "today"."""
         now = now or datetime.now(UTC)
         t = now.timestamp()
         ttl = SPARK_IDLE_TTL if basis_at(now) == "last" else SPARK_TTL
         with self._lock:
-            due = [s for s in self.spark_want if t - self.sparks.get(s, (0.0, []))[0] >= ttl]
+            due = [s for s in self.spark_want
+                   if t - self.sparks.get(s, (0.0, [], None, None))[0] >= ttl]
             if not due:
                 return False
             chunk = due[:SPARK_CHUNK]
         names = {s.replace(".", "-"): s for s in chunk}
-        url = SPARK.format(syms=urllib.parse.quote(",".join(names), safe=""), rng="1d", iv="5m")
+        url = SPARK.format(syms=urllib.parse.quote(",".join(names), safe=""), rng="2d",
+                           iv="5m") + "&includePrePost=true"
         r = fetch(url, key=f"univ_spark_{int(t)}", ttl_sec=0.0, ua=BROWSER_UA, timeout=12,
                   stale_ok=False, store=False, validate=json_body)
         # Marked read either way: a name Yahoo does not know must not hold the queue.
         for s in chunk:
-            self.sparks.setdefault(s, (t, []))
-            self.sparks[s] = (t, self.sparks[s][1])
+            old = self.sparks.get(s, (t, [], None, None))
+            self.sparks[s] = (t, old[1], old[2], old[3])
         if not r.ok:
             return True
         try:
             doc = r.json()
             for row in (doc.get("spark") or {}).get("result") or []:
                 sym = names.get(row.get("symbol"))
-                resp = (row.get("response") or [None])[0] or {}
-                quote = ((resp.get("indicators") or {}).get("quote") or [{}])[0]
-                closes = quote.get("close") or []
-                pts = [round(float(c), 4) for c in closes if isinstance(c, int | float)]
+                pts, ref, last_t = spark_read(row, int(t))
                 if sym and pts:
-                    self.sparks[sym] = (t, pts[-80:])
+                    self.sparks[sym] = (t, pts, ref, last_t)
         except (ValueError, TypeError, AttributeError, IndexError):
             pass
         return True
@@ -1082,7 +1196,7 @@ class UniverseStore:
             e["pinned"] = e["sym"] in ctx.pinned
             e["stage"] = ctx.stage.get(e["sym"])
             e["verdict"] = ctx.verdict(e["sym"])
-            e["spark"] = self.spark(e["sym"])
+            self.fill_spark(e)
             e["themes"] = self.themes_of(self.by_sym[e["sym"]])
         movers = [e for e in base if e["chg"] is not None]
         top_rvol = max((e for e in base if e["rvol"] is not None), key=lambda e: e["rvol"],
@@ -1219,7 +1333,7 @@ class UniverseStore:
         rows = kept[:MAX_ROWS]
         self.want_sparks(e["sym"] for e in rows[:60])
         for e in rows:
-            e["spark"] = self.spark(e["sym"])
+            self.fill_spark(e)
         by_size = sorted(out, key=lambda e: -abs(e["chg"]))
         ups, downs = [e for e in by_size if e["chg"] > 0], [e for e in by_size if e["chg"] < 0]
         return {
@@ -1331,3 +1445,10 @@ class UniverseStore:
 
     def raw(self, sym: str) -> dict[str, Any] | None:
         return self.by_sym.get(sym)
+
+    def pre_rvol(self, sym: str, adv_pct: float | None) -> tuple[float | None, bool]:
+        """This morning's pre-market volume against the name's own usual pre-market, and
+        whether that is an estimate (`_ext_rvol`: fewer than VOL_MIN_DAYS mornings kept).
+        For the pre-market record (premarket_record.py, 2026-11-18)."""
+        r = self.by_sym.get(sym) or {}
+        return self._ext_rvol(sym, "pre", r.get("pm_vol"), adv_pct)

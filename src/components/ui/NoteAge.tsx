@@ -43,6 +43,30 @@ export function NoteAge({ createdUtc, what = "note" }: { createdUtc: string | nu
   );
 }
 
+/**
+ * " · 21h ago", for a report's dateline (owner, 2026-11-19: "get rid of the different
+ * colored stale warning banner on the reports and just have how long ago it was generated
+ * eg '21h ago' and have it by the date in the top right corner"). The market reports
+ * stopped drawing NoteAge's tinted banner that day; the age sits in the date's own ink,
+ * always, not only past two hours. The Market overview and the plans keep the banner.
+ * Null until mounted, as NoteAge is.
+ */
+export function WrittenAgo({ createdUtc, className }: { createdUtc: string | null | undefined; className?: string }) {
+  const now = useNow(60_000);
+  if (!createdUtc || now === null) return null;
+  const t = Date.parse(createdUtc);
+  if (Number.isNaN(t)) return null;
+  return <span className={className}> · {agoWord((now - t) / 60000)}</span>;
+}
+
+/** "just now", "12m ago", "21h ago", "3d ago". */
+export function agoWord(min: number): string {
+  if (min < 1) return "just now";
+  if (min < 60) return `${Math.floor(min)}m ago`;
+  if (min < 48 * 60) return `${Math.round(min / 60)}h ago`;
+  return `${Math.round(min / 1440)}d ago`;
+}
+
 /** "3h", "20 days" — how long, in the unit a reader thinks in. */
 function span(min: number): string {
   if (min < 60 * 36) return `${Math.round(min / 60)}h`;

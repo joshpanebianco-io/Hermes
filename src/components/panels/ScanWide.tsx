@@ -72,7 +72,26 @@ export function dayName(iso: string): string {
 }
 
 /** The day's closes as a line: hue by which way it ended, a flat rule while there are none. */
-export function Spark({ pts, w = 84, h = 26 }: { pts: number[] | null | undefined; w?: number; h?: number }) {
+/**
+ * A row's small chart: the slide-out chart's opening view as five-minute closes (server
+ * scan.spark_of, 2026-11-18: "make sure sparks are accurate representations of the
+ * charts"), the pre-market and after hours in. Green at or above `base`, the last regular
+ * close, as the row's % change reads; against its own first point only without one.
+ */
+export const SPARK_TIP =
+  "Five-minute closes as the chart opens on them: the last half hour of the evening before, then the pre-market from 04:00 ET to now, after hours included. Green above the last regular close, red below it.";
+
+export function Spark({
+  pts,
+  base,
+  w = 84,
+  h = 26,
+}: {
+  pts: number[] | null | undefined;
+  base?: number | null;
+  w?: number;
+  h?: number;
+}) {
   if (!pts || pts.length < 2) return <span className="inline-block" style={{ width: w, height: h }} aria-hidden />;
   const lo = Math.min(...pts);
   const hi = Math.max(...pts);
@@ -80,7 +99,7 @@ export function Spark({ pts, w = 84, h = 26 }: { pts: number[] | null | undefine
   const d = pts
     .map((v, i) => `${i ? "L" : "M"}${((i / (pts.length - 1)) * (w - 2) + 1).toFixed(1)},${(h - 2 - ((v - lo) / span) * (h - 4)).toFixed(1)}`)
     .join("");
-  const up = pts[pts.length - 1] >= pts[0];
+  const up = pts[pts.length - 1] >= (base ?? pts[0]);
   return (
     <svg width={w} height={h} className="block" aria-hidden>
       <path d={d} fill="none" stroke={up ? "var(--call-fig)" : "var(--put-fig)"} strokeWidth={1} opacity={0.85} />
@@ -102,8 +121,17 @@ export function ageWord(min: number): string {
 export function readWord(read: NewsRead | null | undefined): string {
   if (!read || (read.size === "unclear" && !read.line)) return "";
   const size = read.size === "big" ? "Big" : read.size === "ordinary" ? "Ordinary" : "Unclear";
-  return read.line ? `${size}: ${read.line}` : size;
+  const way = read.direction ? ` · ${DIRECTION_WORD[read.direction]}` : "";
+  return read.line ? `${size}${way}: ${read.line}` : `${size}${way}`;
 }
+
+/** The model's direction in words, as its chip reads (types NewsRead). */
+export const DIRECTION_WORD: Record<NonNullable<NewsRead["direction"]>, string> = {
+  bullish: "Bullish",
+  bearish: "Bearish",
+  mixed: "Mixed",
+  unclear: "Unclear",
+};
 
 /** A headline as a key: lower case, letters and digits (the server's newsread.norm). */
 const storyKey = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 80);

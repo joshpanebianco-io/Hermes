@@ -699,17 +699,18 @@ function Regime({ r }: { r: PlanRegime }) {
         <p className="mt-1 text-[11.5px] text-ink-3">one-sigma, from VIX</p>
       </Cell>
       {/* NOT THE PLAN'S BIAS (2026-10-14): this is the scanner's index lean —
-          SPY and QQQ against their own levels, with VIX's direction — and it
-          read "Neutral" under a headline of "Long bias prevails", which follows
-          the eleven-read tape count below. Named for what it is. */}
+          SPY and QQQ against their own levels — and it read "Neutral" under a
+          headline of "Long bias prevails", which follows the tape count below.
+          Named for what it is. The VIX's direction was a third vote until the
+          evening of 2026-11-19; it is the line under it, as weather. */}
       <Cell
         label="Index lean"
-        title="SPY and QQQ against their own levels, with VIX's direction — two votes the same way is a lean. A narrower read than the tape count the plans are capped by."
+        title="SPY and QQQ against their own levels: both the same way is a lean. The VIX's day is said under it and is no vote. A narrower read than the tape count the plans are capped by."
       >
         <span className="text-[16px] font-semibold" style={{ color: sideHue(r.bias) }}>
           {r.bias === "long" ? "▲ Long" : r.bias === "short" ? "▼ Short" : "No lean"}
         </span>
-        <p className="mt-1 text-[11.5px] text-ink-3">{CONFIRM[r.confirm ?? ""] ?? "VIX not confirming either way"}</p>
+        <p className="mt-1 text-[11.5px] text-ink-3">{CONFIRM[r.confirm ?? ""] ?? "VIX flat against SPY"}</p>
       </Cell>
       <Cell label="Tape">
         <ul className="flex flex-col gap-0.5">
@@ -734,9 +735,9 @@ function Regime({ r }: { r: PlanRegime }) {
 
 /** VIX against SPY, in words — the scanner's `confirm`. */
 const CONFIRM: Record<string, string> = {
-  confirm: "SPY up, VIX down — confirmed",
+  confirm: "SPY up, VIX down — no hedging under it",
   divergence: "SPY up with VIX up — a hedged rally",
-  risk_off: "SPY down, VIX up — risk-off",
+  risk_off: "SPY down, VIX up — protection bid",
   divergence_down: "SPY down with VIX down — selling nobody is hedging",
   chop: "SPY and VIX both flat",
 };

@@ -56,11 +56,12 @@ def test_another_companys_event_under_the_name_never_pays() -> None:
 
 def test_rs_is_ten_and_capped_at_five_off_a_live_entry() -> None:
     assert (scanscore.W_RS, scanscore.RS_POOR) == (10, 5)
-    # The parts a setup can earn: 103 since the daily frame's six went (2026-11-15),
-    # shown capped at 100, ranked on the sum.
+    # The parts a setup can earn: 103 once the daily frame's six went (2026-11-15), 98 since
+    # the VIX's five went on the evening of 2026-11-19, shown capped at 100, ranked on the sum.
     full = (max(scanscore.W_STRUCTURE.values()) + scanscore.W_RS + scanscore.W_ENTRY
             + scanscore.W_VOLUME[0][1] + scanscore.W_MARKET + scanscore.W_CATALYST)
-    assert full == 103 and not hasattr(scanscore, "W_FRAME")
+    assert full == 98 and not hasattr(scanscore, "W_FRAME")
+    assert not hasattr(scanscore, "W_CONFIRM")
 
 
 # ---- the previous session's story: on the row and in the log, never in the score ------
@@ -223,8 +224,10 @@ def test_the_answer_is_held_to_what_the_model_was_shown() -> None:
         {"id": "s1", "size": "big", "line": "Raised its full-year outlook to $4.10 a share."},
         {"id": "s2", "size": "huge", "line": "not a size on the list"},
         {"id": "s9", "size": "big", "line": "not a story it was shown"}]}, [c, other])
-    assert got == {c["key"]: {"size": "big",
-                              "line": "Raised its full-year outlook to $4.10 a share"}}
+    # No direction given: "unclear" (2026-11-18); `text`: it read the headline alone.
+    assert got == {c["key"]: {"size": "big", "direction": "unclear",
+                              "line": "Raised its full-year outlook to $4.10 a share",
+                              "text": False}}
     # A figure the text does not carry, and a call on direction: the size stands, no line.
     seen = json.dumps(newsread.shown(c))
     assert newsread.clean_line("Outlook raised 12% to $4.10", seen) == ""
@@ -247,10 +250,12 @@ def test_the_ask_walks_the_chain_and_sends_nothing_of_the_owner() -> None:
         calls.append(payload)
         if len(calls) == 1:   # the schema refused: the same model once more in JSON mode
             raise urllib.error.HTTPError("u", 400, "bad schema", {}, io.BytesIO(b"{}"))  # type: ignore[arg-type]
-        return _answer([{"id": "s1", "size": "ordinary", "line": "Outlook raised"}])
+        return _answer([{"id": "s1", "size": "ordinary", "direction": "bullish",
+                         "line": "Outlook raised"}])
 
     got, attempts = newsread.ask([c], "k", model="m1", post=post)
-    assert got == {c["key"]: {"size": "ordinary", "line": "Outlook raised", "model": "m1"}}
+    assert got == {c["key"]: {"size": "ordinary", "direction": "bullish",
+                              "line": "Outlook raised", "text": False, "model": "m1"}}
     assert [a["mode"] for a in attempts] == ["schema", "json"]
     assert calls[0]["response_format"]["type"] == "json_schema"
     assert calls[1]["response_format"] == {"type": "json_object"}
@@ -306,13 +311,17 @@ def test_the_store_paces_the_requests_and_keeps_the_reads(tmp_path: Any) -> None
     assert [c["key"] for c in todo] == [c["key"] for c in cands[:newsread.BATCH]]
     store.asked(todo, now)
     assert not store.due(now + 60) and store.due(now + newsread.GAP_SEC)
-    store.put({"S0|t": {"size": "big", "line": "A line", "model": "m"}}, todo, now)
+    store.put({"S0|t": {"size": "big", "direction": "bearish", "line": "A line", "model": "m",
+                        "text": True}}, todo, now)
     # Read ones are done; the unanswered wait an hour; the rest come up next.
     nxt = store.pending(cands, now + 400)
     assert [c["key"] for c in nxt] == [c["key"] for c in cands[newsread.BATCH:]]
     assert "S1|t" in [c["key"] for c in store.pending(cands, now + 3700)]
     item = {"tag": "Guidance", "tier": 1, "src": "words", "title": "t"}
-    assert store.for_item("S0", item, None) == {"size": "big", "line": "A line", "headline": "h0"}
+    assert store.for_item("S0", item, None) == {"size": "big", "direction": "bearish",
+                                                "line": "A line", "headline": "h0", "text": True}
+    # Which way, as the score reads it; a story not read is None.
+    assert store.direction("S0", "t") == "bear" and store.direction("S5", "t") is None
     assert store.for_item("S5", item, None) is None
     assert store.for_item("S0", {**item, "tier": 2}, None) is None
     # The day's cap, and the file.

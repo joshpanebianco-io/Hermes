@@ -34,7 +34,7 @@ type Filter = "signals" | "all";
 const POLL_SEC = 30;
 const SMALL = 5;
 
-const KIND: Record<ScanEvent["kind"], string> = { L: "(L)", E: "(E)", BO: "◆", NEAR: "near" };
+const KIND: Record<ScanEvent["kind"], string> = { L: "(L)", E: "(E)", V: "(V)", BO: "◆", NEAR: "near" };
 
 export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
   const [events, setEvents] = useState<ScanEvent[]>([]);
@@ -76,7 +76,7 @@ export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
   }, [load]);
 
   const days = useMemo(() => {
-    const kept = filter === "all" ? events : events.filter((e) => e.kind === "L" || e.kind === "E");
+    const kept = filter === "all" ? events : events.filter((e) => e.kind === "L" || e.kind === "E" || e.kind === "V");
     const by = new Map<string, ScanEvent[]>();
     // By the bar, not by when the log learned of it: a day's backfilled signals
     // are appended after its live ones, so id order read 11:10, 14:20, 13:20.
@@ -99,7 +99,7 @@ export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
         <p className="qt-cap text-[10.5px] text-ink-3">Signals, newest first</p>
         <span className="seg ml-auto">
           <button type="button" onClick={() => setFilter("signals")} {...segItem(filter === "signals")}>
-            (L) and (E)
+            Trades
           </button>
           <button type="button" onClick={() => setFilter("all")} {...segItem(filter === "all")}>
             Every event
@@ -111,8 +111,8 @@ export function ScanLog({ onPick }: { onPick: (sym: string) => void }) {
         <HelmLoader label="Loading the log" size={40} minHeight={220} />
       ) : days.length === 0 ? (
         <p className="px-3 py-8 text-center text-[12px] text-ink-3">
-          Nothing logged yet. Signals are recorded as the engine sees them on ten-minute bars read after they closed, during the
-          regular session.
+          Nothing logged yet. Signals are recorded as the engine sees them on 3-, 5- and 10-minute bars read after they closed,
+          during the regular session.
         </p>
       ) : (
         <table className="w-full min-w-[860px] border-collapse text-left">
@@ -170,6 +170,15 @@ function DayRows({ day, list, onPick }: { day: string; list: ScanEvent[]; onPick
           <td className={cn("px-2.5 py-1.5 whitespace-nowrap", e.side === "long" ? "text-call-fig" : "text-put-fig")}>
             <span className="fig">{KIND[e.kind]}</span> {e.side === "long" ? "▲" : "▼"}
             {e.level && <span className="ml-1.5 text-ink-3">{e.level}</span>}
+            {e.kind !== "NEAR" && <span className="fig ml-1.5 text-ink-3">{e.tf ?? "10m"}</span>}
+            {e.alert === false && (
+              <span
+                className="qt-cap ml-1.5 text-[9px] text-ink-3"
+                title={`Printed first on the ${(e.after ?? []).join(", ")} chart — that one alerted`}
+              >
+                after {(e.after ?? []).join(", ")}
+              </span>
+            )}
           </td>
           <td
             className={cn("fig px-2.5 py-1.5 text-right text-ink", e.retracted && "line-through")}

@@ -154,11 +154,13 @@ type Bench = "SPY" | "QQQ";
  */
 const MAG7: ReadonlySet<string> = new Set(["AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA"]);
 
+// The VIX against SPY as weather, never a side (server scanscore, the evening of
+// 2026-11-19): "confirmed" and "risk-off" read as a call on which way.
 const CONFIRM_LABEL: Record<NonNullable<Regime["confirm"]>, string> = {
-  confirm: "SPY up, VIX down — confirmed",
-  divergence: "SPY up, VIX up — divergence",
-  risk_off: "SPY down, VIX up — risk-off",
-  divergence_down: "SPY down, VIX down — divergence",
+  confirm: "SPY up, VIX down — no hedging under it",
+  divergence: "SPY up, VIX up — a hedged rally",
+  risk_off: "SPY down, VIX up — protection bid",
+  divergence_down: "SPY down, VIX down — nobody hedging",
   chop: "Both flat — chop",
 };
 

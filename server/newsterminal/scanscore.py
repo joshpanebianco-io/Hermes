@@ -26,11 +26,12 @@ tools/fit_score.py prints the same tests as the record grows.
 
 VIX IS THE WEATHER, NOT A SIGNAL. It never picks a stock. It sets the band the
 session is likely to run in (how far a level trade can go, how wide the noise
-is), and its intraday direction against SPY says whether the tape is confirming
-or diverging. Both reach the score only through `market`, and the band reaches
-the page as a sentence rather than as points — a low-vol day does not make one
-breakout better than another, it makes all of them worse, which is a note to
-the reader and not a reordering.
+is), and its intraday direction against SPY is said in words (`confirm`). Neither
+is points: a low-vol day does not make one breakout better than another, it makes
+all of them worse, which is a note to the reader and not a reordering. Its
+direction was one of the tape's three votes and paid W_CONFIRM until the evening
+of 2026-11-19 (owner: "vix and gex are more regime context correct?", then "do
+what you recommend best"); bias.BOARD_FAMILY says why it is no side.
 
 COMPUTED ON READ. The technicals are refreshed by the collector's scanner job;
 this joins them with whatever the snapshot holds now (VIX, sectors, the
@@ -53,6 +54,7 @@ from .catalysts import (
     MAJOR,
     MINOR,
     NOISE,
+    NOT_OWN_BANKRUPT,
     NOTABLE,
     TALK,
     TIER_POINTS,
@@ -282,9 +284,12 @@ RECORD_SOLID = 30
 #: setup against the daily trend is still FLAGGED (flags are not points). The 8 EMA
 #: wave is another thing and stays: it is where an entry is, not a trend filter.
 W_BIAS = 11
-W_CONFIRM = 5
+#: NO POINTS FOR THE VIX "CONFIRMING" since the evening of 2026-11-19 (the module's note
+#: on the VIX): a long earned 5 when SPY rose and the VIX fell, a short when SPY fell
+#: and the VIX rose, which is SPY's own move counted again with the VIX's sign on it.
+#: Not handed to another part: the Market part is 15 now, and no other weight moves.
 W_SECTOR = 4
-W_MARKET = W_BIAS + W_CONFIRM + W_SECTOR
+W_MARKET = W_BIAS + W_SECTOR
 SECTOR_MIN = 0.2  # pp of excess return over SPY before a sector counts as a tailwind
 P_FUEL = -10
 FUEL_USED = 1.2  # the day's range as a multiple of daily ATR
@@ -435,17 +440,17 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
     vix_dir = _sign(vix_pct, VIX_FLAT)
 
     # THE BIAS: the two index ETFs' own level state (the strategy's own read of
-    # them), or their move while both are still inside their levels, plus VIX's
-    # direction against them. Two votes the same way is a lean; anything less is
-    # no lean, because a scanner that always has a bias is a scanner that is
-    # usually guessing.
+    # them), or their move while both are still inside their levels. Both the same
+    # way is a lean; anything less is no lean, because a scanner that always has a
+    # bias is a scanner that is usually guessing. The VIX's direction against them was
+    # a third vote until the evening of 2026-11-19 (the module's note): it is said in
+    # `confirm` below, as words.
     votes = 0
     states = [r.get("lvl_state", 0) if r else 0 for r in (spy, qqq)]
     if any(states):
         votes += sum(_sign(float(s), 0.5) for s in states)
     else:
         votes += sum(_sign(_move(r, session), SPY_FLAT) for r in (spy, qqq))
-    votes -= vix_dir
     bias = "long" if votes >= 2 else "short" if votes <= -2 else None
 
     confirm: str | None = None
@@ -457,8 +462,8 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
         confirm = "risk_off"
     elif spy_dir == -1 and vix_dir == -1:
         # The mirror of "divergence", which had no word (the both-sides audit, 2026-11-14):
-        # a fall nobody is buying protection for. Words only, like its twin: the score
-        # pays a long on "confirm" and a short on "risk_off".
+        # a fall nobody is buying protection for. Words only, as every one of these is
+        # since the evening of 2026-11-19 (W_CONFIRM's note).
         confirm = "divergence_down"
     elif spy_dir == 0 and vix_dir == 0 and spy is not None and vix_pct is not None:
         confirm = "chop"
@@ -505,17 +510,20 @@ def regime(quotes: list[dict[str, Any]], tape_rows: dict[str, dict[str, Any] | N
     if em is not None and spy and spy.get("last"):
         pts = em / 100.0 * float(spy["last"])
         notes.append(f"SPY's implied one-day move is ±{em:.2f}% (±{pts:.2f}).")
+    # The VIX against SPY, as weather (the module's note): how nervous the tape is and
+    # what that does to a trade's room, never which side is favoured.
     if confirm == "confirm":
-        notes.append("SPY up, VIX down — a healthy trend; continuation setups are favoured.")
+        notes.append("SPY up, VIX down — the usual pairing: no hedging under the move, so "
+                     "it has room to run.")
     elif confirm == "divergence":
-        notes.append("SPY up but VIX up too — hedging demand under the rally; be quicker to "
-                     "take profits on longs.")
+        notes.append("SPY up but VIX up too — hedging demand under the rally; moves can turn "
+                     "quickly, so take profits sooner.")
     elif confirm == "risk_off":
-        notes.append("SPY down, VIX up — risk-off; shorts on weak names are favoured, don't "
-                     "catch the knife.")
+        notes.append("SPY down, VIX up — the usual pairing: protection bought into the fall; "
+                     "ranges widen, so give stops room.")
     elif confirm == "divergence_down":
         notes.append("SPY down but VIX down too — no demand for protection under the selling; "
-                     "be quicker to take profits on shorts.")
+                     "moves can turn quickly, so take profits sooner.")
     elif confirm == "chop":
         notes.append("SPY and VIX both flat — expect rotation; levels are more likely to be "
                      "faded than broken.")
@@ -880,7 +888,9 @@ _BEAR = re.compile(
     r"\b(?:secondary|stock|share) offering|\bprobes?\b|investigat|\brecalls?\b|lawsuits?|"
     r"\bsued\b|"
     r"\bfda (?:rejects?|declines?|refuses?)|complete response letter|clinical hold|"
-    r"(?:trial|study) (?:fails|failed)|failed (?:to meet|its) primary|\bbankrupt|\bchapter 11\b|"
+    r"(?:trial|study) (?:fails|failed)|failed (?:to meet|its) primary|"
+    # Somebody else's bankruptcy is not the name's (catalysts.NOT_OWN_BANKRUPT, 2026-11-18).
+    rf"{NOT_OWN_BANKRUPT}\bbankrupt|\bchapter 11\b|"
     # (2026-11-13) Guidance cut however it is worded; equity raised (common stock, a
     # convertible, a registered direct, an at-the-market programme); a trial that missed;
     # an index exit; an executive leaving; a short seller; a dividend cut; a reverse split.
@@ -1038,8 +1048,20 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
                   filings: list[dict[str, Any]] | None, sym: str | None = None,
                   names: Sequence[str] = (), *, tape: float | None = None,
                   fresh_min: float | None = None,
-                  day_move: float | None = None) -> dict[str, Any]:
+                  day_move: float | None = None,
+                  model_dir: Callable[[str | None], str | None] | None = None
+                  ) -> dict[str, Any]:
     """The catalyst part: {pts, note, against, reads_against, item, …}. Pure.
+
+    THE MODEL'S READ OF A STORY'S DIRECTION (owner, 2026-11-18: "do what you recommend
+    to make our scanner more accurate"). `model_dir(title)` (title None: the report) is
+    which way the model read the story from its text (newsread.py): "bull", "bear", ""
+    for read and neither, None for not read yet. Where it has read it, it replaces the
+    headline's words and the report's EPS sign: the words read Nvidia's "strong Q3 puts
+    CEO exit concerns in shade" as bearish by its "CEO exit", and a beat with the outlook
+    cut reads as a beat by its sign. The name's own stated move still comes first (what
+    the stock did), and the tape still overrules. Points do not move: direction is the
+    flag and the tie-break since 2026-11-14.
 
     NEWS IS FUEL (W_CATALYST, 2026-11-14): the strongest story since the close earns its
     grade for whichever side the setup is on. Stories: a report since the close with
@@ -1093,10 +1115,14 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         when_txt = "after the close" if last_night else "this morning"
         if isinstance(sp, (int, float)) and sp != 0:
             text0 = f"reported {when_txt}, EPS {sp:+.1f}% vs estimate"
-            says = "bull" if sp > 0 else "bear"
+            md0 = model_dir(None) if model_dir is not None else None
+            says: str | None = ("bull" if sp > 0 else "bear") if md0 is None else (md0 or None)
             d0: str | None = says
-            src0 = "report"
-            if not heard(says, text0):
+            src0 = "report" if md0 is None else "model"
+            if md0 is not None:
+                text0 += (" · its direction from the model's read" if says
+                          else " · the model's read: no clear way")
+            if says is not None and not heard(says, text0):
                 d0, src0 = None, "overruled"
                 text0 = f"{text0} · overruled by the tape"
             fuel.append((W_CATALYST, text0, {"tag": "Report", "tier": MAJOR, "src": src0,
@@ -1153,15 +1179,24 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
         # THE NAME'S OWN STATED MOVE FIRST (2026-11-13): it is the market's verdict on the
         # news, where the event's words may be anybody's ("Palantir Stock Falls Despite
         # Earnings Beat" was a beat). Then the words, in the name's own clause. Then, for
-        # a story that matters and says no way, the tape (TAPE_CLEAR).
-        d: str | None = mv or headline_direction(title, sym, names)
-        src = "move" if mv else "words"
+        # a story that matters and says no way, the tape (TAPE_CLEAR). Between the move and
+        # the words, the model's read where it has read the story (`model_dir`, 2026-11-18).
+        md = model_dir(title) if model_dir is not None and not mv else None
+        d: str | None
+        if mv:
+            d, src = mv, "move"
+        elif md is not None:
+            d, src = (md or None), "model"
+        else:
+            d, src = headline_direction(title, sym, names), "words"
         if d is not None:
             # Words the tape contradicts: the story is still the name's news and still
             # pays; it reads no way (it was set aside, earning nothing, until 2026-11-14).
             if not heard(d, text):
                 d, src = None, "overruled"
                 text = f"{text} · its words overruled by the tape"
+            elif src == "model":
+                text = f"{text} · its direction from the model's read"
         elif g.tier in (MAJOR, NOTABLE) and tape_dir is not None:
             d, src = tape_dir, "tape"
             text = f"{text} · its direction from the tape"
@@ -1222,6 +1257,9 @@ def catalyst_read(side: str | None, earnings: dict[str, Any] | None,
     w_with = max((it[0] for it in fuel if it[3] == mine), default=0)
     opposed = min((it for it in fuel if it[3] not in (None, mine)), key=order, default=None)
     reads_against = opposed[1] if opposed is not None and opposed[0] >= w_with else None
+    # Its headline, for the model to read (newsread.flag_candidate); None for the report.
+    seen["reads_against_title"] = (opposed[2].get("title")
+                                   if reads_against and opposed is not None else None)
     form_with = max((f for f in forms if f[0] == mine), key=lambda f: f[1], default=None)
     form_against = max((f for f in forms if f[0] != mine), key=lambda f: f[1], default=None)
     earned = max(top[0] if top else 0, form_with[1] if form_with else 0)
@@ -1307,9 +1345,9 @@ def _signal_minute(at_et: Any) -> int | None:
 
 
 def latest_trade_signal(signals: list[dict[str, Any]] | None) -> dict[str, Any] | None:
-    """The row's newest (L) or (E) today, or None. Pure."""
+    """The row's newest (L), (E) or (V) today, or None. Pure."""
     for sg in reversed(signals or []):
-        if isinstance(sg, dict) and sg.get("kind") in ("L", "E"):
+        if isinstance(sg, dict) and sg.get("kind") in ("L", "E", "V"):
             return sg
     return None
 
@@ -1422,7 +1460,8 @@ def record_for(row_kind: str | None, side: str | None, total: int | float | None
     """The record line: settled signals of this kind, side and band (scanlog
     record_table), from RECORD_MIN of them, flagged small under RECORD_SOLID. Pure."""
     band = score_band(total)
-    if not table or row_kind not in ("L", "E") or side not in ("long", "short") or band is None:
+    if not table or row_kind not in ("L", "E", "V") or side not in ("long", "short") \
+            or band is None:
         return None
     r = table.get(f"{band}|{row_kind}|{side}")
     if not r or (r.get("n") or 0) < RECORD_MIN:
@@ -1560,10 +1599,6 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     if d and reg.get("bias") == side:
         pts += W_BIAS
         bits.append("tape agrees")
-    conf = reg.get("confirm")
-    if (side == "long" and conf == "confirm") or (side == "short" and conf == "risk_off"):
-        pts += W_CONFIRM
-        bits.append("VIX confirms")
     if d and sector_rs is not None and abs(sector_rs) >= SECTOR_MIN and sector_rs * d > 0:
         pts += W_SECTOR
         bits.append("sector tailwind")
@@ -1582,7 +1617,9 @@ def score_row(row: dict[str, Any], reg: dict[str, Any], sector_rs: float | None,
     # What decided it, for the signal log (scanlog `ctx.news`); not drawn on the page.
     # `prior` is the previous session's major story (prior_story): logged, never scored.
     cpart["read"] = {"item": cat.get("item"), "fresh": cat.get("fresh"),
-                     "set_aside": cat.get("set_aside"), "prior": cat.get("prior")}
+                     "set_aside": cat.get("set_aside"), "prior": cat.get("prior"),
+                     # The flagged story's headline, for the model to read (newsread.py).
+                     "reads_against_title": cat.get("reads_against_title")}
     parts.append(cpart)
 
     # ---- penalties -----------------------------------------------------------
@@ -1729,8 +1766,13 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
           calendar_ok: bool | None = None,
           sure: Callable[[str], bool] | None = None,
           news_read: Callable[[str, dict[str, Any] | None, dict[str, Any] | None],
-                              dict[str, Any] | None] | None = None) -> dict[str, Any]:
+                              dict[str, Any] | None] | None = None,
+          news_dir: Callable[[str, str | None, dict[str, Any] | None],
+                             str | None] | None = None) -> dict[str, Any]:
     """The /api/scanner payload (contract ScannerPayload). Pure.
+
+    `news_dir(sym, title, earnings)` is which way the model read a story (newsread
+    ReadStore.direction; title None for the report): catalyst_read's `model_dir`.
 
     `news_read` gives what the model made of the story that decided a name's catalyst
     part (newsread.py: how big it is, in one line), from its symbol, that item and its
@@ -1778,7 +1820,7 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         reg["conviction"] = marketctx.conviction_for(
             {"session": session, "trading_day": td.isoformat(),
              "rows": [r for r in rows_in.values() if isinstance(r, dict)]},
-            quotes, sectors, constituents, now)
+            quotes, sectors, constituents, now, context)
     except (ValueError, TypeError, KeyError, ZeroDivisionError):
         reg["conviction"] = None
     event = reg["event"]
@@ -1848,7 +1890,9 @@ def build(scan: dict[str, Any], *, quotes: list[dict[str, Any]],
         # ATRs (RS) — what the news is checked against (TAPE_CLEAR).
         cat = catalyst_read(side0, earn, all_news, fil, sym=sym, names=called,
                             tape=(row.get("rs") or {}).get("SPY"), fresh_min=fresh_min,
-                            day_move=day_move_of(row))
+                            day_move=day_move_of(row),
+                            model_dir=(None if news_dir is None else
+                                       lambda t, s=sym, e=earn: news_dir(s, t, e)))
         cat["prior"] = prior_story(reach, sym, called, fresh_min=fresh_min, prior_min=prior_min)
         # What the model made of the deciding story, when it has read it (newsread.py).
         row["news_read"] = news_read(sym, cat.get("item"), earn) if news_read else None

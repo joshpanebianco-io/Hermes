@@ -831,6 +831,13 @@ WEEK_AHEAD = 7
 DAYS_AHEAD = 14
 #: Days ahead that are kept whole. Past these only the rows that matter are kept.
 FULL_DAYS = 3
+#: AND BACK TO THE WEEK'S MONDAY (owner, 2026-11-19: the market report lists "economic
+#: calender events on the day or earlier in the week that have an impact"). The calendar
+#: read yesterday and on; four days back reaches Monday from a Friday and last Friday's
+#: payrolls from a Monday. Before yesterday a day keeps only what printed and stops the
+#: tape (`thin_past`), so the Macro card and every reader see a handful more rows, not
+#: three more days of the tail.
+DAYS_BACK = 4
 #: Past a week, a release stays only from this impact up: the ones that stop the tape.
 FAR_SCORE = 4
 
@@ -865,6 +872,23 @@ def thin_far(rows: list[dict[str, Any]], today: date,
         us3 = r.get("region") == "us" and score >= 3
         if day is not None and day > edge and not r.get("core") and not us3:
             continue
+        out.append(r)
+    return out
+
+
+def thin_past(rows: list[dict[str, Any]], today: date) -> list[dict[str, Any]]:
+    """`rows` with the days before yesterday cut to what printed and stops the tape: a
+    released row scoring `FAR_SCORE` or more that reaches the books or is America's.
+    Yesterday and on are untouched; a row with no time is kept. Pure."""
+    yesterday = today - timedelta(days=1)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        ts = r.get("ts")
+        day = datetime.fromtimestamp(float(ts), ET).date() if isinstance(ts, (int, float)) else None
+        if day is not None and day < yesterday:
+            ours = bool(r.get("core")) or r.get("region") == "us"
+            if not (r.get("released") and ours and int(r.get("score") or 0) >= FAR_SCORE):
+                continue
         out.append(r)
     return out
 

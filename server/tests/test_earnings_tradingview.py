@@ -134,6 +134,8 @@ class Feeds:
         self.nasdaq = "live"
         self.tv = "live"
         self.asked: list[str] = []
+        self.seen: dict[str, dict[str, Any]] = {}
+        self.bounds: dict[str, tuple[int, int]] = {}
 
     def __call__(self, url: str, **kw: Any) -> FetchResult:
         if "nasdaq.com" in url:
@@ -142,7 +144,9 @@ class Feeds:
                 {"symbol": "CSCO", "name": "Cisco Systems", "marketCap": "$386,000,000,000",
                  "time": "time-after-hours", "epsForecast": "$1.15", "eps": ""}]}}).encode()
             return self._as(self.nasdaq, body, "HTTP 403")
-        field = json.loads(kw["data"])["filter"][-1]["left"]
+        cut = json.loads(kw["data"])["filter"][-1]
+        field = cut["left"]
+        self.bounds[field] = tuple(cut["right"])
         self.asked.append("last" if field == earn.TV_LAST else "next")
         doc = fixture()["last" if field == earn.TV_LAST else "next"]
         return self._as(self.tv, json.dumps(doc).encode(), "HTTP 502")
@@ -163,7 +167,55 @@ def feeds(monkeypatch: pytest.MonkeyPatch) -> Feeds:
     monkeypatch.setattr(earn, "_nasdaq_wait", 0.0)
     monkeypatch.setattr(earn, "_nasdaq_why", "")
     monkeypatch.setattr(earn, "_source", "nasdaq")
+    # The memory of reports seen, in this test and not on the real disk.
+    monkeypatch.setattr(earn, "_load_seen", lambda: dict(f.seen))
+    monkeypatch.setattr(earn, "_save_seen", lambda s: setattr(f, "seen", dict(s)))
     return f
+
+
+def _row(sym: str, day: str, **kw: Any) -> dict[str, Any]:
+    return {"symbol": sym, "date": day, "when": "pre", "eps_forecast": "$1.00",
+            "eps_actual": None, "surprise_pct": None, "market_cap": 2e11, **kw}
+
+
+def test_a_report_the_screener_dropped_on_its_morning_is_kept() -> None:
+    lo, today, hi = date(2026, 11, 15), date(2026, 11, 17), date(2026, 11, 21)
+    seen = {"DIS|2026-11-17": _row("DIS", "2026-11-17"),           # read last night
+            "XYZ|2026-11-19": _row("XYZ", "2026-11-19"),           # ahead: never kept
+            "OLD|2026-11-10": _row("OLD", "2026-11-10"),           # out of the window
+            "HD|2026-11-17": _row("HD", "2026-11-17")}
+    fresh = {"HD": _row("HD", "2026-11-17", eps_actual="$3.86"),
+             "FAR": _row("FAR", "2027-02-10")}                     # outside lo..hi
+    kept, memory = earn.keep_seen(fresh, seen, today, lo, hi)
+    assert [r["symbol"] for r in kept] == ["DIS"]                   # HD is in the read
+    assert set(memory) == {"DIS|2026-11-17", "XYZ|2026-11-19", "HD|2026-11-17"}
+    assert memory["HD|2026-11-17"]["eps_actual"] == "$3.86"         # the newest copy
+    # A name seen on two days keeps its latest one up to today.
+    two = {"ABC|2026-11-16": _row("ABC", "2026-11-16"), "ABC|2026-11-17": _row("ABC", "2026-11-17")}
+    assert [r["date"] for r in earn.keep_seen({}, two, today, lo, hi)[0]] == ["2026-11-17"]
+
+
+def test_the_reports_gone_are_asked_for_to_the_end_of_today(
+        feeds: Feeds, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 08:00 ET on the day: Disney's report that morning was stamped 09:30 as its last.
+    eight = datetime(2026, 11, 10, 8, 0, tzinfo=earn.ET).timestamp()
+    monkeypatch.setattr(earn.time, "time", lambda: eight)
+    feeds.nasdaq = "down"
+    earn.collect(keep=WATCH, today=TODAY)
+    end_of_today = datetime(2026, 11, 11, tzinfo=earn.ET).timestamp()
+    assert feeds.bounds[earn.TV_LAST][1] >= end_of_today
+    assert feeds.bounds[earn.TV_LAST][0] == datetime(2026, 11, 8, tzinfo=earn.ET).timestamp()
+
+
+def test_the_memory_reaches_the_list_and_the_status_says_so(
+        feeds: Feeds, monkeypatch: pytest.MonkeyPatch) -> None:
+    feeds.nasdaq = "down"
+    feeds.seen = {"DIS|2026-11-10": _row("DIS", "2026-11-10", name="Walt Disney")}
+    rows, st = earn.collect(keep=WATCH, today=TODAY)
+    dis = [r for r in rows if r["symbol"] == "DIS"]
+    assert dis and dis[0]["date"] == "2026-11-10"
+    assert any(n.startswith("kept from an earlier read: DIS") for n in st.notes)
+    assert any(k.startswith("DIS|") for k in feeds.seen)            # and it is remembered
 
 
 def test_nasdaq_is_the_list_while_it_answers(feeds: Feeds) -> None:

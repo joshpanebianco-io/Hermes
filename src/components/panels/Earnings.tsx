@@ -91,8 +91,8 @@ export function Earnings({
       {rows.length === 0 ? (
         <p className="px-3 py-5 text-center text-[11px] text-ink-3">
           {watch
-            ? "Nothing on the Scanner or among the large caps reports in the next few sessions."
-            : "Nothing big enough to move an index in the next few sessions."}
+            ? "Nothing on the Scanner or among the large caps reports in the next two weeks."
+            : "Nothing big enough to move an index in the next two weeks."}
         </p>
       ) : (
         byDay.map(([date, list], gi) => (

@@ -603,7 +603,7 @@ def test_facts_and_digest_carry_the_market_blocks(monkeypatch: Any, tmp_path: An
 
     monkeypatch.setattr(rp, "_post", fake)
     out = sp.generate(_scan(), _snap(), top=4)
-    assert "Tape score +0 (0 of 11 reads live" in calls[0]["messages"][1]["content"]
+    assert "Tape score +0 (0 of 9 reads live" in calls[0]["messages"][1]["content"]
     plan = out["plan"]["plans"][0]
     assert (plan["conviction"], plan["conviction_model"], plan["capped"]) == (
         2, 3, "no tape lean — at most 2")

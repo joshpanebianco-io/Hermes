@@ -86,6 +86,7 @@ from .scan import (
     CLOSE_LAG_SEC,
     ET,
     SRC_SEC,
+    TF_SEC,
     Bar,
     atr,
     fmt_px,
@@ -119,12 +120,36 @@ LIVE_LAG_SEC = 2 * BAR_SEC  # found within two bars of the bar closing
 SETTLE_ANYWAY_SEC = 3600
 #: Retractions the alert feed reports, by day: today's and the session before.
 RETRACT_DAYS = 2
-KINDS = ("L", "E", "BO")
+KINDS = ("L", "E", "V", "BO")
 NEAR = "NEAR"
 NEAR_PCT = 0.90
-TRADES = ("L", "E")  # the kinds with an entry, a stop and an outcome
+#: The kinds with an entry, a stop and an outcome. (V), the VWAP retest after an
+#: extended run, from 2026-11-19 (scan.replay).
+TRADES = ("L", "E", "V")
 
-_LABEL = {"L": "(L)", "E": "(E)", "BO": "◆", NEAR: "Near"}
+_LABEL = {"L": "(L)", "E": "(E)", "V": "(V)", "BO": "◆", NEAR: "Near"}
+
+# EVERY CHART'S SIGNALS (owner, 2026-11-19: "it should print signals on both if it happens
+# on 3m, 5m and 10m"). Each event names its chart (`tf`; one logged before then, or with
+# none, is the 10m's). The same retest usually prints on two or three charts minutes
+# apart, so ONE ALERTS: an event whose kind, side and level already printed on another
+# chart within SAME_SETUP_SEC is logged with `alert: false` and `after` (those charts),
+# and the page raises no alert for it (owner's choice: "first one only"). The record
+# (`stats`, `record_table`, tools/fit_score.py's main tables) stays the 10m chart's, so it
+# runs on from before; fit_score reads the charts against each other apart.
+SAME_SETUP_SEC = 2 * BAR_SEC
+TF_DEFAULT = "10m"
+
+
+def tf_of(ev: dict[str, Any]) -> str:
+    """The chart an event or signal was read on; the 10m when it says none. Pure."""
+    tf = ev.get("tf")
+    return tf if isinstance(tf, str) and tf in TF_SEC else TF_DEFAULT
+
+
+def bar_sec(ev: dict[str, Any]) -> int:
+    """The length of the bar an event fired on, in seconds. Pure."""
+    return TF_SEC[tf_of(ev)]
 
 
 def _iso(t: float) -> str:
@@ -140,7 +165,11 @@ def dedupe_key(ev: dict[str, Any]) -> str:
     level per day, whatever bar it was first seen on."""
     if ev["kind"] == NEAR:
         return f"{ev['day']}|{ev['sym']}|NEAR|{ev['level']}"
-    return f"{ev['day']}|{ev['sym']}|{ev['kind']}|{ev['side']}|{ev['level']}|{ev['t']}"
+    # A faster chart's signal names its chart, so a 5m and a 10m bar opening at the same
+    # minute are two events; the 10m's key is the one it always had.
+    tf = tf_of(ev)
+    return (f"{ev['day']}|{ev['sym']}|{ev['kind']}|{ev['side']}|{ev['level']}|{ev['t']}"
+            + ("" if tf == TF_DEFAULT else f"|{tf}"))
 
 
 def held_r(outcome: dict[str, Any] | None) -> float | None:
@@ -172,8 +201,13 @@ REFLOOR_MIN_BARS = 60
 def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price: float,
            stop: float | None, score: int | None, note: str, day: str,
            now_ts: float, parts: dict[str, Any] | None = None,
-           ctx: dict[str, Any] | None = None, risk_min: Any = None) -> dict[str, Any]:
-    live = now_ts - (bar_t + BAR_SEC) <= LIVE_LAG_SEC
+           ctx: dict[str, Any] | None = None, risk_min: Any = None,
+           tf: str | None = None) -> dict[str, Any]:
+    tf = tf if tf in TF_SEC else TF_DEFAULT
+    # Live within two of its own bars, and never less than one ten-minute bar: Yahoo's
+    # bars land minutes late, and a 3m signal found seven minutes on was still found
+    # by the rotation, not by a restart's replay.
+    live = now_ts - (bar_t + TF_SEC[tf]) <= max(2 * TF_SEC[tf], BAR_SEC)
     ev: dict[str, Any] = {
         "id": 0,
         "ts": _iso(now_ts),
@@ -185,6 +219,7 @@ def _event(sym: str, kind: str, side: str, level: str | None, bar_t: int, price:
         "kind": kind,
         "side": side,
         "level": level,
+        "tf": tf,
         "price": round(float(price), 4),
         "stop": round(float(stop), 4) if stop is not None else None,
         # The least the stop's distance is counted as (module docstring).
@@ -229,11 +264,27 @@ def signal_events(sym: str, signals: Iterable[dict[str, Any]], score: int | None
             continue
         side = str(sg.get("side"))
         text = str(sg.get("note") or "")
+        tf = tf_of(sg)
+        # The chart is the event's `tf`, which the pages print beside the note.
         note = f"{_LABEL[kind]} {side} — {text[:1].lower()}{text[1:]}"
         out.append(_event(sym, kind, side, sg.get("level"), int(sg["t"]), sg["price"],
                           sg.get("stop"), score, note, day, now_ts, parts, ctx,
-                          risk_min=sg.get("risk_min")))
+                          risk_min=sg.get("risk_min"), tf=tf))
     return out
+
+
+def same_setup(ev: dict[str, Any], events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The events already logged for the same setup on ANOTHER chart: the same day, name,
+    kind, side and level, whose bars closed within SAME_SETUP_SEC of this one's. Pure."""
+    if ev.get("kind") not in KINDS:
+        return []
+    end = int(ev["t"]) + bar_sec(ev)
+    return [e for e in events
+            if e.get("day") == ev.get("day") and e.get("sym") == ev.get("sym")
+            and e.get("kind") == ev.get("kind") and e.get("side") == ev.get("side")
+            and e.get("level") == ev.get("level") and tf_of(e) != tf_of(ev)
+            and not e.get("retracted")
+            and abs(int(e["t"]) + bar_sec(e) - end) <= SAME_SETUP_SEC]
 
 
 def news_ctx(score: dict[str, Any] | None,
@@ -262,10 +313,47 @@ def news_ctx(score: dict[str, Any] | None,
     prior = ({k: raw_prior.get(k) for k in ("tag", "tier", "age_min")}
              if isinstance(raw_prior, dict) else None)
     size = read_of.get("size") if isinstance(read_of, dict) else None
+    # From 2026-11-18: which way the model read it, and whether it had the story's text.
+    mdir = read_of.get("direction") if isinstance(read_of, dict) else None
+    mtext = read_of.get("text") if isinstance(read_of, dict) else None
     return {"pts": part.get("pts"), "tag": item.get("tag"), "tier": item.get("tier"),
             "dir": item.get("dir"), "with": item.get("with"), "src": item.get("src"),
             "age_min": item.get("age_min"), "fresh": read.get("fresh"),
-            "set_aside": read.get("set_aside"), "prior": prior, "size": size}
+            "set_aside": read.get("set_aside"), "prior": prior, "size": size,
+            "mdir": mdir, "mtext": mtext}
+
+
+def tape_ctx(regime: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The tape's bias as the log keeps it beside a signal (from 2026-11-19). Pure.
+
+    WHY (owner, 2026-11-19, "do what you recommend"): the two-year backfill found the
+    bias calls no index's close, and the bias is not used as a forecast of the close —
+    it is the weather a stock trade is taken in. Whether trading with it pays can only be
+    read on the trades, and the log kept only the Market part's points, which come from
+    the scanner's own vote count (scanscore.regime), not from the bias. So each live
+    signal carries both, as they stood in the payload it was found in:
+
+      score, grade, bias, coverage, backers, conflict, weights   bias.py's tape read
+          (the Scanner's `regime.conviction`, what the Market line and the Game plan say);
+      fam    what each of its families put on the score, in points;
+      vote   the regime's vote count's side, the one "tape agrees" pays (None: no lean).
+
+    Logged, never scored: nothing here moves a rank. tools/fit_score.py reads it
+    (`bias_lines`). None without a regime."""
+    if not isinstance(regime, dict):
+        return None
+    vote = regime.get("bias") if regime.get("bias") in ("long", "short") else None
+    c = regime.get("conviction")
+    if not isinstance(c, dict):
+        return {"score": None, "grade": None, "bias": None, "vote": vote}
+    fams = c.get("families") or []
+    return {"score": c.get("score"), "grade": c.get("grade"),
+            "bias": c.get("bias") if c.get("bias") in ("long", "short") else None,
+            "coverage": c.get("coverage"), "backers": c.get("backers"),
+            "conflict": c.get("conflict"), "weights": c.get("session_key"),
+            "fam": {str(f["key"]): f.get("points") for f in fams
+                    if isinstance(f, dict) and f.get("key")},
+            "vote": vote}
 
 
 def shape_ctx(r: dict[str, Any]) -> dict[str, Any]:
@@ -292,8 +380,9 @@ def shape_ctx(r: dict[str, Any]) -> dict[str, Any]:
 
 
 def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
-               now: datetime) -> list[dict[str, Any]]:
-    """Every event the payload's rows imply right now — new or not. Pure."""
+               now: datetime, tape: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Every event the payload's rows imply right now — new or not. `tape` is the
+    payload's tape read as `tape_ctx` keeps it, the same for every name. Pure."""
     now_ts = now.timestamp()
     out: list[dict[str, Any]] = []
     good = [r for r in rows if r.get("ok")]
@@ -314,8 +403,12 @@ def candidates(rows: Iterable[dict[str, Any]], session: str, day: str,
                # held the name back, and what the catalyst read (news_ctx) go with it.
                "raw": (r.get("score") or {}).get("raw"),
                "gated": bool((r.get("score") or {}).get("gated")),
-               "news": news_ctx(r.get("score"), r.get("news_read"))}
-        out += signal_events(sym, r.get("signals") or [], score, day, now_ts, parts, ctx)
+               "news": news_ctx(r.get("score"), r.get("news_read")),
+               # The tape's bias at the signal, logged and unscored (tape_ctx, 2026-11-19).
+               "tape": tape}
+        # Every chart's signals: the 10m's, then the 3m's and 5m's (scan.Tech.signals_fast).
+        out += signal_events(sym, [*(r.get("signals") or []), *(r.get("signals_fast") or [])],
+                             score, day, now_ts, parts, ctx)
         if session != "rth" or r.get("last") is None:
             continue
         prog = r.get("progress") or {}
@@ -341,17 +434,30 @@ def _moved(a: Any, b: Any) -> bool:
     return abs(float(a) - float(b)) > 1e-6
 
 
-def revalidate(ev: dict[str, Any], found: dict[str, dict[str, Any]], final_to: int | None,
+def final_for(ev: dict[str, Any], final_to: Any) -> int | None:
+    """Where the bars of the event's own chart are final: `final_to` is one figure (the
+    10m chart's, as it always was) or {tf: figure} (2026-11-19). A chart the bars did not
+    cover (no one-minute bars held) is None, and nothing on it is checked. Pure."""
+    if isinstance(final_to, dict):
+        v = final_to.get(tf_of(ev))
+        return int(v) if isinstance(v, (int, float)) else None
+    if tf_of(ev) != TF_DEFAULT:
+        return None
+    return int(final_to) if isinstance(final_to, (int, float)) else None
+
+
+def revalidate(ev: dict[str, Any], found: dict[str, dict[str, Any]], final_to: Any,
                now_ts: float) -> bool:
-    """Check one logged (L) / (E) / breakout against `found` — the events the newest
-    bars imply, by dedupe key — once its bar is final in them (`final_to`). In place;
-    returns whether `ev` changed.
+    """Check one logged (L) / (E) / (V) / breakout against `found` — the events the newest
+    bars imply, by dedupe key — once its bar is final in them (`final_to`, one figure for
+    the 10m chart or {tf: figure}: `final_for`). In place; returns whether `ev` changed.
 
     Gone → retracted (kept, flagged). Price or stop moved → corrected, with the
     first figures kept under `revised` and the outcome recomputed from scratch.
     Back again → the retraction lifted. A bar not yet final is left alone.
     """
-    if ev.get("kind") not in KINDS or final_to is None or int(ev["t"]) + BAR_SEC > final_to:
+    fin = final_for(ev, final_to)
+    if ev.get("kind") not in KINDS or fin is None or int(ev["t"]) + bar_sec(ev) > fin:
         return False
     cur = found.get(dedupe_key(ev))
     if cur is None:
@@ -425,8 +531,9 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
     s = 1.0 if ev["side"] == "long" else -1.0
     tol = abs(entry) * TOUCH_REL
     t0 = int(ev["t"])
-    start = t0 if ev["kind"] == "E" else t0 + BAR_SEC
-    ref = t0 + BAR_SEC  # the 30/60-minute marks run from the signal bar's close
+    span = bar_sec(ev)
+    start = t0 if ev["kind"] == "E" else t0 + span
+    ref = t0 + span  # the 30/60-minute marks run from the signal bar's close
 
     mfe = mae = 0.0
     seen = False
@@ -437,7 +544,10 @@ def compute_outcome(ev: dict[str, Any], bars5: list[Bar], now_ts: float,
     last_close: float | None = None
     last_end = 0
     for b in bars5:
-        if b.t < start:
+        # A 3m signal's entry can fall inside a 5-minute bar (10:48 in 10:45-10:50). That
+        # bar is read whole, minutes before the entry included: a stop it shows counts,
+        # the conservative reading, as for a bar that reaches both (module docstring).
+        if b.t + SRC_SEC <= start:
             continue
         end = b.t + SRC_SEC
         if b.t >= close_ts or end > known:
@@ -515,9 +625,10 @@ def preopen_line(rows: Iterable[dict[str, Any]], day: str, now: datetime) -> dic
 def stats(events: Iterable[dict[str, Any]], days: int, today: date) -> dict[str, Any]:
     """Settled (L)/(E) outcomes over the last `days`, grouped. Pure."""
     start = today - timedelta(days=days)
+    # The 10m chart's, so the record runs on from before the faster charts (SAME_SETUP_SEC).
     rows = [
         e for e in events
-        if e.get("kind") in TRADES and not e.get("retracted")
+        if e.get("kind") in TRADES and not e.get("retracted") and tf_of(e) == TF_DEFAULT
         and (e.get("outcome") or {}).get("final")
         and (e.get("outcome") or {}).get("r") is not None
         and start < date.fromisoformat(e["day"]) <= today
@@ -577,7 +688,8 @@ def record_table(events: Iterable[dict[str, Any]], days: int,
     start = today - timedelta(days=days)
     groups: dict[str, list[dict[str, Any]]] = {}
     for e in events:
-        if e.get("kind") not in TRADES or e.get("retracted"):
+        # The 10m chart's, as `stats`.
+        if e.get("kind") not in TRADES or e.get("retracted") or tf_of(e) != TF_DEFAULT:
             continue
         o = e.get("outcome") or {}
         if not o.get("final") or o.get("r") is None or o.get("hit_1r") is None:
@@ -693,23 +805,39 @@ class EventLog:
         changed = False
         with self._lock:
             self._note_preopen(payload, rows, day, now)
-            for c in candidates(rows, str(payload.get("session")), day, now):
+            tape = tape_ctx(payload.get("regime"))
+            today = [e for e in self.events if e.get("day") == day]
+            # In the order their bars closed, so the chart that printed a setup first is
+            # the one that alerts when two arrive in one pass.
+            cands = sorted(candidates(rows, str(payload.get("session")), day, now, tape),
+                           key=lambda c: int(c["t"]) + bar_sec(c))
+            for c in cands:
                 k = dedupe_key(c)
                 if k in self._keys:
                     continue
+                # ONE SETUP, ONE ALERT (SAME_SETUP_SEC): printed on another chart first,
+                # this one is logged and kept quiet.
+                prior = same_setup(c, today)
+                if prior:
+                    c["alert"] = False
+                    c["after"] = sorted({tf_of(e) for e in prior}, key=lambda x: TF_SEC[x])
                 c["id"] = self._next
                 self._next += 1
                 self._keys.add(k)
                 self.events.append(c)
+                today.append(c)
                 new.append(c)
                 changed = True
-            # The second look at what was logged today (module docstring).
-            found: dict[str, tuple[dict[str, dict[str, Any]], int | None]] = {}
+            # The second look at what was logged today (module docstring), each chart's
+            # signals against that chart's own final bars.
+            found: dict[str, tuple[dict[str, dict[str, Any]], dict[str, Any]]] = {}
             for r in rows:
                 if r.get("ok"):
-                    evs = signal_events(str(r.get("sym")), r.get("signals") or [], None, day,
-                                        now_ts)
-                    found[str(r.get("sym"))] = ({dedupe_key(e): e for e in evs}, r.get("final_to"))
+                    sigs = [*(r.get("signals") or []), *(r.get("signals_fast") or [])]
+                    evs = signal_events(str(r.get("sym")), sigs, None, day, now_ts)
+                    found[str(r.get("sym"))] = ({dedupe_key(e): e for e in evs},
+                                                {TF_DEFAULT: r.get("final_to"),
+                                                 **(r.get("final_to_tf") or {})})
             for e in self.events:
                 if e.get("day") == day and e.get("sym") in found:
                     got, final_to = found[e["sym"]]
@@ -746,13 +874,14 @@ class EventLog:
                     out.setdefault(e["day"], set()).add(e["sym"])
         return out
 
-    def settle(self, day: str, by_sym: dict[str, tuple[list[dict[str, Any]], int | None]],
+    def settle(self, day: str, by_sym: dict[str, tuple[list[dict[str, Any]], Any]],
                now: datetime | None = None, known_only: Iterable[str] = ()) -> int:
         """Settle a FINISHED day against its signals replayed from bars read after
-        its close — {name: (signals, final_to)}. Each logged event is checked
+        its close — {name: (signals, final_to)}, `final_to` one figure for the 10m chart
+        or {tf: figure} (`final_for`). Each logged event is checked
         (`revalidate`) and marked `checked` once the bars reach the bell; a
-        signal those bars hold that was never logged is logged now, not live.
-        Returns how many events changed or were added.
+        signal those bars hold that was never logged is logged now, not live, when its
+        own chart's bars reach the bell. Returns how many events changed or were added.
 
         `known_only` names the names that were NOT being watched to the bell: one
         that left the list during the day and was read again afterwards for this
@@ -770,7 +899,8 @@ class EventLog:
             for sym, (signals, final_to) in by_sym.items():
                 evs = signal_events(sym, signals, None, day, now_ts)
                 got = {dedupe_key(e): e for e in evs}
-                whole = final_to is not None and final_to >= close
+                fin10 = final_for({}, final_to)
+                whole = fin10 is not None and fin10 >= close
                 for e in self.events:
                     if e.get("day") != day or e.get("sym") != sym or e.get("kind") not in KINDS:
                         continue
@@ -784,6 +914,9 @@ class EventLog:
                 for k, c in got.items():
                     if k in self._keys:
                         continue
+                    fc = final_for(c, final_to)
+                    if fc is None or fc < close:
+                        continue  # that chart's bars do not reach the bell
                     c["id"] = self._next
                     c["checked"] = True
                     self._next += 1
@@ -832,8 +965,9 @@ class EventLog:
 
         def due(e: dict[str, Any]) -> bool:
             o = e.get("outcome") or {}
+            # The floor is worked on ten-minute bars (`floor_at`): the 10m chart's only.
             if (e.get("kind") not in TRADES or e.get("retracted") or e.get("stop") is None
-                    or not o.get("final")):
+                    or not o.get("final") or tf_of(e) != TF_DEFAULT):
                 return False
             # No floor yet; or a floor and still no R (a stop exactly on its entry,
             # settled while that was sent back unmeasured, compute_outcome); or an R
@@ -899,6 +1033,27 @@ class EventLog:
             return
         with contextlib.suppress(OSError):
             shutil.copy2(self._path, keep)
+
+    def holding(self, day: str, now_ts: float, *, trade_sec: float,
+                break_sec: float) -> set[str]:
+        """The names the live rotation (rotation.py) keeps on the list for their signals, on
+        any chart: a live (L) / (E) / (V) on `day` whose bar closed in the last `trade_sec` and
+        whose stop has not been hit (a trade the owner may be in), or a live breakout in the
+        last `break_sec` (its retest, the trade, is still to come). Withdrawn ones count for
+        nothing. Live only: a signal replayed when a name joined the list never holds it."""
+        out: set[str] = set()
+        with self._lock:
+            for e in self.events:
+                if (e.get("day") != day or not e.get("live") or e.get("retracted")
+                        or e.get("kind") not in KINDS):
+                    continue
+                age = now_ts - (int(e["t"]) + bar_sec(e))
+                if e.get("kind") in TRADES:
+                    if age <= trade_sec and not (e.get("outcome") or {}).get("stopped"):
+                        out.add(str(e.get("sym")))
+                elif age <= break_sec:
+                    out.add(str(e.get("sym")))
+        return out
 
     def since(self, since: int, limit: int = 200) -> dict[str, Any]:
         """Events with id > since, and `retracted`: the ids of the last

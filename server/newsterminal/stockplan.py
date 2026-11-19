@@ -904,8 +904,11 @@ STRATEGY = (
     "New York only. A name breaks its pre-market high/low (PMH/PML, locked at 09:30) or"
     " previous-day high/low (PDH/PDL); the trade is the RETEST of the broken level on a 10-minute"
     " chart — or of VWAP / the 8 EMA wave when price has run far from the level (entry.dist_atr "
-    "is the distance in 10-minute ATRs). (L) = a retest with the 8 EMA wave at the level; (E) = "
-    "the first candle touching the 8 EMA wave, triggered when price breaks that candle. The "
+    "is the distance in 10-minute ATRs). (L) = a retest with the 8 EMA wave at the level; after "
+    "a run of more than 2.5 ATR past the level, (E) = the first candle touching the 8 EMA wave, "
+    "triggered when price breaks that candle, and (V) = a retest of VWAP that holds, each its own"
+    " signal. A name's `signals` are the 10-minute chart's; the 3- and 5-minute charts print the "
+    "same signals for a quicker entry. The "
     "Pine's stop idea is below the signal bar (long) / above it (short). Options, the expiry: "
     + optcalc.expiry_rule()["text"] + " The contract in each name's `options` is that pick. "
     "A long call/put near 0.60 delta when premium "
@@ -962,9 +965,12 @@ it answers to with today's move and whether that is a headwind or a tailwind FOR
 (`macro` — computed for you; for a short, a headwind helps), up to five of its own headlines \
 tagged rating / earnings / filing / news, and its recent SEC filings. `macro` at the top level is \
 the day's macro moves and the market's high-impact headlines. The regime block is the weather: \
-VIX and its band, the curve shape, the tape's bias and whether VIX confirms it, SPY's implied \
-one-day move. `tape_count` is the engine's score of the tape from -100 to +100: eleven reads, each \
-long, short, flat or unable to vote yet, weighed by family (`families`) for this hour over the \
+VIX and its band, the curve shape, the tape's bias, the VIX's day against SPY's in words \
+(`confirm`: how nervous the tape is, never a side), SPY's implied one-day move. `tape_count` is \
+the engine's score of the tape from -100 to +100: eleven reads (nine vote; the VIX's curve and \
+its day are no side: they say how far moves run), each long or short with how much of a vote \
+its size earns \
+(`strength`), flat, or unable to vote yet, weighed by family (`families`) for this hour over the \
 whole weight (a family that cannot vote yet counts as no lean, so a score on few reads is a small \
 one), with its grade, how many reads are `live` and how much of the weight that is (`coverage`). \
 `breadth` is \

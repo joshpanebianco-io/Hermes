@@ -181,6 +181,11 @@ _PREVIEW = re.compile(
     r"next (earnings|quarterly) report|"
     r"reports? (next week|tomorrow|this week|on (mon|tues|wednes|thurs|fri)day)|"
     r"(wall street|analysts?|the street) (expects?|projects?|forecasts?)\b|"
+    # A report that "could offer clues" has not happened (2026-11-18): "Target, Walmart Q3
+    # Earnings Could Offer Consumer Health & Inflation Clues for Investors" was Walmart's
+    # major Earnings story, twenty points, the night before the report.
+    r"(earnings|results|reports?|quarter|q[1-4]) (could|may|might|should|will|to) "
+    r"(offer|provide|give|reveal|shed|show|test|signal|hold)\b|"
     r"(expected|likely|poised|predicted|projected) to (beat|miss|top|post|deliver|surpass|grow)|"
     r"(revenue|earnings|eps|sales) estimates? (is|are|of|at)\b|"
     r"earnings (on the horizon|on deck|to watch|countdown)|countdown to|in the cards",
@@ -345,9 +350,16 @@ _OFFERING = re.compile(
     r"\bconvertible (?:senior )?notes\b|\bprices? .{0,40}offering\b|\bat-the-market\b",
     re.I,
 )
-# PLURALS (2026-11-13): "Tesla Recalls 2 Million Vehicles" and "DOJ Probes …" were minor.
+# SOMEBODY ELSE'S BANKRUPTCY IS NOT THE NAME'S (2026-11-18): "Google Gets Court Approval
+# to Buy Bankrupt Spirit Airlines' Internal Data for $10 Million" was Google's major
+# Legal story, read as against a long, by the bankrupt company it was buying from. A
+# "bankrupt" straight after a word of buying or of belonging describes what is bought.
+# Fixed-width lookbehinds, one a word; "files for bankruptcy" keeps its "for".
+NOT_OWN_BANKRUPT = (r"(?<!buy )(?<!buys )(?<!bought )(?<!acquire )(?<!acquires )"
+                    r"(?<!purchase )(?<!of )(?<!from )(?<!rival )")
 _LEGAL = re.compile(
-    r"\bprobes?\b|\bsubpoena|\bdoj\b|\bsec (charges|sues|probe)\b|\bbankrupt|\bchapter 11\b|"
+    r"\bprobes?\b|\bsubpoena|\bdoj\b|\bsec (charges|sues|probe)\b|"
+    rf"{NOT_OWN_BANKRUPT}\bbankrupt|\bchapter 11\b|"
     r"\brecalls?\b|\bantitrust\b|\bfraud\b|\binvestigation\b|\blawsuits?\b|\bsued\b",
     re.I,
 )

@@ -205,7 +205,9 @@ def test_sanitize_maps_spelling_and_drops_what_it_cannot_join() -> None:
     assert out["calls"][0]["factors"] == [{"key": "rates", "line": "Yields up"},
                                           {"key": "structure", "line": "Oil up"}]
     assert out["calls"][0]["plan"] == "Below 29,459 targets 29,300"
-    assert set(out) == {"thesis", "calls", "today", "risks", "headlines"}
+    # The briefing's list is always there, empty when the answer has none.
+    assert set(out) == {"thesis", "movers", "calls", "today", "risks", "headlines"}
+    assert out["movers"] == []
     assert out["today"] == [{"id": "c1", "note": "missed"}]  # c9 is no row of the calendar
     assert out["risks"] == ["one", "two", "three"]
     assert out["headlines"] == [{"id": "h1", "books": ["NQ", "GC"], "note": "driver"}]

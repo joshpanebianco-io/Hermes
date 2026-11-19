@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -188,7 +188,22 @@ CONTEXT: list[tuple[str, str, str]] = [
     ("OVX", "^OVX", "Crude vol (OVX)"),
     # The VIX's own month (volterm.vix_month): twenty closes, both desks.
     ("VIX", "^VIX", "VIX"),
+    # THE BIAS'S YARDSTICKS (2026-11-19, drivestats.py): each driver's usual day and how
+    # it has moved with each book lately, so a read is weighed by its size and a driver
+    # votes only while it is driving. Credit, the 10-year note future (the rates read
+    # while the cash yield is shut), copper and the two products had no daily history.
+    ("HYG", "HYG", "High yield (HYG)"),
+    ("ZN", "ZN=F", "10-year note fut"),
+    ("COPPER", "HG=F", "Copper"),
+    ("RBOB", "RB=F", "Gasoline"),
+    ("HEATOIL", "HO=F", "Heating oil"),
 ]
+
+#: How much daily history the context feed asks for, and how much of it the week and
+#: month figures read. The bias's yardsticks read the whole of it (`hist`): sixty
+#: sessions is what a correlation needs to mean anything, where twenty is mostly noise.
+CONTEXT_RANGE = "3mo"
+MONTH_BARS = 22
 
 #: Context rows read for their level alone, kept when Yahoo has too few closes for a change.
 LEVEL_ONLY: frozenset[str] = frozenset({"VXSLV", "OVX", "GVZ"})
@@ -454,13 +469,43 @@ def _daily_row(key: str, label: str, resp: dict[str, Any]) -> dict[str, Any] | N
     }
 
 
+def _tail(resp: dict[str, Any], n: int) -> dict[str, Any]:
+    """A spark response cut to its last `n` bars, meta untouched. Pure."""
+    try:
+        quote = dict(((resp.get("indicators") or {}).get("quote") or [{}])[0])
+    except (TypeError, IndexError, AttributeError):
+        return resp
+    quote["close"] = list(quote.get("close") or [])[-n:]
+    return {**resp, "timestamp": list(resp.get("timestamp") or [])[-n:],
+            "indicators": {**(resp.get("indicators") or {}), "quote": [quote]}}
+
+
+def daily_hist(resp: dict[str, Any]) -> dict[str, list[Any]]:
+    """Each daily bar's date (the exchange's own) beside its close, bars without a close
+    dropped as a pair, so two instruments' days can be lined up across their holidays.
+    Pure."""
+    off = int(((resp.get("meta") or {}).get("gmtoffset")) or 0)
+    try:
+        raw = ((resp.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+    except (TypeError, IndexError, AttributeError):
+        raw = []
+    days: list[str] = []
+    closes: list[float] = []
+    for t, c in zip(resp.get("timestamp") or [], raw, strict=False):
+        if c is None or t is None:
+            continue
+        days.append(datetime.fromtimestamp(int(t) + off, UTC).date().isoformat())
+        closes.append(float(c))
+    return {"days": days, "closes": closes}
+
+
 def collect_context() -> tuple[list[dict[str, Any]], SourceStatus]:
     """Daily bars for the brief's multi-day figures. See CONTEXT."""
     st = SourceStatus("Daily context")
     got: dict[str, Any] = {}
     errors: list[str] = []
     for chunk in _chunks([c[1] for c in CONTEXT], CHUNK):
-        part, err = _spark(chunk, "1mo", "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
+        part, err = _spark(chunk, CONTEXT_RANGE, "1d", ttl=300.0, st=st, stale_max=2 * 3600.0)
         got.update(part)
         if err:
             errors.append(err)
@@ -468,10 +513,13 @@ def collect_context() -> tuple[list[dict[str, Any]], SourceStatus]:
     rows: list[dict[str, Any]] = []
     for key, sym, label in CONTEXT:
         resp = got.get(sym)
-        row = _daily_row(key, label, resp) if resp else None
+        # The week and month figures read the last month, as they did when the request
+        # was for a month; the yardsticks read the whole three.
+        row = _daily_row(key, label, _tail(resp, MONTH_BARS)) if resp else None
         if row is None:
             continue
         row["closes"] = row["closes"][-23:]
+        row["hist"] = daily_hist(resp or {})
         rows.append(row)
 
     st.items = len(rows)

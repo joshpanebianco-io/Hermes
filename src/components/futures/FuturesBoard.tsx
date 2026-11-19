@@ -472,7 +472,7 @@ function BookView({ book, data }: { book: FutBook; data: TerminalData }) {
           <FuturesNews wire={data.wire ?? NONE} now={now} book={book} />
         </div>
         <div className={COL}>
-          <MRanges assets={data.ranges?.assets ?? {}} ladders={data.ladders} expiry={data.expiry} only={book} ageMin={age("ranges")} error={st.ranges?.ok === false ? st.ranges.error : null} />
+          <MRanges assets={data.ranges?.assets ?? {}} ladders={data.ladders} only={book} ageMin={age("ranges")} error={st.ranges?.ok === false ? st.ranges.error : null} />
           <MProfile data={data.profiles} ladders={data.ladders} only={book} ageMin={age("profiles")} error={st.profiles?.ok === false ? st.profiles.error : null} />
           <MGamma
             assets={data.gex?.assets ?? {}}

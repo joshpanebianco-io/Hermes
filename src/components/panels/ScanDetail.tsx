@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { isBool, usePersisted } from "@/lib/usePersisted";
-import type { Catalyst, NewsRead, ScanRow, Side } from "@/types/scanner";
-import { CARD, Glyph, capShort, gapOf, readWord } from "@/components/panels/ScanWide";
+import type { Catalyst, NewsRead, PreContext, ScanRow, Side } from "@/types/scanner";
+import { CARD, DIRECTION_WORD, Glyph, capShort, gapOf, readWord } from "@/components/panels/ScanWide";
 import { ago, compact, dir, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -262,13 +262,30 @@ function Score({ r, side, stage }: { r: ScanRow; side: Side | null; stage: numbe
   const v = r.score.total;
   const hue = v >= 65 ? "text-call-fig" : v >= 50 ? "text-flip-fig" : "text-ink-2";
   const bar = v >= 65 ? "bg-call-fig" : v >= 50 ? "bg-flip-fig" : "bg-ink-3";
+  /*
+   * ONE SCORE, THE LIST'S (owner, 2026-11-18: "i just need it intuitive"). Before the bell
+   * the Scanner ranks how in play a name is, and this card shows that same number and
+   * what earned it, one line a reason; from the bell, the setup score and its parts.
+   */
+  const inplay = r.score.kind === "inplay";
+  const ip = inplay ? r.score.parts.find((p) => p.key === "inplay") : undefined;
+  const reasons = ip?.note ? ip.note.split(" · ").filter(Boolean) : [];
   return (
     <section className={CARD}>
       <p className="qt-cap mb-2 flex items-baseline justify-between text-[10.5px] text-ink-3">
         <span className="flex items-center gap-1.5"><Glyph name="star" size={11} />Score</span>
-        <span className="normal-case" title="Each part is a fixed rule; together they order the list. Not a measured probability.">
-          {stage != null && stage >= 2 ? `Day ${stage} of run · ` : ""}heuristic rank
-        </span>
+        {inplay ? (
+          <span
+            className="normal-case"
+            title="Before the bell the list ranks how in play a name is: the move in daily ATRs, volume against normal, a report or a major story, Day 2 or 3. From 09:30 it ranks by the setup score."
+          >
+            {stage != null && stage >= 2 ? `Day ${stage} of run · ` : ""}in play · until 09:30
+          </span>
+        ) : (
+          <span className="normal-case" title="Each part is a fixed rule; together they order the list. Not a measured probability.">
+            {stage != null && stage >= 2 ? `Day ${stage} of run · ` : ""}setup · heuristic rank
+          </span>
+        )}
       </p>
       <div className="flex items-baseline justify-between gap-3">
         <p className={cn("fig text-[24px] leading-none", hue)}>
@@ -282,21 +299,38 @@ function Score({ r, side, stage }: { r: ScanRow; side: Side | null; stage: numbe
       <div className="relative mt-2 h-[3px] bg-[var(--qt-track,var(--ring))]">
         <span className={cn("absolute inset-y-0 left-0", bar)} style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
       </div>
-      <ul className="mt-2.5 flex flex-col gap-1">
-        {r.score.parts.map((p) => {
-          const good = p.max > 0 && p.pts / p.max >= 0.5;
-          return (
-            <li key={p.key} className="flex items-baseline gap-1.5 text-[11.5px] leading-[1.35]" title={p.note}>
-              <span aria-hidden className={cn("shrink-0 text-[11px]", good ? "text-call-fig" : "text-put-fig")}>{good ? "✓" : "✗"}</span>
-              <span className="min-w-0 flex-1 truncate text-ink-2">
-                {p.label}
-                {p.note ? <span className="text-ink-3"> — {p.note}</span> : null}
-              </span>
-              <span className={cn("fig shrink-0 text-[11px]", p.pts < 0 ? "text-flip-fig" : "text-ink-3")}>{p.max > 0 ? `${Math.round(p.pts)}/${p.max}` : Math.round(p.pts)}</span>
-            </li>
-          );
-        })}
-      </ul>
+      {inplay ? (
+        <>
+          <ul className="mt-2.5 flex flex-col gap-1">
+            {(reasons.length ? reasons : ["not in play yet"]).map((why) => {
+              const good = (ip?.pts ?? 0) > 0;
+              return (
+                <li key={why} className="flex items-baseline gap-1.5 text-[11.5px] leading-[1.35]">
+                  <span aria-hidden className={cn("shrink-0 text-[11px]", good ? "text-call-fig" : "text-put-fig")}>{good ? "✓" : "✗"}</span>
+                  <span className="min-w-0 flex-1 truncate text-ink-2">{why.charAt(0).toUpperCase() + why.slice(1)}</span>
+                </li>
+              );
+            })}
+          </ul>
+          {r.pre_ctx && <PreFigures c={r.pre_ctx} />}
+        </>
+      ) : (
+        <ul className="mt-2.5 flex flex-col gap-1">
+          {r.score.parts.map((p) => {
+            const good = p.max > 0 && p.pts / p.max >= 0.5;
+            return (
+              <li key={p.key} className="flex items-baseline gap-1.5 text-[11.5px] leading-[1.35]" title={p.note}>
+                <span aria-hidden className={cn("shrink-0 text-[11px]", good ? "text-call-fig" : "text-put-fig")}>{good ? "✓" : "✗"}</span>
+                <span className="min-w-0 flex-1 truncate text-ink-2">
+                  {p.label}
+                  {p.note ? <span className="text-ink-3"> — {p.note}</span> : null}
+                </span>
+                <span className={cn("fig shrink-0 text-[11px]", p.pts < 0 ? "text-flip-fig" : "text-ink-3")}>{p.max > 0 ? `${Math.round(p.pts)}/${p.max}` : Math.round(p.pts)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {/* Why the list holds a name lower than its score (scanscore.rvol_gate, 2026-11-13). */}
       {r.score.gated && <p className="mt-2 text-[11.5px] leading-[1.4] text-flip-fig">{r.score.gated}</p>}
       {r.setup.note && <p className="mt-2.5 border-t border-ring/60 pt-2 text-[12px] leading-[1.45] text-ink-2">{r.setup.note}</p>}
@@ -366,6 +400,59 @@ const KIND_LABEL: Record<ScanRow["news"][number]["kind"], string> = {
   news: "News",
 };
 
+/**
+ * BEFORE THE BELL, FOUR FIGURES SHOWN AND NOT SCORED (owner, 2026-11-18: "the purpose of the
+ * scoring is to show potential strong stocks where the break and retest will hold and continue
+ * trending (both bearish or bullish) with momentum"). Each is a reason a move might keep going:
+ * the stock's own push beyond the market's, volume unusual for it, a story behind it, and a gap
+ * that holds into the open. The pre-market record holds them against what the names then did
+ * (server premarket_record.py), and one earns points only where it separates on both sides.
+ */
+function PreFigures({ c }: { c: PreContext }) {
+  const arrow = (x: number) => (x > 0 ? "▲ " : x < 0 ? "▼ " : "");
+  const own =
+    c.own != null
+      ? `${arrow(c.own)}${Math.abs(c.own).toFixed(2)} ATR after SPY${c.spy != null ? ` (${arrow(c.spy)}${Math.abs(c.spy).toFixed(2)})` : ""}`
+      : null;
+  const vol = c.rvol != null ? `${c.rvol.toFixed(1)}× its usual pre-market${c.rvol_est ? " (estimate)" : ""}` : null;
+  const k = c.catalyst;
+  const size = k.size === "big" ? "Big" : k.size === "ordinary" ? "Ordinary" : k.size === "unclear" ? "Unclear" : null;
+  const cat =
+    size || k.direction
+      ? `${[size, k.direction ? DIRECTION_WORD[k.direction] : null].filter(Boolean).join(" · ")}${k.line ? `: ${k.line}` : ""}`
+      : k.report
+        ? k.report.charAt(0).toUpperCase() + k.report.slice(1)
+        : k.tag && k.major
+          ? `${k.tag} story, not read yet`
+          : "No fresh story";
+  const rows: [string, string | null][] = [
+    ["Own move", own],
+    ["Volume", vol],
+    ["Catalyst", cat],
+    ["Hold", c.hold_word],
+  ];
+  return (
+    <div className="mt-2.5 border-t border-ring/60 pt-2">
+      <p
+        className="qt-cap mb-1 text-[9.5px] text-ink-3"
+        title="Shown and recorded, not scored: each is held against whether the names' retests then held and trended, and earns points only if it separates on both longs and shorts."
+      >
+        Not scored yet
+      </p>
+      <ul className="flex flex-col gap-0.5">
+        {rows.map(([label, v]) => (
+          <li key={label} className="flex items-baseline gap-2 text-[11.5px] leading-[1.35]">
+            <span className="w-[62px] shrink-0 text-ink-3">{label}</span>
+            <span className="min-w-0 flex-1 truncate text-ink-2" title={v ?? undefined}>
+              {v ?? "—"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** The news card: the most important story first if it is not in the list, then by day. */
 function NewsCard({ r, now }: { r: ScanRow; now: number | null }) {
   const inList = r.catalyst != null && r.news.some((n) => n.title === r.catalyst?.title);
@@ -392,14 +479,29 @@ function NewsCard({ r, now }: { r: ScanRow; now: number | null }) {
  */
 function ModelRead({ read }: { read: NewsRead }) {
   const size = read.size === "big" ? "Big" : read.size === "ordinary" ? "Ordinary" : "Unclear";
+  /*
+   * AND WHICH WAY (owner, 2026-11-18: "do what you recommend to make our scanner more
+   * accurate"). The model reads the story's own text where TradingView carries it, and
+   * says which way it pushes the name; that replaces the headline's words in the "reads
+   * against" flag. Coloured as the sides are; still no points.
+   */
+  const way = read.direction;
+  const wayHue =
+    way === "bullish" ? "border-call-fig/60 text-call-fig" : way === "bearish" ? "border-put-fig/60 text-put-fig" : way === "mixed" ? "border-flip-fig/60 text-flip-fig" : "border-ring text-ink-3";
   return (
     <div
       className="mb-3 rounded-[3px] border border-ring-2 p-2.5"
-      title={`A model's read of the story the score counted${read.headline ? `: "${read.headline}"` : ""}. Context only: it earns no points.`}
+      title={`A model's read of ${read.text ? "the story's text" : "the headline"}${read.headline ? `: "${read.headline}"` : ""}. Its direction decides the "reads against" flag; it earns no points.`}
     >
       <span className="qt-cap text-[9.5px] text-ink-2">Model&apos;s read</span>
       <span className={cn("qt-cap ml-2 rounded-[2px] border px-1 text-[9.5px] leading-[14px]", read.size === "big" ? "border-ring-2 text-ink" : "border-ring text-ink-3")}>{size}</span>
-      <span className="ml-2 text-[10.5px] text-ink-3">context, not scored</span>
+      {way && (
+        <span className={cn("qt-cap ml-1.5 rounded-[2px] border px-1 text-[9.5px] leading-[14px]", wayHue)}>
+          {way === "bullish" ? "▲ " : way === "bearish" ? "▼ " : ""}
+          {DIRECTION_WORD[way]}
+        </span>
+      )}
+      <span className="ml-2 text-[10.5px] text-ink-3">{read.text ? "from the story" : "headline only"}</span>
       {read.line && <span className="mt-1 block text-[12.5px] leading-[1.4] text-ink">{read.line}</span>}
     </div>
   );

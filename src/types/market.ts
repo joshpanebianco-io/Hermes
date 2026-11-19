@@ -36,6 +36,8 @@ export interface ScoreFamily {
   weight: number;
   /** -100 to +100; null when none of its reads can vote at this hour. */
   score: number | null;
+  /** What it puts on the score, in the score's points (bias.py, 2026-11-19). Absent from an older collector. */
+  points?: number;
   live: number;
   total: number;
 }

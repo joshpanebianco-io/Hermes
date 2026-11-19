@@ -17,9 +17,10 @@ import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
 import { setLegacyViews, useLegacyViews } from "@/lib/legacyViews";
 import { cn } from "@/lib/cn";
+import type { PriceFeed } from "@/types/feed";
 
 /**
- * Settings — the interface, the alerts and the colour presets.
+ * Settings — the interface, the price feed (Data), the alerts and the colour presets.
  *
  * THE PALETTE IS GEXYGEN'S, APPLIED TO `<html>`, LIVE, AND WRITTEN TO A COOKIE.
  * The custom properties go on the document element rather than a wrapper for the
@@ -59,6 +60,7 @@ import { cn } from "@/lib/cn";
 
 const SECTIONS = [
   { key: "interface", label: "Interface" },
+  { key: "data", label: "Data" },
   { key: "alerts", label: "Alerts" },
   { key: "presets", label: "Presets" },
 ] as const;
@@ -185,6 +187,8 @@ export function Settings({
           </Part>
         )}
 
+        {section === "data" && <PriceFeedPart />}
+
         {section === "alerts" && <Alerts />}
 
         {section === "presets" && (
@@ -286,7 +290,8 @@ function Swatches({ t }: { t: ThemeChoice }) {
 
 const KIND_OPTS: { key: AlertKind; label: string; hint: string }[] = [
   { key: "L", label: "(L) retest", hint: "A broken level retested with the 8 EMA wave at it" },
-  { key: "E", label: "(E) trigger", hint: "The (E) candle's high or low broken in the trend's direction" },
+  { key: "E", label: "(E) trigger", hint: "After an extended run: a pullback into the 8 EMA wave, then its candle's high or low broken" },
+  { key: "V", label: "(V) VWAP retest", hint: "After an extended run: VWAP retested and held, like the (L) at a level" },
   { key: "BO", label: "◆ Breakout", hint: "A level broken on a close — not a gap through it" },
   { key: "NEAR", label: "Near a level", hint: "90% of the way to a level; once per level per name per day" },
 ];
@@ -401,6 +406,111 @@ function Alerts() {
           In a background tab Chrome checks about once a minute, so an alert can trail its bar by up to a minute
         </span>
       </div>
+    </Part>
+  );
+}
+
+/**
+ * Where live prices come from (server sources/webull.py `feed_mode`). WEBULL BESIDE YAHOO,
+ * OR YAHOO ALONE (owner, 2026-11-18: "make sure our current implementation is kept as a
+ * fallback so it's easy to revert and switch between"): Webull's trades go into the same
+ * books as Yahoo's stream and the newer trade wins, so Webull on is Yahoo plus Webull, and
+ * Yahoo only is the app exactly as it was. The choice is the collector's, kept across
+ * restarts, and applies within seconds; the line under it is each feed's health, read
+ * again every ten seconds while the tab is open. Since 2026-11-19 Webull is two parts: the
+ * live connection's hundred names, and snapshots of every other name the app watches.
+ */
+function PriceFeedPart() {
+  const [f, setF] = useState<PriceFeed | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const take = (r: Response, d: (PriceFeed & { error?: string }) | null) => {
+    if (!r.ok || !d || d.error) setErr(d?.error ?? `HTTP ${r.status}`);
+    else {
+      setF(d);
+      setErr(null);
+    }
+  };
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/feed", { cache: "no-store" });
+      take(r, (await r.json().catch(() => null)) as (PriceFeed & { error?: string }) | null);
+    } catch (e) {
+      setErr(String(e));
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+    const id = window.setInterval(() => void load(), 10_000);
+    return () => window.clearInterval(id);
+  }, [load]);
+
+  const pick = async (feed: "webull" | "yahoo") => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/feed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feed }),
+      });
+      take(r, (await r.json().catch(() => null)) as (PriceFeed & { error?: string }) | null);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const w = f?.webull;
+  const s = f?.feed === "webull" ? f.snapshots : null;
+  const snaps = !s?.on
+    ? null
+    : s.error
+      ? `Snapshots: ${s.error}`
+      : s.idle
+        ? "Snapshots wait for the pre-market"
+        : s.every_sec
+          ? `Snapshots ${s.names} more every ${Math.round(s.every_sec)}s`
+          : null;
+  const health = err
+    ? `Collector not answering: ${err}`
+    : !f
+      ? "Reading…"
+      : [
+          f.feed === "webull"
+            ? w?.ok
+              ? `Webull live, ${w.items} names`
+              : `Webull not live yet${w?.notes?.[0] || w?.error ? `: ${w?.notes?.[0] ?? w?.error}` : ""}`
+            : "Webull off",
+          snaps,
+          `Yahoo stream ${f.yahoo.ok ? "live" : "down"}, ${f.yahoo.items} names`,
+          f.why.charAt(0).toUpperCase() + f.why.slice(1),
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+  return (
+    <Part title="Price feed" sub="where live prices come from; a switch applies within seconds">
+      <Choice
+        label="Webull"
+        hint={
+          f && !f.webull_keys
+            ? "Needs WEBULL_APP_KEY and WEBULL_APP_SECRET in .env.local"
+            : "Your Webull account's real-time trades (Nasdaq Basic), about half a second behind the market, for the 100 names that matter most (open charts, tracked names, the Scanner list; Webull's limit), and a Webull snapshot of every other name the app watches every 10 seconds (20 outside the session); Yahoo's stream runs beside both, and the newer trade wins"
+        }
+        on={f?.feed === "webull"}
+        onPick={() => void pick("webull")}
+        disabled={busy || !f || !f.webull_keys}
+      />
+      <Choice
+        label="Yahoo only"
+        hint="The app as it was before Webull: Yahoo's free stream and five-second quotes, which have run minutes late on busy days"
+        on={f?.feed === "yahoo"}
+        onPick={() => void pick("yahoo")}
+        disabled={busy || !f}
+      />
+      <p className={cn("px-3 pt-2 text-[9.5px] qt:text-[11.5px]", err ? "text-warn" : "text-ink-3")}>{health}</p>
     </Part>
   );
 }

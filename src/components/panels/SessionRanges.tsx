@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExpiryState, SessionRange, BriefLadder } from "@/types/terminal";
+import type { SessionRange, BriefLadder } from "@/types/terminal";
 import { Module } from "@/components/ui/Module";
 import { AssetIcon } from "@/components/ui/AssetIcon";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -75,7 +75,6 @@ function scaleOf(sessions: SessionRange[], last: number | null) {
 export function SessionRanges({
   assets,
   ladders,
-  expiry,
   only,
   ageMin,
   error,
@@ -85,7 +84,6 @@ export function SessionRanges({
   assets: Record<string, { last: number | null; sessions: SessionRange[] }>;
   /** The live ladders, for the fuel line under this book's rows (structure.fuel). */
   ladders?: Record<string, BriefLadder | null>;
-  expiry?: ExpiryState;
   ageMin?: number | null;
   error?: string | null;
 }) {
@@ -104,7 +102,6 @@ export function SessionRanges({
   return (
     <Module
       title="Session ranges"
-      sub={expiry?.opex_week ? "OpEx week" : undefined}
       ageMin={ageMin}
       error={error}
       bodyClassName="px-0 py-0"
@@ -177,7 +174,6 @@ export function SessionRanges({
               <p className="text-[10.5px] leading-[1.45] text-ink-3">{fuel.read}</p>
             </div>
           )}
-          {expiry && <ExpiryLine e={expiry} />}
         </div>
       )}
     </Module>
@@ -281,34 +277,3 @@ ${where}`}
   );
 }
 
-/**
- * The expiry line. One sentence, and only when it says something.
- *
- * It matters more here than on an ordinary terminal because the walls this
- * app borrows are open-interest structures with a maturity: in OpEx week the
- * near book is at its largest and price pins to it, and the Monday after, the
- * same strikes carry almost nothing.
- */
-function ExpiryLine({ e }: { e: ExpiryState }) {
-  const next = e.next?.[0];
-  return (
-    <div className="flex flex-wrap items-baseline gap-x-2 border-t border-ring/40 px-3 py-1.5 text-[10px]">
-      {e.opex_week ? (
-        <span className="fig qt-pill rounded bg-flip/20 px-1.5 py-px text-[9px] text-flip [--pill-hue:var(--flip-fig)]">
-          OPEX WEEK
-        </span>
-      ) : (
-        <span className="eyebrow text-[9px]">Next</span>
-      )}
-      {next && (
-        <>
-          <span className="text-ink-2">{next.label}</span>
-          <span className="fig text-ink-3">
-            {next.days === 0 ? "today" : `in ${next.days}d`}
-          </span>
-        </>
-      )}
-      {e.opex_week && <span className="text-ink-3">{e.note}</span>}
-    </div>
-  );
-}

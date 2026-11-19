@@ -107,6 +107,30 @@ def test_scanner_row_is_the_whole_row_cut_short_or_names_the_watchlist() -> None
     assert "not on the scanner" in miss["error"] and miss["watchlist"] == ["AMZN", "SPY"]
 
 
+def test_scanner_row_is_the_name_as_the_scanner_shows_it() -> None:
+    # 2026-11-18: before the bell the Scanner showed BILL at 79 (in play) and Hermes had no
+    # row for it at all; for a tracked name it quoted the setup score. The route hands in
+    # the slide-out's row (`more["row"]`); the engine's is the fallback.
+    shown = {"sym": "BILL", "ok": True, "last": 66.1, "news": [], "filings": [],
+             "score": {"total": 79, "side": "long", "kind": "inplay",
+                       "parts": [{"label": "In play", "pts": 25.4, "max": 32,
+                                  "note": "day ▲ 2.74 ATR · RVOL 5.87× · deal news"}]},
+             "news_read": {"size": "big", "direction": "bullish", "line": "TPG nears a deal",
+                           "headline": "TPG nears take-private deal for BILL", "text": True}}
+    out = tools.run("scanner_row", {"sym": "bill"}, snap=_snap(), scan=_scan(), bars=_bars_doc,
+                    brief=lambda i: BRIEF, plan=lambda i: None, now=NOW,
+                    more={"row": lambda s: shown if s == "BILL" else None})
+    assert out["score"]["total"] == 79 and out["score"]["kind"].startswith("in play")
+    assert out["story_read"]["direction"] == "bullish"
+    # A name the slide-out cannot read falls back to the engine's row.
+    amzn = tools.run("scanner_row", {"sym": "AMZN"}, snap=_snap(), scan=_scan(), bars=_bars_doc,
+                     brief=lambda i: BRIEF, plan=lambda i: None, now=NOW,
+                     more={"row": lambda s: None})
+    assert amzn["sym"] == "AMZN" and amzn["score"]["kind"] == "setup"
+    # Outside the session the engine's table says its scores are not the Scanner's.
+    assert ask.score_note("pre") and ask.score_note("rth") is None
+
+
 def test_bars_are_the_last_few_hours_in_et() -> None:
     out = _run("bars", {"sym": "AMZN", "tf": "10m"})
     assert len(out["bars"]) == tools.MAX_BARS

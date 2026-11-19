@@ -12,6 +12,7 @@ import {
   RvolBar,
   ScoreBar as ScoreTier,
   Spark,
+  SPARK_TIP,
   TickerCell,
   VolPct,
   gapOf,
@@ -94,6 +95,9 @@ export function ScanTable({
   // Before the bell (and overnight) the regular change is the last session's own, and no
   // time-of-day volume exists yet: two columns say what they hold instead.
   const before = session === "pre" || session === "closed";
+  // The Scanner's list before the bell carries the in-play read as its score (server
+  // today._inplay_score), and the column says so.
+  const inplay = rows.some((r) => r.score.kind === "inplay");
   return (
     <table className="w-full min-w-[1340px] border-separate border-spacing-0 text-left">
       {/* One row of column names. A band of group names sat over it (News, Move, Levels,
@@ -110,8 +114,17 @@ export function ScanTable({
                 <Head label="News" hint="most important first" />
               </Th>
               {/* Score left of RS (owner, 2026-11-13: "can we move score to the left of rs"). */}
-              <Th k="score" {...th} className="w-[104px]">
-                <Head label="Score" hint="setup, 0–100" />
+              <Th
+                k="score"
+                {...th}
+                className="w-[104px]"
+                title={
+                  inplay
+                    ? "Before the bell the list ranks how in play a name is: the move in daily ATRs, volume against normal, a report or a major story, Day 2 or 3. From 09:30 it is the setup score. The slide-out shows the same number."
+                    : "The setup score: entry, structure, relative strength, the market, volume and the catalyst. The slide-out shows the same number and its parts."
+                }
+              >
+                <Head label="Score" hint={inplay ? "in play, 0–100" : "setup, 0–100"} />
               </Th>
               <Th
                 k="rs"
@@ -154,8 +167,8 @@ export function ScanTable({
               <Th>
                 <Head label="PD range" hint="vs PDH / PDL" />
               </Th>
-              <Th>
-                <Head label="Spark" hint="today" />
+              <Th title={SPARK_TIP}>
+                <Head label="Spark" hint="from 04:00" />
               </Th>
               <Th k="vol" {...th} title="Today's volume, and its share of an average day">
                 <Head label="Volume" hint="vs ADV" />
@@ -648,7 +661,7 @@ function OverviewRow({
         <RangeCell state={pdState} hi={L.pdh} lo={L.pdl} hiName="PDH" loName="PDL" />
       </td>
       <td className={TD}>
-        <Spark pts={r.spark} w={76} />
+        <Spark pts={r.spark} base={r.spark_ref} w={76} />
       </td>
       <td className={TD}>
         {r.volume == null && vol != null && (
@@ -1090,20 +1103,24 @@ const minutesOf = (hhmm: string) => {
   return h * 60 + m;
 };
 
+const TF_MIN: Record<string, number> = { "3m": 3, "5m": 5, "10m": 10 };
+
 /**
- * Today's latest fired signal, for the setup cell: "(L)▲ 10:40". Fresh — lit
- * in its side's hue — for thirty minutes after the bar it fired on, which is
- * the window a retest entry is still a retest entry. A pending (E) candle is
- * not a signal yet and is left to the detail pane.
+ * Today's latest fired signal on any chart, for the setup cell: "(L)▲ 10:42 3m". The
+ * newest is the one whose bar CLOSED last (3m, 5m and 10m bars open at the same minute
+ * and close apart). Fresh — lit in its side's hue — for thirty minutes after the bar it
+ * fired on, which is the window a retest entry is still a retest entry. A pending (E)
+ * candle is not a signal yet and is left to the detail pane.
  */
 function lastSignal(r: ScanRow, now: number | null): { text: string; side: Side; fresh: boolean } | null {
-  const fired = r.signals.filter((s) => s.kind !== "E_SETUP");
-  const s = fired[fired.length - 1];
+  const end = (x: ScanRow["signals"][number]) => (x.t ?? 0) + (TF_MIN[x.tf ?? "10m"] ?? 10) * 60;
+  const fired = [...r.signals, ...(r.signals_fast ?? [])].filter((s) => s.kind !== "E_SETUP");
+  const s = fired.reduce<ScanRow["signals"][number] | null>((a, x) => (a == null || end(x) >= end(a) ? x : a), null);
   if (!s) return null;
   const glyph = s.kind === "BO" ? "◆" : `(${s.kind})`;
   const arrow = s.side === "long" ? "▲" : "▼";
   const age = now == null ? null : minutesOf(ET_NOW.format(new Date(now))) - minutesOf(s.at_et);
-  return { text: `${glyph}${arrow} ${s.at_et}`, side: s.side, fresh: age != null && age >= 0 && age <= 30 };
+  return { text: `${glyph}${arrow} ${s.at_et} ${s.tf ?? "10m"}`, side: s.side, fresh: age != null && age >= 0 && age <= 30 };
 }
 
 /** A strike as the chain prints it: 747, 587.5, 242.5 — no trailing zeros. */

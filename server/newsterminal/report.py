@@ -1232,16 +1232,37 @@ _ENERGY_EVENT = re.compile(
     r"crude|\boil\b|\beia\b|opec|gasoline|distillate|baker hughes|rig count", re.I)
 
 
+#: EARLIER THIS WEEK (owner, 2026-11-19: "economic calender events on the day or earlier in
+#: the week that have an impact"). The calendar read twelve hours back; a high-impact US
+#: print or a Fed decision from earlier in the week is still in the price and is why yields
+#: or the dollar sit where they do. So the calendar also reaches back to the week's
+#: Monday, and three days at least (a Monday report reads Friday's payrolls), for what
+#: has printed and is high impact for the books: flagged `earlier`, at most this many.
+WEEK_BACK_DAYS = 3
+WEEK_BACK_MAX = 6
+#: How far back a heavyweight's results stay on the calendar: the evening before's too.
+EARNINGS_BACK_H = 30
+
+
+def _week_lo(now: datetime) -> float:
+    """The earliest instant the calendar reads back to for this week's prints. Pure."""
+    monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0,
+                                                            microsecond=0)
+    return min(monday.timestamp(), (now - timedelta(days=WEEK_BACK_DAYS)).timestamp())
+
+
 def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[dict[str, Any]]:
-    """Everything scheduled from twelve hours back to three days out, in time order."""
+    """Everything scheduled from twelve hours back to three days out, in time order, and
+    this week's high-impact prints before that (`earlier`, WEEK_BACK_DAYS)."""
     now_ts = now.timestamp()
     lo, hi = now_ts - 12 * 3600, now_ts + 3 * 86400
+    week = _week_lo(now)
     items: list[dict[str, Any]] = []
 
     data: list[dict[str, Any]] = []
     for r in snap.get("calendar") or []:
         ts = r.get("ts")
-        if ts is None or not lo <= ts <= hi or (r.get("score") or 0) < 3:
+        if ts is None or not week <= ts <= hi or (r.get("score") or 0) < 3:
             continue
         # `core` is the calendar's own "does this reach NQ, ES or GC" test.
         # Without it the first live brief (2026-09-15) listed eleven foreign
@@ -1273,6 +1294,11 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
         figures=lambda r: (r.get("actual_raw"), r.get("consensus_raw"), r.get("previous_raw")),
     ):
         r = rel.lead
+        # Before the twelve hours: only what printed and is high impact for the books.
+        earlier = r["ts"] < lo
+        if earlier and not (any(bool(x.get("released")) for x in rel.rows)
+                            and high_for_the_books(rel.rows)):
+            continue
         items.append(_cat(
             "data", datetime.fromtimestamp(r["ts"], ET), now, r.get("event"),
             country=r.get("country"),
@@ -1292,6 +1318,10 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
                            "consensus": x.get("consensus_raw"),
                            "previous": x.get("previous_raw")} for x in rel.subs]}
                if rel.subs else {}),
+            **({"earlier": True} if earlier else {}),
+            # What the release is about (calendar.themes_of): whether the bias counts it
+            # (`bias_links`: an index book counts inflation prints alone).
+            themes=[str(t) for t in r.get("themes") or []],
         ))
 
     # The FOMC a week out is on the brief every day of that week; a speech is
@@ -1299,7 +1329,10 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
     meetings = {m.get("date"): m for m in (snap.get("policy_meetings") or {}).get("meetings") or []}
     for e in snap.get("fed") or []:
         ts = e.get("ts")
-        if ts is None or not lo <= ts <= now_ts + 7 * 86400 or (not e.get("major") and ts > hi):
+        if ts is None or not week <= ts <= now_ts + 7 * 86400 or (not e.get("major") and ts > hi):
+            continue
+        # Earlier this week: a decision or the Chair's word only (`major`).
+        if ts < lo and not e.get("major"):
             continue
         note = e.get("note")
         m = meetings.get(e.get("date")) if e.get("kind") == "FOMC" else None
@@ -1319,7 +1352,7 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
                 continue
         items.append(_cat("fed", datetime.fromtimestamp(ts, ET), now, e.get("title"),
                           country="US", released=ts < now_ts, high=bool(e.get("major")),
-                          note=note))
+                          note=note, **({"earlier": True} if ts < lo else {})))
 
     for a in snap.get("auctions") or []:
         ts = a.get("ts")
@@ -1333,11 +1366,15 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
         ))
 
     if any(b in books for b in INDEX_BOOKS):
+        # Thirty hours back, not twelve (2026-11-19): by 09:00 a heavyweight's results of
+        # the evening before (16:05) were seventeen hours old and off the list, and they
+        # are what a morning report most has to say something about.
+        lo_earn = now_ts - EARNINGS_BACK_H * 3600
         for e in snap.get("earnings") or []:
             if not e.get("bellwether") and (e.get("market_cap") or 0) < 200e9:
                 continue
             when = _earnings_moment(e)
-            if when is None or not lo <= when.timestamp() <= now_ts + 2 * 86400:
+            if when is None or not lo_earn <= when.timestamp() <= now_ts + 2 * 86400:
                 continue
             said = {"pre": "before the open", "after": "after the close"}.get(
                 str(e.get("when") or ""), "time TBC")
@@ -1355,9 +1392,12 @@ def _catalysts(snap: dict[str, Any], books: list[str], now: datetime) -> list[di
     # only then does the lot go back into time order.
     items.sort(key=lambda c: c["ts"])
     ahead = [c for c in items if c["ts"] >= now_ts][:10]
-    done = [c for c in items if c["ts"] < now_ts][-6:]
+    done = [c for c in items if c["ts"] < now_ts and not c.get("earlier")][-6:]
+    # This week's earlier prints have their own few, so the morning's releases do not
+    # push them off, nor they the morning's.
+    week_done = [c for c in items if c.get("earlier")][-WEEK_BACK_MAX:]
     # A holiday is a day, not a minute: today's stays on the list all day, at the head of its day.
-    kept = sorted(done + ahead + _holiday_catalysts(now), key=lambda c: c["ts"])
+    kept = sorted(week_done + done + ahead + _holiday_catalysts(now), key=lambda c: c["ts"])
     for i, c in enumerate(kept, start=1):
         c["id"] = f"c{i}"
     return kept
@@ -1685,6 +1725,209 @@ def key_levels(snap: dict[str, Any], book: str,
     return {"dp": dp, "marks": marks} if marks else None
 
 
+# --------------------------------------------------------------------------
+# What can move prices (brief_version 4, 2026-11-19).
+# --------------------------------------------------------------------------
+#
+# THE REPORT AS A BRIEFING (owner: "format the market report to look like a professional
+# market report that would be given to a ceo ... list what things can impact prices going
+# into a session, eg news, macro events, headlines, earnings, geopolitics, vix, economic
+# calender events on the day or earlier in the week that have an impact and then a brief
+# summary on why each thing has an impact and kepe it concise and easily digestable", then
+# "do what you recommend best"). The page is a bottom line, then one list of what can move
+# prices, each item with its impact, what it does to the book and one line on why, then
+# the call and its levels as before. The model picks the items and writes the why; what
+# each item IS (the release and its figures, the headline, the yields, the VIX) is the
+# collector's, printed from the facts, so a figure on the list is never the model's.
+#
+# Most items are rows the report already has: a `catalysts` id (a release, the Fed, an
+# auction, a heavyweight's results, this week's earlier prints) or a `headlines` id. The
+# rest are the three below, built here: rates and the dollar, the VIX, and positioning.
+# THE VIX IS WEATHER (the owner's rule, and bias.BOARD_FAMILY since the evening of
+# 2026-11-19): its row is always on the list, and what it does is said as the ranges it
+# makes, never as a side. No dealer gamma (the owner, 2026-11-15: "i dont think we need to
+# mention gex"), here as everywhere in the report.
+
+#: How far an item can move the book this session, as the page prints it.
+IMPACTS = ("high", "medium", "low")
+#: What an item does to the book: helps it up, presses it down, could go either way, says
+#: nothing for a side, or already traded. "regime" is the VIX's alone, and the server's.
+EFFECTS = ("supportive", "pressure", "two-way", "neutral", "priced")
+#: The VIX's band (scanscore.regime's rule) → the word for its ranges and the line on why.
+VIX_REGIME: dict[str, tuple[str, str]] = {
+    "grind": ("Small ranges", "Low volatility: small ranges, so a breakout needs proof."),
+    "normal": ("Normal ranges", "Normal volatility: the day's ranges as usual."),
+    "elevated": ("Wider ranges", "Elevated: moves extend, then whip back. Size down."),
+    "stressed": ("Wide, fast ranges", "Stressed: wide, fast swings. Cut size or sit out."),
+}
+
+
+def _vix_band(last: float, shape: str | None) -> str:
+    """The VIX's band as scanscore.regime draws it. Pure, bar the lazy import (scanscore
+    reaches this module through marketctx)."""
+    from . import scanscore
+
+    if shape == "backwardation" or last >= scanscore.VIX_STRESSED:
+        return "stressed"
+    if last < scanscore.VIX_GRIND:
+        return "grind"
+    return "normal" if last < scanscore.VIX_NORMAL else "elevated"
+
+
+def context_movers(snap: dict[str, Any], books: list[str], drivers: dict[str, Any],
+                   now: datetime) -> list[dict[str, Any]]:
+    """The items on the report's list that are not a calendar row or a headline: rates and
+    the dollar, the VIX, and positioning, each with what it is in the collector's words
+    (`what`). The VIX's carries its `regime` word and a `why` of the server's own, for a
+    report whose model wrote none. Pure."""
+    quotes = snap.get("quotes") or []
+    out: list[dict[str, Any]] = []
+
+    ten, dxy = _q(quotes, "US10Y"), _q(quotes, "DXY")
+    parts: list[str] = []
+    # Crude is priced in dollars and does not read the 10-year (bias.py): its row is the dollar.
+    if ten and ten.get("last") is not None and "CL" not in books:
+        t = f"10Y {ten['last']:.3f}%"
+        if ten.get("chg") is not None:
+            t += f" ({ten['chg'] * 100:+.1f}bp)"
+        if stamp := _not_current(ten, now):
+            t += f", {stamp}"
+        parts.append(t)
+    if dxy and dxy.get("last") is not None:
+        t = f"Dollar {dxy['last']:.2f}"
+        if dxy.get("pct") is not None:
+            t += f" ({dxy['pct']:+.2f}%)"
+        parts.append(t)
+    if parts:
+        out.append({"id": "rates", "what": " · ".join(parts)})
+
+    vix = _q(quotes, "VIX")
+    if vix and vix.get("last") is not None:
+        vt = snap.get("volterm") or {}
+        shape = str(vt.get("shape") or "") or None
+        t = f"VIX {vix['last']:.1f}"
+        if vix.get("pct") is not None:
+            t += f" ({vix['pct']:+.1f}%)"
+        if vt.get("ratio") is not None:
+            t += f" · curve {vt['ratio']:.2f}"
+            if shape and shape != "unknown":
+                t += f", {shape}"
+        word, why = VIX_REGIME[_vix_band(float(vix["last"]), shape)]
+        out.append({"id": "vix", "what": t, "regime": word, "why": why})
+
+    cot = [(b, c) for b in books for c in ((drivers.get(b) or {}).get("context") or [])
+           if isinstance(c, dict) and str(c.get("label") or "").startswith("COT ·")
+           and c.get("value") not in (None, "", "—")]
+    if cot:
+        spec = str(cot[0][1]["label"]).removeprefix("COT · ")
+        out.append({"id": "positioning",
+                    "what": f"{spec}: " + " · ".join(f"{b} {c['value']}" for b, c in cot)})
+    return out
+
+
+# HOW EACH ITEM FEEDS THE BIAS (owner, 2026-11-19: "you didnt do what i said in regards to
+# explaining how each thing impacts the market or contributes to the bias", then "do what
+# you recommend"). The list said what each item does to the market and nothing tied it to
+# the bias drawn above it. Each item now names the factor of the engine's bias it is
+# counted in, with that factor's share of the score and its tag as the table prints them,
+# or why the bias does not count it. The engine's arithmetic, not the model's: an index
+# book counts US inflation prints alone (drivers._prints), crude its inventories and US
+# growth prints, a print votes until its day's close, and the stocks tape reads prices,
+# not the calendar.
+_NOT_COUNTED: dict[str, tuple[str, str]] = {
+    "print": ("Read, not counted", "only US inflation prints vote"),
+    "print_cl": ("Read, not counted", "crude counts its inventories and US growth prints"),
+    "foreign": ("Not counted", "the bias reads US prints"),
+    "earlier": ("In the price", "it voted on its day"),
+    "fed": ("Not counted", "it reaches the bias through yields (Macro)"),
+    "earnings": ("Not counted", "already in the index's price"),
+    "holiday": ("Not counted", "it changes what the other rows mean"),
+    "vix": ("Not in the bias", "weather: how far moves run, never a side"),
+    "positioning": ("Not in the bias", "context: what a break would find, never a side"),
+    "tape": ("Not counted", "the tape reads prices; this reaches it through SPY's and QQQ's moves"),
+    "session": ("Not weighed", "its factor has no weight in this session"),
+}
+
+
+def bias_links(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """For every item the list can hold, by id: the factor of the engine's bias it is
+    counted in, as the report's table prints it ({key, name, weight, tag, lean}), or why
+    it is not counted ({key: None, name, note}). The futures report reads its book's table
+    (`facts.factors`), the Stocks report the tape's (`facts.market_factors`). Pure."""
+    shared = "market_factors" in facts
+    books = list(facts.get("books") or [])
+    rows = (facts.get("market_factors") or []) if shared else (
+        ((facts.get("factors") or {}).get(books[0]) or []) if books else [])
+    fam = {r["key"]: r for r in rows if isinstance(r, dict) and r.get("key")}
+    crude = not shared and bool(books) and books[0] == "CL"
+
+    def no(why: str) -> dict[str, Any]:
+        name, note = _NOT_COUNTED[why]
+        return {"key": None, "name": name, "note": note}
+
+    def counted(key: str, note: str | None = None) -> dict[str, Any]:
+        r = fam.get(key)
+        if r is None:
+            return no("session")
+        return {"key": key, "name": r.get("name"), "weight": r.get("weight"),
+                "tag": r.get("tag"), "lean": r.get("lean"), **({"note": note} if note else {})}
+
+    out: dict[str, dict[str, Any]] = {}
+    for c in facts.get("catalysts") or []:
+        if not isinstance(c, dict) or not c.get("id"):
+            continue
+        kind, themes = c.get("kind"), set(c.get("themes") or [])
+        if kind == "earnings":
+            link = no("earnings")
+        elif kind == "holiday":
+            link = no("holiday")
+        elif shared:
+            link = no("tape")
+        elif kind in ("fed", "auction"):
+            link = no("earlier") if c.get("earlier") else no("fed")
+        elif c.get("earlier"):
+            link = no("earlier")
+        elif c.get("country") not in ("United States", "US", None):
+            link = no("foreign")
+        elif crude:
+            energy = bool(_ENERGY_EVENT.search(str(c.get("title") or "")))
+            link = counted("catalysts") if energy or "growth" in themes else no("print_cl")
+        else:
+            link = counted("catalysts") if "inflation" in themes else no("print")
+        out[str(c["id"])] = link
+    for h in facts.get("headlines") or []:
+        if isinstance(h, dict) and h.get("id"):
+            out[str(h["id"])] = counted("event", "lowers the ceiling on the call, never a side")
+    for m in facts.get("context_movers") or []:
+        mid = str(m.get("id"))
+        out[mid] = (counted("rates") if mid == "rates" else no("vix") if mid == "vix"
+                    else no("positioning"))
+    return out
+
+
+def _link_words(link: dict[str, Any]) -> str:
+    """A link as the model reads it: "Macro, 30% of the bias, Not live yet". Pure."""
+    if link.get("key") is None:
+        return f"{link.get('name')}: {link.get('note')}"
+    weight = f", {link['weight']}% of the bias" if link.get("weight") is not None else ""
+    note = f" ({link['note']})" if link.get("note") else ""
+    return f"{link.get('name')}{weight}, {link.get('tag')}{note}"
+
+
+def movers_menu(facts: dict[str, Any]) -> dict[str, Any]:
+    """What the model may put on the list, as the digest hands it over: the calendar's and
+    the wire's ids are already there; these are the rest, by id, with what each is, and
+    how the engine's bias counts every one of them (`bias_links`), which the page prints
+    beside the item. Pure."""
+    # The VIX's band word goes with it: the page prints it as the item's effect, and the
+    # first briefing's why said "normal ranges" beside a printed "Wider ranges".
+    links = facts.get("bias_links") or bias_links(facts)
+    return {"other_movers": [{"id": m["id"], "what": m["what"],
+                              **({"ranges": m["regime"]} if m.get("regime") else {})}
+                             for m in facts.get("context_movers") or []],
+            "feeds_the_bias": {k: _link_words(v) for k, v in links.items()}}
+
+
 def report_view(digest: dict[str, Any], facts: dict[str, Any]) -> dict[str, Any]:
     """The digest as the REPORT's model reads it: no dealer gamma anywhere (its block,
     its card, its walls on the ladder, its row on the board, the board's line on how
@@ -1717,6 +1960,7 @@ def report_view(digest: dict[str, Any], facts: dict[str, Any]) -> dict[str, Any]
     out["factors_on_the_page"] = {
         b: [{k: f.get(k) for k in ("key", "name", "weight", "tag")} for f in rows]
         for b, rows in (facts.get("factors") or {}).items()}
+    out.update(movers_menu(facts))
     return out
 
 
@@ -1727,7 +1971,7 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
     ladders = [lad for b in books if (lad := _ladder(snap, b, session, now))]
     by_book = {lad["book"]: lad for lad in ladders}
     drivers = _drivers(snap, books, session, now)
-    return {
+    facts = {
         "books": books,
         "as_of": f"{now:%a %d %b %Y}, {now:%H:%M} ET",
         "partial": _partial(snap, books),
@@ -1753,7 +1997,12 @@ def build_facts(snap: dict[str, Any], session: str = "ny", asset: str = "all") -
         "heavyweights": {b: events_mod.heavyweights(snap, b, now)
                          for b in books if b in INDEX_BOOKS},
         "event_risk": events_mod.event_risk(snap, now),
+        # The list's items that are not a calendar row or a headline (2026-11-19).
+        "context_movers": context_movers(snap, books, drivers, now),
     }
+    # How the engine's bias counts each item the list can hold (2026-11-19).
+    facts["bias_links"] = bias_links(facts)
+    return facts
 
 
 def _drivers(snap: dict[str, Any], books: list[str], session: str = "ny",
@@ -1834,7 +2083,7 @@ def _board_view(bd: dict[str, Any]) -> dict[str, Any]:
 #: The tape's families as the report names them (FACTOR_NAMES has the futures' names).
 TAPE_FACTOR_NAMES: dict[str, tuple[str, str | None]] = {
     "levels": ("Index levels", "SPY and QQQ against their own"),
-    "risk": ("Risk appetite", "the VIX, its curve and credit"),
+    "risk": ("Risk appetite", "credit beyond the S&P's own move"),
     "rates": ("Macro", "rates & dollar"),
     "participation": ("Participation", "sectors, equal weight, volume & leaders"),
 }
@@ -1936,7 +2185,7 @@ def _etf_facts(snap: dict[str, Any], scan: dict[str, Any] | None,
     if len(by) < len(ETF_BOOKS):
         missing = ", ".join(s for s in ETF_BOOKS if s not in by)
         partial.append(f"The scanner has no row for {missing} yet: no levels for it.")
-    return {
+    out = {
         **base,
         "books": list(ETF_BOOKS),
         "partial": partial,
@@ -1948,6 +2197,9 @@ def _etf_facts(snap: dict[str, Any], scan: dict[str, Any] | None,
         "market_factors": factors_of("TAPE", market) if market else [],
         "funds": fund_rows(scan),
     }
+    # The list's links read the tape's table, not the Indexes report's.
+    out["bias_links"] = bias_links(out)
+    return out
 
 
 def etf_view(digest: dict[str, Any], facts: dict[str, Any]) -> dict[str, Any]:
@@ -2650,65 +2902,63 @@ _BIAS = {"type": "string", "enum": list(BIASES)}
 # report"). The three reasons of 2 became one comment a factor, for every factor the
 # bias weighs (`factors_of`), so nothing that moves the score is left off the page;
 # and dealer gamma left the report. A 2 keeps its layout on the page.
-BRIEF_VERSION = 3
+# 4 IS THE BRIEFING (2026-11-19, "What can move prices" above `context_movers`): a bottom
+# line, the list (`movers`), and a call a book with the engine's own table and levels
+# under it. The model writes no comment a factor (the list says each thing once, with its
+# why, and the table prints the engine's reads), no plan and no invalidation (off the
+# page since 2026-11-17), and no calendar notes, risks or headline notes (the list is
+# all three). `sanitize_brief` still reads every older field, so a 3 drawn again or an
+# answer in the old shape loses nothing.
+BRIEF_VERSION = 4
 
+# "mover" WAS 16 (the evening of 2026-11-19), and the owner's first word on the result was
+# "you didnt do what i said in regards to explaining how each thing impacts the market":
+# sixteen words held a figure and a verdict, never the channel. Two sentences now.
 LIMITS: dict[str, int] = {
     "thesis": 40, "factor": 20, "plan": 28, "wrong_if": 16,
-    "today": 14, "risks": 14, "headlines": 12,
+    "today": 14, "risks": 14, "headlines": 12, "mover": 40,
 }
+#: The list holds at least this many items and at most MOVERS_MAX.
+MOVERS_MIN = 3
+MOVERS_MAX = 10
 #: A quarter over is let through: a bullet two words long of its limit is not worth
 #: forty seconds of a second answer.
 LIMIT_SLACK = 1.25
 
+_MOVER = _obj({
+    "id": {**_STR, "description": (
+        "What can move the book: a `catalysts` id (c…), a `headlines` id (h…) or an "
+        "`other_movers` id (rates, vix, positioning)."
+    )},
+    "impact": {"type": "string", "enum": list(IMPACTS)},
+    "effect": {"type": "string", "enum": list(EFFECTS)},
+    "why": {**_STR, "description": (
+        f"Two sentences, {LIMITS['mover']} words at most: how it moves the market (the "
+        "channel, plainly), then what a surprise, a break or an escalation does to the book."
+    )},
+})
 SCHEMA: dict[str, Any] = _obj({
     "thesis": {**_STR, "description": (
-        f"The day in one or two plain sentences, {LIMITS['thesis']} words at most."
+        f"The bottom line in one or two plain sentences, {LIMITS['thesis']} words at most."
     )},
+    "movers": _arr(_MOVER, MOVERS_MIN, MOVERS_MAX),
     "calls": _arr(_obj({
         "book": _BOOK,
         "open_bias": _BIAS,
         "conviction": {"type": "integer", "minimum": 1, "maximum": 5},
-        # THE REASONS, ONE A FACTOR. The owner asked for the bias to explain itself
-        # (2026-09-16) and then for every factor behind it to be named (2026-11-15).
-        # The key is the row it is the comment on; the tag and the weight beside it
-        # are the engine's and are not the model's to write.
-        "factors": _arr(_obj({
-            "key": {"type": "string", "enum": list(FACTOR_KEYS)},
-            "line": {**_STR, "description": (
-                f"What this factor is saying now, with its figure, {LIMITS['factor']} "
-                "words at most, in plain words."
-            )},
-        }), 1, 8),
-        "plan": {**_STR, "description": (
-            f"One line, {LIMITS['plan']} words at most: the key level that has to "
-            "hold or break, and where that carries."
-        )},
-        "wrong_if": {**_STR, "description": (
-            f"One line, {LIMITS['wrong_if']} words at most: what kills the call."
-        )},
     }), 1, 3),
-    "today": _arr(_obj({"id": _STR, "note": _STR}), 0, 3),
-    "risks": _arr(_STR, 0, 3),
-    "headlines": _arr(_obj({"id": _STR, "books": _arr(_BOOK, 1, 3), "note": _STR}), 0, 3),
 })
 
-# THE STOCKS REPORT'S SHAPE (2026-11-16): one bias for the three funds, so the comments
-# on its factors are written once, at the top, and a call per fund carries none.
+# THE STOCKS REPORT'S SHAPE (2026-11-16): one bias for the three funds, read once at the
+# top, and a call per fund.
 _ETF = {"type": "string", "enum": list(ETF_BOOKS)}
 _CALL = SCHEMA["properties"]["calls"]["items"]["properties"]
-_TAPE_FACTORS = {**_CALL["factors"], "items": {**_CALL["factors"]["items"], "properties": {
-    **_CALL["factors"]["items"]["properties"],
-    "key": {"type": "string", "enum": list(TAPE_FACTOR_KEYS)}}}}
 SCHEMA_ETFS: dict[str, Any] = _obj({
     "thesis": SCHEMA["properties"]["thesis"],
-    "factors": _TAPE_FACTORS,
+    "movers": SCHEMA["properties"]["movers"],
     "calls": _arr(_obj({
         "book": _ETF, "open_bias": _BIAS, "conviction": _CALL["conviction"],
-        "plan": _CALL["plan"], "wrong_if": _CALL["wrong_if"],
     }), 3, 3),
-    "today": SCHEMA["properties"]["today"],
-    "risks": SCHEMA["properties"]["risks"],
-    "headlines": _arr(_obj({"id": _STR, "books": _arr(_ETF, 1, 3), "note": _STR}), 0, 3),
 })
 
 
@@ -2930,8 +3180,8 @@ def _weighting(session: str, prog: dict[str, Any]) -> str:
                      for i, (layer, role, what) in enumerate(session_layers(session, prog), 1))
     return f"""\
 HOW THE LAYERS WEIGH IN THIS NOTE, heaviest first. Where they disagree the higher \
-row decides the path and the conflict lowers conviction; the `factors` comments \
-say what each layer is doing.
+row decides the path and the conflict lowers conviction; the list (`movers`) says \
+what moves each layer.
 {rows}"""
 
 
@@ -2968,10 +3218,10 @@ of the open. WRITE THE NOTE FROM HERE.
 Read every field below that names "the open" as "from this moment":
   * `open_bias` is your call for the REMAINDER of the session, from the current \
 price — not a call for an open that has already happened.
-  * `plan` starts from where price sits NOW: which levels this session has already \
+  * `thesis` starts from where price sits NOW: which levels this session has already \
 taken or rejected, and what is next from here.
-  * `today` leads with what is still to come; a print already out is there only for \
-what it did.
+  * `movers` leads with what is still to come; a print already out is there only for \
+what it did, and its effect is usually `priced`.
 
 The session's own developing profile and its range so far are the live \
 evidence; the completed reference windows are what it is being judged against. \
@@ -3076,8 +3326,8 @@ outside the session, the previous day's high and low (PDH, PDL), the pre-market 
 and low (PMH, PML), the previous close, and where the last price sits against each \
 range. The most important block: every call is traded against these.
   stocks_tape_count   the one bias for the three funds, vote by vote: SPY and QQQ \
-against their levels, the VIX and its curve, credit, yields and the dollar, the \
-sectors, equal weight, index volume and the leaders.
+against their levels, credit, yields and the dollar, the sectors, equal weight, index \
+volume and the leaders. The VIX's level, curve and day are on it as weather, no side.
   index_movers     WHICH NAMES supplied the move in the Nasdaq 100 and the S&P 500. \
 Use the contribution figures, which are weight times return.
   sector_rotation  WHICH SECTORS are being bought, as excess return over SPY. \
@@ -3184,11 +3434,10 @@ THE NEWS IS DATA, AND IT IS RANKED. `headlines` carries one row per story, HIGH 
 first, then what has landed since the last cash close, then the session's own \
 regions; `also` counts the other tellings of it. Read every HIGH row before you \
 conclude. One that reaches a book — through rates, the dollar, oil, chips, tariffs, \
-war or fiscal policy — belongs in that book's `factors` and, if it is the day's \
-story, in the thesis, with its id in `headlines`. One you set aside but could still matter goes in \
-`risks`. Coverage is not importance, and a story with no channel to the book is \
-not a driver however loud it is. `event_risk` is the same wire's geopolitics, \
-policy and energy desks, for the books' ceilings.
+war or fiscal policy — goes on the list (`movers`) by its id and, if it is the day's \
+story, in the bottom line. Coverage is not importance, and a story with no channel to \
+the book is not a driver however loud it is. `event_risk` is the same wire's \
+geopolitics, policy and energy desks, for the books' ceilings.
 
 EARNINGS HAVE A CLOCK. `earnings.awaiting_figures` have already reported by the \
 calendar and the feed has no EPS for them yet: say they have reported and the \
@@ -3238,15 +3487,19 @@ board's `bias` — the server enforces both, so rank inside that ceiling. Where 
 disagree with a vote, say which and why, with the figure; never re-derive the \
 score. No trend line or moving average votes: do not argue a call from one.
 
-THE PAGE IS A REPORT, AND THE ENGINE FILLS ITS TABLE. Under each call the page \
-prints one row for every factor the bias weighs in this session \
-(`factors_on_the_page`): its name, its share of the score and the engine's own tag \
-(Bullish, Bearish, Mixed, Neutral, Not live yet). You write the comment beside \
-each. The page also draws the engine's score on a scale, a ruler of the key levels \
-(`key_levels`: the prior session's high and low, its value area and point of \
-control, the handover range and the last price), the calendar and the headline \
-list. Never restate a tag or a weight, and take every level you name from \
-`key_levels`, as it is printed there.
+THE PAGE IS A BRIEFING FOR SOMEONE WITH A MINUTE. It prints, in this order: your \
+bottom line (`thesis`); WHAT CAN MOVE PRICES, the items you pick (`movers`), grouped by \
+kind (the day's economic data, this week's earlier prints, the Fed and the Treasury, \
+earnings, geopolitics and headlines, rates and the dollar, volatility and \
+positioning), each printed with what it is from the data (the release with its \
+actual, consensus and prior, the results, the headline, the yields and the dollar, \
+the VIX) and your impact, effect and why beside it; then each book's call, with the \
+engine's score on a scale, the engine's table of the factors the bias weighs \
+(`factors_on_the_page`, with its own tags and reads) and a ruler of the key levels \
+(`key_levels`: the prior session's high and low, its value area and point of control, \
+the handover range and the last price). You write none of the tables. Never restate \
+what a row already prints, and take every level you name from `key_levels`, as it is \
+printed there.
 
 {_live_framing(session, prog)}
 {_weighting(session, prog)}
@@ -3277,9 +3530,9 @@ changes how the day trades. Write the top of that ranking and nothing below it. 
 true fact that would not change a trade is left out.
   * EVERY SENTENCE IS A CAUSE AND WHAT IT DOES TO THE BOOK, with the figure. Never \
 a figure alone, never an effect with no figure behind it.
-  * SAY EACH FACT ONCE, where it does the most work. One factor, one comment; a \
-level in `plan` is not named again in `wrong_if` unless it is the invalidation \
-itself; `risks` never restates a comment or `wrong_if`.
+  * SAY EACH FACT ONCE, where it does the most work. One item on the list, one why; \
+two items are never one story told twice; the bottom line names the decider and the \
+list explains the rest.
   * NO MOVING AVERAGES. The bias does not weigh a trend line, so the report does \
 not argue from one: never write "EMA", "SMA", "200-day" or "trend line".
   * NO PREAMBLE, NO HEDGE, NO NARRATION. Not "it is worth noting", "could \
@@ -3292,46 +3545,54 @@ decimals (an exchange rate as it is given), a level exactly as \
   * AN ID IS NEVER PROSE. `h3` or `c2` goes in an `id` field and nowhere else; in \
 a sentence, name the story or the release.
   * THE WORD LIMITS BELOW ARE HARD, AND SO IS "ONCE". An answer over a limit, or \
-with a risk that says a comment again, is sent back.
+with two items that say one thing, is sent back.
 
 Field by field:
-  thesis     The day in one or two sentences, {LIMITS["thesis"]} words at most: the \
-single force driving the books in scope in this session, and the figure or level \
-that decides it. It is the page's headline. With nothing live, say so in one \
-sentence and name the range. Never the last price for its own sake: the page \
-prints it.
+  thesis     THE BOTTOM LINE, {LIMITS["thesis"]} words at most, one or two sentences: \
+the call and the one thing that decides it, with its level or figure. It is read \
+first, by someone with a minute. With nothing live, say so in one sentence and name \
+the range. Never the last price for its own sake: the page prints it.
+  movers     WHAT CAN MOVE PRICES, {MOVERS_MIN} to {MOVERS_MAX} items, the most \
+important first. Rank everything you read by how far it can move {book_list} in THIS \
+session and list the top of it:
+    - every high-impact release and Fed event on the session's day, printed or due \
+(`catalysts` rows with `high` true), and a speaker or an auction that can move the \
+curve;
+    - this week's earlier prints (`catalysts` rows with `earlier` true) that still \
+explain where yields, the dollar or the book sit;
+    - a heavyweight's results, reported or due;
+    - the stories the wire ranks HIGH that reach the book through a channel (rates, \
+the dollar, oil, chips, tariffs, war, fiscal policy): one item a story;
+    - `other_movers`: `rates` (the 10-year and the dollar), `vix` (the page always \
+lists it and prints its band's word, `ranges`, as its effect: say what that does to \
+stops and size, in agreement with it, never a side) and `positioning` (who is \
+crowded and what a break would find).
+    Nothing that lands after this session closes, and no routine release to fill \
+the list: three items that matter beat ten that do not. Each item:
+      id       the row's id, exactly as given (c3, h7, rates).
+      impact   high, medium or low: how far it can move the book in this session.
+      effect   what it does to {book_list}: supportive (pushes it up), pressure \
+(pushes it down), two-way (could go either way: a release still to print, a story \
+still developing), neutral (no side for the book: printed in line, or nothing in it \
+for this market), priced (it printed earlier and the market has traded it).
+      why      TWO SENTENCES, {LIMITS["mover"]} words at most, for a reader who is not a \
+trader. First HOW it moves the market: the channel, plainly ("A low claims print says \
+hiring is still tight, which keeps the Fed from cutting and lifts yields, and that \
+weighs on tech valuations"). Then WHAT A SURPRISE, A BREAK OR AN ESCALATION DOES to \
+the book, or why it matters in this session ("A high print does the reverse; it is the \
+only release before the open, so it decides whether the gap holds"). Do not open with \
+the item's name or time: its row prints them. A figure that explains the channel may \
+be quoted, copied from the data.
+    The page prints beside each item how the engine's bias counts it \
+(`feeds_the_bias`, by id: the factor, its share and its tag, or why it is not \
+counted). Agree with it: an item the bias does not count is never said to drive the \
+bias, and where the factor cannot vote yet (a cash market shut, a print still to come), \
+say when it will.
   calls      Exactly one per book in scope.
     open_bias, conviction   The side and its strength, 1-5. THE CALL IS THE CALL: \
-the thesis, the comments and `wrong_if` argue the side named here and no other. If \
-the words say a book leans short, `open_bias` is leaning bearish; if the call is \
-neutral, nothing in the brief calls it a lean.
-    factors  One comment for EVERY row of `factors_on_the_page` for this book, by \
-its `key`, {LIMITS["factor"]} words at most: what that factor is saying right now, \
-with its figure, in words a trader reads at a glance. Macro: the yield and the \
-dollar and which way they push this book. News & data: the print or the result and \
-its surprise, or what is awaited and when. Volume profile & structure: where price \
-sits against the prior session's value area and range. Geopolitics & events \
-(`event`): the story and the channel it reaches this book by, or that the tape is \
-quiet. A factor with no live read says what it \
-is waiting for. Never the engine's tag or weight: the page prints them.
-    plan     One line, {LIMITS["plan"]} words at most: the map, from `key_levels`. \
-The level that has to hold or break, and where that carries.
-    wrong_if One line, {LIMITS["wrong_if"]} words at most: the price that kills the \
-call (acceptance beyond one of the `key_levels`) or the print that would.
-  today      Up to three things on the clock that can move these books in this \
-session, the most important first, each by its `catalysts` id with a note of \
-{LIMITS["today"]} words at most: what is priced and what a miss or a beat does; \
-once printed, what it did. The row already prints the time and the name, so the \
-note repeats neither. A release's `also` series are one item. Nothing that lands \
-after this session closes, and nothing that matters is an empty list: never a \
-routine release to fill it.
-  risks      Up to three, {LIMITS["risks"]} words each at most: what is NOT in the \
-call and could break it: something that can HAPPEN in this session. A story, an \
-event, a crowded position giving way. Not the state of the clock, not a gap in the \
-data, not a reason said again.
-  headlines  Up to three headline ids that are moving price now, each with the \
-books it moves and {LIMITS["headlines"]} words at most on the channel it reaches \
-them by. Often one. None is an empty list.
+the bottom line and the list argue the side named here and no other. If the words \
+say a book leans short, `open_bias` is leaning bearish; if the call is neutral, \
+nothing in the brief calls it a lean.
 
 Be concrete and unhedged in the direction call. Do not use disclaimers, do not \
 mention that you are an AI, and do not recommend position sizes or give \
@@ -3344,7 +3605,7 @@ def _etf_rules(asset: str) -> str:
     rules above where the two differ. Empty for every other subject. Pure."""
     if resolve_asset(asset) != ETF_ASSET:
         return ""
-    return f"""
+    return """
 
 THIS REPORT IS THE STOCKS DESK'S: SPY, QQQ AND IWM FOR NEW YORK, AND FOUR THINGS \
 ABOVE ARE DIFFERENT FOR IT. Where this section and the text above disagree, this \
@@ -3355,17 +3616,14 @@ scale, above the three calls. Each call's `conviction` may not exceed its \
 `max_conviction`, and may not exceed 3 when the call runs against its `bias`; the \
 server enforces both. The three funds may still differ: QQQ under its PML while IWM \
 holds its range is a call each, and the difference is the read.
-  2. THE FACTORS ARE WRITTEN ONCE, AT THE TOP. The page prints one table, \
-`factors_on_the_page.market`, above the calls. Put one comment for EVERY row of it in \
-the top-level `factors`, by its `key`, {LIMITS["factor"]} words at most (Index levels, \
-`levels`: where SPY and QQQ sit against their levels; Risk appetite: the VIX, its \
-curve and credit; Macro: yields and the dollar; Participation: the sectors, equal \
-weight, volume and the leaders; Geopolitics & events, `event`). A call has no \
-`factors` of its own.
-  3. EACH FUND'S LEVELS ARE ITS OWN. `plan` and `wrong_if` name that fund's PDH, PDL, \
-PMH, PML or previous close from `key_levels` and `index_funds`, exactly as printed. \
-Never a futures level, a value area or a point of control: those are NQ's and ES's \
-(`futures_blocks`).
+  2. THE LIST IS FOR US STOCKS. An item's `effect` is what it does to SPY, QQQ and IWM \
+together. Where it hits one harder than the others (rates on IWM, chips on QQQ), the \
+`why` says so. The page prints the tape's table once, `factors_on_the_page.market`, \
+above the calls, on the engine's own reads: you write no comment for it.
+  3. EACH FUND'S LEVELS ARE ITS OWN. A level in the bottom line is that fund's PDH, \
+PDL, PMH, PML or previous close from `key_levels` and `index_funds`, exactly as \
+printed. Never a futures level, a value area or a point of control: those are NQ's \
+and ES's (`futures_blocks`).
   4. NEW YORK ONLY. The report is for the regular session, 09:30 to 16:00 ET."""
 
 
@@ -3636,6 +3894,8 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "thesis": thesis,
         **out_top,
+        # What can move prices (brief_version 4): each item a row the facts have.
+        "movers": _movers(obj.get("movers"), facts),
         "calls": [calls[b] for b in books],
         # What is on the clock, and only ids that are rows of the calendar the
         # page prints: the note is joined onto its row there, so it does not say
@@ -3650,6 +3910,125 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
         "risks": _texts(obj.get("risks"), 3),
         "headlines": headlines[:3],
     }
+
+
+#: The words a model writes for an impact and an effect, mapped onto the schema's: the
+#: loose mode enforces nothing, and "Bearish" is the right answer misspelt.
+_IMPACT_WORDS = {"high": "high", "medium": "medium", "med": "medium", "moderate": "medium",
+                 "mid": "medium", "low": "low"}
+_EFFECT_WORDS = {
+    "supportive": "supportive", "support": "supportive", "supports": "supportive",
+    "bullish": "supportive", "positive": "supportive", "tailwind": "supportive",
+    "pressure": "pressure", "pressures": "pressure", "bearish": "pressure",
+    "negative": "pressure", "headwind": "pressure",
+    "two-way": "two-way", "two way": "two-way", "twoway": "two-way", "mixed": "two-way",
+    "either way": "two-way", "either": "two-way", "binary": "two-way",
+    "neutral": "neutral", "none": "neutral", "no side": "neutral",
+    "priced": "priced", "priced in": "priced", "already priced": "priced",
+}
+
+
+def _movers(v: Any, facts: dict[str, Any]) -> list[dict[str, str]]:
+    """The list, each item a row the facts have (a calendar row, a headline, or one of
+    `context_movers`), first mention wins, MOVERS_MAX at most. An item with no why is
+    dropped. THE VIX IS ALWAYS ON IT and is never a side: its effect is "regime" whatever
+    was written, and where the model left it off, or wrote nothing on it, its line is the
+    server's (`context_movers`). Pure."""
+    cats = {c["id"]: c for c in facts.get("catalysts") or [] if isinstance(c, dict) and c.get("id")}
+    heads = {h["id"] for h in facts.get("headlines") or [] if isinstance(h, dict) and h.get("id")}
+    ctx = {m["id"]: m for m in facts.get("context_movers") or [] if isinstance(m, dict)}
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for x in _dicts(v):
+        mid = x.get("id")
+        if not isinstance(mid, str):
+            continue
+        mid = mid.strip()
+        if mid.lower() in ctx:
+            mid = mid.lower()
+        if mid in seen or not (mid in cats or mid in heads or mid in ctx):
+            continue
+        why = _prose(x.get("why"))
+        if mid in cats:
+            why = _drop_clock(why, cats[mid])
+        if not why and mid != "vix":
+            continue
+        seen.add(mid)
+        out.append({
+            "id": mid,
+            "impact": _IMPACT_WORDS.get(str(x.get("impact") or "").strip().lower(), "medium"),
+            "effect": "regime" if mid == "vix" else _EFFECT_WORDS.get(
+                str(x.get("effect") or "").strip().lower(), "two-way"),
+            "why": why,
+        })
+    out = out[:MOVERS_MAX]
+    vix = ctx.get("vix")
+    if vix is not None:
+        have = next((m for m in out if m["id"] == "vix"), None)
+        if have is None:
+            out.append({"id": "vix", "impact": "medium", "effect": "regime",
+                        "why": str(vix.get("why") or "")})
+        elif not have["why"]:
+            have["why"] = str(vix.get("why") or "")
+    return out
+
+
+def _on_the_session(c: dict[str, Any], session: str) -> bool:
+    """Whether a calendar row is a high-impact release or Fed event of the session the
+    report is for: not this week's earlier prints, and a release only when it lands in
+    that session (New York's pre-market counts as New York's). Pure."""
+    if not c.get("high") or c.get("earlier") or c.get("kind") not in ("data", "fed"):
+        return False
+    if c.get("kind") == "fed":
+        return session == "ny"
+    lands = c.get("lands_in_session")
+    return lands in ("premkt", "ny") if session == "ny" else lands == session
+
+
+def list_faults(b: dict[str, Any], facts: dict[str, Any], session: str) -> list[str]:
+    """What sends a briefing back besides `faults`: a list of fewer than MOVERS_MIN items,
+    or one that leaves out a high-impact release or Fed event of the session. Empty for a
+    brief in the older shape (no list asked for). Pure."""
+    movers = b.get("movers")
+    if not isinstance(movers, list):
+        return []
+    out: list[str] = []
+    real = [m for m in movers if m.get("id") != "vix"]
+    # As many as the facts can give: a quiet Sunday with two rows is not short of a third.
+    there = (len(facts.get("catalysts") or []) + len(facts.get("headlines") or [])
+             + sum(1 for m in facts.get("context_movers") or [] if m.get("id") != "vix"))
+    need = min(MOVERS_MIN, there)
+    if len(real) < need:
+        out.append(f"the list has {len(real)} items besides the VIX (at least {need})")
+    have = {m.get("id") for m in movers}
+    for c in facts.get("catalysts") or []:
+        if isinstance(c, dict) and c.get("id") not in have and _on_the_session(c, session):
+            out.append(f"the list leaves out {c['id']} ({c.get('title')}), "
+                       "high impact this session")
+    return out
+
+
+#: The line for a high-impact row the model left off the list twice (`fill_missed`).
+_MISSED_WHY = {
+    False: "Due this session: a surprise either way reprices rates and the open.",
+    True: "Printed this session: its surprise is what the market is trading now.",
+}
+
+
+def fill_missed(b: dict[str, Any], facts: dict[str, Any], session: str) -> None:
+    """Put a high-impact row of the session the list still leaves out after the re-ask
+    onto it, with the server's line: the reader is told about every one of them, model or
+    no model. In place. Pure."""
+    movers = b.get("movers")
+    if not isinstance(movers, list):
+        return
+    have = {m.get("id") for m in movers}
+    for c in facts.get("catalysts") or []:
+        if isinstance(c, dict) and c.get("id") not in have and _on_the_session(c, session):
+            done = bool(c.get("released"))
+            movers.append({"id": c["id"], "impact": "high",
+                           "effect": "priced" if done else "two-way",
+                           "why": _MISSED_WHY[done], "server": True})
 
 
 # THE ROW SAYS WHEN AND WHAT; THE NOTE SAYS WHAT IT DOES (2026-11-15). Two real short
@@ -3723,6 +4102,8 @@ def too_long(b: dict[str, Any]) -> list[str]:
         check(f"risk {i}", r, "risks")
     for x in b.get("headlines") or []:
         check(f"headline {x.get('id')}", x.get("note"), "headlines")
+    for x in b.get("movers") or []:
+        check(f"item {x.get('id')}", x.get("why"), "mover")
     return over
 
 
@@ -3784,6 +4165,14 @@ def repeats(b: dict[str, Any]) -> list[str]:
             if small >= 4 and len(a & r) / small >= RISK_REPEAT_SHARE:
                 out.append(f"risk {i} repeats {name}")
                 break
+    # The list (brief_version 4): two items whose whys are one sentence are one story.
+    whys = [(f"item {m.get('id')}", _content_words(m.get("why")))
+            for m in b.get("movers") or [] if not m.get("server")]
+    for i, (first, a) in enumerate(whys):
+        for later, bb in whys[i + 1:]:
+            small = min(len(a), len(bb))
+            if small >= 4 and len(a & bb) / small >= REPEAT_SHARE:
+                out.append(f"{later} repeats {first}")
     return out
 
 
@@ -3858,6 +4247,11 @@ def brief_prose(b: dict[str, Any]) -> list[str]:
     out += [x.get("note") or "" for x in b.get("today") or []]
     out += list(b.get("risks") or [])
     out += [x.get("note") or "" for x in b.get("headlines") or []]
+    # The list's whys, the model's own: the VIX's and a filled row's line are the server's.
+    server_lines = {w for _, w in VIX_REGIME.values()}
+    out += [x.get("why") or "" for x in b.get("movers") or []
+            if not x.get("server")
+            and not (x.get("id") == "vix" and x.get("why") in server_lines)]
     return [x for x in out if x]
 
 
@@ -3910,7 +4304,8 @@ def length_retry(long: list[str]) -> str:
         "over-long part to its limit: keep the strongest reason and drop what the tables "
         "already print. Say each fact once: a reason two books share belongs in the "
         "thesis, and the bullet that repeated it is dropped or replaced by something "
-        "that is that book's own. Add nothing new. Return the whole JSON object again."
+        "that is that book's own. Add nothing new, except an item the list was told it "
+        "leaves out or is short of. Return the whole JSON object again."
     )
 
 
@@ -3940,37 +4335,29 @@ def _reask(payload: dict[str, Any], key: str, content: str, bad: list[str],
     return fixed, doc, "re-asked"
 
 
+_LOOSE_MOVERS = f"""  "movers": [ {{ "id": "c3" | "h7" | "rates" | "vix" | "positioning",
+                "impact": one of "high" | "medium" | "low",
+                "effect": one of "supportive" | "pressure" | "two-way" | "neutral" | "priced",
+                "why": "{LIMITS['mover']} words at most" }} ],
+                // {MOVERS_MIN}-{MOVERS_MAX} items, the most important first"""
+
 LOOSE_SHAPE = f"""{{
-  "thesis": "one or two sentences, {LIMITS['thesis']} words at most",
+  "thesis": "the bottom line, one or two sentences, {LIMITS['thesis']} words at most",
+{_LOOSE_MOVERS}
   "calls": [ {{ "book": one of the books in scope ("NQ", "ES", "GC", "SIL", "CL"),
                "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
                            "leaning bearish" | "bearish",
-               "conviction": integer 1-5,
-               "factors": [ {{ "key": "rates", "line": "{LIMITS['factor']} words at most" }} ],
-                                    // one for EVERY row of factors_on_the_page for the book
-               "plan": "one line, {LIMITS['plan']} words at most",
-               "wrong_if": "one line, {LIMITS['wrong_if']} words at most" }} ],  // one per book
-  "today": [ {{ "id": "c2", "note": "{LIMITS['today']} words at most" }} ],   // 0-3 catalyst ids
-  "risks": [ "{LIMITS['risks']} words at most" ],                           // 0-3
-  "headlines": [ {{ "id": "h3", "books": [ "NQ" ],
-                   "note": "{LIMITS['headlines']} words at most" }} ]        // 0-3
+               "conviction": integer 1-5 }} ]   // one per book
 }}"""
 
 
 LOOSE_SHAPE_ETFS = f"""{{
-  "thesis": "one or two sentences, {LIMITS['thesis']} words at most",
-  "factors": [ {{ "key": "levels", "line": "{LIMITS['factor']} words at most" }} ],
-                // one for EVERY row of factors_on_the_page.market: the market's, written once
+  "thesis": "the bottom line, one or two sentences, {LIMITS['thesis']} words at most",
+{_LOOSE_MOVERS}
   "calls": [ {{ "book": one of "SPY", "QQQ", "IWM",
                "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
                            "leaning bearish" | "bearish",
-               "conviction": integer 1-5,
-               "plan": "one line, {LIMITS['plan']} words at most",
-               "wrong_if": "one line, {LIMITS['wrong_if']} words at most" }} ],  // all three
-  "today": [ {{ "id": "c2", "note": "{LIMITS['today']} words at most" }} ],   // 0-3 catalyst ids
-  "risks": [ "{LIMITS['risks']} words at most" ],                           // 0-3
-  "headlines": [ {{ "id": "h3", "books": [ "QQQ" ],
-                   "note": "{LIMITS['headlines']} words at most" }} ]        // 0-3
+               "conviction": integer 1-5 }} ]   // all three
 }}"""
 
 
@@ -4357,7 +4744,9 @@ def generate(
         bad = unverified(brief, seen)
         # AND THE LIMITS AND THE REPEATS (`faults`), in the same single re-ask: they
         # are named together with any figure, and the second answer is judged on all.
-        long = faults(brief)
+        # With them, the list's own (`list_faults`): too short, or a high-impact
+        # release of the session left off it.
+        long = faults(brief) + list_faults(brief, facts, sess)
         if bad or long:
             note = " · ".join(x for x in (
                 f"unverified numerals: {', '.join(bad[:8])}" if bad else "",
@@ -4366,7 +4755,8 @@ def generate(
             if (time.monotonic() - started) + _ATTEMPT_RESERVE <= BUDGET_SEC:
                 fixed, doc2, outcome = _reask(payload, key, content, bad, facts, long)
                 if fixed is not None and doc2 is not None:
-                    bad2, long2 = unverified(fixed, seen), faults(fixed)
+                    bad2 = unverified(fixed, seen)
+                    long2 = faults(fixed) + list_faults(fixed, facts, sess)
                     left = " · ".join(x for x in (
                         f"still unverified: {', '.join(bad2[:8])}" if bad2 else "",
                         f"still over: {'; '.join(long2[:4])}" if long2 else "",
@@ -4377,6 +4767,8 @@ def generate(
                         brief, bad, doc = fixed, bad2, doc2
                 note += f" · {outcome}"
             attempts.append({"model": candidate, "mode": mode, "note": note})
+        # Every high-impact release of the session is on the list, the model's or not.
+        fill_missed(brief, facts, sess)
         base["unverified"] = bad
         base["words"] = brief_words(brief)
 

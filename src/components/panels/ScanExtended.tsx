@@ -16,6 +16,7 @@ import {
   RvolWord,
   Showing,
   Spark,
+  SPARK_TIP,
   TD,
   TH,
   Tag,
@@ -268,7 +269,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
                     <th scope="col" className={TH}><Head label="PM range" hint="pre-market low → current → high" /></th>
                   </>
                 )}
-                {has("chart") && <th scope="col" className={TH}><Head label="Spark" hint="today" /></th>}
+                {has("chart") && <th scope="col" className={TH} title={SPARK_TIP}><Head label="Spark" hint="from 04:00" /></th>}
               </tr>
             </thead>
             <tbody>
@@ -323,7 +324,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
                     )}
                     {has("chart") && (
                       <td className={TD}>
-                        <Spark pts={r.spark} />
+                        <Spark pts={r.spark} base={r.spark_ref} />
                       </td>
                     )}
                   </tr>

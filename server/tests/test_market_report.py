@@ -95,10 +95,9 @@ def test_gamma_and_trend_are_no_row() -> None:
     assert "daily" not in report.FACTOR_KEYS
     assert set(report.FACTOR_KEYS) == {"catalysts", "rates", "risk", "structure",
                                        "participation", "event"}
-    # The model can only comment on a row there is.
-    keys = report.SCHEMA["properties"]["calls"]["items"]["properties"]["factors"]["items"][
-        "properties"]["key"]["enum"]
-    assert set(keys) == set(report.FACTOR_KEYS)
+    # Brief_version 4: the table is the engine's own reads, and the model writes no
+    # comment on it (the list says each thing once).
+    assert "factors" not in report.SCHEMA["properties"]["calls"]["items"]["properties"]
 
 
 def test_a_quiet_tape_is_a_quiet_row_and_one_story_is_one() -> None:
@@ -306,12 +305,13 @@ def test_the_prompt_names_gamma_and_averages_only_to_rule_them_out(session: str,
                 assert line.startswith("DEALER GAMMA IS NOT IN THIS REPORT"), line[:120]
             if re.search(r"\b(?:EMAs?|SMAs?|200-day|moving average|trend line)\b", line):
                 assert "NO MOVING AVERAGES" in line or "moving average votes" in line, line[:120]
-        assert "`factors`" in p and "`why`" not in p
+        assert "`movers`" in p and "`factors`" not in p and "`why`" not in p
 
 
 def test_a_stored_report_says_which_shape_it_is() -> None:
-    assert report.BRIEF_VERSION == 3
-    assert "why" not in report.LIMITS and report.LIMITS["factor"] == 20
+    assert report.BRIEF_VERSION == 4
+    # Two sentences an item since the owner's word that 16 explained nothing (2026-11-19).
+    assert "why" not in report.LIMITS and report.LIMITS["mover"] == 40
 
 
 def test_an_average_the_model_wrote_anyway_is_put_in_plain_words() -> None:

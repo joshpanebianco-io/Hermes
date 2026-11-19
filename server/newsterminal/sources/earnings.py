@@ -30,7 +30,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import BROWSER_UA
-from ..http import SourceStatus, clean_text, fetch, json_body
+from ..http import CACHE, SourceStatus, clean_text, fetch, json_body
 
 ET = ZoneInfo("America/New_York")
 NASDAQ = "https://api.nasdaq.com/api/calendar/earnings?date={d}"
@@ -38,6 +38,11 @@ NASDAQ = "https://api.nasdaq.com/api/calendar/earnings?date={d}"
 # Below this a report does not reach an index future on this desk. $50bn keeps
 # roughly the S&P 100 plus the large Nasdaq names and drops the rest.
 MIN_CAP = 50_000_000_000.0
+#: How far ahead the list reaches: two weeks, as the economic calendar does (owner,
+#: 2026-11-17: "can we have it so we can see further into the future of future earnings
+#: reports?"; it was four days). The card, the brief and the Today list each cut it by
+#: date, so a longer list adds rows only where a reader asks for them.
+DAYS_AHEAD = 14
 
 # The handful whose reports are session-defining for NQ regardless of anything
 # else — kept even if the cap field is missing or malformed, which it sometimes
@@ -191,12 +196,70 @@ TV_COLUMNS = [
 #: The screener's own floor. The panel keeps $50bn and the watchlist (MIN_CAP,
 #: `keep`); this only has to be under every name the watchlist can hold.
 TV_MIN_CAP = 2_000_000_000.0
-TV_RANGE = 600
+#: Rows a reply may hold, biggest first. 600 while the list reached four days; two weeks
+#: of the season's peak runs to a thousand $2bn names, and the smaller ones are what
+#: the Today list reads for the next open.
+TV_RANGE = 2000
 #: Nasdaq is not asked again before this (epoch), and why.
 NASDAQ_RETRY_SEC = 1800.0
 _nasdaq_wait = 0.0
 _nasdaq_why = ""
 _source = "nasdaq"
+
+# THE REPORTS IT HAS SEEN, KEPT THROUGH THE DAY (owner, 2026-11-17: "do what you
+# recommend"). On the morning a company reports, the screener can move its NEXT date
+# on to the following quarter before it lists the report as its LAST: for that while
+# the name is in neither reply. Disney reported before the open on Tue 17 Nov 2026 and
+# was off the large caps until TradingView caught up; it stayed on the card only
+# because it is on the Scanner. So every row read inside the window is remembered (on
+# disk: the collector restarts often), and a name the replies have dropped keeps its
+# report for today and the days back in the window. Never a day ahead: a report that
+# drops out before its day may have been put off. The one cost: a report put off on
+# its own morning stands until the window passes it.
+SEEN_KEY = "earn_tv_seen"
+
+
+def keep_seen(fresh: dict[str, dict[str, Any]], seen: dict[str, dict[str, Any]], today: date,
+              lo: date, hi: date) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """The reports to keep that the replies dropped, and the memory to save. Pure.
+
+    `fresh` is this read's rows by symbol, `seen` the memory ("SYM|date" → row). The
+    memory gains every fresh row inside lo..hi and loses what is older than lo; a row
+    is kept when its name is not in `fresh` and its day is lo..today, the latest one a
+    name has."""
+    def day(r: dict[str, Any]) -> date | None:
+        try:
+            return date.fromisoformat(str(r.get("date")))
+        except ValueError:
+            return None
+
+    memory = {k: r for k, r in seen.items() if (d := day(r)) is not None and d >= lo}
+    for r in fresh.values():
+        d = day(r)
+        if d is not None and lo <= d <= hi:
+            memory[f"{r['symbol']}|{r['date']}"] = r
+    kept: dict[str, dict[str, Any]] = {}
+    for r in memory.values():
+        d = day(r)
+        sym = r.get("symbol")
+        if d is None or not sym or sym in fresh or d > today:
+            continue
+        if sym not in kept or str(kept[sym]["date"]) < str(r["date"]):
+            kept[sym] = r
+    return sorted(kept.values(), key=lambda r: (r["date"], r["symbol"])), memory
+
+
+def _load_seen() -> dict[str, dict[str, Any]]:
+    blob = CACHE.read(SEEN_KEY)
+    try:
+        got = json.loads(blob) if blob else {}
+    except ValueError:
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _save_seen(seen: dict[str, dict[str, Any]]) -> None:
+    CACHE.write(SEEN_KEY, json.dumps(seen).encode())
 
 
 def source() -> str:
@@ -322,7 +385,10 @@ def _from_tradingview(today: date, days_ahead: int, days_back: int, keep: frozen
 
     now = int(time.time())
     asks = [
-        (TV_LAST, start(lo), now + 3600, "earn_tv_last"),
+        # To the end of today, not an hour from now (2026-11-17): Disney's report before
+        # that day's open was stamped 09:30 ET as its last, and at 08:00 ET an hour on
+        # did not reach it, so it was in neither reply while its next said February.
+        (TV_LAST, start(lo), max(now + 3600, start(today) + 86400), "earn_tv_last"),
         (TV_NEXT, start(today), start(hi) + 86400, "earn_tv_next"),
     ]
     rows: dict[str, dict[str, Any]] = {}
@@ -347,9 +413,20 @@ def _from_tradingview(today: date, days_ahead: int, days_back: int, keep: frozen
         # when its next date has not rolled on yet.
         for row in got:
             rows.setdefault(row["symbol"], row)
+    # A report the replies dropped on its own morning (`keep_seen`).
+    seen = _load_seen()
+    kept, memory = keep_seen(rows, seen, today, lo, hi)
+    if memory != seen:
+        _save_seen(memory)
+    for row in kept:
+        rows[row["symbol"]] = row
     out = sorted(rows.values(), key=lambda r: (r["date"], -(r.get("market_cap") or 0)))
     st.items = len(out)
     st.notes.append(f"TradingView's screener: Nasdaq is not answering ({why})")
+    shown = [r["symbol"] for r in kept if not r.get("watch_only")]
+    if shown:
+        st.notes.append(f"kept from an earlier read: {', '.join(shown[:6])} (the screener "
+                        "moved the date on before it listed the report)")
     st.settle(failed == 0, "read")
     return out, st
 
@@ -406,7 +483,7 @@ def _from_nasdaq(today: date, days_ahead: int, days_back: int,
 
 
 def collect(
-    days_ahead: int = 4, days_back: int = 2, keep: frozenset[str] = frozenset(),
+    days_ahead: int = DAYS_AHEAD, days_back: int = 2, keep: frozenset[str] = frozenset(),
     today: date | None = None,
 ) -> tuple[list[dict[str, Any]], SourceStatus]:
     """A few sessions either side of today, big names only, plus `keep`: Nasdaq's

@@ -13,6 +13,7 @@ import {
   Menu,
   RangeCell,
   Spark,
+  SPARK_TIP,
   TD,
   TH,
   TrackButton,
@@ -367,7 +368,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
                 </>
               )}
               {has("news") && <th scope="col" className={TH}>Headline</th>}
-              {has("chart") && <th scope="col" className={TH}>Spark</th>}
+              {has("chart") && <th scope="col" className={TH} title={SPARK_TIP}>Spark</th>}
               <th scope="col" className={TH} />
             </tr>
           </thead>
@@ -420,7 +421,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
                 {has("news") && (
                   <td className={TD}>{r.catalyst ? <CatalystCell c={r.catalyst} width={380} /> : <span className="text-[11.5px] text-ink-3">No news</span>}</td>
                 )}
-                {has("chart") && <td className={TD}><Spark pts={r.spark} /></td>}
+                {has("chart") && <td className={TD}><Spark pts={r.spark} base={r.spark_ref} /></td>}
                 <td className={cn(TD, "text-right")}>
                   <TrackButton
                     sym={r.sym}

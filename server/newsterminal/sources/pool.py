@@ -95,9 +95,12 @@ never blank), and promotions happen at four marks:
                          09:25 mark saw 09:10). It only FILLS: the pre-market
                          marks leave POST_OPEN_SLOTS free for it and nothing
                          promoted is dropped once the session is on.
-From 10:00 the list is sticky until the scanner's day rolls (20:00 ET; 17:00 on
-a half day), when the promotions go with it. A collector started at noon runs
-the latest pre-market mark it missed and then the post-open one, so it still
+The marks no longer have the last word in the session (2026-11-19): from 09:35 to a quarter
+hour before the close the live rotation (rotation.py) swaps a pick for a better setup off
+the list, a minute a round. The core, the favourites and a name tracked by hand are never
+swapped. The promotions go when the scanner's day rolls (20:00 ET; 17:00 on a half day).
+A collector started at noon runs the latest pre-market mark it missed and then the
+post-open one, so it still
 gets a list. A stale copy of the pool (a failed read served from disk) ranks
 the panel but never promotes: FRESH_MIN caps the age a promotion may read.
 
@@ -115,6 +118,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
@@ -712,6 +716,49 @@ def choose_favourites(ranked: list[dict[str, Any]], pinned: Iterable[str],
     return sorted(order, key=lambda s: (-score.get(s, -1.0), pos[s]))[:n]
 
 
+# ONE TICKER A COMPANY (owner, 2026-11-19: "also in stocks why do i see GOOG and GOOGL? is
+# that a gltihc / bug"). It was: the screen reads every US listing at $2bn+, Alphabet's
+# class A and class C both passed with the same gap, and the 07:00 mark promoted GOOG while
+# GOOGL is on the list for good (the MAG 7). One company, one chart, one story, two slots,
+# and two rows of the Scanner, the Dashboard's Top setups and the Charts. A company is its
+# name with the class words taken off; the news and the peers already treat share classes
+# as one (scanner.SHARE_CLASSES, scanscore._TWINS).
+_CLASS_WORDS = re.compile(r"\b(?:class|cl|series)\s+[a-z]\b\.?", re.I)
+
+
+def company_key(name: Any) -> str | None:
+    """A listing's company, for telling share classes of one apart from two companies:
+    "Alphabet Inc. Class C" and "Alphabet Inc. Class A" are both "alphabet inc"; "Liberty
+    Media Corporation Series C Liberty Live" keeps its tracker's name. None for no name, which
+    is never merged. Pure."""
+    if not isinstance(name, str) or not name.strip():
+        return None
+    n = _CLASS_WORDS.sub(" ", name.lower())
+    n = re.sub(r"[^a-z0-9]+", " ", n).strip()
+    return n or None
+
+
+def one_per_company(rows: list[Any], *, name_of: Callable[[Any], Any] = lambda r: r.get("name"),
+                    sym_of: Callable[[Any], Any] = lambda r: r.get("symbol"),
+                    prefer: Iterable[str] = ()) -> list[Any]:
+    """`rows` with one listing a company, in their order. The first of a company stays,
+    unless a later share class is one the engine holds for good (`prefer`: the core, the
+    favourites), which then takes the first one's place. A row with no name is kept. Pure."""
+    keep = set(prefer)
+    out: list[Any] = []
+    at: dict[str, int] = {}
+    for r in rows:
+        k = company_key(name_of(r))
+        if k is None:
+            out.append(r)
+        elif k not in at:
+            at[k] = len(out)
+            out.append(r)
+        elif sym_of(r) in keep and sym_of(out[at[k]]) not in keep:
+            out[at[k]] = r
+    return out
+
+
 def promote(ranked: list[dict[str, Any]], pinned: Iterable[str], current: list[dict[str, Any]],
             mark: str, cap: int = MAX_SYMBOLS,
             favs: list[str] | None = None,
@@ -730,10 +777,17 @@ def promote(ranked: list[dict[str, Any]], pinned: Iterable[str], current: list[d
     # not (scanner.ScanStore.watchlist, 2026-11-13), so it is counted either way.
     used = len(set(pinned_l) | core_s) if favs is None else len(core_s | set(favs))
     slots = max(0, cap - used)
-    cands = [r for r in ranked if r["score"] >= MIN_SCORE and r["symbol"] not in excluded]
+    # Never a share class of a company already on the list, and one of each company among
+    # the rest (`one_per_company`): GOOG is not promoted beside the core's GOOGL.
+    key_of = {r["symbol"]: company_key(r.get("name")) for r in ranked}
+    held = {k for s in excluded if (k := key_of.get(s))}
+    cands = one_per_company([r for r in ranked if r["score"] >= MIN_SCORE
+                             and r["symbol"] not in excluded
+                             and key_of.get(r["symbol"]) not in held])
     if mark != POST_MARK[1]:
         return cands[: max(0, slots - POST_OPEN_SLOTS)]
-    keep = [c for c in current if c["symbol"] not in excluded][:slots]
+    keep = [c for c in current if c["symbol"] not in excluded
+            and key_of.get(c["symbol"]) not in held][:slots]
     have = {c["symbol"] for c in keep}
     for r in cands:
         if len(keep) >= slots:
@@ -898,6 +952,53 @@ class PoolStore:
                                 "mark": "hand"})
             self._save()
         return None
+
+    def picks(self) -> list[dict[str, Any]]:
+        """Today's promotions as they stand (copies), for the live rotation (rotation.py)."""
+        with self._lock:
+            return [dict(p) for p in self.promoted]
+
+    def rotate(self, moves: list[dict[str, Any]], names: dict[str, dict[str, Any]], at: str,
+               now_ts: float) -> bool:
+        """The live rotation's moves (rotation.decide) into today's picks: each name in takes
+        the place of the one it replaces, or the end of the list for a free slot, with when it
+        joined (`since`, which rotation.held reads for the minimum stay). `names` carries each
+        name's company name and sector. True when the picks changed.
+
+        In place, not appended: the scanner takes the picks in order up to the room the core
+        and the favourites leave (ScanStore.watchlist), so a name added at the end of a list
+        longer than the room would be cut. The pool's own in-play read stays the entry's
+        `score` (the scale every other reader of it expects); the setup score that won the
+        slot is `setup_score`."""
+        with self._lock:
+            if not self.enabled or not moves:
+                return False
+            have = {p["symbol"] for p in (*self.promoted, *self.manual)}
+            picks = list(self.promoted)
+            before = [p["symbol"] for p in picks]
+            for m in moves:
+                sym = str(m["in"])
+                if sym in have:
+                    continue
+                info = names.get(sym) or {}
+                vs = (f" over {m['out']} {round(m['out_score'] or 0)}" if m.get("out")
+                      else " into a free slot")
+                entry = {"symbol": sym, "name": info.get("name"), "sector": info.get("sector"),
+                         "score": float((self.by_sym.get(sym) or {}).get("score") or 0.0),
+                         "setup_score": m.get("in_score"),
+                         "reason": f"rotated in at {at}: setup {round(m['in_score'] or 0)}{vs}",
+                         "at": at, "mark": "live", "since": now_ts}
+                at_i = next((i for i, p in enumerate(picks) if p["symbol"] == m.get("out")), None)
+                if at_i is None:
+                    picks.append(entry)
+                else:
+                    picks[at_i] = entry
+                have.add(sym)
+            if [p["symbol"] for p in picks] == before:
+                return False
+            self.promoted = picks
+            self._save()
+        return True
 
     def set_enabled(self, on: bool) -> bool:
         """Switch promotion. Off clears today's list; on re-runs today's latest

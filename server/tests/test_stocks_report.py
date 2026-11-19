@@ -210,9 +210,9 @@ def test_the_prompt_says_what_is_different_and_the_schema_holds_it():
     s = report.schema_for("etfs")
     call = s["properties"]["calls"]["items"]["properties"]
     assert call["book"]["enum"] == ["SPY", "QQQ", "IWM"]
-    assert "factors" in s["required"] and "factors" not in call
-    # The tape's keys for the market's comments; the futures schema is as it was.
-    keys = s["properties"]["factors"]["items"]["properties"]["key"]["enum"]
-    assert keys == ["levels", "risk", "rates", "participation", "event"]
+    # Brief_version 4: the bottom line, the list and a call a fund; the tape's table
+    # prints the engine's reads, with no comment of the model's.
+    assert set(s["required"]) == {"thesis", "movers", "calls"} and "factors" not in call
     assert "levels" not in report.FACTOR_KEYS
+    assert "THE LIST IS FOR US STOCKS" in p
     assert '"SPY", "QQQ", "IWM"' in report.LOOSE_SHAPE_ETFS

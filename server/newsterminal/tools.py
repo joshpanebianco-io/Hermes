@@ -142,8 +142,10 @@ PANELS: dict[str, str] = {
     "dashboard": "Dashboard · the session on one page: the read in words, the game plan (the "
                  "tape's bias, the focus sectors and themes, the counts of best setups, who "
                  "reports), breadth, the top setups by score, the names in play by the pool's "
-                 "rank with whether the engine took each, the freshest major stock stories, and "
-                 "the eleven sectors with the stocks pushing each",
+                 "rank with whether the engine took each, the freshest major stock stories, the "
+                 "High impact news card (the day's prints, Fed speakers, big reports, an IPO, "
+                 "then the wire's high-impact and geopolitical headlines), and the eleven "
+                 "sectors with the stocks pushing each",
     "sector_heatmap": "Sectors · every sector and theme ETF with its day, week and "
                       "month, how many of its $2bn+ stocks rose and fell and who led, and the "
                       "ninety-odd industry groups by their median stock (group, an ETF or an "
@@ -191,7 +193,8 @@ PANELS: dict[str, str] = {
     # The four below were the Stocks tab's Index view, which was removed on 2026-11-13.
     # The data is served as before; only the Tape figure is still drawn on a page.
     "tape_count": "Stocks, the Tape figure on the Setups row · the tape's score, the eleven "
-                  "reads with thresholds, which can vote, the grade and the conviction cap",
+                  "reads (ten vote; the VIX curve is no side) with each read's size, which "
+                  "can vote, the grade and the conviction cap",
     "breadth": "Stocks, on no page since the Index view went · sectors up and down, equal "
                "weight against SPY, how many NDX and SPX names are up",
     "fuel": "Stocks, on no page since the Index view went · how much of the implied day SPY, "
@@ -229,7 +232,8 @@ PANELS: dict[str, str] = {
                   "for the hour it is: after hours the movers since the close and the day's "
                   "big ones, overnight the prep for the next session, pre-market what is in "
                   "play into the open, from the 09:30 bell to the close the setups by score; "
-                  "each name with why it is there, its story and its plan",
+                  "each name with why it is there, its story and its plan; in the session "
+                  "the names the live rotation brought in, and when",
     "breakouts": "Stocks, Breakouts · the wide scan, every US stock at $2bn+ against its "
                  "levels: names through both the pre-market and previous-day ranges, relative "
                  "volume, the gap, each name's most important story (fifteen minutes delayed "
@@ -277,11 +281,12 @@ DIGEST_PANEL: dict[str, str] = {
 #: The list the model is shown, in OpenAI's function-calling shape.
 SPEC: list[dict[str, Any]] = [
     _tool("scanner_row",
-          "One watchlist name's scanner row: last, levels (PDH, PDL, PMH, PML, VWAP), what "
-          "has broken, the setup and entry, the score and its parts, options context (IV "
-          "against RV, the expected move, the suggested contract), earnings date, recent "
-          "headlines and filings. Use for any question about a stock or index ETF the "
-          "scanner tracks.",
+          "One name's row as the Scanner and its slide-out show it: last, levels (PDH, PDL, "
+          "PMH, PML, VWAP), what has broken, the setup and entry, the score the Scanner shows "
+          "and its parts (score.kind says which: in play until 09:30 ET, the setup score "
+          "after), options context (IV against RV, the expected move, the suggested contract), "
+          "earnings date, recent headlines and filings, and the model's read of the story. Use "
+          "for any question about one stock or index ETF, on the Scanner's list or not.",
           _params({"sym": {**_STR, "description": "Ticker, e.g. AMZN or SPY"}}, ["sym"])),
     _tool("scanner",
           "The whole table on the Stocks tab, one line per watchlist name: score and side, the "
@@ -529,11 +534,20 @@ def _row_brief(row: dict[str, Any], now: datetime) -> dict[str, Any]:
         if levels.get("ema200") is not None else None,
         "score": {
             "total": score.get("total"), "side": score.get("side"),
+            # Which score it is (2026-11-18): before the bell the Scanner's in-play read,
+            # the number its table and slide-out show; in the session the setup score.
+            "kind": ("in play: how in play the name is, the Scanner's rank until 09:30 ET"
+                     if score.get("kind") == "inplay" else "setup"),
             "parts": [f"{p.get('label')} {_num(p.get('pts'))}/{_num(p.get('max'))} — "
                       f"{p.get('note')}"
                       for p in score.get("parts") or [] if isinstance(p, dict)],
         },
         "setup": {k: setup.get(k) for k in ("side", "state", "level", "entry", "note")},
+        # The model's read of the deciding story (newsread.py): how big, which way, one line,
+        # and whether it read the story's text or the headline alone. Never points.
+        "story_read": ({k: _d(row.get("news_read")).get(k)
+                        for k in ("size", "direction", "line", "headline", "text")}
+                       if row.get("news_read") else None),
         "levels": {k: levels.get(k) for k in ("pdh", "pdl", "pmh", "pml", "vwap", "ema200")},
         "broken": [k.upper() for k, v in broken.items() if v],
         "daily_frame": frame.get("text"),
@@ -694,6 +708,9 @@ def _scanner(scan: dict[str, Any], a: dict[str, Any]) -> dict[str, Any]:
         "rows": [_scan_line(r) for r in live[:limit]],
         "no_data": [_scan_line(r) for r in rows if not r.get("ok")],
     }
+    note = ask.score_note(scan.get("session"))
+    if note:
+        out["score_note"] = note
     return _cap(out, SCANNER_CHARS)
 
 
@@ -1006,6 +1023,21 @@ def _note(got: dict[str, Any], kind: str, book: str | None,
               if isinstance(h, dict) and h.get("id") in by_id]
     if picked:
         body["headlines"] = picked
+    # The briefing's list (brief_version 4): each item joined to what it is.
+    ctx = {m.get("id"): m for m in _d(facts).get("context_movers") or [] if isinstance(m, dict)}
+    movers = []
+    for m in note.get("movers") or []:
+        if not isinstance(m, dict):
+            continue
+        mid = m.get("id")
+        what = (f"{rows[mid].get('when') or ''} {rows[mid].get('title') or ''}".strip()
+                if mid in rows else by_id[mid].get("title") if mid in by_id
+                else (ctx.get(mid) or {}).get("what"))
+        if what:
+            movers.append(f"{what} — {m.get('impact')} impact, {m.get('effect')}: "
+                          f"{m.get('why') or ''}".rstrip(": "))
+    if movers:
+        body["what_can_move_prices"] = movers
     return _cap({**head, "note": body}, NOTE_CHARS)
 
 
@@ -1328,7 +1360,9 @@ def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
     """The Dashboard as the page shows it."""
     def setup(r: dict[str, Any]) -> str:
         sc, st = _d(r.get("score")), _d(r.get("setup"))
-        bits = [f"{r.get('sym')} score {sc.get('total')} {sc.get('side') or 'no side'}",
+        # Before the bell the list's score is how in play a name is (dashboard._slim).
+        word = "in play" if sc.get("kind") == "inplay" else "score"
+        bits = [f"{r.get('sym')} {word} {sc.get('total')} {sc.get('side') or 'no side'}",
                 " ".join(str(x) for x in (st.get("state"), st.get("level")) if x),
                 f"last {_num(r.get('last'))}", f"day {_pc(r.get('chg_pct'))}",
                 f"extended hours {_pc(r.get('ext_pct'))}"]
@@ -1357,6 +1391,15 @@ def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
                         "names": [inplay(r) for r in _d(g.get("inplay")).get("rows") or []
                                   if isinstance(r, dict)]},
             "stories": [story(s) for s in rows("stories")],
+            # The High impact news card (impact.py): the day's prints, the Fed, the big
+            # reports and an IPO, then the wire's high-impact headlines.
+            "high_impact_today": [f"{r.get('t')} {r.get('kind')}: {r.get('line')}"
+                                  for r in _d(g.get("impact")).get("today") or []
+                                  if isinstance(r, dict)],
+            "high_impact_headlines": [
+                f"{h.get('t')} [{h.get('kind')}{', high impact' if h.get('high') else ''}] "
+                f"{h.get('title')} ({h.get('publisher')})"
+                for h in _d(g.get("impact")).get("heads") or [] if isinstance(h, dict)],
             "sectors": [f"{s.get('key')} {s.get('label')} {_pc(s.get('day_pct'))} "
                         f"({_pc(s.get('rs_day'))} vs SPY), leaders "
                         f"{', '.join(str(x) for x in s.get('leaders') or []) or 'none yet'}"
@@ -1498,6 +1541,9 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
             "for_session": ph.get("day"), "next": f"{ph.get('next_label')} in "
                                                  f"{ph.get('ends_in_min')} min",
             "note": got.get("note"),
+            # In the session the list rotates: a pool pick a better setup off the list beats
+            # by 10 points two minutes running is swapped out (rotation.py).
+            "rotated_in_today": got.get("rotated") or None,
             "rows": [{k: r.get(k) for k in ("rank", "sym", "name", "last", "chg", "move",
                                              "score", "score_max", "score_kind", "lean",
                                              "why", "status", "fav", "tracked", "new")}
@@ -1595,7 +1641,13 @@ def run(
             return _panel(str(a.get("name") or ""), a, snap, scan, more or {}, now)
         if name == "scanner_row":
             sym = str(a.get("sym") or "").upper().strip()
-            row = ask.selected_row(scan, sym)
+            # The name as the Scanner and its slide-out show it (`more["row"]`, collector
+            # scanner_name): the list's score at this hour, and a name the engine does not
+            # track read on the request (2026-11-18). Else the engine's row, as before.
+            shown = (more or {}).get("row")
+            row = shown(sym) if shown is not None and sym else None
+            if row is None:
+                row = ask.selected_row(scan, sym)
             if row is None:
                 have = [r.get("sym") for r in (scan or {}).get("rows") or []
                         if isinstance(r, dict)]

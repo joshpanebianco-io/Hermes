@@ -8,8 +8,8 @@ plan before the open"; this is that answer on one page, every figure a click fro
 where it came from.
 
 NO NEW JUDGEMENT. The read is the tape count, the VIX band and breadth put into words
-by a fixed rule, and the top setups are the scanner's own rank rather than a list
-somebody picked.
+by a fixed rule, and the top setups are the Scanner list's own first ten rather than a
+list somebody picked.
 
 Pure, so the words can be tested: give it the blocks, get the page.
 """
@@ -17,8 +17,10 @@ Pure, so the words can be tested: give it the blocks, get the page.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
+
+from . import impact as impact_mod
 
 #: The size of move the read's "moving" count means, the same as the page's.
 MOVING_PCT = 4.0
@@ -26,7 +28,8 @@ MOVING_PCT = 4.0
 BREADTH_RATIO = 1.5
 #: Sectors, and themes, the plan names at most.
 FOCUS = 3
-TOP_ROWS = 15
+#: The Scanner list's Top 10 chip keeps ten (src/lib/multiChart TOP_N); the card is those.
+TOP_ROWS = 10
 REPORTS = 12
 #: The In play card: the pool's top names, the index ETFs never (they are the market).
 IN_PLAY_ROWS = 10
@@ -35,7 +38,7 @@ IN_PLAY_SKIP = frozenset({"SPY", "QQQ", "IWM"})
 _TITLE = {"pre": "Pre-market", "rth": "Regular session", "post": "After hours",
           "closed": "Market closed"}
 _ROW_KEYS = ("sym", "name", "sector", "last", "chg_pct", "ext_pct", "rvol", "trend", "levels",
-             "broken", "setup", "catalyst", "stage", "spark")
+             "broken", "setup", "catalyst", "stage", "spark", "spark_ref")
 
 
 def _d(v: Any) -> dict[str, Any]:
@@ -148,7 +151,9 @@ def read_lines(regime: dict[str, Any], focus: list[dict[str, Any]], themes: list
 def _slim(r: dict[str, Any]) -> dict[str, Any]:
     out = {k: r.get(k) for k in _ROW_KEYS}
     s = _d(r.get("score"))
-    out["score"] = {"total": s.get("total"), "side": s.get("side")}
+    # `kind` "inplay" before the bell (today._inplay_score): the Score column is then how
+    # in play the name is, as the Scanner's is, not the setup score.
+    out["score"] = {"total": s.get("total"), "side": s.get("side"), "kind": s.get("kind")}
     return out
 
 
@@ -209,13 +214,23 @@ def in_play(ranked: list[dict[str, Any]], view: dict[str, Any], *,
 def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: dict[str, Any],
           stories: list[dict[str, Any]], *, session_day: date,
           inplay: dict[str, Any] | None = None,
-          pre_day: str | None = None) -> dict[str, Any]:
+          pre_day: str | None = None,
+          listed: list[dict[str, Any]] | None = None,
+          now: datetime | None = None) -> dict[str, Any]:
     """The page. `session_day` is the session the cards' moves are about
     (universe.cards_day), which before the open is the last one; `inplay` is
     `in_play`'s card, None when the pool has not been read. `pre_day` is today's date
     while the funds are trading before the bell (universe.cards_phase "pre"): the focus
     lists, the rotation row and the read's leaders clause are then the pre-market's
-    (`pre_market_rows`), as the Sectors cards are."""
+    (`pre_market_rows`), as the Sectors cards are.
+
+    `listed` is the Scanner list's rows in its own order (collector.today, each Today
+    row's `row`). THE TOP SETUPS ARE ITS FIRST TEN (owner, 2026-11-19: "top setups ...
+    show mag7 and the indicies, not the top 10"). They were the engine's scored rows,
+    and the engine tracks only the benchmarks and the MAG 7 from the 20:00 ET roll until
+    the pool's first mark at 06:00, so overnight the card was those ten while the
+    Scanner led with the evening's movers and the names in play. The Charts view had the
+    same fault on 2026-11-15. None (the list could not be read) is the engine's order."""
     rows = [r for r in _list(scan.get("rows")) if r.get("ok")]
     regime = _d(scan.get("regime"))
     session = str(scan.get("session") or "closed")
@@ -236,6 +251,7 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
     conv = _d(regime.get("conviction"))
     stats, chips = _d(brk.get("stats")), _d(d23.get("chips"))
     status = _d(_d(snap.get("status")).get("stock_news"))
+    wire_st = _d(_d(snap.get("status")).get("wire"))
 
     return {
         "ok": bool(rows),
@@ -272,12 +288,18 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
         },
         "breadth": {k: wide.get(k) for k in ("basis", "floor", "names", "of", "advancers",
                                              "decliners", "buckets")} if wide else None,
-        "top": [_slim(r) for r in scored[:TOP_ROWS]],
+        "top": [_slim(r) for r in (listed if listed is not None else scored)[:TOP_ROWS]],
         # In play took My list's place (2026-11-10): the pinned names were the same
         # list every day, and the pool's rank is who is moving across the market.
         "inplay": inplay,
         "stories": stories,
         "news_live": bool(status.get("ok")),
+        # HIGH IMPACT NEWS took Live signals' place (owner, 2026-11-19: "a High Impact News
+        # card ... important headlines, geopolitcs, IPO's earnigns ofr the day"): the day's
+        # prints, the Fed, the big reports, an IPO, then the wire's high-impact headlines.
+        "impact": impact_mod.build(_list(snap.get("wire")), _list(snap.get("calendar")),
+                                   _list(snap.get("earnings")), now or datetime.now(UTC),
+                                   live=bool(wire_st.get("ok"))),
         "rotation": _rotation(sectors, leaders),
         # What the focus lists and the rotation row are moves of: the pre-market's
         # before the bell, else the session's (the last one before the open).

@@ -238,7 +238,11 @@ def test_the_tape_votes_the_same_both_ways() -> None:
                     assert down["confirm"] == words[up["confirm"]], (a, b, move, vix)
     # The word the falling tape did not have: SPY down with the VIX down.
     assert reg(0, 0, -0.6, -4.0)["confirm"] == "divergence_down"
-    assert any("take profits on shorts" in n for n in reg(0, 0, -0.6, -4.0)["notes"])
+    assert any("no demand for protection under the selling" in n
+               for n in reg(0, 0, -0.6, -4.0)["notes"])
+    # The VIX is no vote since the evening of 2026-11-19: with SPY and QQQ inside their
+    # levels and flat, no VIX move makes a lean either way.
+    assert {reg(0, 0, 0.0, vix)["bias"] for vix in (-6.0, 0.0, 6.0)} == {None}
 
 
 def test_the_rank_and_the_pool_do_not_know_a_side() -> None:

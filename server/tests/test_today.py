@@ -308,6 +308,32 @@ def test_every_today_row_is_drawn_as_the_setups_tables_row() -> None:
     assert today.scan_row(t, eng, "session", wide)["score"]["total"] == 34
 
 
+def test_one_score_the_slide_out_shows_what_the_list_shows() -> None:
+    """Owner, 2026-11-18: BILL read 79 in the table and 40 in the slide-out before the bell.
+    The slide-out's row goes through the same scan_row as the table's, so the number, its
+    kind and its side match; the setup score's record line does not ride on it."""
+    t = {"sym": "BILL", "rank": 1, "score": 25.4, "score_max": 32.0, "lean": "long",
+         "why": ["day ▲ 2.74 ATR", "RVOL 5.87×", "deal news"], "chg": 3.1, "move": "day"}
+    eng = {"sym": "BILL", "ok": True, "setup": {"side": "long", "state": "forming"},
+           "lvl_state": 0, "levels": {}, "catalyst": None,
+           "score": {"total": 40, "side": "long", "parts": [{"key": "location", "pts": 25}]},
+           "record": {"kind": "L", "side": "long", "band": "40-59", "n": 30}}
+    table = today.scan_row(t, eng, "overnight", None)
+    slide = today.scan_row(t, dict(eng), "overnight", None)
+    assert table["score"]["total"] == slide["score"]["total"] == round(100 * 25.4 / 32)
+    assert table["score"]["kind"] == "inplay" and table["score"]["side"] == "long"
+    assert table["record"] is None
+    # From the bell the row is the engine's own: the setup score, its record kept.
+    live = today.scan_row(t, eng, "session", None)
+    assert live["score"]["total"] == 40 and "kind" not in live["score"] and live["record"]
+    # A name the list does not hold reads its in-play figure from the pool, no lean of its own.
+    off = today.off_list("ZZZ", {"score": 4.0, "reason": "gap 0.40 ATR"})
+    row = today.scan_row(off, {**eng, "sym": "ZZZ"}, "pre", None)
+    assert row["score"]["total"] == round(100 * 4.0 / pool.SCORE_MAX)
+    assert row["score"]["parts"][0]["note"] == "gap 0.40 ATR" and row["score"]["side"] == "long"
+    assert today.off_list("ZZZ", None)["why"] == ["not in play yet"]
+
+
 # ---- new names and the record ------------------------------------------------------
 
 

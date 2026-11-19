@@ -265,6 +265,8 @@ def rank_pre(ranked: list[dict[str, Any]], rows: dict[str, dict[str, Any]], *,
             "plan": plan_of(last, lv.get("pdh"), lv.get("pdl"), lv.get("pmh"), lv.get("pml")),
             "setup": None, "levels": lv, "gap_atr": e.get("gap_atr"),
             "vol_pct": e.get("vol_pct"), "rvol": None, "stage": e.get("day"),
+            # The report the pool read, for the pre-market record (premarket_record.py).
+            "report": e.get("reports"),
         })
         if len(out) >= limit:
             break
@@ -315,7 +317,7 @@ def rank_session(rows: list[dict[str, Any]], *, favs: frozenset[str],
             "plan": None, "setup": _setup_out(r.get("setup")),
             "levels": {k: lv.get(k) for k in ("pdh", "pdl", "pmh", "pml", "pdc", "vwap")},
             "gap_atr": None, "vol_pct": None, "rvol": r.get("rvol"), "stage": r.get("stage"),
-            "spark": r.get("spark"),
+            "spark": r.get("spark"), "spark_ref": r.get("spark_ref"),
         })
     return out
 
@@ -500,7 +502,8 @@ def rest_of_list(rows: list[dict[str, Any]], engine: Iterable[dict[str, Any]], *
             "lean": (e.get("score") or {}).get("side"), "plan": None, "setup": None,
             "levels": {k: lv.get(k) for k in ("pdh", "pdl", "pmh", "pml", "pdc")},
             "gap_atr": ip.get("gap_atr"), "vol_pct": ip.get("vol_pct"), "rvol": e.get("rvol"),
-            "stage": e.get("stage"), "spark": e.get("spark"), "listed": True,
+            "stage": e.get("stage"), "spark": e.get("spark"), "spark_ref": e.get("spark_ref"),
+            "listed": True,
         })
     return out
 
@@ -516,8 +519,21 @@ def _inplay_score(t: dict[str, Any], side: str | None, base: dict[str, Any] | No
     mx = float(t.get("score_max") or pool.SCORE_MAX)
     return {**(base or {}), "total": round(min(100.0, 100.0 * pts / mx)) if mx else 0,
             "raw": round(pts, 1), "rank": t.get("rank"), "side": side, "gated": None,
+            # What this score is, for the slide-out's Score card: the list's in-play read,
+            # not the setup score (owner, 2026-11-18).
+            "kind": "inplay",
             "parts": [{"key": "inplay", "label": "In play", "pts": round(pts, 1),
                        "max": round(mx), "note": " · ".join(t.get("why") or [])}]}
+
+
+def off_list(sym: str, ip: dict[str, Any] | None) -> dict[str, Any]:
+    """A name the phase's list does not hold, as a Today row for `scan_row`: its in-play
+    read from the pool, worded as `rest_of_list` words it for the tracked names under
+    the ranking, and no lean of its own. Pure."""
+    ip = ip or {}
+    return {"sym": sym, "score": float(ip.get("score") or 0.0),
+            "score_max": pool.SCORE_MAX, "why": [str(ip.get("reason") or "not in play yet")],
+            "lean": None, "rank": None}
 
 
 def _lean_setup(lean: str, eng: dict[str, Any]) -> dict[str, Any]:
@@ -570,10 +586,19 @@ def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
                 side = lean
                 row["setup"] = _lean_setup(lean, eng)
             row["score"] = _inplay_score(t, side, eng.get("score"))
+            # The record line is the setup score's band ("longs scored 40-59"), which is
+            # not the number this row shows before the bell.
+            row["record"] = None
         row["catalyst"] = eng.get("catalyst") or t.get("story")
         row["today"] = {k: t.get(k) for k in ("rank", "why", "new", "status", "move")}
         # For the Today bar's Filters (market cap): the engine's row does not carry it.
         row["market_cap"] = t.get("cap") or (wide or {}).get("cap")
+        # Before the bell: the four figures shown and logged, never scored
+        # (premarket_record.py, 2026-11-18). None in the session.
+        row["pre_ctx"] = t.get("pre_ctx") if phase != "session" else None
+        # The list's spark, laid on as the list was read (collector.today, fill_spark).
+        if t.get("spark"):
+            row["spark"], row["spark_ref"] = t["spark"], t.get("spark_ref")
         return row
     w = wide or {}
     lv = t.get("levels") or {}
@@ -622,8 +647,10 @@ def scan_row(t: dict[str, Any], eng: dict[str, Any] | None, phase: str,
                     "last": last, "asof": None, "source": "screener"}
                    if phase == "pre" else None),
         "catalyst": t.get("story"), "stage": t.get("stage"), "spark": t.get("spark"),
-        "tracked": False, "market_cap": t.get("cap") or _num(w.get("cap")),
+        "spark_ref": t.get("spark_ref"), "tracked": False,
+        "market_cap": t.get("cap") or _num(w.get("cap")),
         "today": {k: t.get(k) for k in ("rank", "why", "new", "status", "move")},
+        "pre_ctx": t.get("pre_ctx") if phase != "session" else None,
     }
 
 

@@ -143,6 +143,21 @@ def _dict(v: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
 
+#: ONE SCORE, THE SCANNER'S (owner, 2026-11-18: "i just need it intuitive"). Before the bell
+#: the Scanner list ranks how in play a name is, and the table and slide-out show that
+#: number; the engine's rows carry the setup score. Said beside every table of engine rows
+#: outside the session, so Hermes does not quote 40 for a name the Scanner shows at 79.
+SCORE_NOTE = ("These scores are the engine's setup scores. Until 09:30 ET the Scanner list "
+              "ranks by how in play a name is (today_list), and its rows and slide-out show "
+              "that number instead: quote a name's Scanner score from today_list or "
+              "scanner_row, never from here.")
+
+
+def score_note(session: Any) -> str | None:
+    """SCORE_NOTE outside the regular session, None in it (the two scores are one). Pure."""
+    return None if session == "rth" else SCORE_NOTE
+
+
 def scanner_table(scan: dict[str, Any] | None) -> dict[str, Any] | None:
     """Every scanner name that has data, one compact row each, best score first.
     Pure. None when there is no scanner payload at all.
@@ -188,13 +203,17 @@ def scanner_table(scan: dict[str, Any] | None) -> dict[str, Any] | None:
                       if isinstance(f, dict) and f.get("text")][:TABLE_FLAGS],
         })
     names.sort(key=lambda n: -int(n["score"] or 0))
-    return {
+    out = {
         "as_of_utc": scan.get("built_utc"),
         "session": scan.get("session"),
         "trading_day": scan.get("trading_day"),
         "regime": scan.get("regime"),
         "names": names,
     }
+    note = score_note(scan.get("session"))
+    if note:
+        out["score_note"] = note
+    return out
 
 
 def whole_context(

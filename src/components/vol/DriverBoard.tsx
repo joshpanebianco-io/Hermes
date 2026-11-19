@@ -227,11 +227,15 @@ export function DriverBoard({
       {/* ---- the method ---- */}
       <footer className={cn(pad, "border-t py-3.5 text-[11px] leading-[1.55] text-ink-3", rule)}>
         The score runs from -100 to +100: each factor&apos;s net read, weighed for the session, over the whole of its
-        weight. A factor that cannot vote at this hour counts as no lean, so the less of the board is live the nearer
-        the score sits to zero. Strong is 50 or more with at least 60% of the weight live, moderate 30, weak 10; a
-        conflict between macro and structure takes a notch off. A read marked with a dot cannot vote at this hour.
-        Dealer gamma and the context rows are never a side. The weights are a judgement and have not been tested
-        against outcomes.
+        weight. A read counts by its size: a move in its own usual day (in full from one and a half), a market that
+        moves with the book only for what the book&apos;s own move does not explain, breadth by how one-sided it is; the
+        10-year and the dollar vote only while they have been driving the book. A factor that cannot vote at this hour
+        counts as no lean, so the less of the board is live the nearer the score sits to zero. Strong is 50 or more
+        with at least 60% of the weight live and two factors behind it, moderate 30, weak 10; macro and structure each
+        putting 10 points or more on opposite sides is a conflict and takes a notch off. A read marked with a dot
+        cannot vote at this hour. Dealer gamma, the VIX curve, the heavyweights&apos; prints and the context rows are
+        never a side. The weights are a judgement, and every read is being recorded against the session&apos;s close to
+        test them.
       </footer>
     </article>
   );

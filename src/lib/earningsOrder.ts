@@ -23,6 +23,25 @@ export function aheadFirst<T>(days: readonly (readonly [string, T])[], today: st
   return [...days].sort(([a], [b]) => rank(a) - rank(b) || (a > today ? a.localeCompare(b) : b.localeCompare(a)));
 }
 
+/**
+ * The card's window: the collector's own (server sources/earnings.collect, two days
+ * back and DAYS_AHEAD on, fourteen since the owner asked to see further ahead on
+ * 2026-11-17; it was four), for the Scanner's names as for the large caps (owner, the
+ * same day: "do what you recommend"). A Scanner name's next report reaches months ahead
+ * since its history reads TradingView, and the card listed 29 of them, 26 Nov to
+ * 4 Mar 2027 and mostly with no time of day. Without a usable day either way, a row is
+ * kept. Pure.
+ */
+export const EARN_BACK = 2;
+export const EARN_AHEAD = 14;
+export function inWindow(date: string, today: string, back = EARN_BACK, ahead = EARN_AHEAD): boolean {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!iso.test(date) || !iso.test(today)) return true;
+  const n = (d: string) => Math.round(Date.parse(`${d}T12:00:00Z`) / 86_400_000);
+  const k = n(date) - n(today);
+  return k >= -back && k <= ahead;
+}
+
 export function nearestFirst<T>(days: readonly (readonly [string, T])[], today: string): (readonly [string, T])[] {
   const dayNumber = (d: string) => Math.round(Date.parse(`${d}T12:00:00Z`) / 86_400_000);
   const now = dayNumber(today);

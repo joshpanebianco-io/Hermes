@@ -49,6 +49,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import bias as bias_mod
+from . import drivestats as ds
 from . import releases
 from .holidays import next_trading_day
 from .policy import HOLD_BAND_BP
@@ -125,9 +126,14 @@ def _signed(x: float, dp: int, unit: str = "") -> str:
 
 
 def _vote(key: str, label: str, value: str, vote: str, note: str,
-          live: bool = True) -> dict[str, Any]:
-    """One read. `live` false means it cannot vote at this hour: not flat, absent."""
-    return {"key": key, "label": label, "value": value, "vote": vote, "note": note, "live": live}
+          live: bool = True, strength: float | None = None) -> dict[str, Any]:
+    """One read. `live` false means it cannot vote at this hour: not flat, absent.
+    `strength` is how much of a full vote a long or short read's size earns
+    (drivestats.py, since 2026-11-19); none is a whole vote."""
+    v = {"key": key, "label": label, "value": value, "vote": vote, "note": note, "live": live}
+    if strength is not None and vote in ("long", "short"):
+        v["strength"] = round(strength, 2)
+    return v
 
 
 def _side(x: float, long_at: float, short_at: float) -> str:
@@ -243,19 +249,33 @@ def _levels_vote(key: str, sym: str, row: dict[str, Any] | None,
                  "between its highs and lows — no break to lean on")
 
 
+def _es_move(quotes: list[dict[str, Any]]) -> float | None:
+    """The S&P future's day so far: what the tape's co-movers are read against. ES trades
+    round the clock, so it has a move before the open as well as in it."""
+    q = _q(quotes, "ES")
+    return _num(q.get("pct")) if q else None
+
+
 def _vix_dir(quotes: list[dict[str, Any]], session: str, now: datetime,
-             td: date | None = None) -> dict[str, Any]:
-    key, label = "vix_dir", "VIX direction"
+             td: date | None = None, st: ds.Stats | None = None) -> dict[str, Any]:
+    """The VIX's day. NEVER A SIDE since the evening of 2026-11-19 (bias.TAPE_FAMILY,
+    BOARD_FAMILY says why): what its surprise read says is kept as words, how nervous
+    the tape is, and it votes nothing."""
+    key, label = "vix_dir", "VIX today"
     q, pct, why = _quote(quotes, "VIX", "pct", session, now, td)
     if pct is None or q is None:
-        return _vote(key, label, "—", "neutral", why or "no VIX", live=False)
-    v = _side(-pct, VIX_FLAT, -VIX_FLAT)
-    last = _num(q.get("last"))
-    value = (f"{last:.2f} " if last is not None else "") + _signed(pct, 1, "%")
-    note = {"long": "VIX falling — protection being sold under the tape",
-            "short": "VIX rising — protection being bought",
-            "neutral": f"VIX inside ±{VIX_FLAT}% — no read"}[v]
-    return _vote(key, label, value, v, note)
+        v = _vote(key, label, "—", "neutral", why or "no VIX", live=False)
+    else:
+        last = _num(q.get("last"))
+        value = (f"{last:.2f} " if last is not None else "") + _signed(pct, 1, "%")
+        note = ds.context_note(
+            st or ds.Stats(None, now.astimezone(ET).date()), "VIX", pct, "ES",
+            _es_move(quotes), "the S&P",
+            ("protection bought beyond what the move explains — moves can run further",
+             "protection sold beyond what the move explains — a calmer tape"))
+        v = _vote(key, label, value, "neutral", note)
+    v["aside"] = "never a side: the VIX says how far moves run, not which way"
+    return v
 
 
 def _vix_curve(quotes: list[dict[str, Any]], session: str, now: datetime,
@@ -270,12 +290,19 @@ def _vix_curve(quotes: list[dict[str, Any]], session: str, now: datetime,
         return _vote(key, label, f"{ratio:.2f}", "neutral",
                      f"VIX has not traded {_on(td, now)} yet — the curve votes once it does",
                      live=False)
-    v = "long" if ratio < CURVE_CALM else "short" if ratio >= CURVE_STRESS else "neutral"
-    note = {"long": f"VIX ÷ VIX3M under {CURVE_CALM:.2f}: steep contango, a calm tape",
-            "short": f"VIX ÷ VIX3M at {CURVE_STRESS:.2f} or more: near-dated protection bid",
-            "neutral": f"between {CURVE_CALM:.2f} and {CURVE_STRESS:.2f}: neither calm nor "
-                       "stressed"}[v]
-    return _vote(key, label, f"{ratio:.2f} · {vt.get('shape') or 'unknown'}", v, note)
+    # NEVER A SIDE SINCE 2026-11-19 (bias.TAPE_FAMILY): the curve's shape says how far
+    # moves run, as gamma's regime does, not which way.
+    if ratio < CURVE_CALM:
+        note = (f"VIX ÷ VIX3M under {CURVE_CALM:.2f}: steep contango, a calm tape — moves "
+                "are smaller")
+    elif ratio >= CURVE_STRESS:
+        note = (f"VIX ÷ VIX3M at {CURVE_STRESS:.2f} or more: near-dated protection bid — moves "
+                "run, either way")
+    else:
+        note = f"between {CURVE_CALM:.2f} and {CURVE_STRESS:.2f}: neither calm nor stressed"
+    v = _vote(key, label, f"{ratio:.2f} · {vt.get('shape') or 'unknown'}", "neutral", note)
+    v["aside"] = "never a side: the curve says how far moves run, not which way"
+    return v
 
 
 def _sectors_vote(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]:
@@ -289,10 +316,15 @@ def _sectors_vote(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
     if n < SECTOR_MIN:
         return _vote(key, label, value, "neutral", f"only {n} sectors reporting", live=False)
     need = math.ceil(SECTOR_SHARE * n)
+    # SIZED BY NET BREADTH (2026-11-19): seven of eleven is a light vote, ten a full one.
+    s = ds.breadth_strength(up, down)
     if up >= need:
-        return _vote(key, label, value, "long", f"{up} of {n} sectors up — a broad bid")
+        return _vote(key, label, value, "long",
+                     f"{up} of {n} sectors up — a broad bid, counts {round(s * 100)}%", strength=s)
     if down >= need:
-        return _vote(key, label, value, "short", f"{down} of {n} sectors down — broad selling")
+        return _vote(key, label, value, "short",
+                     f"{down} of {n} sectors down — broad selling, counts {round(s * 100)}%",
+                     strength=s)
     return _vote(key, label, value, "neutral", f"mixed — neither side has {need} of {n}")
 
 
@@ -307,10 +339,14 @@ def _equal_weight(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
         return _vote(key, label, value, "neutral",
                      "the last session's figures — votes from the open", live=False)
     v = _side(spread, RSP_EDGE, -RSP_EDGE)
+    # Sized (2026-11-19): a third of a vote at the edge, all of it from RSP_FULL.
+    s = min(1.0, abs(spread) / RSP_FULL)
     note = {"long": "the average stock is beating the index — broad participation",
             "short": "the index is leaning on its megacaps — the average stock lags",
             "neutral": f"within ±{RSP_EDGE}pp of the index — no read"}[v]
-    return _vote(key, label, value, v, note)
+    if v != "neutral":
+        note += f", counts {round(s * 100)}%"
+    return _vote(key, label, value, v, note, strength=s)
 
 
 def _pct_vote(quotes: list[dict[str, Any]], session: str, now: datetime, *, key: str,
@@ -329,20 +365,86 @@ def _pct_vote(quotes: list[dict[str, Any]], session: str, now: datetime, *, key:
     return _vote(key, label, value, rising if up else falling, notes[0] if up else notes[1])
 
 
+#: A 10-year note future's price move in basis points of yield, near enough.
+ZN_DURATION = 6.5
+#: Above this the equal-weight spread counts in full (pp).
+RSP_FULL = 0.75
+_RATE_NOTES = ("yields rising — a headwind for equity multiples, growth first",
+               "yields falling — multiples get room")
+
+
 def _yields(quotes: list[dict[str, Any]], session: str, now: datetime,
-            td: date | None = None) -> dict[str, Any]:
+            td: date | None = None, st: ds.Stats | None = None) -> dict[str, Any]:
+    """The 10-year: sized in its usual day, a vote only while it has been moving against
+    the S&P lately, and read from the note future while the cash yield has not traded
+    (since 2026-11-19, drivestats.py)."""
     key, label = "yields", "10Y yield"
+    st = st or ds.Stats(None, now.astimezone(ET).date())
     q, chg, why = _quote(quotes, "US10Y", "chg", session, now, td)
+    zq = _q(quotes, "ZN")
+    zpct = _num(zq.get("pct")) if zq else None
+    cash_shut = q is not None and str(q.get("feed") or "") not in ("live", "delayed")
+    if (chg is None or q is None or cash_shut) and zq is not None and zpct is not None \
+            and str(zq.get("feed") or "") in ("live", "delayed"):
+        approx = _signed(-zpct / ZN_DURATION * 100, 1, "bp")
+        value = f"note fut {_signed(zpct, 2, '%')} (≈ {approx})"
+        gate = ds.gate_note(st, "ZN", "ES", 1, "the S&P", "The note future")
+        if gate:
+            return _vote(key, label, value, "neutral", gate, live=False)
+        u, measured = st.usual("ZN")
+        vote, s, note = ds.sized(zpct, u, measured, "long", (_RATE_NOTES[1], _RATE_NOTES[0]),
+                                 "the note future's move")
+        return _vote(key, label, value, vote, "read from the 10-year note future: " + note,
+                     strength=s)
     if chg is None or q is None:
         return _vote(key, label, "—", "neutral", why or "no 10Y", live=False)
     bp = chg * 100.0
     last = _num(q.get("last"))
     value = (f"{last:.2f}% " if last is not None else "") + _signed(bp, 1, "bp")
-    v = _side(-bp, YIELD_BP, -YIELD_BP)
-    note = {"long": "yields falling — multiples get room",
-            "short": "yields rising — a headwind for equity multiples, growth first",
-            "neutral": f"inside ±{YIELD_BP:.0f}bp — no read"}[v]
-    return _vote(key, label, value, v, note)
+    gate = ds.gate_note(st, "US10Y", "ES", -1, "the S&P", "The 10-year")
+    if gate:
+        return _vote(key, label, value, "neutral", gate, live=False)
+    u, measured = st.usual("US10Y")
+    vote, s, note = ds.sized(bp, u, measured, "short", _RATE_NOTES, "the 10-year's move")
+    return _vote(key, label, value, vote, note, strength=s)
+
+
+def _dollar(quotes: list[dict[str, Any]], session: str, now: datetime,
+            td: date | None = None, st: ds.Stats | None = None) -> dict[str, Any]:
+    """The dollar: sized, and a vote only while it has been moving against the S&P."""
+    key, label = "dollar", "Dollar"
+    st = st or ds.Stats(None, now.astimezone(ET).date())
+    q, pct, why = _quote(quotes, "DXY", "pct", session, now, td)
+    if pct is None or q is None:
+        return _vote(key, label, "—", "neutral", why or "no DXY", live=False)
+    last = _num(q.get("last"))
+    value = "DXY " + (f"{last:.2f} " if last is not None else "") + _signed(pct, 2, "%")
+    gate = ds.gate_note(st, "DXY", "ES", -1, "the S&P", "The dollar")
+    if gate:
+        return _vote(key, label, value, "neutral", gate, live=False)
+    u, measured = st.usual("DXY")
+    vote, s, note = ds.sized(pct, u, measured, "short",
+                             ("a firmer dollar tightens conditions — a headwind",
+                              "a softer dollar eases conditions — a tailwind"),
+                             "the dollar's move")
+    return _vote(key, label, value, vote, note, strength=s)
+
+
+def _credit(quotes: list[dict[str, Any]], session: str, now: datetime,
+            td: date | None = None, st: ds.Stats | None = None) -> dict[str, Any]:
+    """High yield, on what the S&P's own move does not explain (since 2026-11-19)."""
+    key, label = "credit", "Credit (HYG)"
+    q, pct, why = _quote(quotes, "HYG", "pct", session, now, td)
+    if pct is None or q is None:
+        return _vote(key, label, "—", "neutral", why or "no HYG", live=False)
+    last = _num(q.get("last"))
+    value = "HYG " + (f"{last:.2f} " if last is not None else "") + _signed(pct, 2, "%")
+    vote, s, note = ds.surprise(st or ds.Stats(None, now.astimezone(ET).date()), "HYG", pct,
+                                "ES", _es_move(quotes), "the S&P", "long",
+                                ("high yield bid beyond the echo — credit is taking risk",
+                                 "high yield offered beyond the echo — credit is leaving risk "
+                                 "first"))
+    return _vote(key, label, value, vote, note, strength=s)
 
 
 def _index_volume(rows: dict[str, dict[str, Any]], session: str) -> dict[str, Any]:
@@ -382,36 +484,37 @@ def _participation(constituents: dict[str, Any] | None, session: str) -> dict[st
                      f"only {up + down} of the index leaders reporting", live=False)
     pct = up / (up + down) * 100.0
     v = _side(pct, PART_LONG, PART_SHORT)
+    s = ds.breadth_strength(up, down)
     note = {"long": f"{pct:.0f}% of the NDX/SPX leaders up — the weight is behind the move",
             "short": f"only {pct:.0f}% of the NDX/SPX leaders up — the weight is selling",
             "neutral": f"{pct:.0f}% up — split leadership"}[v]
-    return _vote(key, label, value, v, note)
+    if v != "neutral":
+        note += f", counts {round(s * 100)}%"
+    return _vote(key, label, value, v, note, strength=s)
 
 
 def votes(scan: dict[str, Any], quotes: list[dict[str, Any]], sectors: list[dict[str, Any]],
-          constituents: dict[str, Any] | None, now: datetime | None = None
-          ) -> list[dict[str, Any]]:
-    """The eleven reads of the tape, in a fixed order. Pure."""
+          constituents: dict[str, Any] | None, now: datetime | None = None,
+          context: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """The eleven reads of the tape, in a fixed order. Pure.
+
+    `context` is the daily context feed: each driver's usual day and its link to the S&P
+    (drivestats.py). Without it every read falls back to a stated usual day and beta."""
     now = now or datetime.now(UTC)
     session = str(scan.get("session") or "closed")
     td = _trading_day(scan, now)
     rows = _rows(scan)
+    st = ds.Stats(context, now.astimezone(ET).date())
     return [
         _levels_vote("spy_levels", "SPY", rows.get("SPY"), session),
         _levels_vote("qqq_levels", "QQQ", rows.get("QQQ"), session),
-        _vix_dir(quotes, session, now, td),
+        _vix_dir(quotes, session, now, td, st),
         _vix_curve(quotes, session, now, td),
         _sectors_vote(sectors, session),
         _equal_weight(sectors, session),
-        _pct_vote(quotes, session, now, key="credit", label="Credit (HYG)", sym="HYG",
-                  flat=HYG_FLAT, rising="long",
-                  notes=("high yield bid — credit is taking risk", "high yield offered — "
-                         "credit is leaving risk before equities do"), td=td),
-        _yields(quotes, session, now, td),
-        _pct_vote(quotes, session, now, key="dollar", label="Dollar", sym="DXY",
-                  flat=DXY_FLAT, rising="short",
-                  notes=("a firmer dollar tightens conditions — a headwind",
-                         "a softer dollar eases conditions — a tailwind"), td=td),
+        _credit(quotes, session, now, td, st),
+        _yields(quotes, session, now, td, st),
+        _dollar(quotes, session, now, td, st),
         _index_volume(rows, session),
         _participation(constituents, session),
     ]
@@ -424,9 +527,10 @@ def conviction(vs: list[dict[str, Any]], session: str = "rth") -> dict[str, Any]
 
 def conviction_for(scan: dict[str, Any], quotes: list[dict[str, Any]],
                    sectors: list[dict[str, Any]], constituents: dict[str, Any] | None,
-                   now: datetime | None = None) -> dict[str, Any]:
+                   now: datetime | None = None,
+                   context: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The Scanner's `regime.conviction` — the same read the Market tab prints. Pure."""
-    return conviction(votes(scan, quotes, sectors, constituents, now),
+    return conviction(votes(scan, quotes, sectors, constituents, now, context),
                       str(scan.get("session") or "closed"))
 
 
@@ -814,7 +918,8 @@ def build(scan: dict[str, Any], snap: dict[str, Any],
         "ok": bool(quotes) or bool(scan.get("ok")),
         "built_utc": now.astimezone(UTC).isoformat(),
         "session": session if session in ("pre", "rth", "post", "closed") else "closed",
-        "conviction": conviction_for(scan, quotes, sectors, cons, now),
+        "conviction": conviction_for(scan, quotes, sectors, cons, now,
+                                     [c for c in snap.get("context") or [] if isinstance(c, dict)]),
         "breadth": breadth(sectors, cons),
         "fuel": fuel(scan, quotes),
         "prints": prints([c for c in snap.get("calendar") or [] if isinstance(c, dict)], now,

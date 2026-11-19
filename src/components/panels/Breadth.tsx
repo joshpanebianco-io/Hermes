@@ -14,18 +14,27 @@ import type { BreadthAll } from "@/types/terminal";
  * panel of the same bars until 2026-11-13, when the page lost its two duplicates
  * (MacroBoard.tsx).
  */
-export function BreadthBars({ data }: { data: Pick<BreadthAll, "buckets" | "advancers" | "decliners"> }) {
+export function BreadthBars({
+  data,
+  barHeight = 92,
+}: {
+  data: Pick<BreadthAll, "buckets" | "advancers" | "decliners">;
+  /** The bars' area, their counts above them included (the Dashboard's card fills its row). */
+  barHeight?: number;
+}) {
   const max = Math.max(1, ...data.buckets.map((b) => b.n));
   const total = Math.max(1, data.advancers + data.decliners);
+  // The tallest bar is the area less its count's line.
+  const tall = Math.max(20, barHeight - 24);
   return (
     <>
-      <div className="grid grid-cols-8 items-end gap-1.5" style={{ height: 92 }}>
+      <div className="grid grid-cols-8 items-end gap-1.5" style={{ height: barHeight }}>
         {data.buckets.map((b) => (
           <div key={b.label} className="flex h-full flex-col justify-end text-center" title={`${b.n} names`}>
             <span className="fig text-[10px] text-ink-3">{b.n}</span>
             <span
               className="mt-0.5 block rounded-[1px]"
-              style={{ height: `${Math.max(2, (b.n / max) * 68)}px`, background: b.side === "up" ? "var(--call)" : "var(--put)", opacity: 0.85 }}
+              style={{ height: `${Math.max(2, (b.n / max) * tall)}px`, background: b.side === "up" ? "var(--call)" : "var(--put)", opacity: 0.85 }}
             />
           </div>
         ))}

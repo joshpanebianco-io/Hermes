@@ -1,7 +1,19 @@
 // node --experimental-strip-types --test src/lib/earningsOrder.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aheadFirst, nearestFirst } from "./earningsOrder.ts";
+import { aheadFirst, inWindow, nearestFirst } from "./earningsOrder.ts";
+
+test("the card's window is two days back to two weeks ahead, across a month's end", () => {
+  const today = "2026-11-17";
+  assert.equal(inWindow("2026-11-15", today), true);
+  assert.equal(inWindow("2026-11-14", today), false);
+  assert.equal(inWindow("2026-11-26", today), true); // MRVL, a Scanner name, nine days out
+  assert.equal(inWindow("2026-12-01", today), true); // the fourteenth day
+  assert.equal(inWindow("2026-12-02", today), false);
+  assert.equal(inWindow("2027-02-04", today), false); // AAPL's next, TradingView's estimate
+  assert.equal(inWindow("2026-12-10", "2026-11-28"), true);
+  assert.equal(inWindow("2026-11-20", ""), true); // no usable day: kept
+});
 
 const order = (dates: string[], today: string) =>
   nearestFirst(dates.map((d) => [d, null] as const), today).map(([d]) => d);

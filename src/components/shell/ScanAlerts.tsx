@@ -18,6 +18,10 @@ import { cn } from "@/lib/cn";
  * browser has granted it) a desktop notification. What fires, and how, is
  * Settings → Alerts.
  *
+ * EVERY CHART, ONE ALERT A SETUP (owner, 2026-11-19). Signals print on the 3m, 5m and
+ * 10m charts; the same retest on two of them minutes apart alerts once, on the chart
+ * that printed it first. The engine marks the others `alert: false` (scanlog.py).
+ *
  * ONLY LIVE EVENTS ALERT. The page starts at the feed's current end, so a
  * reload never replays the morning; and an event the collector found by
  * replaying bars after a restart is marked not-live by the engine and is
@@ -39,7 +43,10 @@ const POLL_SEC = 15;
 const TOAST_SEC = 25;
 const MAX_TOASTS = 4;
 
-const GLYPH: Record<ScanEvent["kind"], string> = { L: "(L)", E: "(E)", BO: "◆", NEAR: "Near" };
+const GLYPH: Record<ScanEvent["kind"], string> = { L: "(L)", E: "(E)", V: "(V)", BO: "◆", NEAR: "Near" };
+
+/** The chart a signal printed on, after its glyph ("(L) 3m"); none for a Near. */
+const chart = (e: ScanEvent) => (e.kind === "NEAR" ? "" : ` ${e.tf ?? "10m"}`);
 
 const openUrl = (sym: string) => `/?tab=scanner&sym=${encodeURIComponent(sym)}`;
 
@@ -63,7 +70,7 @@ export function ScanAlerts() {
     const p = prefsRef.current;
     if (p.desktop && typeof Notification !== "undefined" && Notification.permission === "granted") {
       try {
-        new Notification(`Withdrawn · ${GLYPH[e.kind]} ${e.sym} · ${e.at_et} ET`, {
+        new Notification(`Withdrawn · ${GLYPH[e.kind]}${chart(e)} ${e.sym} · ${e.at_et} ET`, {
           body: "The final bars do not hold this signal.",
           tag: `hx-${e.id}`,
           silent: true,
@@ -81,7 +88,7 @@ export function ScanAlerts() {
     if (p.sound) chime(e.side);
     if (p.desktop && typeof Notification !== "undefined" && Notification.permission === "granted") {
       try {
-        const n = new Notification(`${GLYPH[e.kind]} ${e.side === "long" ? "▲" : "▼"} ${e.sym} · ${e.at_et} ET`, {
+        const n = new Notification(`${GLYPH[e.kind]}${chart(e)} ${e.side === "long" ? "▲" : "▼"} ${e.sym} · ${e.at_et} ET`, {
           body: e.note,
           tag: `hx-${e.id}`,
           silent: true,
@@ -111,6 +118,8 @@ export function ScanAlerts() {
       for (const e of d.events) {
         cursor.current = Math.max(cursor.current ?? 0, e.id);
         if (!p.on || !e.live || e.retracted || !p.kinds.includes(e.kind)) continue;
+        // One setup, one alert: printed on another chart first, it is logged only.
+        if (e.alert === false) continue;
         if ((e.score ?? 0) < p.minScore) continue;
         raise(e);
       }
@@ -178,7 +187,8 @@ export function ScanAlerts() {
                 e.retracted ? "text-ink-3 line-through" : e.side === "long" ? "text-call-fig" : "text-put-fig",
               )}
             >
-              {GLYPH[e.kind]} {e.side === "long" ? "▲" : "▼"}
+              {GLYPH[e.kind]}
+              {chart(e)} {e.side === "long" ? "▲" : "▼"}
             </span>
             <span className={cn("text-[13.5px] font-semibold", e.retracted ? "text-ink-3 line-through" : "text-ink")}>{e.sym}</span>
             {e.retracted && <span className="qt-cap text-[10.5px] text-flip-fig">withdrawn</span>}

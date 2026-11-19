@@ -331,6 +331,20 @@ class NewsStore:
         return any(story(s["title"], sym, self._called(sym), str(s.get("provider") or ""),
                          self._strict(sym)) is not None for sym in s["syms"])
 
+    def ids_by_title(self, key: Callable[[str], str]) -> dict[str, str]:
+        """{key(headline): story id} for every story held: a story's text is read by its
+        id (sources/tvstory.py), and the rows' headlines mostly come from Yahoo's feeds,
+        which carry the same headline (newsread.py, 2026-11-18)."""
+        with self._lock:
+            rows = list(self.stories.values())
+        return {key(str(s.get("title") or "")): str(s["id"]) for s in rows if s.get("id")}
+
+    def ids_by_url(self) -> dict[str, str]:
+        """{page address: story id}: a Reuters page drops its id's "tag:" (tvstory)."""
+        with self._lock:
+            rows = list(self.stories.values())
+        return {str(s["url"]): str(s["id"]) for s in rows if s.get("id") and s.get("url")}
+
     def catalyst(self, sym: str, now: float | None = None,
                  ref: float | None = None) -> dict[str, Any] | None:
         """The name's most important story of the last day, for a row.

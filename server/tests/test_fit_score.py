@@ -107,7 +107,21 @@ def test_each_side_is_read_apart_so_the_longs_cannot_pass_for_the_list() -> None
     # It rides under the Trending table, and a side with nothing says so.
     assert any("By side" in x for x in fit.trend_lines(evs))
     only = fit.side_lines([one("2026-11-16", 50, "long", True)])
-    assert "too few a day to split" in only[1] and only[2].strip() == "shorts  none"
+    assert "no day with 5 or more" in only[1] and only[2].strip() == "shorts  none"
+    five = fit.side_lines([one("2026-11-16", 50 - i, "long", True) for i in range(5)])
+    assert "too few a day to split" in five[1]
+
+
+def test_a_thin_day_does_not_count_as_much_as_a_full_one() -> None:
+    # 2026-11-18: 49 signals on 16 Nov, one on 17 Nov (the app stopped), and that one
+    # weighed as much as the 49 in every equal-day line.
+    full = [ev("2026-11-16", 90 - i, stopped=True, close=-1.0) for i in range(10)]
+    lone = [ev("2026-11-17", 50, hit=True, two=True, close=3.0)]
+    lines = fit.equal_day_lines(full + lone)
+    assert "1 day with fewer than 5 signals left out" in lines[0]
+    assert lines[2] == "  every signal    0.0%    0.0%  -1.00"
+    assert "1 day with fewer than 5 signals left out" in fit.trend_lines(full + lone)[0]
+    assert fit.full_days(fit.by_day(full + lone)) == (["2026-11-16"], 1)
 
 
 def test_the_news_table_reads_what_is_logged_and_unscored() -> None:
@@ -129,6 +143,63 @@ def test_the_news_table_reads_what_is_logged_and_unscored() -> None:
     for label in ("reads against it", "day 2, no news", "day 2, any", "read as big", "any major"):
         assert label in by and "2/2" in by[label], label
     assert "no day with 3 or more on each side" in by["read as ordinary"]
+
+
+def test_the_tapes_bias_is_read_on_the_trades_by_side_in_counts() -> None:
+    def e(day: str, side: str, hit: bool, bias: str | None, vote: str | None,
+          grade: str = "moderate") -> dict[str, Any]:
+        x = {**ev(day, 60, hit=hit, stopped=not hit, close=1.5 if hit else -1.0), "side": side}
+        x["ctx"] = {"tape": {"score": 30, "grade": grade, "bias": bias, "vote": vote}}
+        return x
+
+    evs = [e("2026-11-19", "long", True, "long", "long"),
+           e("2026-11-19", "long", True, "long", None, grade="weak"),
+           e("2026-11-19", "long", False, "short", "long"),
+           e("2026-11-20", "long", False, None, None),
+           e("2026-11-20", "short", True, "short", "long"),
+           {**ev("2026-11-20", 60), "side": "short"}]          # logged before the bias: left out
+    text = fit.bias_lines(evs)
+    assert text[0].startswith("The tape's bias at the signal (5 signals on 2 days carry it")
+    assert "under 10 days" in text[1]
+    rows = {ln.strip().split("  ")[0]: ln for ln in text if ln.startswith("    ")}
+    longs = text[text.index("  longs (4)") + 1:text.index("  shorts (1)")]
+    got = {ln.strip().split("  ")[0]: ln for ln in longs}
+    assert "+1R   2 of 2" in got["with the bias"] and "1 day" in got["with the bias"]
+    assert "+1R   0 of 1" in got["against the bias"] and "stopped   1" in got["against the bias"]
+    assert "+1R   0 of 1" in got["no lean"]
+    assert "+1R   1 of 1" in got["with a moderate or strong"]    # the weak one is not in it
+    assert "+1R   1 of 2" in got["with the vote count"]
+    # The two rows that decide which read the Market points should come from.
+    assert "+1R   1 of 1" in got["with the bias, not the vote"]
+    assert "+1R   0 of 1" in got["with the vote, not the bias"]
+    assert "with the bias" in rows
+    assert fit.bias_lines([ev("2026-11-18", 60)]) == [
+        "The tape's bias at the signal: no signal carries it yet (logged from 2026-11-19)"]
+
+
+def test_each_chart_is_read_apart_and_the_record_stays_the_10m_charts() -> None:
+    def e(day: str, tf: str | None, hit: bool, alert: bool | None = None) -> dict[str, Any]:
+        x = ev(day, 60, hit=hit, stopped=not hit, close=1.5 if hit else -1.0)
+        if tf:
+            x["tf"] = tf
+        if alert is not None:
+            x["alert"] = alert
+        return x
+
+    evs = [e("2026-11-18", None, True),                       # before the charts: 10m
+           e("2026-11-19", "3m", True), e("2026-11-19", "10m", False, alert=False),
+           e("2026-11-19", "5m", False)]
+    text = fit.tf_lines(evs)
+    assert text[0].startswith("By chart, from 2026-11-19 (3 signals on 1 days")
+    longs = text[text.index("  longs") + 1:text.index("  shorts")]
+    got = {ln.strip().split("  ")[0]: ln for ln in longs}
+    assert "+1R   1 of 1" in got["(L) 3m"] and "+1R   0 of 1" in got["(L) 10m"]
+    assert "+1R   1 of 2" in got["first to print a setup"]
+    assert "+1R   0 of 1" in got["printed it after"]
+    assert fit.tf_lines([e("2026-11-18", None, True)]) == [
+        "By chart: no 3m or 5m signal settled yet (logged from 2026-11-19)"]
+    # Every other table reads the 10m chart alone.
+    assert "on the 10m chart over 5 days: 2" in fit.report(evs, 5).splitlines()[0]
 
 
 def test_inside_the_day_a_busy_day_cannot_pass_for_a_good_input() -> None:
@@ -217,3 +288,18 @@ def test_the_pools_record_reads_each_mark_against_its_days_outcome() -> None:
         {"kind": "outcome", "day": "2026-11-16", "rows": outcome}]))
     assert "top 10" in text and "11-50" in text and "promoted" in text
     assert "no mark" in fit.pool_lines([{"kind": "mark", "day": "d", "rows": rows}])[0]
+
+
+def test_a_mark_run_late_is_left_out_of_the_pool_table() -> None:
+    # 2026-11-17: the "10:00" mark ran at 18:30 ET on the whole day's figures.
+    rows = [{"sym": "AAA", "promoted": True}]
+    outcome = {"AAA": {"close": 110.0, "change": 10.0, "high": 112.0, "low": 99.0, "atr": 4.0}}
+    on_time = {"kind": "mark", "day": "2026-11-17", "mark": "09:25", "at_et": "09:25",
+               "rows": rows}
+    late = {"kind": "mark", "day": "2026-11-17", "mark": "10:00", "at_et": "18:30", "rows": rows}
+    assert fit._late(late) and not fit._late(on_time)
+    assert not fit._late({"mark": "10:00", "at_et": "10:20"})
+    assert not fit._late({"mark": "10:00"})   # an older line without the time it ran
+    text = "\n".join(fit.pool_lines([on_time, late,
+                                     {"kind": "outcome", "day": "2026-11-17", "rows": outcome}]))
+    assert "1 marks over 1 days, 1 run late left out" in text

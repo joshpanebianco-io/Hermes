@@ -19,10 +19,15 @@ def _q(key: str, last: float, pct: float = 0.0, chg: float = 0.0,
 
 
 def _snap(**over: Any) -> dict[str, Any]:
+    # Every read with no history behind it (no `context`): each is measured in the stated
+    # usual day (drivestats.FALLBACK_USUAL), so the 10-year's +9bp is one and a half usual
+    # days (a full vote), the dollar's +0.6% the same, credit's -0.3% on a flat NQ 1.2 of
+    # its usual (counts 70%), the VIX's +6% one usual day (counts 50%) and silver's +3% on a
+    # flat gold one and a half (full).
     quotes = [
         _q("NQ", 30_000.0), _q("ES", 8_000.0), _q("GC", 4_000.0),
-        _q("US10Y", 4.10, chg=0.06), _q("DXY", 99.0, pct=0.4), _q("HYG", 80.0, pct=-0.3),
-        _q("VIX", 18.0, pct=3.0), _q("VIX3M", 20.0), _q("SILVER", 50.0, pct=1.0),
+        _q("US10Y", 4.10, chg=0.09), _q("DXY", 99.0, pct=0.6), _q("HYG", 80.0, pct=-0.3),
+        _q("VIX", 18.0, pct=6.0), _q("VIX3M", 20.0), _q("SILVER", 50.0, pct=3.0),
         _q("COPPER", 5.0, pct=0.8), _q("VXN", 24.0),
     ]
     snap: dict[str, Any] = {
@@ -59,11 +64,17 @@ def test_nq_board_counts_the_votes_and_names_the_conflict() -> None:
     out = drivers.build(_snap(), "rth", NOW)
     nq = out["books"]["NQ"]
     v = _votes(nq)
-    assert v["yields"]["vote"] == "short" and v["yields"]["value"] == "4.10% +6.0bp"
-    assert v["dollar"]["vote"] == "short"
-    assert v["credit"]["vote"] == "short"
-    assert v["vix_dir"]["vote"] == "short"
-    assert v["vix_curve"]["vote"] == "neutral"  # 18 / 20 = 0.90 sits on the calm bound
+    assert v["yields"]["vote"] == "short" and v["yields"]["value"] == "4.10% +9.0bp"
+    assert v["yields"]["strength"] == 1.0
+    assert "1.5× its usual day, counts 100%" in v["yields"]["note"]
+    assert v["dollar"]["vote"] == "short" and v["dollar"]["strength"] == 1.0
+    assert v["credit"]["vote"] == "short" and v["credit"]["strength"] == 0.7
+    # The VIX up 6% beyond NQ's echo was a short vote at half strength until the evening of
+    # 2026-11-19; it is said as weather now, like its curve: read, in no family.
+    assert v["vix_dir"]["vote"] == "neutral" and v["vix_dir"]["family"] is None
+    assert "moves can run further" in v["vix_dir"]["note"]
+    assert v["vix_dir"]["aside"].startswith("never a side")
+    assert v["vix_curve"]["vote"] == "neutral" and v["vix_curve"]["family"] is None
     # Below the flip in negative gamma: said, and not a short vote (owner, 2026-11-12:
     # "positive doesnt mean bullish and vice versa"). It is in no family and has its own line.
     assert v["gamma"]["vote"] == "neutral" and "200 below the flip (0.4σ)" in v["gamma"]["note"]
@@ -78,6 +89,10 @@ def test_nq_board_counts_the_votes_and_names_the_conflict() -> None:
     assert not {"frame", "daily200", "trend10m"} & set(v)
     assert "daily" not in {f["key"] for f in nq["families"]}
     assert v["sectors"]["vote"] == "neutral" and v["leaders"]["vote"] == "neutral"
+    # New York's weights since the evening of 2026-11-19: structure all short on 35, rates
+    # all short on 20, risk (credit alone) short at 0.7 on 10: -35 - 20 - 7 = -62, on 65
+    # of the weight live and three families behind it, so strong.
+    assert (nq["score"], nq["coverage"], nq["backers"]) == (-62, 65, 3)
     assert nq["bias"] == "short" and nq["grade"] == "strong"
     assert nq["macro_lean"] == "short" and nq["structure_lean"] == "short"
     assert nq["conflict"] is False
@@ -88,13 +103,19 @@ def test_nq_board_counts_the_votes_and_names_the_conflict() -> None:
     assert ctx["putcall"]["value"] == "equity 0.52 · total 0.87"
 
 
-def test_vix_curve_threshold_is_the_stocks_desks() -> None:
-    calm = drivers.build(_snap(quotes=[_q("NQ", 1.0), _q("VIX", 16.0), _q("VIX3M", 20.0)]),
-                         "rth", NOW)
-    assert _votes(calm["books"]["NQ"])["vix_curve"]["vote"] == "long"
-    stress = drivers.build(_snap(quotes=[_q("NQ", 1.0), _q("VIX", 21.0), _q("VIX3M", 20.0)]),
-                           "rth", NOW)
-    assert _votes(stress["books"]["NQ"])["vix_curve"]["vote"] == "short"
+def test_the_vix_curve_is_a_regime_and_never_a_side() -> None:
+    # 2026-11-19: a calm curve is not bullish and a stressed one is not bearish. Each is
+    # said as how far moves run, in no family, and the score does not move with it.
+    reads = {}
+    for vix in (16.0, 18.5, 21.0):
+        b = drivers.build(_snap(quotes=[_q("NQ", 1.0), _q("VIX", vix), _q("VIX3M", 20.0)]),
+                          "rth", NOW)["books"]["NQ"]
+        reads[vix] = (_votes(b)["vix_curve"], b["score"])
+    assert {r[1] for r in reads.values()} == {reads[16.0][1]}
+    assert all(v["vote"] == "neutral" and v["family"] is None and v["aside"].startswith(
+        "never a side") for v, _ in reads.values())
+    assert "moves are smaller" in reads[16.0][0]["note"]
+    assert "moves run, either way" in reads[21.0][0]["note"]
 
 
 def test_cash_reads_are_neutral_outside_us_hours_and_say_so() -> None:
@@ -128,7 +149,9 @@ def test_gold_reads_silver_and_not_credit_and_never_the_equity_curve() -> None:
     gc = out["books"]["GC"]
     v = _votes(gc)
     assert "credit" not in v and "sectors" not in v and "leaders" not in v
-    assert v["silver"]["vote"] == "long" and "industrial as well" in v["silver"]["note"]
+    # Silver +3% on a flat gold: all of it beyond gold's echo, a usual day and a half.
+    assert v["silver"]["vote"] == "long" and "running ahead of gold" in v["silver"]["note"]
+    assert v["silver"]["strength"] == 1.0
     assert v["vix_curve"]["vote"] == "neutral"
     assert v["yields"]["vote"] == "short" and "carrying cost" in v["yields"]["note"]
     assert v["dollar"]["note"].startswith("a firmer dollar is the unit gold is priced in")

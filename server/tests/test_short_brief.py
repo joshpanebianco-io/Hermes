@@ -46,16 +46,25 @@ def _brief(**over: Any) -> dict[str, Any]:
         "today": [{"id": f"c{i}", "note": "n"} for i in (1, 2, 3, 4)],
         "risks": ["ra", "rb", "rc", "rd"],
         "headlines": [{"id": f"h{i}", "books": ["NQ"], "note": "n"} for i in (1, 2, 3, 4)],
+        # The briefing's list (brief_version 4): three items, so none is sent back as short.
+        "movers": [{"id": "c1", "impact": "high", "effect": "pressure", "why": "yields up"},
+                   {"id": "h1", "impact": "medium", "effect": "two-way", "why": "tariff risk"},
+                   {"id": "c2", "impact": "low", "effect": "priced", "why": "already traded"}],
     }
     b.update(over)
     return b
 
 
-def test_the_shape_is_five_parts_a_comment_a_factor_and_three_of_the_rest() -> None:
-    assert set(report.SCHEMA["properties"]) == {"thesis", "calls", "today", "risks", "headlines"}
+def test_the_shape_is_a_bottom_line_a_list_and_a_call_and_the_older_parts_still_read() -> None:
+    # Brief_version 4 (owner, 2026-11-19: a report "given to a ceo"): the bottom line, what
+    # can move prices, a call a book. Nothing else is asked for.
+    assert set(report.SCHEMA["properties"]) == {"thesis", "movers", "calls"}
     call = report.SCHEMA["properties"]["calls"]["items"]["properties"]
-    assert set(call) == {"book", "open_bias", "conviction", "factors", "plan", "wrong_if"}
-    assert set(call["factors"]["items"]["properties"]) == {"key", "line"}
+    assert set(call) == {"book", "open_bias", "conviction"}
+    item = report.SCHEMA["properties"]["movers"]["items"]["properties"]
+    assert set(item) == {"id", "impact", "effect", "why"}
+    assert report.SCHEMA["properties"]["movers"]["minItems"] == report.MOVERS_MIN
+    # An answer in the older shape still reads: a stored 3 is drawn again from it.
     out = report.sanitize_brief(_brief(), _facts())
     assert out is not None
     # A comment a factor, every one kept: nothing that moves the score is cut to three.
@@ -74,7 +83,9 @@ def test_a_brief_needs_no_read_only_a_thesis_and_a_call_per_book() -> None:
 
 def test_the_limits_are_in_the_prompt_and_the_loose_shape() -> None:
     p = report.system_prompt("ny", "indexes")
-    for key, cap in report.LIMITS.items():
+    # The parts the briefing asks for; the older parts' limits hold only an older answer.
+    for key in ("thesis", "mover"):
+        cap = report.LIMITS[key]
         assert f"{cap} words" in p, key
         assert f"{cap} words at most" in report.LOOSE_SHAPE, key
     # The longer shape's fields are named nowhere a model is told what to write.
@@ -105,10 +116,11 @@ def test_the_guard_reads_every_part_the_model_wrote() -> None:
                               "factors": _f(("rates", "w 2")), "plan": "p 3",
                               "wrong_if": "x 4"}],
         today=[{"id": "c1", "note": "n 5"}], risks=["r 6"],
-        headlines=[{"id": "h1", "books": ["NQ"], "note": "h 7"}]), _facts())
+        headlines=[{"id": "h1", "books": ["NQ"], "note": "h 7"}],
+        movers=[{"id": "c2", "impact": "high", "effect": "pressure", "why": "m 8"}]), _facts())
     assert b is not None
-    assert report.unverified(b, "nothing") == ["1", "2", "3", "4", "5", "6", "7"]
-    assert report.brief_words(b) == 14
+    assert report.unverified(b, "nothing") == ["1", "2", "3", "4", "5", "6", "7", "8"]
+    assert report.brief_words(b) == 16
 
 
 def _generate(monkeypatch: pytest.MonkeyPatch, answers: list[dict[str, Any]]) -> tuple[
@@ -135,7 +147,7 @@ def test_an_over_long_answer_is_sent_back_once_and_the_shorter_one_kept(
     assert rep["ok"] is True and len(asked) == 2
     assert "breaks the brief's limits: thesis is 90 words (limit 40)" in asked[1][-1]["content"]
     assert rep["report"]["thesis"] == "Core CPI is the day."
-    assert rep["brief_version"] == 3
+    assert rep["brief_version"] == 4
     assert rep["words"] == report.brief_words(rep["report"]) < 60
     assert "ok after re-ask" in rep["attempts"][-1]["note"]
 

@@ -5,8 +5,11 @@ import type { BreadthAll } from "@/types/terminal";
 
 export type DashRow = Pick<
   ScanRow,
-  "sym" | "name" | "sector" | "last" | "chg_pct" | "ext_pct" | "rvol" | "trend" | "levels" | "broken" | "setup" | "catalyst" | "stage" | "spark"
-> & { score: { total: number; side: Side | null } };
+  "sym" | "name" | "sector" | "last" | "chg_pct" | "ext_pct" | "rvol" | "trend" | "levels" | "broken" | "setup" | "catalyst" | "stage" | "spark" | "spark_ref"
+> & {
+  /** `kind` "inplay" before the bell: how in play the name is, as the Scanner list scores it. */
+  score: { total: number; side: Side | null; kind?: "inplay" | null };
+};
 
 export interface DashStory {
   syms: string[];
@@ -15,6 +18,36 @@ export interface DashStory {
   url: string;
   provider: string;
   age_min: number;
+}
+
+/** A Today row of the High impact news card (server impact.py): a print, the Fed, reports, an IPO. */
+export interface DashImpactRow {
+  /** "08:30", or "Before" / "After" (the open, the close) / "Today" (an IPO). */
+  t: string;
+  /** "US data", "Fed", "Earnings", "IPO", or a country ("Japan", "UK", "Euro area"). */
+  kind: string;
+  line: string;
+  /** Out already (a print released, a speaker who has spoken, a report in). */
+  done: boolean;
+  url?: string | null;
+}
+
+/** A headline of the High impact news card: the wire's high impact, then geopolitics, energy, policy. */
+export interface DashImpactHead {
+  t: string;
+  kind: string;
+  high: boolean;
+  title: string;
+  url: string | null;
+  publisher: string | null;
+  age_min: number;
+}
+
+export interface DashImpact {
+  today: DashImpactRow[];
+  heads: DashImpactHead[];
+  /** The wire is reading. */
+  live: boolean;
 }
 
 /** One name on the In play card: the pool's rank entry and the engine's verdict on it. */
@@ -75,20 +108,6 @@ export interface DashOverview {
   risks: string[];
 }
 
-/** The newest Stocks Market Report as the Dashboard's card (server report.card_of, 2026-11-16). */
-export interface DashReportCard {
-  id: string;
-  et_label: string;
-  created_et: string | null;
-  /** Written by the 09:00 ET clock rather than the button. */
-  auto: boolean;
-  underway: boolean;
-  thesis: string;
-  market: { bias: "long" | "short" | null; score: number | null; basis?: string | null; grade: string | null } | null;
-  calls: { book: string; open_bias: string; conviction: number }[];
-  risks: string[];
-}
-
 export interface DashboardPayload {
   ok: boolean;
   session: ScanSession;
@@ -123,10 +142,10 @@ export interface DashboardPayload {
   inplay: DashInPlay | null;
   /** The latest market overview's card (server overview.latest_card), in In play's place since 2026-11-13; on no card since 2026-11-16. */
   overview?: DashOverview | null;
-  /** The newest Stocks Market Report's card, in the overview card's place since 2026-11-16. */
-  report?: DashReportCard | null;
   stories: DashStory[];
   news_live: boolean;
+  /** The High impact news card; absent from a collector older than 2026-11-19. */
+  impact?: DashImpact;
   rotation: Array<{ key: string; label: string; day_pct: number | null; rs_day: number | null; leaders: string[] }>;
   /** "pre" before the bell: the focus lists and the rotation row are the funds' pre-market moves (2026-11-16). */
   sectors_basis?: "pre" | "session";

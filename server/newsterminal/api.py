@@ -23,7 +23,7 @@ import re
 import threading
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -383,6 +383,11 @@ class PromotionIn(BaseModel):
     on: bool
 
 
+class FeedIn(BaseModel):
+    #: "webull", "yahoo", or None to go back to NT_PRICE_FEED in .env.local.
+    feed: Literal["webull", "yahoo"] | None = None
+
+
 @app.get("/api/scanner")
 def scanner() -> dict[str, Any]:
     return COLLECTOR.scanner_payload()
@@ -489,11 +494,11 @@ def scanner_sectors() -> dict[str, Any]:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict[str, Any]:
-    """The Dashboard tab, whole, with the latest Stocks report's card (report.latest_card),
-    which took the market overview card's place on 2026-11-16. The overview's card is still
-    served, for an older page."""
-    return {**COLLECTOR.dashboard(), "report": report_mod.latest_card(),
-            "overview": overview_mod.latest_card()}
+    """The Dashboard tab, whole. The latest Stocks report's card (report.latest_card) was
+    served here from 2026-11-16 until the owner had the card removed on 2026-11-19 ("maybe
+    we should just remove the card"); the report is one link away in the game plan's head.
+    The overview's card is still served, for an older page."""
+    return {**COLLECTOR.dashboard(), "overview": overview_mod.latest_card()}
 
 
 @app.get("/api/scanner/extended")
@@ -537,6 +542,19 @@ def scanner_track(body: TrackIn) -> dict[str, Any]:
 def scanner_stream() -> dict[str, Any]:
     """The live stream's health, and its running score against the bars."""
     return COLLECTOR.stream_health()
+
+
+@app.get("/api/feed")
+def price_feed() -> dict[str, Any]:
+    """Which live-price feed is on (Webull beside Yahoo, or Yahoo alone), and why."""
+    return COLLECTOR.feed()
+
+
+@app.post("/api/feed")
+def set_price_feed(body: FeedIn) -> dict[str, Any]:
+    """Switch the live-price feed: {"feed": "webull" | "yahoo"}, or {"feed": null} to go back
+    to NT_PRICE_FEED in .env.local. Takes effect at once; kept across restarts."""
+    return COLLECTOR.set_feed(body.feed)
 
 
 @app.post("/api/scanner/watchlist")
@@ -642,13 +660,36 @@ def ask_context(
         # The tab's opening picture (ask.slim_context); the tools fill the rest.
         return {"tab": tab, "desk": desk, "slim": ask_mod.slim_context(
             snap, COLLECTOR.scanner_payload(), report_mod.latest(), plan_mod.latest()),
-            "selected": ask_mod.selected_row(COLLECTOR.scanner_payload(), sym)}
+            "selected": _shown_row(sym) or ask_mod.selected_row(COLLECTOR.scanner_payload(), sym)}
     if tab == ask_mod.HERMES_TAB:
-        return ask_mod.whole_context(snap, COLLECTOR.scanner_payload(), sym,
-                                     report_mod.latest(), plan_mod.latest(), desk)
+        out = ask_mod.whole_context(snap, COLLECTOR.scanner_payload(), sym,
+                                    report_mod.latest(), plan_mod.latest(), desk)
+        out["selected"] = _shown_row(sym) or out.get("selected")
+        return out
     scan = COLLECTOR.scanner_payload() if tab in ask_mod.STOCKS_TABS else None
     note = report_mod.latest() if tab == "report" else plan_mod.latest() if tab == "plan" else None
-    return ask_mod.context(tab, snap, scan, sym, note)
+    out = ask_mod.context(tab, snap, scan, sym, note)
+    if scan is not None:
+        out["selected"] = _shown_row(sym) or out.get("selected")
+    return out
+
+
+def _shown_row(sym: str | None) -> dict[str, Any] | None:
+    """A name's row as the Scanner and its slide-out show it (collector.scanner_name), cut
+    as the selected row is (ask.selected_row): the score the list ranks by at this hour,
+    and a name the engine does not track read on the request. Before the bell most of the
+    Scanner's list is names the engine does not track, and Hermes had no row for them; and
+    for one it tracks it quoted the setup score beside a table showing in play (owner,
+    2026-11-18: "i just need it intuitive"). None without a name or a row; never raises."""
+    if not sym:
+        return None
+    try:
+        row = COLLECTOR.scanner_name(sym.strip().upper()[:12]).get("row")
+    except Exception:  # noqa: BLE001 - the engine's row is the fallback
+        return None
+    if not isinstance(row, dict) or not row.get("ok"):
+        return None
+    return ask_mod.selected_row({"rows": [row]}, str(row.get("sym") or sym))
 
 
 @app.get("/api/ask/tools")
@@ -681,6 +722,7 @@ def ask_tool(body: ToolIn) -> dict[str, Any]:
         brief=lambda i: report_mod.load(i) if i else report_mod.latest(),
         plan=lambda i: plan_mod.load(i) if i else plan_mod.latest(),
         more={
+            "row": _shown_row,
             "watchlist": COLLECTOR.watchlist_payload,
             "today": COLLECTOR.today,
             "breakouts": COLLECTOR.breakouts,
@@ -747,11 +789,12 @@ AUTO_SETTLE_SEC = 180.0
 
 def _overview_clock(stop: threading.Event) -> None:
     """Write the STOCKS REPORT by itself at 09:00 ET on a trading day (report.auto_due):
-    SPY, QQQ and IWM for New York, what the Dashboard's Market report card shows. It
-    wrote the market overview until 2026-11-16, when the owner had the overview card
-    replaced ("do waht you recommend best"); the overview is still written on its button
-    (`/api/plan`). Waits for the scanner to hold rows and the collector to have run three
-    minutes, and never starts while a report is already being written. Never fatal."""
+    SPY, QQQ and IWM for New York, the Stocks tab's Market Report view (and the Dashboard's
+    card until 2026-11-19). It wrote the market overview until 2026-11-16, when the owner
+    had the overview card replaced ("do waht you recommend best"); the overview is still
+    written on its button (`/api/plan`). Waits for the scanner to hold rows and the
+    collector to have run three minutes, and never starts while a report is already being
+    written. Never fatal."""
     while not stop.wait(20.0):
         try:
             now = datetime.now(UTC)
@@ -793,15 +836,25 @@ def _newsread_clock(stop: threading.Event) -> None:
             def summary_of(title: str, held: dict[str, str] = summaries) -> str | None:
                 return held.get(newsread.norm(title))
 
-            todo = store.pending(newsread.candidates(rows, summary_of), now)
+            # The Scanner's list first, in its order: the names it leads with before the
+            # bell are mostly ones the engine does not track (2026-11-18).
+            try:
+                listed = COLLECTOR.today().get("rows") or []
+            except Exception:  # noqa: BLE001 - the engine's rows still get read
+                listed = []
+            todo = store.pending(newsread.candidates(rows, summary_of, listed=listed), now)
             if not todo:
                 continue
             store.asked(todo, now)
+            # Each story's own text, where TradingView carries it (sources/tvstory.py).
+            COLLECTOR.fill_story_text(todo)
             got, attempts = newsread.ask(todo, key)
             store.put(got, todo, datetime.now(UTC).timestamp(), attempts)
             if config.TICK_LOG:
                 last = attempts[-1] if attempts else {}
+                with_text = sum(1 for c in todo if c.get("text"))
                 print(f"news read: {len(got)} of {len(todo)} stories read"
+                      f" ({with_text} with their text)"
                       f" ({last.get('model', 'no model')}, {last.get('sec', '?')}s"
                       f"{', ' + str(last['error']) if last.get('error') else ''})", flush=True)
         except Exception as e:  # noqa: BLE001 — a clock must not die on one bad tick

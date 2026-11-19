@@ -87,6 +87,8 @@ export interface ScoreFamily {
   weight: number;
   /** -100 to +100; null when none of its reads can vote at this hour. */
   score: number | null;
+  /** What it puts on the score, in the score's points (bias.py, 2026-11-19). Absent from an older collector. */
+  points?: number;
   live: number;
   total: number;
 }
@@ -125,17 +127,24 @@ export interface ScoreRow {
   note: string;
 }
 
+/** The charts signals are read on (scan.TF_SEC, 2026-11-19); 10m is the Pine's own. */
+export type SignalTf = "3m" | "5m" | "10m";
+
 export interface ScanSignal {
-  kind: "L" | "E" | "BO" | "E_SETUP";
+  /** (L) level retest, (E) EMA-wave entry and (V) VWAP retest (both after an extended run only, from 2026-11-19), ◆ breakout. */
+  kind: "L" | "E" | "V" | "BO" | "E_SETUP";
   side: Side;
-  level: LevelKey | null;
+  /** The level broken and retested; "VWAP" for a (V). */
+  level: LevelKey | "VWAP" | null;
   at_et: string;
   price: number;
   note: string;
   /** The bar's open, epoch seconds — what the chart places it by. */
   t?: number;
-  /** The Pine's stop idea for an (L) / (E). */
+  /** The Pine's stop idea for an (L) / (E) / (V). */
   stop?: number | null;
+  /** The chart it printed on; absent from a collector older than 2026-11-19 (the 10m). */
+  tf?: SignalTf;
 }
 
 export interface ScanFlag {
@@ -163,11 +172,44 @@ export interface ScanFlag {
  * newsread.py): how big it is, in one line. Context on the row and in the signal log;
  * it earns no points. `line` is empty where the model's words did not pass the guard.
  */
+/** A pre-market row's four unscored figures (server premarket_record.pre_context). */
+export interface PreContext {
+  /** The gap in daily ATRs, signed, and SPY's; `own` is the first less the second. */
+  gap: number | null;
+  spy: number | null;
+  own: number | null;
+  /** The sector fund's pre-market move, %. */
+  sector_pct: number | null;
+  /** Pre-market volume against the name's own usual pre-market; an estimate under five mornings. */
+  rvol: number | null;
+  rvol_est: boolean;
+  catalyst: {
+    tag: string | null;
+    major: boolean;
+    report: string | null;
+    size: NewsRead["size"] | null;
+    direction: NewsRead["direction"];
+    line: string | null;
+    text?: boolean | null;
+  };
+  /** Where the last trade sits in the pre-market range toward the gap, 0 to 1, and in words. */
+  hold: number | null;
+  hold_word: string | null;
+}
+
 export interface NewsRead {
   size: "big" | "ordinary" | "unclear";
   line: string;
   /** The headline it read. */
   headline?: string | null;
+  /**
+   * Which way it read the story for this name (2026-11-18). It replaces the headline's
+   * words and the EPS sign in the "reads against" flag and the tie-break; never points.
+   * Absent on a read made before it was asked.
+   */
+  direction?: "bullish" | "bearish" | "mixed" | "unclear" | null;
+  /** Whether it read the story's own text, not the headline alone. */
+  text?: boolean;
 }
 
 /** An insider trade worth a line (server sources/insiders.py): an open-market buy of
@@ -284,7 +326,10 @@ export interface ScanRow {
     entry: { kind: LevelKey | "VWAP" | "EMA8"; price: number; dist_atr: number } | null;
     note: string;
   };
+  /** The 10m chart's signals: the ones the score, the record and the contract read. */
   signals: ScanSignal[];
+  /** The 3m and 5m charts' signals, each with its `tf` (2026-11-19); absent from an older collector. */
+  signals_fast?: ScanSignal[];
   score: {
     total: number;
     side: Side | null;
@@ -295,6 +340,11 @@ export interface ScanRow {
     rank?: number;
     /** Why the RVOL gate kept a name out of the top ten, when it did. */
     gated?: string;
+    /**
+     * "inplay" before the bell: the Scanner ranks how in play a name is, and the row and
+     * the slide-out both carry that read (server today._inplay_score). Absent: the setup score.
+     */
+    kind?: "inplay";
   };
   flags: ScanFlag[];
   earnings: {
@@ -338,8 +388,19 @@ export interface ScanRow {
   news_read?: NewsRead | null;
   /** Which day of a multi-day move this is (momentum.py), when it is on one. */
   stage?: number | null;
-  /** The day's closes, for the table's small chart. */
+  /**
+   * Before the bell, four figures shown and logged and NEVER scored until the pre-market
+   * record says which earn points (server premarket_record.py, 2026-11-18). Null in the session.
+   */
+  pre_ctx?: PreContext | null;
+  /**
+   * The small chart's five-minute closes: the slide-out chart's opening view (server
+   * scan.spark_of), the evening before's last bars, then the pre-market from 04:00 ET to
+   * now, after hours included.
+   */
   spark?: number[] | null;
+  /** The last regular close before them, which the line is coloured against. */
+  spark_ref?: number | null;
   /**
    * The record line (scanscore.record_for): settled signals of the kind this
    * setup implies, the side and the score band, from ten of them; `small`
@@ -696,10 +757,18 @@ export interface ScanEvent {
   at_et: string;
   day: string;
   sym: string;
-  /** (L) retest, (E) trigger, ◆ breakout, or NEAR — 90% of the way to a level. */
-  kind: "L" | "E" | "BO" | "NEAR";
+  /** (L) retest, (E) trigger, (V) VWAP retest, ◆ breakout, or NEAR — 90% of the way to a level. */
+  kind: "L" | "E" | "V" | "BO" | "NEAR";
   side: Side;
-  level: LevelKey | null;
+  level: LevelKey | "VWAP" | null;
+  /** The chart it printed on (absent before 2026-11-19: the 10m). */
+  tf?: SignalTf;
+  /**
+   * False when the same setup printed on another chart first (scanlog.SAME_SETUP_SEC):
+   * logged, never alerted. `after` names those charts.
+   */
+  alert?: boolean;
+  after?: SignalTf[];
   price: number;
   stop: number | null;
   score: number | null;
@@ -804,7 +873,8 @@ export interface ScanBars {
    */
   history?: Array<{ key: "PDH" | "PDL" | "PMH" | "PML"; v: number; from: number; to: number; day: string }>;
   sessions: Array<{ kind: "pre" | "rth" | "post"; from: number; to: number }>;
-  signals: Array<{ t: number; kind: "L" | "E" | "BO" | "E_SETUP"; side: Side; price: number }>;
+  /** The view's own chart's signals: 3m and 5m their own, 1m the 3m's, 10m and longer the 10m's. */
+  signals: Array<{ t: number; kind: "L" | "E" | "V" | "BO" | "E_SETUP"; side: Side; price: number; tf?: SignalTf }>;
   /** A futures book's ladder rows drawn as lines: the flip, the walls, the settle, the opening range. */
   lines?: Array<{ v: number; label: string; tone: "call" | "put" | "flip" | "ref" }>;
   /** A futures book's expected move, from the collector rather than an options row. */
@@ -942,6 +1012,7 @@ export interface BreakoutRow {
   stage: number | null;
   verdict?: Verdict | null;
   spark: number[] | null;
+  spark_ref?: number | null;
 }
 
 /**
@@ -1009,6 +1080,7 @@ export interface ExtendedRow {
   stage?: number | null;
   verdict?: Verdict | null;
   spark?: number[] | null;
+  spark_ref?: number | null;
 }
 
 export type ExtendedChip = "all" | "up" | "down" | "news" | "through" | "inside" | "day23" | "pinned";
@@ -1063,6 +1135,7 @@ export interface Day23Row {
   tracked: boolean;
   pinned: boolean;
   spark: number[] | null;
+  spark_ref?: number | null;
 }
 
 export type Day23Chip = "all" | "long" | "short" | "day1" | "day2" | "day3" | "inside" | "through";

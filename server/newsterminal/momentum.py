@@ -262,7 +262,7 @@ class MomentumStore:
     def table(self, *, read: Callable[[str], dict[str, Any] | None],
               raw: Callable[[str], dict[str, Any] | None],
               catalyst: Callable[[str], dict[str, Any] | None],
-              spark: Callable[[str], list[float] | None], tracked: frozenset[str],
+              spark: Callable[[dict[str, Any]], None], tracked: frozenset[str],
               pinned: frozenset[str], basis: str, today: date, min_move: float, cap: float,
               chip: str, forming: list[dict[str, Any]]) -> dict[str, Any]:
         """The Day 2/3 table: every track past the filters, read against now."""
@@ -350,6 +350,6 @@ class MomentumStore:
         kept = [x for x in rows if keep(x)] if keep else rows
         kept.sort(key=lambda x: (-x["score"], KIND_ORDER[x["kind"]], x["stage"]))
         for x in kept:
-            x["spark"] = spark(x["sym"])
+            spark(x)   # lays `spark` and `spark_ref` on the row (universe.fill_spark)
         return {"chips": counts, "rows": kept, "shown": len(kept), "matched": len(rows),
                 "last_day": self.last_day}

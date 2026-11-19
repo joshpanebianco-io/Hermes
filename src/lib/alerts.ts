@@ -16,7 +16,7 @@ import { useSyncExternalStore } from "react";
  * usePersisted for the hydration reason).
  */
 
-export type AlertKind = "L" | "E" | "BO" | "NEAR";
+export type AlertKind = "L" | "E" | "V" | "BO" | "NEAR";
 
 export interface AlertPrefs {
   /** In-app alerts at all. */
@@ -27,6 +27,11 @@ export interface AlertPrefs {
   kinds: AlertKind[];
   /** Only names scoring at least this. */
   minScore: 0 | 40 | 60;
+  /**
+   * The kinds there were when `kinds` was saved. A kind added since (the (V), 2026-11-19)
+   * takes its default rather than reading as switched off by a choice made before it existed.
+   */
+  known?: AlertKind[];
 }
 
 /*
@@ -38,24 +43,32 @@ export const DEFAULT_ALERTS: AlertPrefs = {
   on: true,
   desktop: false,
   sound: true,
-  kinds: ["L", "E", "BO"],
+  kinds: ["L", "E", "V", "BO"],
   minScore: 0,
 };
 
 const KEY = "nt.alerts";
-const KINDS: AlertKind[] = ["L", "E", "BO", "NEAR"];
+const KINDS: AlertKind[] = ["L", "E", "V", "BO", "NEAR"];
+/** The kinds before the (V): a choice saved with no `known` was made among these. */
+const KINDS_BEFORE_V: AlertKind[] = ["L", "E", "BO", "NEAR"];
 let cache: AlertPrefs | null = null;
 const subs = new Set<() => void>();
 
-function parse(raw: string | null): AlertPrefs {
+const isKind = (k: unknown): k is AlertKind => KINDS.includes(k as AlertKind);
+
+export function parseAlertPrefs(raw: string | null): AlertPrefs {
   if (!raw) return DEFAULT_ALERTS;
   try {
     const v = JSON.parse(raw) as Partial<AlertPrefs>;
+    const known = Array.isArray(v.known) ? v.known.filter(isKind) : KINDS_BEFORE_V;
+    const chosen = Array.isArray(v.kinds) ? v.kinds.filter(isKind) : DEFAULT_ALERTS.kinds;
+    // A kind the saved choice never saw takes its default (`known`).
+    const added = DEFAULT_ALERTS.kinds.filter((k) => !known.includes(k) && !chosen.includes(k));
     return {
       on: typeof v.on === "boolean" ? v.on : DEFAULT_ALERTS.on,
       desktop: typeof v.desktop === "boolean" ? v.desktop : DEFAULT_ALERTS.desktop,
       sound: typeof v.sound === "boolean" ? v.sound : DEFAULT_ALERTS.sound,
-      kinds: Array.isArray(v.kinds) ? v.kinds.filter((k): k is AlertKind => KINDS.includes(k as AlertKind)) : DEFAULT_ALERTS.kinds,
+      kinds: [...chosen, ...added],
       minScore: v.minScore === 40 || v.minScore === 60 ? v.minScore : 0,
     };
   } catch {
@@ -66,7 +79,7 @@ function parse(raw: string | null): AlertPrefs {
 function read(): AlertPrefs {
   if (cache) return cache;
   try {
-    cache = parse(window.localStorage.getItem(KEY));
+    cache = parseAlertPrefs(window.localStorage.getItem(KEY));
   } catch {
     cache = DEFAULT_ALERTS;
   }
@@ -89,7 +102,7 @@ function subscribe(fn: () => void): () => void {
 }
 
 export function setAlertPrefs(patch: Partial<AlertPrefs>): void {
-  cache = { ...read(), ...patch };
+  cache = { ...read(), ...patch, known: KINDS };
   try {
     window.localStorage.setItem(KEY, JSON.stringify(cache));
   } catch {

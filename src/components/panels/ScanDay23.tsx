@@ -13,6 +13,7 @@ import {
   ScoreBar,
   Showing,
   Spark,
+  SPARK_TIP,
   StagePips,
   TD,
   TH,
@@ -155,7 +156,7 @@ export function ScanDay23({ onTrackChanged }: { onTrackChanged?: () => void }) {
                 <th scope="col" className={TH}><Head label="Resistance" hint="vs yesterday's high · PDH" /></th>
                 <th scope="col" className={TH}><Head label="News" hint="most important first" /></th>
                 <th scope="col" className={cn(TH, "text-right")} title="Since Day 1's close"><Head label="Since" hint="cumulative · Day 1" right /></th>
-                <th scope="col" className={TH}><Head label="Spark" hint="today" /></th>
+                <th scope="col" className={TH} title={SPARK_TIP}><Head label="Spark" hint="from 04:00" /></th>
               </tr>
             </thead>
             <tbody>
@@ -245,7 +246,7 @@ function Group({ side, rows, ticker, onDone }: { side: Side; rows: Day23Row[]; t
             </td>
             <td className={cn(TD, "fig text-right text-[12.5px]", r.stage <= 1 ? "text-ink-3" : (r.since ?? 0) >= 0 ? "up" : "down")}>{r.stage <= 1 ? "—" : pctText(r.since)}</td>
             <td className={TD}>
-              <Spark pts={r.spark} w={76} />
+              <Spark pts={r.spark} base={r.spark_ref} w={76} />
             </td>
           </tr>
         );

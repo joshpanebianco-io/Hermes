@@ -73,14 +73,18 @@ the other tabs already hold, and every part opens where it came from. Three rows
   bias, the sectors and themes ahead of SPY, the count of Day 2/3 continuations and of
   breakouts and breakdowns through the previous day's range, and every stock at $2bn+ by
   the size of its move.
-- **Top setups, what's in play, the news.** The top setups are the Scanner's own rank, because
-  nobody here picks names by hand, each with its side, where it sits against the previous
-  day and the pre-market, the setup, its most important story and today's chart. Beside
-  them **In play**: the pool's rank across every stock it screens, each with why (the gap
-  in its own ATRs, pre-market volume against an average day, a report, a story, a level
-  already taken, a Day 2 or 3) and what the engine has done about it — taken at a mark,
-  pinned, on the list, or one Track away — with the pool's counts and its next mark in the
-  header; and the freshest major company stories, one line per event.
+- **Top setups, High impact news, Stock news** (three even columns, as the row above has
+  been since 2026-11-19). The top setups are the Scanner list's first ten, because nobody
+  here picks names by hand, each with its side, where it sits against the previous day and
+  the pre-market, the setup, its most important story and today's chart. **High impact
+  news** (`server/newsterminal/impact.py`, no model) is what can move the whole market
+  today. *Today* gives one line each, in time order: the US prints that matter, with the
+  figure against what was expected and the calendar's hot or cold read; the Fed's
+  speakers; the big reports, before the open with beat or missed, after the close by name;
+  an IPO the headlines are full of; the night's big foreign print. *Headlines* are the
+  wire's high-impact stories of the last twelve hours, then its geopolitics, energy and
+  policy of the last six, one a story. There is no IPO calendar, only headlines. **Stock
+  news** is the freshest major stories of named stocks, one line per event.
 - **Sector rotation.** The eleven sectors on one row with the stocks pushing each; a card
   opens that sector on the heat map.
 
@@ -149,7 +153,14 @@ Record view went on 2026-11-13, and the signal log it showed is still kept by th
 pinned names are favourites**: each morning the fifteen most in play are tracked with SPY,
 QQQ and IWM, and the pool's picks (06:00, 07:00, 08:00, 09:00, 09:25, then 10:00) fill the
 rest of the forty, so the market's best can reach the list; a favourite not tracked today
-stays pinned. Each phase's list is written to `cache/today_marks.jsonl` near its end, so its
+stays pinned. **In the session the list rotates** (2026-11-19, `rotation.py`): from 09:35 to a
+quarter hour before the close, once a minute, the best names off the list (through their
+levels on the live price, plus any you opened in the last hour) are scored like the list's,
+and one that beats the weakest of the pool's picks by 10 points two rounds running takes its
+place (a free slot takes one scoring 40+). SPY, QQQ, IWM, the MAG 7, the favourites and a name
+tracked by hand never leave; a name that joined stays ten minutes at least, and one stays for
+a live (L)/(E)/(V) in the last half hour that has not been stopped out, or a breakout in the
+last quarter hour. Each swap is written to `cache/rotation.jsonl`. Each phase's list is written to `cache/today_marks.jsonl` near its end, so its
 rank can be held to what the names did next. The older views below (Setups, Breakouts,
 Extended hours, Day 2/3) are shown only while Settings → Interface keeps them, for a week.
 
@@ -236,10 +247,13 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   the fuel.
 - **The weather strip** — VIX, its curve (VIX/VIX3M) and VVIX, the one-day implied
   SPY move (VIX ÷ √252), SPY / QQQ / IWM against their *own* levels, the tape's
-  bias (confirmed or contradicted by which way VIX is moving), and the next
-  high-impact US print. **VIX never ranks a name by itself**: it is the weather,
-  and it reaches a score only through the market part. The four bands (13 / 20 /
-  28) score; two sub-lines inside them only change the words: **18**, the VIX's
+  bias (SPY and QQQ), which way the VIX is moving against SPY in words, and the
+  next high-impact US print. **VIX never ranks a name and never picks a side**: it
+  is the weather. Since the evening of 2026-11-19 neither its level, its curve nor
+  its day votes on direction anywhere (the futures bias, the stocks tape, the
+  scanner's index lean or its score); it says how far moves run and how wide the
+  stops go. Dealer gamma is the same, since 2026-11-12. The four bands (13 / 20 /
+  28) set the words; two sub-lines inside them only change the words too: **18**, the VIX's
   long-run median, below which the tape tends to mean-revert inside the day
   (dealers long gamma: the retest holds, fades work) and above which it tends to trend
   (dealers short gamma: breaks run, stops a notch wider, 1%-plus days normal),
@@ -258,7 +272,8 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   it, a failed break, the wrong side of VWAP and no setup earn none · structure 20 ·
   relative strength 10, in full only on a live
   entry — a retest, a pullback, near VWAP or the 8 EMA — and at most 5 anywhere else ·
-  market 20 · relative volume 8, or before the bell (and until the first RVOL after
+  market 15 (the tape agrees 11, a sector tailwind 4; the VIX's 5 went on the evening of
+  2026-11-19) · relative volume 8, or before the bell (and until the first RVOL after
   it) the gap and the pre-market volume · the catalyst 20, less
   penalties for a spent daily range, a print inside 30 minutes, an after-the-close
   report today, a failed break, a signal still live from the first thirty minutes or
@@ -535,8 +550,8 @@ Chg is headed *last session*, with the pre-market or after-hours move labelled u
   400% after it, so the top of the list separates, where it used to tie at 20 and 21) and
   promoted at four marks:
   08:00, 09:00 and 09:25 ET replace the pre-market list whole, 10:00 fills the slots
-  they leave for the opening drive, and from then the list holds until the day
-  rolls. A promoted row says so, with the mark and the reason; the editor shows
+  they leave for the opening drive, and in the session the live rotation swaps a pick
+  for a better setup off the list (above); the picks go when the day rolls. A promoted row says so, with the mark and the reason; the editor shows
   today's promotions with a pin for any you want to keep, the names in play that
   did not make the cut, and a switch to turn promotion off. A fresh major story that
   is not the report is worth three points in that rank. On the Breakouts and Extended

@@ -102,6 +102,8 @@ class Tick(NamedTuple):
     session: str | None  # "pre" | "rth" | "post", None overnight
     day_volume: int | None
     recv: float  # epoch seconds this process received it
+    #: Whose trade: "yahoo" (this socket) or "webull" (sources/webull.WebullFeed, `put`).
+    src: str = "yahoo"
 
 
 def _varint(b: bytes, i: int) -> tuple[int, int]:
@@ -388,6 +390,12 @@ class PriceStream:
         with self._lock:
             self._touched[sym] = time.monotonic() + TOUCH_SEC
 
+    def touched(self) -> list[str]:
+        """The names a chart has asked for in the last TOUCH_SEC."""
+        now = time.monotonic()
+        with self._lock:
+            return [s for s, t in self._touched.items() if t > now]
+
     def wanted(self) -> list[str]:
         """Every name to subscribe to, touched and tracked first, inside MAX_NAMES."""
         now = time.monotonic()
@@ -413,14 +421,37 @@ class PriceStream:
             age = max(0.0, tick.recv - tick.at)
             self._ages_min.append(age)
             self._recent.append((tick.recv, age))
-            if tick.session is None:
-                self._overnight[sym] = tick
-                return sym
-            prev = self._last.get(sym)
-            if prev is None or tick.at >= prev.at:
-                self._last[sym] = tick
-            self._minutes.setdefault(sym, Candles()).add(tick.price, tick.at)
+            self._book(sym, tick)
         return sym
+
+    def _book(self, sym: str, tick: Tick) -> None:
+        """One trade into the books, under the lock. The newer trade is the last price,
+        whichever feed it came by; every trade builds the minute's candle."""
+        if tick.session is None:
+            prev = self._overnight.get(sym)
+            if prev is None or tick.at >= prev.at:
+                self._overnight[sym] = tick
+            return
+        prev = self._last.get(sym)
+        if prev is None or tick.at >= prev.at:
+            self._last[sym] = tick
+        self._minutes.setdefault(sym, Candles()).add(tick.price, tick.at)
+
+    def put(self, sym: str, price: float, at: float, *, src: str,
+            recv: float | None = None) -> None:
+        """A trade from another feed (Webull's, sources/webull.WebullFeed) into the same
+        books, so every reader of `last_trade` and `quote` takes it unchanged.
+
+        BOTH FEEDS AT ONCE, NEWEST WINS (owner, 2026-11-18: "make sure our current
+        implementation is kept as a fallback so it's easy to revert and switch between").
+        Yahoo's socket runs as before beside it; a late Yahoo trade never overwrites a
+        newer one, and if Webull drops, Yahoo's carry on. This feed's lag is its own
+        status's business: the rail's "trades arriving late" is still Yahoo's alone."""
+        if not price > 0:
+            return
+        t = time.time() if recv is None else recv
+        with self._lock:
+            self._book(sym, Tick(price, at, session_of_ts(at), None, t, src))
 
     def last_trade(self, sym: str) -> tuple[float, float] | None:
         """(price, epoch) of the name's latest session trade."""
@@ -439,7 +470,7 @@ class PriceStream:
             return None
         out: dict[str, Any] = {}
         if t is not None:
-            out.update(price=t.price, at=t.at, session=t.session, minute=minute)
+            out.update(price=t.price, at=t.at, session=t.session, minute=minute, feed=t.src)
         if n is not None and (t is None or n.at > t.at):
             out["overnight"] = {"price": n.price, "at": n.at}
         return out

@@ -226,9 +226,85 @@ def test_a_live_signal_carries_where_it_stood_on_the_list() -> None:
                               "gap_atr": None,
                               # The quant audit's phase 3 (2026-11-13): the uncapped score, the
                               # RVOL gate and the catalyst read; none on a bare test row.
-                              "raw": None, "gated": False, "news": None}
+                              "raw": None, "gated": False, "news": None,
+                              # The tape's bias (2026-11-19): none passed here.
+                              "tape": None}
     late = datetime(2026, 11, 5, 13, 0, tzinfo=ET)
     assert "ctx" not in scanlog.candidates(rows, "rth", "2026-11-05", late)[0]
+
+
+def test_one_setup_on_two_charts_is_two_events_and_one_alert(tmp_path: Any) -> None:
+    # Owner, 2026-11-19: signals on 3m, 5m and 10m, and an alert on the first only. The 3m
+    # retest's bar closed at 10:06, the 10m's at 10:10: the 3m alerts, the 10m is logged
+    # quiet, naming the chart that printed it first.
+    log = EventLog(str(tmp_path / "ev.jsonl"))
+    t10, t3 = ts(2026, 10, 13, 10, 0), ts(2026, 10, 13, 10, 3)
+    r = {**row(signals=[l_signal(t10)]), "signals_fast": [{**l_signal(t3), "tf": "3m"}]}
+    new = log.observe(payload([r]), {}, et(2026, 10, 13, 10, 12))
+    assert [(e["tf"], e.get("alert"), e.get("after"), e["live"]) for e in new] == [
+        ("3m", None, None, True), ("10m", False, ["3m"], True)]
+    # Two keys: the 10m's is the one it always had.
+    assert scanlog.dedupe_key(new[1]).endswith(f"|{t10}")
+    assert scanlog.dedupe_key(new[0]).endswith(f"|{t3}|3m")
+    # The same retest an hour later on the 5m is a new setup, and alerts.
+    t5 = ts(2026, 10, 13, 11, 0)
+    r2 = {**r, "signals_fast": [*r["signals_fast"], {**l_signal(t5), "tf": "5m"}]}
+    (later,) = log.observe(payload([r2]), {}, et(2026, 10, 13, 11, 6))
+    assert (later["tf"], later.get("alert")) == ("5m", None)
+
+
+def test_each_chart_is_checked_on_its_own_bars_and_the_record_is_the_10m_charts() -> None:
+    now = ts(2026, 10, 13, 12, 0)
+    ev = scanlog.signal_events("AAPL", [{**l_signal(ts(2026, 10, 13, 10, 3)), "tf": "3m"}],
+                               None, "2026-10-13", now)[0]
+    # Bars covering the 10m chart only: the 3m event is not in them, and is not withdrawn.
+    assert scanlog.revalidate(ev, {}, {"10m": now}, now) is False
+    assert scanlog.revalidate(ev, {}, now, now) is False and not ev.get("retracted")
+    # Its own chart's bars, final past it, without it: withdrawn.
+    assert scanlog.revalidate(ev, {}, {"3m": now}, now) is True and ev["retracted"]
+    settled = {"final": True, "r": 1.0, "hit_1r": True, "hit_2r": False, "stopped": False,
+               "ret_close_r": 1.0}
+    ten = {**l_signal(ts(2026, 10, 13, 10, 0)), "day": "2026-10-13", "outcome": settled}
+    three = {**ten, "tf": "3m"}
+    assert scanlog.stats([ten, three], 5, date(2026, 10, 14))["total"] == 1
+    assert scanlog.record_table([{**ten, "score": 70}, {**three, "score": 70}], 5,
+                                date(2026, 10, 14))["60+|L|long"]["n"] == 1
+
+
+def test_a_3m_entry_inside_a_5m_bar_reads_that_bar_whole() -> None:
+    # The (L) on the 10:45 3m bar enters at its close, 10:48, inside the 10:45-10:50 5-minute
+    # bar. That bar's low is under the stop: counted stopped, the conservative reading.
+    t = ts(2026, 10, 13, 10, 45)
+    ev = scanlog.signal_events("AAPL", [{**l_signal(t, 100.0, 99.0), "tf": "3m"}], None,
+                               "2026-10-13", t + 600)[0]
+    bars = [Bar(t, 100.0, 100.4, 98.8, 100.2, 1.0), Bar(t + 300, 100.2, 101.5, 100.1, 101.4, 1.0)]
+    out = compute_outcome(ev, bars, t + 900)
+    assert out["stopped"] is True and out["hit_1r"] is False
+
+
+def test_a_live_signal_carries_the_tapes_bias_and_the_regimes_vote(tmp_path: Any) -> None:
+    # The bias (bias.py's tape read, the Scanner's regime.conviction) and the vote count the
+    # Market part pays are both logged, as they stood in the payload the signal was found
+    # in. Logged, never scored: the event's score is the row's, untouched.
+    conv = {"score": -34, "grade": "moderate", "bias": "short", "coverage": 85, "backers": 2,
+            "conflict": False, "session_key": "ny_rth", "max_conviction": 4,
+            "families": [{"key": "levels", "weight": 35, "score": -60, "points": -21.0},
+                         {"key": "risk", "weight": 15, "score": -87, "points": -13.0}],
+            "votes": [{"key": "spy", "vote": "short"}]}
+    t = ts(2026, 10, 13, 10, 0)
+    p = {**payload([row(signals=[l_signal(t)])]),
+         "regime": {"bias": "long", "conviction": conv}}
+    (ev,) = EventLog(str(tmp_path / "ev.jsonl")).observe(p, {}, et(2026, 10, 13, 10, 12))
+    assert ev["score"] == 55
+    assert ev["ctx"]["tape"] == {"score": -34, "grade": "moderate", "bias": "short",
+                                 "coverage": 85, "backers": 2, "conflict": False,
+                                 "weights": "ny_rth",
+                                 "fam": {"levels": -21.0, "risk": -13.0}, "vote": "long"}
+    # No lean is no side; a regime with no tape read still keeps its vote.
+    assert scanlog.tape_ctx({"bias": None, "conviction": {**conv, "bias": None}})["bias"] is None
+    assert scanlog.tape_ctx({"bias": "short", "conviction": None}) == {
+        "score": None, "grade": None, "bias": None, "vote": "short"}
+    assert scanlog.tape_ctx(None) is None
 
 
 # --- the chart -------------------------------------------------------------------------------

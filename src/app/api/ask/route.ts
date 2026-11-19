@@ -101,7 +101,7 @@ const asSym = (v: unknown): string | null =>
   typeof v === "string" && /^[A-Z0-9.\-]{1,12}$/.test(v.toUpperCase()) ? v.toUpperCase() : null;
 const asDesk = (v: unknown): "futures" | "stocks" | null => (v === "futures" || v === "stocks" ? v : null);
 
-const ALERT_KINDS = new Set(["L", "E", "BO", "NEAR"]);
+const ALERT_KINDS = new Set(["L", "E", "V", "BO", "NEAR"]);
 
 /** The reader's settings as the page sent them, checked field by field; null when absent. */
 function asPrefs(v: unknown): ReaderPrefs | null {

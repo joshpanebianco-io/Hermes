@@ -4,14 +4,18 @@ import type {
   Book,
   BriefBoard,
   BriefBody,
+  BriefBiasLink,
   BriefCall,
   BriefCatalyst,
+  BriefContextMover,
   BriefFactor,
   BriefFacts,
   BriefGamma,
+  BriefHeadline,
   BriefLadder,
   BriefLadderRow,
   BriefLevels,
+  BriefMover,
   BriefRead,
   BriefSnapshotRow,
   Report,
@@ -24,11 +28,13 @@ import { biasInk, biasLabel, convictionWord, scoreText } from "@/lib/bias";
 import { wholeScore } from "@/lib/biasScale";
 import { fromLast, layoutRuler, priceText } from "@/lib/levelRuler";
 import { BiasScale } from "@/components/ui/BiasScale";
+import { WrittenAgo } from "@/components/ui/NoteAge";
 import { cn } from "@/lib/cn";
 import { bp, dir, num, pct, signed } from "@/lib/format";
 import { useLum, useQuiet } from "@/components/state/UiMode";
 import { regimeMeans } from "@/lib/gammaRegime";
 import { subLabel } from "@/lib/releases";
+import { groupMovers, onTheDay, rotationLines, rotationRead, tradingDay } from "@/lib/reportSheet";
 
 /**
  * The session brief — the model's read, laid out like a desk's morning note.
@@ -201,7 +207,14 @@ function tint(hue: string, amount: number): string {
  */
 const MEASURE = "max-w-[840px]";
 
-export function Brief({ rep }: { rep: Report }) {
+export function Brief({
+  rep,
+  embedded = false,
+}: {
+  rep: Report;
+  /** Drawn inside the report's own card (panels/Report): the market report draws no card of its own then. */
+  embedded?: boolean;
+}) {
   const quiet = useQuiet();
   const lum = useLum();
   return (
@@ -209,7 +222,7 @@ export function Brief({ rep }: { rep: Report }) {
       {/* A note keeps the layout it was written for: the market report (3), the short
           brief of the same afternoon (2), and the longer note before them. */}
       {(rep.brief_version ?? 1) >= 3 ? (
-        <MarketReportView rep={rep} />
+        <MarketReportView rep={rep} embedded={embedded} />
       ) : (rep.brief_version ?? 1) >= 2 ? (
         <ShortBrief rep={rep} />
       ) : (
@@ -506,8 +519,14 @@ function EngineScale({ board, book, name, className = "mt-3.5" }: { board?: Brie
  * gamma. This is one document: a masthead that says what it is about and when it was
  * written over a rule, the summary, a section a book, the calendar beside the risks,
  * and a line at its foot saying whose figures are whose. Hairlines divide it, as they
- * would on paper; the other tables (the snapshot, the whole calendar, rotation, the
- * headlines picked) are still one click away under More, on cards of their own.
+ * would on paper.
+ *
+ * NO MORE BUTTON, AND NO PLAN (owner, 2026-11-17, lib/reportSheet's note). The snapshot
+ * and the whole calendar went with the More fold; the calendar beside the risks lists the
+ * report's own trading day (`onTheDay`), every release that reaches the books with the
+ * model's note on those it picked; the headlines that move price and a five-day rotation
+ * block are the second pair; a book's Plan and Wrong if are no longer drawn (the model
+ * still writes them, and old reports keep them in their stored text).
  *
  * EVERY FACTOR THE BIAS WEIGHS IS A ROW, AND THE ROW IS THE ENGINE'S. The table under a
  * call is `facts.factors`: the families with a weight in this session, heaviest first,
@@ -531,36 +550,35 @@ const SUBJECT_TITLE: Partial<Record<Report["asset"], string>> = {
   etfs: "SPY · QQQ · IWM",
 };
 
-function MarketReportView({ rep }: { rep: Report }) {
+function MarketReportView({ rep, embedded = false }: { rep: Report; embedded?: boolean }) {
   const p = usePaint();
+  // Luminous draws the sheet as its own card, unless it is inside the report's card.
+  const card = p.lum && !embedded;
   const b = rep.report as ShortBriefBody;
   const f = rep.facts as BriefFacts;
   const live = rep.session_underway === true;
-  const [more, setMore] = useState(false);
   const rule = p.lum ? "border-white/[0.07]" : "border-ring/60";
   const pad = p.lum ? "px-7" : "px-4";
 
+  // THE CALENDAR IS THE REPORT'S TRADING DAY (lib/reportSheet onTheDay), in time order,
+  // with the model's note on the rows it picked. A report whose rows carry no instant
+  // keeps the model's picks, in its own order.
   const rowOf = new Map(f.catalysts.map((c) => [c.id, c]));
-  // In the order the model ranked them, not the calendar's.
-  const clock = b.today.flatMap((t) => {
-    const row = rowOf.get(t.id);
-    return row ? [row] : [];
-  });
   const notes = new Map(b.today.map((t) => [t.id, t.note]));
-  const hasRot = f.rotation.ratios.length > 0 || f.rotation.megacaps.length > 0;
-  const hasHead = b.headlines.some((h) => f.headlines.some((x) => x.id === h.id));
-  const folded = [
-    f.snapshot.length > 0 && "Snapshot",
-    f.catalysts.length > 0 && "Calendar",
-    hasRot && "Rotation",
-    hasHead && "Headlines",
-  ].filter(Boolean) as string[];
-  // The folded tables are the longer brief's components, which read a note in that shape.
-  const tables: BriefBody = {
-    thesis: b.thesis, calls: [], snapshot_watch: [], gamma_read: "", catalysts_intro: "",
-    catalyst_notes: [], reads: [], rotation_read: "", ratio_reads: [], rotation_notes: [],
-    headlines: b.headlines, cross_asset: "", risks: [],
-  };
+  const day = tradingDay(Date.parse(rep.created_utc) / 1000);
+  const dated = day != null && f.catalysts.some((c) => c.ts != null);
+  const clock = dated
+    ? f.catalysts.filter((c) => onTheDay(c, day, rep.session)).sort((x, y) => (x.ts ?? 0) - (y.ts ?? 0))
+    : b.today.flatMap((t) => {
+        const row = rowOf.get(t.id);
+        return row ? [row] : [];
+      });
+  const dayLabel = day
+    ? new Date(`${day}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })
+    : null;
+  const byId = new Map(f.headlines.map((h) => [h.id, h]));
+  const picks = b.headlines.filter((h) => byId.has(h.id));
+  const hasRot = rotationLines(f.rotation.ratios).length > 0 || f.rotation.megacaps.length > 0;
   const wide = b.calls.length === 1;
   // The Stocks report: one board for the three funds, its table printed once above them.
   const shared = f.market_factors != null;
@@ -569,17 +587,26 @@ function MarketReportView({ rep }: { rep: Report }) {
   const cut = f.as_of.lastIndexOf(", ");
   const date = cut > 0 ? f.as_of.slice(0, cut) : f.as_of;
   const hour = cut > 0 ? f.as_of.slice(cut + 2) : "";
-  const both = clock.length > 0 && b.risks.length > 0;
+  // THE BRIEFING (brief_version 4, 2026-11-19): a bottom line, what can move prices, then
+  // the calls on the engine's own tables. The calendar, the risks, the headlines and the
+  // rotation are the list's now, and are drawn only for a report written before it.
+  const briefing = Array.isArray(b.movers);
+  const clockShown = briefing ? [] : clock;
+  const risks = briefing ? [] : b.risks;
+  const picksShown = briefing ? [] : picks;
+  const rotShown = !briefing && hasRot;
+  const both = clockShown.length > 0 && risks.length > 0;
+  const secondShown = picksShown.length > 0 && rotShown;
 
   return (
     <article
       className={cn(
-        p.lum
+        card
           ? "qt-noscale grid w-full grid-cols-1 gap-2 lum:gap-[var(--lum-gap)] xl:grid-cols-12"
           : "qt-noscale w-full pt-2 pb-8",
       )}
     >
-      <div className={cn("min-w-0", p.lum && "qt-card overflow-hidden xl:col-span-12")}>
+      <div className={cn("min-w-0", card && "qt-card overflow-hidden xl:col-span-12")}>
         <header className={cn(pad, "pt-6")}>
           <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-2">
             <div className="min-w-0">
@@ -590,7 +617,10 @@ function MarketReportView({ rep }: { rep: Report }) {
               </h2>
             </div>
             <div className="text-right">
-              <p className="fig text-[13px] leading-none text-ink">{date}</p>
+              <p className="fig text-[13px] leading-none text-ink">
+                {date}
+                <WrittenAgo createdUtc={rep.created_utc} className="text-ink-3" />
+              </p>
               <p className="mt-1.5 text-[11.5px] leading-none text-ink-3">
                 {hour}
                 {hour && " · "}
@@ -603,13 +633,15 @@ function MarketReportView({ rep }: { rep: Report }) {
 
         <section className={cn(pad, "pt-5 pb-6")}>
           <ReportBanners f={f} rep={rep} />
-          <p className="qt-cap text-[10.5px] text-ink-3">Summary</p>
+          <p className="qt-cap text-[10.5px] text-ink-3">{briefing ? "Bottom line" : "Summary"}</p>
           <p className="mt-2 max-w-[1100px] text-[21px] leading-[1.42] font-medium tracking-[-0.005em] text-ink">{b.thesis}</p>
         </section>
 
         {/* THE STOCKS REPORT'S ONE BIAS (2026-11-16): the tape, read for all three funds,
             with its table once; each fund's call below carries its plan and levels only. */}
-        {shared && <MarketSection board={f.market ?? undefined} rows={f.market_factors ?? []} said={b.factors ?? []} className={cn(pad, rule)} />}
+        {shared && (
+          <MarketSection board={f.market ?? undefined} rows={f.market_factors ?? []} said={b.factors ?? []} engine={briefing} className={cn(pad, rule)} />
+        )}
 
         <div className={cn("grid border-t", rule, cols === 2 && "xl:grid-cols-2", cols === 3 && "xl:grid-cols-3")}>
           {b.calls.map((c, i) => (
@@ -621,24 +653,30 @@ function MarketReportView({ rep }: { rep: Report }) {
               levels={f.levels?.[c.book]}
               live={live}
               wide={wide}
+              engine={briefing}
               className={cn(pad, rule, i > 0 && "border-t", i > 0 && i < cols && "xl:border-t-0", i % cols !== 0 && "xl:border-l")}
             />
           ))}
         </div>
 
-        {(clock.length > 0 || b.risks.length > 0) && (
+        {/* THE LEAN STAYS AT THE TOP (owner, 2026-11-19: "we should still have the bias lean
+            at the top fo the report"): the bottom line, then the call with its scale, table
+            and levels, then what can move prices. */}
+        {briefing && <MoversSection b={b} f={f} rep={rep} live={live} className={cn(pad, rule)} />}
+
+        {(clockShown.length > 0 || risks.length > 0) && (
           <div className={cn("grid border-t", rule, both && "xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]")}>
-            {clock.length > 0 && (
+            {clockShown.length > 0 && (
               <section className={cn(pad, "min-w-0 py-6")} aria-label="Calendar">
-                <SheetHead title="Calendar" right="what can move it this session" />
-                <CatalystTable rows={clock} notes={notes} lead />
+                <SheetHead title="Calendar" right={dated && dayLabel ? `${dayLabel} · what reaches it` : "what can move it this session"} />
+                <CatalystTable rows={clockShown} notes={notes} lead />
               </section>
             )}
-            {b.risks.length > 0 && (
+            {risks.length > 0 && (
               <section className={cn(pad, rule, "min-w-0 py-6", both && "border-t xl:border-t-0 xl:border-l")} aria-label="Risks">
                 <SheetHead title="Risks" right="outside the call" />
                 <ol className={cn("border-t", rule)}>
-                  {b.risks.map((x, i) => (
+                  {risks.map((x, i) => (
                     <li key={i} className={cn("flex gap-3 border-b py-2.5 text-[13.5px] leading-[1.5] text-ink", rule)}>
                       <span className="fig w-5 shrink-0 text-[11.5px] leading-[20px] text-flip-fig">{String(i + 1).padStart(2, "0")}</span>
                       <span className="min-w-0">{x}</span>
@@ -650,41 +688,93 @@ function MarketReportView({ rep }: { rep: Report }) {
           </div>
         )}
 
+        {(picksShown.length > 0 || rotShown) && (
+          <div className={cn("grid border-t", rule, secondShown && "xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]")}>
+            {picksShown.length > 0 && (
+              <section className={cn(pad, "min-w-0 py-6")} aria-label="Headlines that move price">
+                <SheetHead title="Headlines that move price" right="what the news is doing to it" />
+                <HeadlineList picks={picksShown} byId={byId} />
+              </section>
+            )}
+            {rotShown && (
+              <section className={cn(pad, rule, "min-w-0 py-6", secondShown && "border-t xl:border-t-0 xl:border-l")} aria-label="Rotation">
+                <SheetHead title="Rotation" right="five days" />
+                <RotationBlock rot={f.rotation} live={live} rule={rule} />
+              </section>
+            )}
+          </div>
+        )}
+
         <footer className={cn(pad, rule, "border-t py-3 text-[11px] leading-relaxed text-ink-3")}>
-          The bias scores, weights and levels are the engine&apos;s, computed from live data when this was written; the
-          comments beside them are the model&apos;s. The weights are a judgement and have not been tested against outcomes.
+          {briefing ? (
+            <>
+              Each item&apos;s figures, the bias scores, weights, reads and levels are the engine&apos;s, from live data when this was
+              written; the bottom line, the calls and each item&apos;s impact, effect and why are the model&apos;s. The VIX is weather:
+              it says how far moves run, never which way. The weights are a judgement, being recorded against outcomes to test them.
+            </>
+          ) : (
+            <>
+              The bias scores, weights and levels are the engine&apos;s, computed from live data when this was written; the comments
+              beside them are the model&apos;s. The weights are a judgement, being recorded against outcomes to test them.
+            </>
+          )}
         </footer>
       </div>
-
-      {folded.length > 0 && (
-        <div className={cn(p.lum ? "qt-card min-w-0 xl:col-span-12" : cn("mt-2 border-t border-ring", pad))}>
-          <button
-            type="button"
-            onClick={() => setMore((v) => !v)}
-            aria-expanded={more}
-            title={more ? "Hide the rest of the tables" : "The rest of the tables this report was written from"}
-            className={cn("flex w-full items-baseline gap-3 text-left", p.lum ? "px-7 py-3.5" : "py-4")}
-          >
-            <span className="text-[14.5px] font-semibold text-ink">More</span>
-            <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{folded.join(" · ")}</span>
-            <span className="qt-cap text-[10.5px] text-ink-2">{more ? "Hide" : "Show"}</span>
-          </button>
-        </div>
-      )}
-
-      {more && (
-        <div className={cn(p.lum ? "contents" : pad)}>
-          {f.snapshot.length > 0 && (
-            <Section title="Snapshot" span="xl:col-span-12">
-              <Snapshot rows={f.snapshot} watch={new Map()} />
-            </Section>
-          )}
-          <Catalysts f={f} b={tables} span="xl:col-span-12" title="Calendar" />
-          <Rotation f={f} b={tables} span={hasHead ? "xl:col-span-6" : "xl:col-span-12"} />
-          <Headlines f={f} b={tables} span={hasRot ? "xl:col-span-6" : "xl:col-span-12"} />
-        </div>
-      )}
     </article>
+  );
+}
+
+/**
+ * Rotation in a few lines (lib/reportSheet): the read when the ratios agree, each
+ * leading leg's five-day change against what it is measured by, and the index
+ * heavyweights' moves. Which sectors lead is context: it is not a vote in the bias, so
+ * a ratio's change is printed in ink, never green or red; a stock's own move is.
+ */
+function RotationBlock({ rot, live, rule }: { rot: BriefFacts["rotation"]; live: boolean; rule: string }) {
+  const lines = rotationLines(rot.ratios);
+  const read = rotationRead(rot.ratios);
+  const heavy = rot.megacaps
+    .filter((m) => m.pct != null)
+    .sort((a, b) => Math.abs(b.pct ?? 0) - Math.abs(a.pct ?? 0));
+  return (
+    <div className="flex flex-col gap-5">
+      {lines.length > 0 && (
+        <div>
+          {read && <p className="mb-2.5 text-[15px] leading-none font-semibold text-ink">{read}</p>}
+          <dl className={cn("border-t", rule)}>
+            {lines.map((l) => (
+              <div key={l.lead} className={cn("flex gap-3 border-b py-2 text-[13px] leading-snug", rule)}>
+                <dt className="w-[96px] shrink-0 text-ink-2">{l.lead}</dt>
+                <dd className="min-w-0 text-ink">
+                  {l.parts.map((x, i) => (
+                    <span key={x.vs}>
+                      {i > 0 && <span className="text-ink-3"> · </span>}
+                      <span className="fig">{pct(x.chg, 1)}</span> <span className="text-ink-3">vs {x.vs}</span>
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+      {heavy.length > 0 && (
+        <div>
+          <p className="qt-cap text-[10.5px] text-ink-3">
+            Heavyweights, {live ? "today" : "last session"}
+            {rot.megacap_index && rot.index_pct != null ? ` · ${rot.megacap_index} ${pct(rot.index_pct, 1)}` : ""}
+          </p>
+          <p className="fig mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-[13px]">
+            {heavy.map((m) => (
+              <span key={m.symbol} className="whitespace-nowrap">
+                <span className="text-ink-2">{m.symbol}</span>{" "}
+                <span className={(m.pct ?? 0) >= 0 ? "up" : "down"}>{pct(m.pct, 1)}</span>
+              </span>
+            ))}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -724,6 +814,188 @@ function SheetHead({ title, right }: { title: string; right?: string }) {
 }
 
 /**
+ * WHAT CAN MOVE PRICES (brief_version 4; owner, 2026-11-19: a market report "that would be
+ * given to a ceo ... list what things can impact prices going into a session ... and then
+ * a brief summary on why each thing has an impact and kepe it concise and easily
+ * digestable"). One list, filed by kind in a fixed order (lib/reportSheet groupMovers):
+ * each row is when, what it is (the collector's words and figures), how much it can move
+ * the book, which way, and the model's one line on why. The VIX is on it every day and its
+ * effect is the ranges it makes, never a side.
+ */
+function MoversSection({ b, f, rep, live, className }: { b: ShortBriefBody; f: BriefFacts; rep: Report; live: boolean; className?: string }) {
+  const p = usePaint();
+  const rule = p.lum ? "border-white/[0.07]" : "border-ring/60";
+  const day = tradingDay(Date.parse(rep.created_utc) / 1000);
+  const dayLabel = day
+    ? new Date(`${day}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })
+    : null;
+  const cats = new Map(f.catalysts.map((c) => [c.id, c]));
+  const heads = new Map(f.headlines.map((h) => [h.id, h]));
+  const ctx = new Map((f.context_movers ?? []).map((m) => [m.id as string, m]));
+  const groups = groupMovers(b.movers ?? [], (id) => cats.get(id), (id) => heads.has(id), day);
+  // Whom the effect column is about: the one book, or US stocks on the Stocks report.
+  const forWhom = f.market_factors != null ? "For stocks" : f.books.length === 1 ? `For ${f.books[0]}` : "Effect";
+  // A report written before 2026-11-19's evening has no links: no column, as it was.
+  const links = f.bias_links ?? null;
+  const hasLinks = links != null;
+  if (!groups.length) return null;
+  const th = "qt-cap text-[10px] font-medium text-ink-3";
+  return (
+    <section className={cn("border-t py-6", className)} aria-label="What can move prices">
+      <SheetHead title="What can move prices" right={live ? "this session, from here" : "going into the session"} />
+      <div className={cn("hidden gap-x-4 border-b pb-1.5 md:grid", MOVER_COLS, rule)}>
+        <span className={th}>When</span>
+        <span className={th}>What, and why it matters</span>
+        <span className={th}>Impact</span>
+        <span className={th}>{forWhom}</span>
+        {hasLinks && (
+          <span className={th} title="Which factor of the engine's bias above counts it, its share and its read now; or why the bias does not count it">
+            Feeds the bias
+          </span>
+        )}
+      </div>
+      {groups.map((g) => (
+        <div key={g.key} className="mt-4 first-of-type:mt-3">
+          <p className="qt-cap text-[10.5px] text-ink-2">
+            {g.title}
+            {(g.key === "data" ? dayLabel : g.sub) && <span className="text-ink-3"> · {g.key === "data" ? dayLabel : g.sub}</span>}
+          </p>
+          <ul className={cn("mt-1.5 border-t", rule)}>
+            {g.items.map((m) => (
+              <MoverRow
+                key={m.id}
+                m={m}
+                cat={cats.get(m.id)}
+                head={heads.get(m.id)}
+                ctx={ctx.get(m.id)}
+                link={links ? (links[m.id] ?? null) : undefined}
+                rule={rule}
+              />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** The list's columns from md up: when, what and why, impact, effect, feeds the bias. */
+const MOVER_COLS = "md:grid-cols-[88px_minmax(0,1fr)_64px_104px_minmax(150px,190px)]";
+
+const IMPACT_WORD: Record<BriefMover["impact"], string> = { high: "High", medium: "Medium", low: "Low" };
+
+/**
+ * Where an item sits in the engine's bias (server report.bias_links): the factor, its share
+ * and its read now, the read in the table's own colours; or, quieter, why it is not counted.
+ */
+function BiasLinkCell({ link }: { link: BriefBiasLink | null }) {
+  if (!link) return <span className="text-[12px] leading-[20px] text-ink-3">—</span>;
+  if (link.key == null) {
+    return (
+      <span className="block text-[12px] leading-snug text-ink-3">
+        <span className="text-ink-2">{link.name}</span>
+        {link.note && <span className="block text-[11px]">{link.note}</span>}
+      </span>
+    );
+  }
+  const hue =
+    link.lean === "bull" ? "text-call-fig" : link.lean === "bear" ? "text-put-fig" : link.lean === "damp" ? "text-warn" : "text-ink-3";
+  return (
+    <span className="block text-[12px] leading-snug" title={link.note}>
+      <span className="font-medium text-ink">{link.name}</span>
+      {link.weight != null && <span className="fig text-ink-3"> · {link.weight}%</span>}
+      <span className={cn("block text-[11px]", hue)}>
+        {link.tag}
+        {link.note && <span className="text-ink-3"> · {link.note}</span>}
+      </span>
+    </span>
+  );
+}
+const EFFECT_WORD: Record<Exclude<BriefMover["effect"], "regime">, string> = {
+  supportive: "Supportive", pressure: "Pressure", "two-way": "Two-way", neutral: "Neutral", priced: "Priced in",
+};
+const EFFECT_TITLE: Record<BriefMover["effect"], string> = {
+  supportive: "Pushes the book up",
+  pressure: "Pushes the book down",
+  "two-way": "Could go either way: still to print, or still developing",
+  neutral: "No side for the book",
+  priced: "Printed earlier: the market has traded it",
+  regime: "Weather, not a side: how far moves run, not which way",
+};
+
+/** One item: when, what it is with its figures, the why under it, the impact and the effect. */
+function MoverRow({
+  m,
+  cat,
+  head,
+  ctx,
+  link,
+  rule,
+}: {
+  m: BriefMover;
+  cat?: BriefCatalyst;
+  head?: BriefHeadline;
+  ctx?: BriefContextMover;
+  /** How the bias counts it; undefined on a report written before the links (no column). */
+  link?: BriefBiasLink | null;
+  rule: string;
+}) {
+  const figures = cat
+    ? [
+        cat.actual && `${cat.kind === "earnings" ? "EPS" : "actual"} ${cat.actual}${cat.official ? ` (${cat.official})` : ""}`,
+        cat.consensus && `${cat.kind === "earnings" ? "est." : "consensus"} ${cat.consensus}`,
+        cat.previous && `prior ${cat.previous}`,
+        !cat.actual && cat.note,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : head
+      ? head.publisher
+      : "";
+  const when = cat ? cat.when.replace(/ ET$/, "") : head ? head.time_et.replace(/ ET$/, "") : "";
+  const effectWord = m.effect === "regime" ? (ctx?.regime ?? "Ranges") : EFFECT_WORD[m.effect];
+  const effectHue =
+    m.effect === "supportive" ? "text-call-fig" : m.effect === "pressure" ? "text-put-fig" : m.effect === "neutral" || m.effect === "priced" ? "text-ink-3" : "text-ink-2";
+  const title = cat?.title ?? head?.title ?? ctx?.what ?? m.id;
+  return (
+    <li className={cn("grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 border-b py-2.5", MOVER_COLS, rule)}>
+      <span className="fig col-span-2 text-[11.5px] leading-[20px] text-ink-3 md:col-span-1">{when}</span>
+      <div className="min-w-0">
+        <p className="text-[13.5px] leading-snug font-semibold text-ink">
+          {head?.url ? (
+            <a href={head.url} target="_blank" rel="noreferrer noopener" className="hover:underline">
+              {title}
+            </a>
+          ) : (
+            <span>{title}</span>
+          )}
+          {cat?.released && cat.kind !== "fed" && cat.kind !== "holiday" && <Chip>Released</Chip>}
+        </p>
+        {figures && <p className="fig mt-0.5 text-[11.5px] leading-snug text-ink-3">{figures.charAt(0).toUpperCase() + figures.slice(1)}</p>}
+        {m.why && (
+          <p className="mt-1 text-[13px] leading-[1.45] text-ink-2" title={m.server ? "The collector's line: the model left this release off the list" : undefined}>
+            {m.why}
+          </p>
+        )}
+      </div>
+      <span className={cn("text-[12.5px] leading-[20px] md:pt-0", m.impact === "high" ? "font-semibold text-ink" : m.impact === "medium" ? "text-ink-2" : "text-ink-3")}>
+        <span className="text-ink-3 md:hidden">Impact </span>
+        {IMPACT_WORD[m.impact]}
+      </span>
+      <span className={cn("text-[12.5px] leading-[20px] font-medium md:col-start-4", effectHue)} title={EFFECT_TITLE[m.effect]}>
+        {effectWord}
+      </span>
+      {link !== undefined && (
+        <span className="col-span-2 md:col-span-1 md:col-start-5">
+          <span className="qt-cap text-[9.5px] text-ink-3 md:hidden">Feeds the bias </span>
+          <BiasLinkCell link={link} />
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
  * The Stocks report's market (2026-11-16): the tape's side as the big word, its grade and
  * the ceiling it puts on the three calls, its score on the bias scale, and its table of
  * factors with the model's comment on each, once for SPY, QQQ and IWM. The rows, tags
@@ -733,11 +1005,14 @@ function MarketSection({
   board,
   rows,
   said,
+  engine = false,
   className,
 }: {
   board?: BriefBoard;
   rows: BriefFactor[];
   said: { key: string; line: string }[];
+  /** The briefing's table: the engine's reads, no comment of the model's (DriversTable). */
+  engine?: boolean;
   className?: string;
 }) {
   const side = board?.bias ?? null;
@@ -763,7 +1038,7 @@ function MarketSection({
       </div>
       {rows.length > 0 && (
         <div className="mt-6">
-          <DriversTable rows={rows} said={said} />
+          <DriversTable rows={rows} said={said} engine={engine} />
         </div>
       )}
     </section>
@@ -783,6 +1058,7 @@ function BookSection({
   levels,
   live,
   wide,
+  engine = false,
   className,
 }: {
   c: ShortCall;
@@ -791,6 +1067,8 @@ function BookSection({
   levels?: BriefLevels;
   live: boolean;
   wide: boolean;
+  /** The briefing's table: the engine's reads, no comment of the model's (DriversTable). */
+  engine?: boolean;
   className?: string;
 }) {
   const p = usePaint();
@@ -818,26 +1096,11 @@ function BookSection({
   );
   const drivers = rows.length > 0 && (
     <div className="mt-6">
-      <DriversTable rows={rows} said={c.factors ?? []} />
+      <DriversTable rows={rows} said={c.factors ?? []} engine={engine} />
     </div>
   );
-  const box = p.lum ? cn(TILE, "px-4 py-3") : "border-l-2 border-ring py-0.5 pl-3";
-  const plan = (c.plan || c.wrong_if) && (
-    <div className={cn("grid gap-3", c.plan && c.wrong_if && "sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]")}>
-      {c.plan && (
-        <div className={cn("min-w-0", box)}>
-          <p className="qt-cap text-[10.5px] text-ink-3">Plan</p>
-          <p className="mt-1 text-[13.5px] leading-[1.5] text-ink">{c.plan}</p>
-        </div>
-      )}
-      {c.wrong_if && (
-        <div className={cn("min-w-0", box)}>
-          <p className="qt-cap text-[10.5px] text-ink-3">Wrong if</p>
-          <p className="mt-1 text-[13.5px] leading-[1.5] font-semibold text-ink">{c.wrong_if}</p>
-        </div>
-      )}
-    </div>
-  );
+  // No Plan and no Wrong if (owner, 2026-11-17: "also remove the 'plan' and 'wrong if'"):
+  // the model still writes both, and the sheet no longer draws them.
   const ruler = levels && <KeyLevels lv={levels} />;
   if (wide) {
     return (
@@ -849,10 +1112,7 @@ function BookSection({
           {head}
           {drivers}
         </div>
-        <div className="flex min-w-0 flex-col gap-6 xl:pt-1">
-          {plan}
-          {ruler}
-        </div>
+        <div className="flex min-w-0 flex-col gap-6 xl:pt-1">{ruler}</div>
       </section>
     );
   }
@@ -860,7 +1120,6 @@ function BookSection({
     <section className={cn("flex min-w-0 flex-col py-6", className)} aria-label={BOOK_TITLE[c.book]}>
       {head}
       {drivers}
-      {plan && <div className="mt-5">{plan}</div>}
       {ruler && <div className="mt-6">{ruler}</div>}
     </section>
   );
@@ -874,7 +1133,20 @@ function BookSection({
  * The weight has a column of its own where the table is wide enough for one, and sits
  * under the factor's name where it is not (two books side by side on a 1920 screen).
  */
-function DriversTable({ rows, said }: { rows: BriefFactor[]; said: { key: string; line: string }[] }) {
+function DriversTable({
+  rows,
+  said,
+  engine = false,
+}: {
+  rows: BriefFactor[];
+  said: { key: string; line: string }[];
+  /**
+   * THE BRIEFING'S TABLE (brief_version 4): the model writes no comment on it, since the
+   * list above says each thing once with its why, so the last column is the engine's own
+   * reads, at full ink and headed as theirs rather than as comments left blank.
+   */
+  engine?: boolean;
+}) {
   const p = usePaint();
   const rule = p.lum ? "border-white/[0.07]" : "border-ring/60";
   const line = new Map(said.map((x) => [x.key, x.line]));
@@ -893,18 +1165,18 @@ function DriversTable({ rows, said }: { rows: BriefFactor[]; said: { key: string
             >
               Weight
             </th>
-            <th className={th}>Comment</th>
+            <th className={th}>{engine ? "What the engine reads" : "Comment"}</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => {
             const text = line.get(r.key);
-            const engine = r.reads.join(" · ");
+            const reads = r.reads.join(" · ");
             return (
               <tr
                 key={r.key}
                 className={cn("border-b align-top last:border-b-0", rule)}
-                title={engine ? `The engine's reads: ${engine}` : undefined}
+                title={reads ? `The engine's reads: ${reads}` : undefined}
               >
                 <td className="py-2.5 pr-4">
                   <div className="text-[13.5px] leading-snug font-semibold text-ink">{r.name}</div>
@@ -942,7 +1214,11 @@ function DriversTable({ rows, said }: { rows: BriefFactor[]; said: { key: string
                   )}
                 </td>
                 <td className="py-2.5 text-[13.5px] leading-[1.5]">
-                  {text ? <span className="text-ink">{text}</span> : <span className="text-ink-3">{engine || "No read at this hour."}</span>}
+                  {text ? (
+                    <span className="text-ink">{text}</span>
+                  ) : (
+                    <span className={engine ? "text-[12.5px] text-ink-2" : "text-ink-3"}>{reads || "No read at this hour."}</span>
+                  )}
                 </td>
               </tr>
             );
@@ -1129,7 +1405,10 @@ function BriefBodyView({ rep }: { rep: Report }) {
             {rep.session_label} Session Brief
           </h1>
         )}
-        <span className="fig text-[11.5px] text-ink-3">{f.as_of}</span>
+        <span className="fig text-[11.5px] text-ink-3">
+          {f.as_of}
+          <WrittenAgo createdUtc={rep.created_utc} />
+        </span>
       </header>
 
       {f.partial.length > 0 && (
@@ -2244,9 +2523,24 @@ function Headlines({ f, b, span }: { f: BriefFacts; b: BriefBody; span?: string 
   if (picks.length === 0) return null;
   return (
     <Section title="Headlines that move price" span={span}>
+      <HeadlineList picks={picks} byId={byId} />
+    </Section>
+  );
+}
+
+/** The headlines the model picked, each with its outlet, hour, books and note. */
+function HeadlineList({
+  picks,
+  byId,
+}: {
+  picks: BriefBody["headlines"];
+  byId: Map<string, BriefHeadline>;
+}) {
+  return (
       <ul className="border-t border-ring/60">
         {picks.map((p) => {
-          const h = byId.get(p.id)!;
+          const h = byId.get(p.id);
+          if (!h) return null;
           return (
             <li key={p.id} className="border-b border-ring/60 py-2.5">
               <div className="flex flex-wrap items-center text-[11px] text-ink-3">
@@ -2274,7 +2568,6 @@ function Headlines({ f, b, span }: { f: BriefFacts; b: BriefBody; span?: string 
           );
         })}
       </ul>
-    </Section>
   );
 }
 

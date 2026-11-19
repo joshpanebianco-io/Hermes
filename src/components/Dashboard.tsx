@@ -7,14 +7,14 @@ import { DASH_BOOKS, futuresBrief, nextEvent, sessionStrip, weightsWord } from "
 import { DAY_TYPED, FUT_NAME, QUOTE_KEY, type FutView } from "@/lib/futures";
 import { CALL_HUE } from "@/lib/daytype";
 import { wholeScore } from "@/lib/biasScale";
-import type { DashReportCard, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
+import type { DashImpact, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
 import { BreadthBars } from "@/components/panels/Breadth";
 import { setupLabel } from "@/components/panels/ScanDetail";
 import { CARD, CatalystCell, Chips, Spark, TD, TH, ageWord, dayName, rowProps } from "@/components/panels/ScanWide";
 import { PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { SectorGlyph } from "@/components/ui/SectorGlyph";
-import { biasInk, biasLabel, scoreText } from "@/lib/bias";
+import { scoreText } from "@/lib/bias";
 import { BiasScale } from "@/components/ui/BiasScale";
 import { cn } from "@/lib/cn";
 import { dir, inMin, num, pct } from "@/lib/format";
@@ -171,15 +171,29 @@ export function Dashboard({
       {/* Three across from 1280px, as the row under it is: the owner's 1920 screens had
           the four-card rule's two-by-two, which left Futures alone beside a hole. Under
           1280 the game plan and Breadth share a row and Futures takes the next whole. */}
-      <div className="grid shrink-0 gap-3 lum:gap-[var(--lum-gap)] lg:grid-cols-2 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.15fr)]">
+      {/* Earlier the same day the game plan was made wider than Breadth (1.55 : 0.9 : 1.2) so
+          its sectors and themes sat on one line; the even columns below replaced that. Breadth
+          fills its card's height instead of floating. */}
+      {/* THREE EVEN COLUMNS ON BOTH ROWS (owner, 2026-11-19: "restructure the widths and space
+          so that it looks more even", the flip mock at 2560 approved: "the dashboard mock is
+          good"). 841px a card at 2560, 629 at 1920; it was 1071 | 622 | 829. */}
+      <div className="grid shrink-0 gap-3 lum:gap-[var(--lum-gap)] lg:grid-cols-2 xl:grid-cols-[repeat(3,minmax(0,1fr))]">
         <PlanCard d={data} later={later} now={now} prices={prices} onWire={() => onOpen("terminal")} toScanner={toScanner} />
         <BreadthCard d={data} />
         {futures && <FuturesCard {...futures} />}
       </div>
-      <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[minmax(0,5fr)_minmax(0,3.7fr)_minmax(0,3.6fr)] xl:grid-rows-[minmax(0,1fr)]">
+      {/* Row two's history, all 2026-11-19: the Market report card went (it repeated the
+          plan's bias); Top setups took two thirds and the owner found it "so wide, it's
+          uneven"; it went under the plan alone with Stock news, then Live signals, between;
+          then High impact news replaced Live signals and both rows went even. */}
+      {/* HIGH IMPACT NEWS IN LIVE SIGNALS' PLACE (owner, 2026-11-19: "replace the live signals
+          card on dashboard with a High Impact News card ... important headlines, geopolitcs,
+          IPO's earnigns ofr the day"). The signals still alert, and each Scanner row shows
+          its last one. */}
+      <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[repeat(3,minmax(0,1fr))] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
         <TopSetups rows={data.top} onAll={() => toScanner("today", { "today.side": "all" })} />
-        <ReportCard r={data.report ?? null} tradingDay={data.trading_day} onOpen={() => toScanner("report")} />
+        <HighImpact d={data.impact} onWire={() => onOpen("terminal")} />
         <StockNews stories={data.stories} live={data.news_live} />
       </div>
       <Rotation d={data} onHeat={() => toSectors()} onSector={(k) => toSectors({ "sec.mode": "cards", "sec.sel": k })} />
@@ -271,7 +285,7 @@ function FuturesCard({ data, onBook }: { data: TerminalData; onBook: (v: FutView
           <span />
           <span>Price</span>
           <span className="col-span-2">Bias · which way</span>
-          <span>Session type · trend or range</span>
+          <span className="truncate" title="Session type: will New York trend or range">Session type · trend or range</span>
         </div>
         {DASH_BOOKS.map((k) => {
           const b = books[k];
@@ -445,6 +459,7 @@ function PlanCard({
  * the move. A card of its own since 2026-11-12; it was the right half of the plan's.
  */
 function BreadthCard({ d }: { d: DashboardPayload }) {
+  const [box, h] = useBoxHeight<HTMLDivElement>();
   return (
     <section className={cn(CARD, "flex flex-col gap-3 lg:col-span-2 2xl:col-span-1")}>
       <Head
@@ -462,12 +477,38 @@ function BreadthCard({ d }: { d: DashboardPayload }) {
           ) : undefined
         }
       />
-      {/* Centred in whatever height the row gives it: the bars are a fixed 92px tall. */}
-      <div className="flex min-w-0 flex-1 flex-col justify-center">
-        {d.breadth ? <BreadthBars data={d.breadth} /> : <p className="py-6 text-center text-[11.5px] text-ink-3">The wide read has not landed yet.</p>}
+      {/* THE BARS FILL WHAT HEIGHT THE ROW GIVES THEM (2026-11-19): they were a fixed 92px
+          centred in a card the game plan makes 400 tall, a small chart floating in the
+          middle. The chart is laid over the space, so it takes the row's height and never
+          sets it: the game plan and Futures do. */}
+      <div ref={box} className="relative min-h-[140px] min-w-0 flex-1">
+        <div className="absolute inset-0 flex flex-col justify-end">
+          {d.breadth ? (
+            <BreadthBars data={d.breadth} barHeight={Math.min(240, Math.max(92, h - BREADTH_FOOT))} />
+          ) : (
+            <p className="py-6 text-center text-[11.5px] text-ink-3">The wide read has not landed yet.</p>
+          )}
+        </div>
       </div>
     </section>
   );
+}
+
+/** Below the bars: their labels, the split line and the two counts (Breadth.BreadthBars). */
+const BREADTH_FOOT = 48;
+
+/** An element's height, kept as it changes. */
+function useBoxHeight<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+  const ref = useRef<T>(null);
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => setH(Math.round(e.contentRect.height)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, h];
 }
 
 function FocusLine({ rows, none }: { rows: DashboardPayload["plan"]["focus"]; none: string }) {
@@ -521,12 +562,17 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
   const ticker = useTicker();
   const shown = rows.filter(TOP_TEST[chip]);
   const counts = { all: rows.length, long: rows.filter(TOP_TEST.long).length, short: rows.filter(TOP_TEST.short).length, news: rows.filter(TOP_TEST.news).length };
+  // Before the bell the list ranks how in play a name is, 0 to 100, as the Scanner's Score does.
+  const inPlay = rows.some((r) => r.score.kind === "inplay");
   return (
     // `@container`: on a card under 700px (a 1920 screen with the Sidebar interface's
     // sidebar open) the table was wider than the card and the score, the one figure the
     // card is ranked by, was cut off its right edge. The small chart gives way there.
+    // The Scanner list's first ten, in its order (server dashboard.build `listed`, 2026-11-19):
+    // overnight that is the evening's movers and the names in play, not the MAG 7 the
+    // engine holds until the pool's 06:00 mark. From 1536px it is the game plan's track.
     <section className={cn(CARD, "@container flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Top setups" sub="The scanner's own rank" right={<Go onClick={onAll}>Open the Scanner</Go>} />
+      <Head title="Top setups" sub={inPlay ? "The Scanner's top ten · in play until the open" : "The Scanner's top ten"} right={<Go onClick={onAll}>Open the Scanner</Go>} />
       <div className="shrink-0">
         <Chips items={TOP_CHIPS} on={chip} set={setChip} counts={counts} />
       </div>
@@ -544,7 +590,9 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
                 <th scope="col" className={TH}>Setup</th>
                 <th scope="col" className={TH}>Most important story</th>
                 <th scope="col" className={cn(TH, "@max-[700px]:hidden")}>Chart</th>
-                <th scope="col" className={cn(TH, "text-right")}>Score</th>
+                <th scope="col" className={cn(TH, "text-right")} title={inPlay ? "In play, 0–100: the Scanner's read until 09:30 ET, then the setup score" : "The setup score, 0–100"}>
+                  Score
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -559,8 +607,10 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
                   <td className={cn(TD, "text-center")}><Dot at={pdPlace(r)} range="Previous day" /></td>
                   <td className={cn(TD, "text-center")}><Dot at={pmPlace(r)} range="Pre-market" /></td>
                   <td className={cn(TD, "text-[12px] whitespace-nowrap text-ink-2")}>{setupLabel(r, true)}</td>
-                  <td className={TD}><CatalystCell c={r.catalyst} width={360} /></td>
-                  <td className={cn(TD, "@max-[700px]:hidden")}><Spark pts={r.spark} w={72} h={24} /></td>
+                  {/* The card is the game plan's width from 1536px (2026-11-19): a story
+                      wraps to two lines at most rather than pushing the chart away. */}
+                  <td className={TD}><CatalystCell c={r.catalyst} width={420} /></td>
+                  <td className={cn(TD, "@max-[700px]:hidden")}><Spark pts={r.spark} base={r.spark_ref} w={72} h={24} /></td>
                   <td className={cn(TD, "fig text-right text-[12.5px] text-ink")}>{r.score.total}</td>
                 </tr>
               ))}
@@ -572,64 +622,91 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
   );
 }
 
-/**
- * THE MARKET OVERVIEW'S CARD, WHERE IN PLAY STOOD (owner, 2026-11-13: "what can we
- * replace the 'in play' section on the dashboard? it seems redundant", then "okay do that").
- * In play was the pool's top ten, the Scanner's own pre-market list a second time. This is
- * the one read the page did not carry: the AI overview written at 09:00 ET (the Stocks
- * tab's Market view), cut to its headline, what it means for the list and three risks.
- * Its news and its sectors are left to the Stock news and Rotation cards beside it.
+/*
+ * HIGH IMPACT NEWS (owner, 2026-11-19: "a High Impact News card or something named similar, tha
+ * tlists things like important headlines, geopolitcs, IPO's earnigns ofr the day etc"; the mock
+ * on the real page approved: "the dashboard mock is good"). What can move the whole market
+ * today, composed by the server (impact.py) from the collector's own data, no model:
+ *  - TODAY, in time order, one line each: the US prints that matter with the figure against
+ *    what was expected, the Fed's speakers, the big reports before and after, an IPO the
+ *    headlines are full of, the night's big foreign print;
+ *  - HEADLINES: the wire's high-impact stories of the last twelve hours, then geopolitics,
+ *    energy and policy of the last six, one a story, newest first.
+ * Stock news beside it is the names' own stories; this card is the market's.
  */
-/**
- * The Stocks Market Report, in the Market overview card's place (2026-11-16, owner: "do
- * waht you recommend best"). The overview card read a note written at 22:23 ET on a
- * Saturday about the Monday after, still arguing from the ten-minute 200 EMA. This is the
- * newest report on SPY, QQQ and IWM (server report.latest_card), written by itself at
- * 09:00 ET on a trading day and on Generate: its summary, each fund's call and its risks.
- * The market's bias is the game plan's, live, above it, so the card does not repeat it.
- */
-function ReportCard({ r, tradingDay, onOpen }: { r: DashReportCard | null; tradingDay: string; onOpen: () => void }) {
-  const current = r != null && (r.created_et ?? "").slice(0, 10) === tradingDay;
-  const when = r ? (current ? (r.et_label.split(", ")[1] ?? r.et_label) : r.et_label) : "";
-  const sub = !r ? "SPY · QQQ · IWM for New York, written at 09:00 ET" : `SPY · QQQ · IWM · New York · written ${when}${r.auto ? " by itself" : ""}`;
+function HighImpact({ d, onWire }: { d: DashImpact | undefined; onWire: () => void }) {
+  const today = d?.today ?? [];
+  const heads = d?.heads ?? [];
   return (
-    <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Market report" sub={sub} right={<Go onClick={onOpen}>Open report</Go>} />
-      {!r ? (
-        <p className="py-8 text-center text-[12px] text-ink-3">
-          No report yet. It writes itself at 09:00 ET on a trading day, or press Generate on the Stocks tab&apos;s Market Report.
-        </p>
+    <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2 xl:min-h-0")}>
+      <Head
+        title={
+          <span className="flex items-center gap-2">
+            High impact news
+            {d?.live && (
+              <span className="qt-cap flex items-center gap-1 text-[9.5px] font-normal text-ink-3">
+                <span aria-hidden className="h-[5px] w-[5px] rounded-full bg-call" />
+                live
+              </span>
+            )}
+          </span>
+        }
+        sub="What can move the whole market today: the day's prints, reports and listings, then the headlines"
+        right={<Go onClick={onWire}>Open the wire</Go>}
+      />
+      {d == null ? (
+        <p className="py-8 text-center text-[12px] text-ink-3">Reading the wire and the calendar…</p>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto pr-1">
-          {!current && <p className="mb-2 text-[11px] text-ink-3">From an earlier day: the next writes itself at 09:00 ET.</p>}
-          <p className="text-[14px] leading-[1.45] font-semibold text-ink">{r.thesis}</p>
-          {r.calls.length > 0 && (
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {r.calls.map((c) => (
-                <div key={c.book} className="min-w-0 rounded-[4px] border border-ring/60 px-2.5 py-1.5">
-                  <p className="fig text-[11px] text-ink-3">{c.book}</p>
-                  <p className="truncate text-[13.5px] leading-tight font-semibold" style={{ color: biasInk(c.open_bias) }}>
-                    {biasLabel(c.open_bias)}
-                  </p>
-                  <p className="fig mt-0.5 text-[10.5px] text-ink-3" title="The model's conviction, capped by the Stocks tape's">
-                    conviction {c.conviction}/5
-                  </p>
-                </div>
+          <p className="qt-cap mt-1 mb-0.5 text-[10px] text-ink-3">Today</p>
+          {today.length === 0 ? (
+            <p className="py-2 text-[12px] text-ink-3">Nothing scheduled in the US today.</p>
+          ) : (
+            <ul>
+              {today.map((r) => (
+                <li
+                  key={`${r.t}-${r.kind}-${r.line}`}
+                  className="grid grid-cols-[52px_70px_minmax(0,1fr)] items-baseline gap-x-2 border-b border-ring/60 py-[5px] last:border-b-0"
+                >
+                  <span className="fig text-[11.5px] text-ink-3">{r.t}</span>
+                  <span className={cn("text-[11.5px] font-semibold", r.done ? "text-ink" : "text-ink-2")}>{r.kind}</span>
+                  {r.url ? (
+                    <a href={r.url} target="_blank" rel="noreferrer noopener" title={r.line} className="hit truncate text-[12px] text-ink-2 hover:text-ink">
+                      {r.line}
+                    </a>
+                  ) : (
+                    <span title={r.line} className={cn("truncate text-[12px]", r.done ? "text-ink-2" : "text-ink-3")}>
+                      {r.line}
+                    </span>
+                  )}
+                </li>
               ))}
-            </div>
+            </ul>
           )}
-          {r.risks.length > 0 && (
-            <div className="mt-3">
-              <p className="qt-cap mb-1 text-[10px] text-ink-3">Risks</p>
-              <ul className="flex flex-col gap-1">
-                {r.risks.map((x) => (
-                  <li key={x} className="flex gap-2 text-[12px] leading-[1.45] text-ink-2">
-                    <span aria-hidden className="mt-[7px] h-[4px] w-[4px] shrink-0 rounded-[1px] bg-ink-4" />
-                    {x}
-                  </li>
-                ))}
-              </ul>
-            </div>
+          <p className="qt-cap mt-3 mb-0.5 text-[10px] text-ink-3">Headlines</p>
+          {heads.length === 0 ? (
+            <p className="py-2 text-[12px] text-ink-3">No high-impact headlines in the last twelve hours.</p>
+          ) : (
+            <ul>
+              {heads.map((h) => (
+                <li key={`${h.t}-${h.title}`} className="border-b border-ring/60 py-2 last:border-b-0">
+                  <p className="text-[11.5px]">
+                    <span className={cn("font-semibold", h.high ? "text-ink" : "text-ink-2")}>{h.kind}</span>
+                    {h.high && <span className="text-ink-3"> · high impact</span>}
+                  </p>
+                  {h.url ? (
+                    <a href={h.url} target="_blank" rel="noreferrer noopener" className="hit mt-0.5 line-clamp-2 text-[12px] leading-[1.35] text-ink-2 hover:text-ink">
+                      {h.title}
+                    </a>
+                  ) : (
+                    <p className="mt-0.5 line-clamp-2 text-[12px] leading-[1.35] text-ink-2">{h.title}</p>
+                  )}
+                  <p className="fig mt-0.5 text-[10.5px] text-ink-3">
+                    {ageWord(h.age_min)} ago{h.publisher ? ` · ${h.publisher}` : ""}
+                  </p>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

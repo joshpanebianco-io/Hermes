@@ -236,14 +236,58 @@ def test_no_retest_on_the_break_bar_itself() -> None:
 
 
 def _replay(rows: list[tuple[float, float, float, float]], w_top: float, w_bot: float,
-            levels: dict[str, Lvl] | None = None) -> list[dict[str, Any]]:
+            levels: dict[str, Lvl] | None = None, vwap: float | None = None,
+            tf: str = "10m") -> list[dict[str, Any]]:
     bars = [_b(*r, i=i) for i, r in enumerate(rows)]
     n = len(bars)
     lv = levels or {"PDH": Lvl("PDH", True, 90.0), "PDL": Lvl("PDL", False, 80.0),
                     "PMH": Lvl("PMH", True, 92.0), "PML": Lvl("PML", False, 85.0)}
     rp = scan.replay(bars, list(range(n)), None, lv, [1.0] * n, [w_top] * n, [w_bot] * n,
-                     lv["PMH"].price, lv["PML"].price)
+                     lv["PMH"].price, lv["PML"].price,
+                     vwap=[vwap] * n if vwap is not None else None, tf=tf)
     return rp.signals
+
+
+def _near_levels() -> dict[str, Lvl]:
+    # PDH 99 and PMH 99.5, just under the bars below: a run of two ATR at most, not extended.
+    return {"PDH": Lvl("PDH", True, 99.0), "PDL": Lvl("PDL", False, 80.0),
+            "PMH": Lvl("PMH", True, 99.5), "PML": Lvl("PML", False, 85.0)}
+
+
+def test_the_ema_entry_is_for_an_extended_run_only() -> None:
+    # Owner, 2026-11-19: "if price is really extended, then retest of the ema or vwap".
+    # The same bars as test_e_setup_then_trigger, whose levels sit 8 ATR below them, with
+    # the levels two ATR under the run instead: the wave pullback is no (E) any more.
+    rows = [(99, 101, 99, 100.5), (100.5, 102, 100.2, 101.5), (101.5, 101.8, 99.9, 100.6),
+            (100.6, 102.2, 100.4, 102.0)]
+    assert any(s["kind"] == "E" for s in _replay(rows, 100.0, 99.5))
+    near = _replay(rows, 100.0, 99.5, levels=_near_levels())
+    assert not any(s["kind"] in ("E", "E_SETUP") for s in near)
+
+
+VWAP_ROWS = [
+    (99, 101, 99, 100.5),         # extended from here (PMH 92, 8.5 ATR under the close)
+    (100.5, 102, 100.6, 101.8),   # clear of VWAP 100: armed
+    (101.8, 101.9, 100.1, 100.6),  # back within the buffer of VWAP and closes above it
+]
+
+
+def test_a_vwap_retest_after_an_extended_run_is_its_own_signal() -> None:
+    # The wave sits far below the bars, so no (E) can set: the (V) stands on its own.
+    sig = _replay(VWAP_ROWS, 95.0, 94.0, vwap=100.0)
+    v = [s for s in sig if s["kind"] == "V"]
+    assert len(v) == 1 and v[0]["side"] == "long" and v[0]["level"] == "VWAP"
+    assert (v[0]["price"], v[0]["stop"], v[0]["tf"]) == (100.6, 100.1, "10m")
+    assert v[0]["risk_min"] == pytest.approx(0.25)   # the chart's buffer, as for the (L)
+    assert "after a run of 2.5+ ATR past PMH" in v[0]["note"]
+    assert not any(s["kind"] == "E" for s in sig)
+
+
+def test_no_vwap_retest_without_the_extended_run_and_every_signal_names_its_chart() -> None:
+    assert not any(s["kind"] == "V" for s in _replay(VWAP_ROWS, 95.0, 94.0, vwap=100.0,
+                                                     levels=_near_levels()))
+    sig = _replay(VWAP_ROWS, 95.0, 94.0, vwap=100.0, tf="3m")
+    assert sig and {s["tf"] for s in sig} == {"3m"}
 
 
 def test_e_setup_then_trigger() -> None:
@@ -365,12 +409,15 @@ def test_score_parts_sum_to_the_total() -> None:
     sc = scanscore.score_row(_row(), reg, 0.5, None, None)
     by = {p["key"]: p["pts"] for p in sc["parts"]}
     # The weights of the quant audit (2026-11-13): structure 20, the entry 25 (all or
-    # nothing since 2026-11-14), RS 10 (halved the same day), RVOL 8, market 20
-    # (11 + 5 + 4), catalyst 20. The daily frame was a seventh part worth 6 until
-    # 2026-11-15 (owner: "i think we drop ema's from the bias and scoring of stocks").
-    assert by == {"structure": 20, "rs": 6, "location": 25, "volume": 6, "market": 20,
+    # nothing since 2026-11-14), RS 10 (halved the same day), RVOL 8, market 15
+    # (11 + 4), catalyst 20. The daily frame was a seventh part worth 6 until
+    # 2026-11-15 (owner: "i think we drop ema's from the bias and scoring of stocks"),
+    # and the VIX "confirming" paid 5 of market until the evening of 2026-11-19: the
+    # regime here still says "confirm", and it is worth nothing.
+    assert by == {"structure": 20, "rs": 6, "location": 25, "volume": 6, "market": 15,
                   "catalyst": 0}
-    assert sc["total"] == 77 and sc["raw"] == 77 and sc["side"] == "long"
+    assert sc["total"] == 72 and sc["raw"] == 72 and sc["side"] == "long"
+    assert "VIX" not in next(p for p in sc["parts"] if p["key"] == "market")["note"]
 
 
 @pytest.mark.parametrize(

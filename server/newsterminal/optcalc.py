@@ -639,7 +639,7 @@ def trade_plan(row: dict[str, Any], side: str) -> tuple[float | None, float | No
         return None, None, "no price"
     sign = 1.0 if side == "long" else -1.0
     for s in reversed(row.get("signals") or []):
-        if s.get("kind") not in ("L", "E") or s.get("side") != side:
+        if s.get("kind") not in ("L", "E", "V") or s.get("side") != side:
             continue
         stop, price = _f(s.get("stop")), _f(s.get("price"))
         if stop is not None and price is not None:

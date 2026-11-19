@@ -42,6 +42,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from . import bias as bias_mod
+from . import drivestats as ds
 from . import events as events_mod
 from . import frame as frame_mod
 from . import holidays, marketctx, releases, report, structure, volterm
@@ -95,10 +96,65 @@ def _q(quotes: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
 
 
 def _vote(key: str, label: str, layer: str, value: str, vote: str, note: str,
-          live: bool = True) -> dict[str, Any]:
-    """One read. `live` false means it cannot vote at this hour: not flat, absent."""
-    return {"key": key, "label": label, "layer": layer, "value": value, "vote": vote,
-            "note": note, "live": live}
+          live: bool = True, strength: float | None = None) -> dict[str, Any]:
+    """One read. `live` false means it cannot vote at this hour: not flat, absent.
+    `strength` is how much of a full vote a long or short read's size earns
+    (drivestats.py); none is a whole vote."""
+    v = {"key": key, "label": label, "layer": layer, "value": value, "vote": vote,
+         "note": note, "live": live}
+    if strength is not None and vote in ("long", "short"):
+        v["strength"] = round(strength, 2)
+    return v
+
+
+#: A print, the inventories, any figure on the calendar, votes until this hour ET on the
+#: day it lands: by the close the session has traded it, and in Asia it is in the price.
+CATALYST_UNTIL = (16, 0)
+
+
+def _after_close(now: datetime) -> bool:
+    et = now.astimezone(report.ET)
+    return (et.hour, et.minute) >= CATALYST_UNTIL
+
+
+def _spent(v: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """A catalyst read after its day's close: it voted while the session traded it, and
+    by Asia it is in the price (since 2026-11-19; it voted until midnight ET). Pure."""
+    if v.get("live") is False or not _after_close(now):
+        return v
+    out = {k: x for k, x in v.items() if k != "strength"}
+    out.update(vote="neutral", live=False,
+               note=f"voted until {CATALYST_UNTIL[0]}:00 ET; the session has traded it since "
+                    f"— {v.get('note')}")
+    return out
+
+
+def _sized(key: str, label: str, value: str, move: float, usual: float, measured: bool,
+           up: str, notes: tuple[str, str], what: str = "the move") -> dict[str, Any]:
+    """A read voted by its size in its usual days (drivestats.sized). Pure."""
+    vote, s, note = ds.sized(move, usual, measured, up, notes, what)
+    return _vote(key, label, "macro", value, vote, note, strength=s)
+
+
+def _surprise(key: str, label: str, value: str, st: ds.Stats, x: str, x_move: float,
+              book_key: str, book_move: float | None, book_name: str, up: str,
+              notes: tuple[str, str]) -> dict[str, Any]:
+    """A co-mover voted on what the book's own move leaves unexplained
+    (drivestats.surprise). Pure."""
+    vote, s, note = ds.surprise(st, x, x_move, book_key, book_move, book_name, up, notes)
+    return _vote(key, label, "macro", value, vote, note, strength=s)
+
+
+def _gated(st: ds.Stats, x: str, book_key: str, sign: int, book_name: str,
+           what: str) -> str | None:
+    """Why a macro driver is not voting on this book now (drivestats.gate_note). Pure."""
+    return ds.gate_note(st, x, book_key, sign, book_name, what)
+
+
+#: The book's name in a note.
+_BOOK_NAME = {"NQ": "NQ", "ES": "ES", "GC": "gold", "SIL": "silver", "CL": "crude"}
+#: A 10-year note future's price move in basis points of yield, near enough: its duration.
+ZN_DURATION = 6.5
 
 
 def _side(x: float, long_at: float, short_at: float) -> str:
@@ -132,42 +188,81 @@ def _stopped(q: dict[str, Any]) -> bool:
 # ---- macro -------------------------------------------------------------------
 
 
-def _yields(quotes: list[dict[str, Any]], book: str, day: date | None = None) -> dict[str, Any]:
+def _rate_notes(book: str) -> tuple[str, str]:
+    """(yields up, yields down) for this book."""
+    if book == "GC":
+        return ("yields up: the carrying cost of a zero-coupon asset rises — a headwind",
+                "yields down: cheaper to hold gold — a tailwind")
+    if book == "SIL":
+        return ("yields up: a metal that pays nothing costs more to hold — a headwind",
+                "yields down: cheaper to hold silver — a tailwind")
+    return ("the discount rate is rising — a headwind for a long-duration index",
+            "the discount rate is falling — a tailwind")
+
+
+def _yields(quotes: list[dict[str, Any]], book: str, day: date | None = None,
+            st: ds.Stats | None = None) -> dict[str, Any]:
+    """The 10-year: the cash yield in its hours, the note future when it is shut.
+
+    SINCE 2026-11-19 (the logic pass, drivestats.py): sized in its usual day, and a vote
+    only while the 10-year has been moving against the book lately. The note future
+    (ZN) trades round the clock, so rates speak in Asia and London, where the cash
+    yield's last print is the day before's."""
+    st = st or ds.Stats(None, day or date.today())
+    bk, name = ds.BOOK_KEY.get(book, book), _BOOK_NAME.get(book, book)
+    up, down = _rate_notes(book)
     q = _q(quotes, "US10Y")
     chg = _num(q.get("chg")) if q else None
+    value = "—"
+    if q is not None and chg is not None:
+        bp = chg * 100.0
+        last = _num(q.get("last"))
+        value = f"{last:.2f}% {_signed(bp, 1, 'bp')}" if last is not None else _signed(bp, 1, "bp")
+    # A bond holiday (Columbus Day, Veterans Day: stocks trade, cash Treasuries do not).
+    # The index still publishes a figure, and it is not a market: it cannot vote.
+    shut = holidays.bond_closed(day) if day else None
+    if q is not None and chg is not None and not shut and _trading(q):
+        why = _gated(st, "US10Y", bk, -1, name, "The 10-year")
+        if why:
+            return _vote("yields", "10Y yield", "macro", value, "neutral", why, live=False)
+        u, measured = st.usual("US10Y")
+        return _sized("yields", "10Y yield", value, chg * 100.0, u, measured, "short", (up, down),
+                      "the 10-year's move")
+    # The cash yield cannot vote: the note future can, while it trades. A rise in the note
+    # is a fall in yields.
+    zn = _q(quotes, "ZN")
+    pct = _num(zn.get("pct")) if zn else None
+    if zn is not None and pct is not None and _trading(zn):
+        approx = -pct / ZN_DURATION * 100.0
+        value = f"note fut {_signed(pct, 2, '%')} (≈ {_signed(approx, 1, 'bp')})"
+        why = _gated(st, "ZN", bk, 1, name, "The note future")
+        if why:
+            return _vote("yields", "10Y yield", "macro", value, "neutral", why, live=False)
+        u, measured = st.usual("ZN")
+        cash = (f"the cash market is shut ({shut}); " if shut
+                else "the cash yield is shut; " if q is not None else "")
+        r = _sized("yields", "10Y yield", value, pct, u, measured, "long", (down, up),
+                   "the note future's move")
+        r["note"] = cash + "read from the 10-year note future: " + r["note"]
+        return r
     if q is None or chg is None:
         return _vote("yields", "10Y yield", "macro", "—", "neutral", "no 10Y on the board",
                      live=False)
-    bp = chg * 100.0
-    last = _num(q.get("last"))
-    value = f"{last:.2f}% {_signed(bp, 1, 'bp')}" if last is not None else _signed(bp, 1, "bp")
-    # A bond holiday (Columbus Day, Veterans Day: stocks trade, Treasuries do not). The
-    # index still publishes a figure, and it is not a market: it cannot vote.
-    shut = holidays.bond_closed(day) if day else None
     if shut:
         return _vote("yields", "10Y yield", "macro", value, "neutral",
                      f"the cash Treasury market is shut today ({shut}) — no live read",
                      live=False)
-    if not _trading(q):
-        return _vote("yields", "10Y yield", "macro", value, "neutral",
-                     "the cash 10Y last printed at its close — no live read", live=False)
-    if abs(bp) < YIELD_BP:
-        return _vote("yields", "10Y yield", "macro", value, "neutral",
-                     f"inside ±{YIELD_BP:.0f}bp on the day — no read")
-    rising = bp > 0
-    if book == "GC":
-        note = ("yields up: the carrying cost of a zero-coupon asset rises — a headwind"
-                if rising else "yields down: cheaper to hold gold — a tailwind")
-    elif book == "SIL":
-        note = ("yields up: a metal that pays nothing costs more to hold — a headwind"
-                if rising else "yields down: cheaper to hold silver — a tailwind")
-    else:
-        note = ("the discount rate is rising — a headwind for a long-duration index"
-                if rising else "the discount rate is falling — a tailwind")
-    return _vote("yields", "10Y yield", "macro", value, "short" if rising else "long", note)
+    return _vote("yields", "10Y yield", "macro", value, "neutral",
+                 "the cash 10Y last printed at its close and the note future is not "
+                 "trading — no live read", live=False)
 
 
-def _dollar(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
+def _dollar(quotes: list[dict[str, Any]], book: str,
+            st: ds.Stats | None = None) -> dict[str, Any]:
+    """The dollar index: sized in its usual day, a vote only while it has been moving
+    against the book lately (since 2026-11-19)."""
+    st = st or ds.Stats(None, date.today())
+    bk, name = ds.BOOK_KEY.get(book, book), _BOOK_NAME.get(book, book)
     q = _q(quotes, "DXY")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
@@ -177,27 +272,31 @@ def _dollar(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     if _stopped(q):
         return _vote("dollar", "Dollar", "macro", value, "neutral",
                      "the dollar index has stopped printing — no live read", live=False)
-    if abs(pct) < DXY_FLAT:
-        return _vote("dollar", "Dollar", "macro", value, "neutral",
-                     f"inside ±{DXY_FLAT}% — no read")
-    up = pct > 0
+    why = _gated(st, "DXY", bk, -1, name, "The dollar")
+    if why:
+        return _vote("dollar", "Dollar", "macro", value, "neutral", why, live=False)
     if book == "GC":
-        note = ("a firmer dollar is the unit gold is priced in rising — a headwind" if up
-                else "a softer dollar — a tailwind for gold")
+        notes = ("a firmer dollar is the unit gold is priced in rising — a headwind",
+                 "a softer dollar — a tailwind for gold")
     elif book == "SIL":
-        note = ("a firmer dollar is the unit silver is priced in rising — a headwind" if up
-                else "a softer dollar — a tailwind for silver")
+        notes = ("a firmer dollar is the unit silver is priced in rising — a headwind",
+                 "a softer dollar — a tailwind for silver")
     elif book == "CL":
-        note = ("a firmer dollar makes the barrel dearer for every buyer paying in another "
-                "currency — a headwind" if up
-                else "a softer dollar makes the barrel cheaper outside America — a tailwind")
+        notes = ("a firmer dollar makes the barrel dearer for every buyer paying in another "
+                 "currency — a headwind",
+                 "a softer dollar makes the barrel cheaper outside America — a tailwind")
     else:
-        note = ("a firmer dollar tightens conditions — a headwind" if up
-                else "a softer dollar eases conditions — a tailwind")
-    return _vote("dollar", "Dollar", "macro", value, "short" if up else "long", note)
+        notes = ("a firmer dollar tightens conditions — a headwind",
+                 "a softer dollar eases conditions — a tailwind")
+    u, measured = st.usual("DXY")
+    return _sized("dollar", "Dollar", value, pct, u, measured, "short", notes,
+                  "the dollar's move")
 
 
-def _credit(quotes: list[dict[str, Any]]) -> dict[str, Any]:
+def _credit(quotes: list[dict[str, Any]], book: str = "NQ", st: ds.Stats | None = None,
+            book_move: float | None = None) -> dict[str, Any]:
+    """High yield, on what the book's own move does not explain (since 2026-11-19)."""
+    st = st or ds.Stats(None, date.today())
     q = _q(quotes, "HYG")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
@@ -207,58 +306,78 @@ def _credit(quotes: list[dict[str, Any]]) -> dict[str, Any]:
     if not _trading(q):
         return _vote("credit", "Credit (HYG)", "macro", value, "neutral",
                      "the cash market is closed — credit votes from 09:30 ET", live=False)
-    if abs(pct) < HYG_FLAT:
-        return _vote("credit", "Credit (HYG)", "macro", value, "neutral",
-                     f"inside ±{HYG_FLAT}% — no read")
-    return _vote("credit", "Credit (HYG)", "macro", value, "long" if pct > 0 else "short",
-                 "high yield bid — credit is taking risk" if pct > 0
-                 else "high yield offered — credit is leaving risk before equities do")
+    return _surprise("credit", "Credit (HYG)", value, st, "HYG", pct,
+                     ds.BOOK_KEY.get(book, book), book_move, _BOOK_NAME.get(book, book), "long",
+                     ("high yield bid beyond the echo — credit is taking risk",
+                      "high yield offered beyond the echo — credit is leaving risk first"))
 
 
-def _vix_dir(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
+def _vix_dir(quotes: list[dict[str, Any]], book: str, st: ds.Stats | None = None,
+             book_move: float | None = None) -> dict[str, Any]:
+    """The VIX's day. NEVER A SIDE since the evening of 2026-11-19 (bias.BOARD_FAMILY): it
+    voted short when it rose beyond what the index's own move explains. The row says the
+    same thing in words, as context for how far moves run, and votes nothing."""
+    st = st or ds.Stats(None, date.today())
+    aside = "never a side: the VIX says how far moves run, not which way"
     q = _q(quotes, "VIX")
     pct = _num(q.get("pct")) if q else None
+    last = _num(q.get("last")) if q else None
     if q is None or pct is None:
-        return _vote("vix_dir", "VIX today", "macro", "—", "neutral", "no VIX on the board",
-                     live=False)
-    last = _num(q.get("last"))
-    value = f"{last:.1f} {_signed(pct, 1, '%')}" if last is not None else _signed(pct, 1, "%")
-    if not _trading(q):
-        return _vote("vix_dir", "VIX today", "macro", value, "neutral",
-                     "the VIX last printed at its close (it trades 03:00–16:15 ET)", live=False)
-    if abs(pct) < VIX_FLAT:
-        return _vote("vix_dir", "VIX today", "macro", value, "neutral",
-                     f"inside ±{VIX_FLAT}% — no read")
-    up = pct > 0
-    if book == "GC":
-        return _vote("vix_dir", "VIX today", "macro", value, "neutral",
-                     "equity fear is not a gold vote on its own — the dollar and yields decide",
-                     live=False)
-    return _vote("vix_dir", "VIX today", "macro", value, "short" if up else "long",
-                 "protection being bought — risk-off" if up else "protection being sold — risk-on")
+        v = _vote("vix_dir", "VIX today", "macro", "—", "neutral", "no VIX on the board",
+                  live=False)
+    elif not _trading(q):
+        v = _vote("vix_dir", "VIX today", "macro", _vix_value(last, pct), "neutral",
+                  "the VIX last printed at its close (it trades 03:00–16:15 ET)", live=False)
+    elif book == "GC":
+        v = _vote("vix_dir", "VIX today", "macro", _vix_value(last, pct), "neutral",
+                  "equity fear is context for gold — the dollar and yields decide", live=False)
+    else:
+        # What the surprise read says, kept as words: protection bought or sold beyond
+        # the index's own move is how nervous the tape is, not which way it goes.
+        note = ds.context_note(
+            st, "VIX", pct, ds.BOOK_KEY.get(book, book), book_move,
+            _BOOK_NAME.get(book, book),
+            ("protection bought beyond what the move explains — moves can run further",
+             "protection sold beyond what the move explains — a calmer tape"))
+        v = _vote("vix_dir", "VIX today", "macro", _vix_value(last, pct), "neutral", note)
+    v["aside"] = aside
+    return v
+
+
+def _vix_value(last: float | None, pct: float) -> str:
+    """"22.9 +0.0%": the VIX's level and its day, as its row prints them."""
+    return f"{last:.1f} {_signed(pct, 1, '%')}" if last is not None else _signed(pct, 1, "%")
 
 
 def _vix_curve(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
+    """The VIX against VIX3M. NEVER A SIDE since 2026-11-19 (bias.BOARD_FAMILY): the
+    curve's shape says how far moves run, as gamma's regime does, not which way."""
     vt = volterm.state(quotes)
     ratio, shape = _num(vt.get("ratio")), vt.get("shape")
+    aside = "never a side: the curve says how far moves run, not which way"
     if ratio is None:
-        return _vote("vix_curve", "VIX curve", "macro", "—", "neutral",
-                     "VIX or VIX3M missing from the board", live=False)
-    value = f"{ratio:.2f} · {shape or 'unknown'}"
-    if book == "GC":
-        return _vote("vix_curve", "VIX curve", "macro", value, "neutral",
-                     "the equity curve is context for gold, not a vote", live=False)
-    if ratio >= CURVE_STRESS:
-        return _vote("vix_curve", "VIX curve", "macro", value, "short",
-                     "flat to inverted: near-term protection bid now — stress")
-    if ratio < CURVE_CALM:
-        return _vote("vix_curve", "VIX curve", "macro", value, "long",
-                     "steep contango: a calm tape, dips get bought")
-    return _vote("vix_curve", "VIX curve", "macro", value, "neutral",
-                 f"between {CURVE_CALM:.2f} and {CURVE_STRESS:.2f} — normal contango, no read")
+        v = _vote("vix_curve", "VIX curve", "macro", "—", "neutral",
+                  "VIX or VIX3M missing from the board", live=False)
+    elif book == "GC":
+        v = _vote("vix_curve", "VIX curve", "macro", f"{ratio:.2f} · {shape or 'unknown'}",
+                  "neutral", "the equity curve is context for gold, not a vote", live=False)
+    else:
+        value = f"{ratio:.2f} · {shape or 'unknown'}"
+        if ratio >= CURVE_STRESS:
+            note = "flat to inverted: near-term protection bid now — moves run, either way"
+        elif ratio < CURVE_CALM:
+            note = "steep contango: a calm tape — moves are smaller and fade more often"
+        else:
+            note = f"between {CURVE_CALM:.2f} and {CURVE_STRESS:.2f} — normal contango"
+        v = _vote("vix_curve", "VIX curve", "macro", value, "neutral", note)
+    v["aside"] = aside
+    return v
 
 
-def _silver(quotes: list[dict[str, Any]]) -> dict[str, Any]:
+def _silver(quotes: list[dict[str, Any]], st: ds.Stats | None = None,
+            gold_move: float | None = None) -> dict[str, Any]:
+    """Silver, for gold: on how far it runs beyond gold's own move (since 2026-11-19)."""
+    st = st or ds.Stats(None, date.today())
     q = _q(quotes, "SILVER")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
@@ -268,26 +387,18 @@ def _silver(quotes: list[dict[str, Any]]) -> dict[str, Any]:
     if _stopped(q):
         return _vote("silver", "Silver", "macro", value, "neutral",
                      "silver has stopped printing — no live read", live=False)
-    cu = _q(quotes, "COPPER")
-    cpct = _num(cu.get("pct")) if cu else None
-    tail = ""
-    if cpct is not None and abs(cpct) >= COPPER_FLAT:
-        same = (cpct > 0) == (pct > 0)
-        tail = (f"; copper {_signed(cpct, 1, '%')} says the metals bid is "
-                f"{'industrial as well' if same else 'monetary, not industrial'}")
-    if abs(pct) < SILVER_FLAT:
-        return _vote("silver", "Silver", "macro", value, "neutral",
-                     f"inside ±{SILVER_FLAT}% — no read" + tail)
-    return _vote("silver", "Silver", "macro", value, "long" if pct > 0 else "short",
-                 ("the metals complex is bid — gold rarely falls alone" if pct > 0
-                  else "the metals complex is offered") + tail)
+    return _surprise("silver", "Silver", value, st, "SILVER", pct, "GC", gold_move, "gold",
+                     "long", ("silver is running ahead of gold — the metals bid is broad",
+                              "silver is lagging gold — the metals bid is not confirmed"))
 
 
 # ---- silver's and crude's own reads (2026-11-15; bias.py says why these) ------------
 
 
-def _gold(quotes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Gold's day move, for silver: the mirror of the silver read on gold's board."""
+def _gold(quotes: list[dict[str, Any]], st: ds.Stats | None = None,
+          silver_move: float | None = None) -> dict[str, Any]:
+    """Gold, for silver: on how far it runs beyond silver's own move (since 2026-11-19)."""
+    st = st or ds.Stats(None, date.today())
     q = _q(quotes, "GC")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
@@ -296,15 +407,16 @@ def _gold(quotes: list[dict[str, Any]]) -> dict[str, Any]:
     if _stopped(q):
         return _vote("gold", "Gold", "macro", value, "neutral",
                      "gold has stopped printing — no live read", live=False)
-    if abs(pct) < GOLD_FLAT:
-        return _vote("gold", "Gold", "macro", value, "neutral", f"inside ±{GOLD_FLAT}% — no read")
-    return _vote("gold", "Gold", "macro", value, "long" if pct > 0 else "short",
-                 "gold is bid — silver follows it, and moves further" if pct > 0
-                 else "gold is offered — silver rarely holds when gold falls")
+    return _surprise("gold", "Gold", value, st, "GC", pct, "SILVER", silver_move, "silver",
+                     "long", ("gold is running ahead of silver's move — silver follows it",
+                              "gold is lagging silver — the monetary bid is not behind it"))
 
 
-def _copper(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
-    """Copper's day move: silver's industrial half, and crude's demand read."""
+def _copper(quotes: list[dict[str, Any]], book: str, st: ds.Stats | None = None,
+            book_move: float | None = None) -> dict[str, Any]:
+    """Copper: silver's industrial half and crude's demand read, on how far it runs
+    beyond the book's own move (since 2026-11-19)."""
+    st = st or ds.Stats(None, date.today())
     q = _q(quotes, "COPPER")
     pct = _num(q.get("pct")) if q else None
     if q is None or pct is None:
@@ -314,21 +426,23 @@ def _copper(quotes: list[dict[str, Any]], book: str) -> dict[str, Any]:
     if _stopped(q):
         return _vote("copper", "Copper", "macro", value, "neutral",
                      "copper has stopped printing — no live read", live=False)
-    if abs(pct) < COPPER_FLAT:
-        return _vote("copper", "Copper", "macro", value, "neutral",
-                     f"inside ±{COPPER_FLAT}% — no read")
-    up = pct > 0
     if book == "CL":
-        note = ("copper is bid — the growth trade is on, and crude is a demand market" if up
-                else "copper is offered — the growth trade is coming off, and demand with it")
+        notes = ("copper is running ahead of crude — the growth trade is on, and crude is a "
+                 "demand market",
+                 "copper is lagging crude — the growth trade is coming off, and demand with it")
     else:
-        note = ("copper is bid — the industrial half of silver's demand is with it" if up
-                else "copper is offered — the industrial half of silver's demand is leaving")
-    return _vote("copper", "Copper", "macro", value, "long" if up else "short", note)
+        notes = ("copper is running ahead of silver — the industrial half of its demand is "
+                 "with it", "copper is lagging silver — the industrial half is not behind it")
+    return _surprise("copper", "Copper", value, st, "COPPER", pct, ds.BOOK_KEY.get(book, book),
+                     book_move, _BOOK_NAME.get(book, book), "long", notes)
 
 
-def _products(quotes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Gasoline and heating oil, for crude: whether the barrel is being pulled through."""
+def _products(quotes: list[dict[str, Any]], st: ds.Stats | None = None,
+              crude_move: float | None = None) -> dict[str, Any]:
+    """Gasoline and heating oil, for crude: whether they run ahead of the barrel, which is
+    refiners paying up to pull it through (since 2026-11-19; it was their outright move,
+    which mostly is crude's own)."""
+    st = st or ds.Stats(None, date.today())
     legs = [(name, q) for name, key in (("gasoline", "RBOB"), ("heating oil", "HEATOIL"))
             if (q := _q(quotes, key)) is not None and _num(q.get("pct")) is not None]
     if not legs:
@@ -340,13 +454,11 @@ def _products(quotes: list[dict[str, Any]]) -> dict[str, Any]:
         return _vote("products", "Products", "macro", value, "neutral",
                      "the products have stopped printing — no live read", live=False)
     avg = sum(printing) / len(printing)
-    if abs(avg) < PRODUCTS_FLAT:
-        return _vote("products", "Products", "macro", value, "neutral",
-                     f"{_signed(avg, 2, '%')} between them, inside ±{PRODUCTS_FLAT}% — no read")
-    return _vote("products", "Products", "macro", value, "long" if avg > 0 else "short",
-                 "the products are bid — refiners are paying up, the barrel is being pulled "
-                 "through" if avg > 0
-                 else "the products are offered — nothing is pulling the barrel through")
+    return _surprise("products", "Products", value, st, "PRODUCTS", avg, "WTI", crude_move,
+                     "crude", "long",
+                     ("the products are running ahead of crude — refiners are paying up, the "
+                      "barrel is being pulled through",
+                      "the products are lagging crude — nothing is pulling the barrel through"))
 
 
 def _barrels(n: float) -> str:
@@ -612,10 +724,14 @@ def _leaders(constituents: dict[str, Any] | None, book: str, cash_open: bool) ->
                      f"only {up + down} of the leaders reporting", live=False)
     pct = up / (up + down) * 100.0
     v = _side(pct, PART_LONG, PART_SHORT)
+    # SIZED BY NET BREADTH (2026-11-19): 60% up is a light vote, 80% a full one.
+    s = ds.breadth_strength(up, down)
     note = {"long": f"{pct:.0f}% of the leaders up — the weight is behind the move",
             "short": f"only {pct:.0f}% of the leaders up — the weight is selling",
             "neutral": f"{pct:.0f}% up — split leadership"}[v]
-    return _vote("leaders", label, "structure", value, v, note)
+    if v != "neutral":
+        note += f", counts {round(s * 100)}%"
+    return _vote("leaders", label, "structure", value, v, note, strength=s)
 
 
 # ---- the catalysts (events.py) ------------------------------------------------
@@ -626,7 +742,19 @@ def _heavyweight_prints(heavy: list[dict[str, Any]], book: str) -> dict[str, Any
     percentage points — a macro vote past ±PRINTS_VOTE_PP, since a megacap's print
     is the largest scheduled macro an index future has (2026-10-30). A name that
     has reported and not yet traded in the cash session is named and does not
-    vote: the only move on its row is the session before the report (2026-11-05)."""
+    vote: the only move on its row is the session before the report (2026-11-05).
+
+    NEVER A SIDE SINCE 2026-11-19 (bias.BOARD_FAMILY): the reporters' moves are already
+    in the index future's price, so it voted the book's own move twice. The row is kept
+    and drawn as context; its vote is always neutral and `said` keeps what it would
+    have said."""
+    v = _hw_read(heavy, book)
+    v["said"], v["vote"] = v["vote"], "neutral"
+    v["aside"] = "never a side: the reporters' moves are already in the index future's price"
+    return v
+
+
+def _hw_read(heavy: list[dict[str, Any]], book: str) -> dict[str, Any]:
     label = f"{INDEX_OF.get(book, 'Index')} prints"
     net, who = events_mod.net_print_points(heavy)
     waiting = events_mod.awaiting_open(heavy)
@@ -719,12 +847,16 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
                expiry: dict[str, Any] | None, fed: dict[str, Any] | None,
                sigma: float | None, scan_session: str, now: datetime, weigh: str,
                heavy: list[dict[str, Any]] | None = None,
-               events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+               events: list[dict[str, Any]] | None = None,
+               st: ds.Stats | None = None) -> dict[str, Any]:
     # Silver and crude ride the board under SILVER and WTI (volterm.quote_key).
     q = _q(quotes, volterm.quote_key(book))
     last = _num(q.get("last")) if q else None
+    # The book's own day so far: what a co-mover's move is read against (drivestats.py).
+    move = _num(q.get("pct")) if q else None
     cash_open = scan_session == "rth"
     day = now.astimezone(report.ET).date()
+    st = st or ds.Stats(None, day)
     # THE MACRO READS ARE THE BOOK'S OWN (bias.py says what each answers to). The
     # index books and gold are as they were; silver reads rates and the dollar as gold
     # does, with gold and copper beside them; crude reads the dollar, the products,
@@ -732,16 +864,20 @@ def book_board(book: str, *, quotes: list[dict[str, Any]], calendar: list[dict[s
     # 10-year nor the VIX.
     votes: list[dict[str, Any]]
     if book == "SIL":
-        votes = [_yields(quotes, book, day), _dollar(quotes, book), _gold(quotes),
-                 _copper(quotes, book), _prints(calendar, now, book)]
+        votes = [_yields(quotes, book, day, st), _dollar(quotes, book, st),
+                 _gold(quotes, st, move), _copper(quotes, book, st, move),
+                 _spent(_prints(calendar, now, book), now)]
     elif book == "CL":
-        votes = [_dollar(quotes, book), _products(quotes), _credit(quotes),
-                 _copper(quotes, book), _inventories(calendar, now),
-                 _growth_prints(calendar, now)]
+        votes = [_dollar(quotes, book, st), _products(quotes, st, move),
+                 _credit(quotes, book, st, move), _copper(quotes, book, st, move),
+                 _spent(_inventories(calendar, now), now),
+                 _spent(_growth_prints(calendar, now), now)]
     else:
-        votes = [_yields(quotes, book, day), _dollar(quotes, book),
-                 _silver(quotes) if book == "GC" else _credit(quotes),
-                 _vix_dir(quotes, book), _vix_curve(quotes, book), _prints(calendar, now, book)]
+        votes = [_yields(quotes, book, day, st), _dollar(quotes, book, st),
+                 _silver(quotes, st, move) if book == "GC"
+                 else _credit(quotes, book, st, move),
+                 _vix_dir(quotes, book, st, move), _vix_curve(quotes, book),
+                 _spent(_prints(calendar, now, book), now)]
     # No trend read (owner, 2026-11-15; bias.BOARD_FAMILY has the why): the daily
     # frame, the 200-day EMA and the ten-minute 200 EMA were three rows here and are
     # none. `_frame`, `_regime200` and `_trend10m` are kept below, unused, as the way
@@ -789,6 +925,9 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
                                                                   dict) else None)
     events = events_mod.event_risk(snap, now)
     weigh = weights_for(now)
+    # The yardsticks, once for every book (drivestats.py): the context feed's daily closes.
+    st = ds.Stats([c for c in snap.get("context") or [] if isinstance(c, dict)],
+                  now.astimezone(report.ET).date())
     boards = {
         book: book_board(
             book, quotes=quotes,
@@ -805,7 +944,7 @@ def build(snap: dict[str, Any], scan_session: str = "closed",
             expiry=snap.get("expiry") if isinstance(snap.get("expiry"), dict) else None,
             fed=fed, sigma=books_sigma.get(book), scan_session=scan_session, now=now, weigh=weigh,
             heavy=events_mod.heavyweights(snap, book, now) if book in INDEX_OF else None,
-            events=events,
+            events=events, st=st,
         )
         for book in BOOKS
     }

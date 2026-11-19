@@ -49,6 +49,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import statistics
 import sys
 import threading
 import time
@@ -59,13 +60,26 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import config, daytype, drivers, futfill, marketctx, newsread, structure
+from . import (
+    bias_record,
+    config,
+    daytype,
+    drivers,
+    drivestats,
+    futfill,
+    marketctx,
+    newsread,
+    premarket_record,
+    structure,
+)
 from . import dashboard as dash_mod
 from . import futures as fut_mod
 from . import momentum as mom_mod
 from . import report as report_mod
+from . import rotation as rot_mod
 from . import scan as scan_mod
 from . import today as today_mod
+from . import volterm as volterm_mod
 from .config import BROWSER_UA
 from .expiry import state as expiry_state
 from .holidays import early_close, is_trading_day, prev_trading_day
@@ -99,12 +113,20 @@ from .sources import scanner as scan_src
 from .sources import shortint as short_src
 from .sources import stream as stream_src
 from .sources import tvnews as tvnews_src
+from .sources import tvstory as tvstory_src
 from .sources import universe as uni_src
+from .sources import webull as webull_src
 from .sources import wire as wire_src
 from .volterm import BOOK_DP, implied_day, vix_month
 from .volterm import state as volterm_state
 
 ET = ZoneInfo("America/New_York")
+
+#: The oldest copy of the scanner's bars a spark is drawn from (`_held_spark`): past it
+#: the spark read (uni_src.SPARK_TTL, four minutes) is the fresher. The rotation reads a
+#: tracked name every ninety seconds in a session and every fifteen minutes when closed.
+HELD_SPARK_SEC = 240.0
+HELD_SPARK_IDLE_SEC = 1800.0
 
 # A LOG LINE MUST NEVER TAKE THE COLLECTOR DOWN (2026-10-14). Started with its
 # output redirected to a file, Python on Windows writes in the legacy code
@@ -208,6 +230,9 @@ class Collector:
         # watches the best of what it finds.
         self.stream = stream_src.PriceStream()
         self.scan.stream = self.stream
+        # Webull's trades into the same books, for the same names, while the feed switch
+        # says "webull" (webull_src.feed_mode); Yahoo's socket runs beside it either way.
+        self.webull = webull_src.WebullFeed(self.stream.put, self._webull_wanted)
         self.stock_news = tvnews_src.NewsStore()
         self.stock_news.names = self._called
         # Only the table's names are held against a headline that does not carry them
@@ -215,13 +240,19 @@ class Collector:
         self.stock_news.sure = scan_src.ALIASES.__contains__
         # A story that states a move is held to the name's real one (catalysts.STATED_MIN).
         self.stock_news.move = self._day_move
-        # What the model made of each name's major story (newsread.py): context on the
-        # row and in the signal log, never score. Asked for by a clock in api.py.
+        # What the model made of each name's major story (newsread.py): how big, never
+        # score; and since 2026-11-18 which way, for the flag and the tie-break. Asked for
+        # by a clock in api.py, with each story's own text (sources/tvstory.py).
         self.newsread = newsread.ReadStore()
+        self.story_text = tvstory_src.StoryText()
         self.universe = uni_src.UniverseStore()
         # The scanner's pre-market range is checked against these two reads, which
         # are not Yahoo's bars (`_pm_range`; scan.technicals says why).
         self.scan.pm_hint = self._pm_range
+        # A spark off the bars the slide-out chart draws, where the scanner holds them.
+        self.universe.held_spark = self._held_spark
+        # The rest end on the stream's latest trade, as the chart's last candle does.
+        self.universe.live_trade = self.stream.last_trade
         self.holdings = hold_src.HoldingsStore()
         self.momentum = mom_mod.MomentumStore()
         #: The Today list (today.py): when each name first reached the top ten of the
@@ -233,6 +264,14 @@ class Collector:
         self._fut_fills: dict[str, tuple[float, tuple[float, int, list[scan_mod.Bar]] | None]] = {}
         #: The Today list's names as last drawn, for the SEC job's insider reads (`_sec_extra`).
         self._today_syms: list[str] = []
+        #: The Today list as last built: its phase key, when (monotonic), and its rows by
+        #: symbol, so the slide-out shows the score the list shows (`_as_listed`).
+        self._today_last: tuple[str, float, dict[str, dict[str, Any]]] | None = None
+        #: The pre-market record's after-the-bell work (premarket_record.py): when it last
+        #: ran, the names worked so far for each owed day, and the tries of each.
+        self._pre_outcome_at = 0.0
+        self._pre_progress: dict[str, dict[str, dict[str, Any]]] = {}
+        self._pre_tries: dict[tuple[str, str], int] = {}
         self.scan.sec_extra = self._sec_extra
         self.pool.core = self.scan.core
         self.pool.news = self.stock_news.major
@@ -246,6 +285,8 @@ class Collector:
         # The backfill's rows beside it are the record's larger half, and the
         # base-rate tables over both are built once and kept until a label lands.
         self.daytypes = daytype.SessionLog()
+        #: The bias record's (td, mark) pairs and closed days on file, read on its first tick.
+        self._bias_done: tuple[set[tuple[str, str]], set[str]] | None = None
         self._dt_record = daytype.load_backfill()
         self._dt_tables: dict[str, dict[str, Any]] = {}
         self._dt_meta: dict[str, Any] = {}
@@ -305,7 +346,19 @@ class Collector:
             # Short interest from Yahoo's summary: one name a tick, twelve
             # hours between reads of the same name.
             "scan_short": (self._do_shorts, short_src.TICK_SEC, now + 12.0),
+            # The live rotation (rotation.py): a round a minute in the session, the pool's
+            # picks swapped for better setups off the list. On this thread because its
+            # reads are the bars job's kind and share its 429 pause.
+            "rotation": (self._do_rotation, rot_mod.ROUND_SEC, now + 20.0),
         }
+        #: Names off the list the owner opened (the slide-out, Hermes's selected name), and
+        #: when: candidates for the rotation for rot_mod.OPENED_SEC.
+        self._opened: dict[str, float] = {}
+        #: How many rounds in a row each candidate has qualified (rotation.decide).
+        self._rot_streak: dict[str, int] = {}
+        self._rot_logged = 0.0
+        #: The session whose rotation outcome line is written (or had nothing to write).
+        self._rot_outcome_day: str | None = None
         # The chains, on their own thread (module docstring); one per tick.
         self._option_jobs: dict[str, Job] = {
             "options": (self._do_options, opt_src.TICK_SEC, now + 3.0),
@@ -324,6 +377,9 @@ class Collector:
             # The session-type record (daytype.py): a card at 09:25 ET, its label
             # after the close. The same short tick, so a mark is met in seconds.
             "daytype": (self._do_daytype, 20.0, now + 8.0),
+            # The bias record (bias_record.py): every board read at its marks and each
+            # book's price at the close, to test the weights against what followed.
+            "bias_record": (self._do_bias_record, 20.0, now + 12.0),
         }
         # The live layer, alone (module docstring); it paces itself.
         self._live_jobs: dict[str, Job] = {
@@ -346,6 +402,7 @@ class Collector:
         }
         self._wide_thread: threading.Thread | None = None
         self._stream_logged = 0.0
+        self._webull_logged = 0.0
         self._stream_checked = 0.0
 
     # ---------------------------------------------------------------- jobs
@@ -412,6 +469,25 @@ class Collector:
         if not st.ok or now - self._stream_logged >= 300.0:
             self._stream_logged = now
             self._log("stream", st)
+        # The feed switch, read again each tick: a change in the app or the file applies
+        # within seconds, no restart.
+        feed, _why = webull_src.feed_mode()
+        if feed == "webull" and not self.webull.running():
+            self.webull.start()
+        elif feed != "webull" and self.webull.running():
+            self.webull.stop()
+        if feed == "webull":
+            wst = self.webull.status()
+            with self._lock:
+                self._status["webull"] = wst
+                if wst.ok:
+                    self._updated["webull"] = time.time()
+            if not wst.ok or now - self._webull_logged >= 300.0:
+                self._webull_logged = now
+                self._log("webull", wst)
+        else:
+            with self._lock:
+                self._status.pop("webull", None)
 
     def _do_universe(self) -> None:
         st, read = self.universe.tick()
@@ -531,14 +607,19 @@ class Collector:
         # Two weeks ahead since 2026-11-16 (a week before that, three days before that,
         # which on a Friday ended on Monday): the days past the third thinned to what
         # reaches the books, the week after to its big releases (calendar.thin_far).
-        rows, st = cal_src.collect(days_ahead=cal_src.DAYS_AHEAD)
+        # And back to the week's Monday (2026-11-19, calendar.DAYS_BACK), the days before
+        # yesterday thinned to the prints that stop the tape (calendar.thin_past): the
+        # market report's "earlier this week".
+        rows, st = cal_src.collect(days_ahead=cal_src.DAYS_AHEAD, days_back=cal_src.DAYS_BACK)
         # TradingView's calendar, read while Nasdaq is refusing, lists no speeches:
         # the Board's own (the "fed" source) join its rows (sources/calendar.py).
         if st.ok:
             with self._lock:
                 fed = list(self._state.get("fed") or [])
                 figs = dict(self._state.get("official") or {})
-            rows = cal_src.thin_far(cal_src.with_fed_speeches(rows, fed), datetime.now(ET).date())
+            today = datetime.now(ET).date()
+            rows = cal_src.thin_past(cal_src.thin_far(cal_src.with_fed_speeches(rows, fed), today),
+                                     today)
             # And the agencies' own figures on the rows they are the prints of: a
             # fresh read of the feed would otherwise print the feed's copy again.
             rows = off_src.apply(rows, figs)
@@ -621,9 +702,12 @@ class Collector:
                 self._log("scan_events", st_ow)
             quiet = self.scan.unwatched()
             for day, syms in owed.items():
-                got = self.scan.day_signals(date.fromisoformat(day), syms)
+                # Every chart's signals (3m, 5m, 10m), each settled on its own bars.
+                got = self.scan.day_signals(date.fromisoformat(day), syms, fast=True)
                 if got:
                     self.events.settle(day, got, known_only=quiet)
+            # The pre-market record's finished days, held to what their names did.
+            self._premarket_outcomes()
         except Exception as e:  # noqa: BLE001 — see module docstring
             st_ev = SourceStatus("Scanner events")
             st_ev.error = f"{e.__class__.__name__}: {e}"
@@ -784,11 +868,15 @@ class Collector:
         daily = self.scan.daily.get(sym) or []
         # Confirmed by the download, as on the row (scan.CLOSE_LAG_SEC) — a chart
         # marking a signal the row does not have would be its own phantom.
+        # The one-minute bars the ROW's 3m signals were read on, not the chart's own
+        # download below, so the chart marks exactly the signals the row has.
         tech = scan_mod.technicals(bars, daily, clock,
                                    official=scan_mod.official_close(self.scan.meta.get(sym)),
                                    asof=self.scan.fetched.get(sym),
                                    daily_asof=self.scan.daily_at.get(sym),
-                                   pm_wide=self.scan.pm_wide(sym, clock.trading_day))
+                                   pm_wide=self.scan.pm_wide(sym, clock.trading_day),
+                                   bars1=self.scan.bars1.get(sym),
+                                   asof1=self.scan.fetched1.get(sym))
         bars1: list[scan_mod.Bar] | None = None
         if scan_mod.CHART_TF.get(tf, 600) < 300:
             bars1, err = self.scan.bars_1m(sym)
@@ -829,6 +917,9 @@ class Collector:
         raw = self.universe.raw(sym)
         if not tracked:
             err = self.scan.ensure_adhoc(sym)
+            # Opened by the owner: a candidate for the live rotation for the next hour.
+            if err is None:
+                self._opened[sym] = time.time()
         names = [sym] if not tracked else None
         sector = raw["sector"] if raw else None
         extra = None
@@ -846,6 +937,9 @@ class Collector:
             row["industry"] = raw.get("industry")
             if not row.get("name"):
                 row["name"] = raw.get("name")
+        if row is not None and row.get("ok"):
+            row = self._as_listed(sym, row, raw, datetime.now(UTC))
+            self._story_read(row)
         stages = self._ctx().stage
         pinned = self.scan.pinned()
         return {"ok": row is not None and bool(row.get("ok")), "sym": sym, "row": row,
@@ -853,6 +947,72 @@ class Collector:
                 "tracked": tracked, "pinned": sym in pinned,
                 "session": payload.get("session"), "trading_day": payload.get("trading_day"),
                 "stage": stages.get(sym)}
+
+    #: How old the Today list may be before the slide-out builds it again for a score.
+    TODAY_HOLD_SEC = 60.0
+
+    def _as_listed(self, sym: str, row: dict[str, Any], wide: dict[str, Any] | None,
+                   now: datetime) -> dict[str, Any]:
+        """ONE SCORE: THE SLIDE-OUT'S IS THE LIST'S (owner, 2026-11-18: "i just need it
+        intuitive ... before market open see what are gonna be potentially the best stocks
+        to trade and then as the session opens ... what is developing and looking like the
+        best stocks to trade"). From the bell both are the engine's setup score and this
+        changes nothing. Before it the Scanner ranks how in play a name is, and the
+        slide-out showed the setup score beside it under the same word: at 02:20 ET that
+        morning BILL was 79 in the table and 40 in the slide-out, and 25 of the 40 were
+        the Entry part every name with a pre-market plan earns. So a name on the list
+        takes its score and side as the list has them (today.scan_row on this row, the
+        same call that draws a tracked name's table row); a name off it, its in-play read
+        from the pool, as the tracked names under the ranking get theirs."""
+        phase = today_mod.phase_at(now)
+        if phase.key == "session":
+            return row
+        key = f"{phase.key}:{phase.day.isoformat()}"
+        last = self._today_last
+        if last is None or last[0] != key or time.monotonic() - last[1] > self.TODAY_HOLD_SEC:
+            try:
+                self.today(now)
+            except Exception:  # noqa: BLE001 - the slide-out still draws, on the setup score
+                traceback.print_exc()
+                return row
+            last = self._today_last
+        t = (last[2] if last and last[0] == key else {}).get(sym)
+        if t is None:
+            t = today_mod.off_list(sym, self.pool.by_sym.get(sym))
+        return today_mod.scan_row(t, row, phase.key, wide)
+
+    def fill_story_text(self, cands: list[dict[str, Any]]) -> None:
+        """Each story the model is about to read, with its own text where TradingView
+        carries it (newsread.py, sources/tvstory.py): found by the id in its address, else
+        by its headline among the stories held. Reads the ones not held yet (a few
+        requests, on the model's clock). Never raises: a story without text is read on
+        its headline as before."""
+        try:
+            ids = self.stock_news.ids_by_title(newsread.norm)
+            by_url = self.stock_news.ids_by_url()
+            want: dict[str, str] = {}
+            for c in cands:
+                url = str(c.get("url") or "")
+                sid = (by_url.get(url) or tvstory_src.id_from_url(url)
+                       or ids.get(newsread.norm(str(c.get("headline") or ""))))
+                if sid:
+                    want[c["key"]] = sid
+            self.story_text.read(list(want.values()))
+            for c in cands:
+                sid = want.get(c["key"])
+                c["text"] = (self.story_text.get(sid) or "") if sid else ""
+        except Exception:  # noqa: BLE001 - the headline alone is still a read
+            traceback.print_exc()
+
+    def _story_read(self, row: dict[str, Any]) -> None:
+        """A row with no read of its deciding story takes the read of its own story, the
+        one the Scanner shows (a name the engine does not track has no catalyst part)."""
+        if row.get("news_read"):
+            return
+        story = row.get("catalyst")
+        if isinstance(story, dict) and story.get("title"):
+            row["news_read"] = self.newsread.for_story(str(row.get("sym") or ""),
+                                                       str(story["title"]))
 
     def _catalyst(self, sym: str) -> dict[str, Any] | None:
         return self.stock_news.catalyst(sym, ref=uni_src.news_anchor(datetime.now(UTC)))
@@ -970,7 +1130,9 @@ class Collector:
             return float(p) if isinstance(p, int | float) else None
 
         inplay = dash_mod.in_play(
-            list(self.pool.ranked), view,
+            # One listing a company, as the Scanner list has it (pool.one_per_company).
+            pool_src.one_per_company(list(self.pool.ranked), prefer=set(scan_src.CORE) | pinned),
+            view,
             verdict=lambda s: pool_src.verdict(self.pool.entry(s), s in pinned, s in tracked),
             price=price) if view.get("ok") else None
         now = datetime.now(UTC)
@@ -981,7 +1143,31 @@ class Collector:
         pre_day = (spy_ext or {}).get("day") if uni_src.cards_phase(spy_ext, now) == "pre" else None
         return dash_mod.build(self.scanner_payload(), snap, self.breakouts(),
                               self.day23(), self.top_stories(tracked),
-                              session_day=uni_src.cards_day(now), inplay=inplay, pre_day=pre_day)
+                              session_day=uni_src.cards_day(now), inplay=inplay, pre_day=pre_day,
+                              listed=self._listed_rows(now))
+
+    #: How old a read of the Scanner list the Dashboard takes as it is: the Dashboard's
+    #: own poll in the session, so its prices are no staler than they were.
+    LISTED_HOLD_SEC = 10.0
+
+    def _listed_rows(self, now: datetime) -> list[dict[str, Any]] | None:
+        """The Scanner list's rows in its order, as the Scanner table draws them
+        (dashboard.build `listed`): the last read when it is this phase's and under
+        LISTED_HOLD_SEC old, else read again. None when it cannot be read: the card then
+        falls back to the engine's own order."""
+        phase = today_mod.phase_at(now)
+        key = f"{phase.key}:{phase.day.isoformat()}"
+        last = self._today_last
+        if last is None or last[0] != key or time.monotonic() - last[1] > self.LISTED_HOLD_SEC:
+            try:
+                self.today(now)
+            except Exception:  # noqa: BLE001 - the Dashboard still draws, on the engine's rows
+                traceback.print_exc()
+                return None
+            last = self._today_last
+        if last is None or last[0] != key:
+            return None
+        return [r["row"] for r in last[2].values() if isinstance(r.get("row"), dict)]
 
     # ---- the Today list (today.py) ----------------------------------------------
 
@@ -1087,6 +1273,11 @@ class Collector:
             # The rest of the tracked list under the phase's ranking, as Setups showed it.
             rows = rows + today_mod.rest_of_list(rows, payload.values(),
                                                  inplay=dict(self.pool.by_sym), favs=favs)
+        # ONE ROW A COMPANY (owner, 2026-11-19: "why do i see GOOG and GOOGL?"): a share
+        # class of a company already listed goes, the one held for good (the MAG 7's GOOGL,
+        # a favourite) taking the place of the first (pool.one_per_company).
+        rows = pool_src.one_per_company(rows, sym_of=lambda r: r["sym"],
+                                        prefer=set(scan_src.CORE) | favs)
         key = f"{phase.key}:{phase.day.isoformat()}"
         # One reader at a time past here: the pool's thread (the phase-end log) and a page
         # read the list in the same second after a restart, and the second saw the phase's
@@ -1097,21 +1288,120 @@ class Collector:
                 self._today_seen = {key: {}}
             today_mod.mark_new(rows, self._today_seen[key], now.timestamp(), fresh)
         today_mod.numbered(rows)
+        if phase.key == "pre":
+            self._pre_figures(rows, payload, phase.day)
         self.universe.want_sparks(r["sym"] for r in rows[:40])
         self._today_syms = [r["sym"] for r in rows if not r.get("listed")][:40]
         for r in rows:
-            if r.get("spark") is None:
-                r["spark"] = self.universe.spark(r["sym"])
+            self.universe.fill_spark(r)
             r["row"] = today_mod.scan_row(r, payload.get(r["sym"]), phase.key,
                                           self.universe.raw(r["sym"]))
             # A name the engine does not track is drawn from the wide read, which has no
             # insider trades; the book has them whether it is tracked or not.
             if "insiders" not in r["row"]:
                 self._with_insiders(r["row"])
+            self._story_read(r["row"])
+        self._today_last = (key, time.monotonic(), {r["sym"]: r for r in rows})
         return {"ok": True, "phase": phase.as_dict(now), "phases": [
                     {"key": k, "label": today_mod.LABELS[k]} for k in today_mod.PHASES],
                 "rows": rows, "note": note, "favs_tracked": self.scan.tracked_favourites(),
+                # The names the live rotation brought in today, each with when and over whom
+                # (rotation.py): for Hermes and the page.
+                "rotated": [{"sym": p["symbol"], "at": p.get("at"), "why": p.get("reason")}
+                            for p in self.pool.picks() if p.get("mark") == "live"],
                 "updated_utc": now.isoformat()}
+
+    def _pre_figures(self, rows: list[dict[str, Any]], payload: dict[str, dict[str, Any]],
+                     day: date) -> None:
+        """Each pre-market row's four figures, shown and logged and never scored
+        (premarket_record.pre_context): its gap against SPY's, its pre-market volume
+        against its own usual one, the model's read of its story, and where it holds in
+        its pre-market range. Never raises: a row without them is drawn as before."""
+        try:
+            spy = payload.get("SPY") or {}
+            s_last, s_pdc = spy.get("last"), (spy.get("levels") or {}).get("pdc")
+            s_atr = spy.get("atr_d")
+            spy_gap = ((float(s_last) - float(s_pdc)) / float(s_atr)
+                       if isinstance(s_last, int | float) and isinstance(s_pdc, int | float)
+                       and isinstance(s_atr, int | float) and s_atr else None)
+            with self._lock:
+                ext = dict(self._state.get("sector_ext") or {})
+            for t in rows:
+                sym = str(t.get("sym") or "")
+                sec = ext.get(str(t.get("sector") or "")) or {}
+                pct = (sec.get("pct") if sec.get("kind") == "pre"
+                       and sec.get("day") == day.isoformat() else None)
+                rvol, est = self.universe.pre_rvol(sym, t.get("vol_pct"))
+                story = t.get("story")
+                read = (self.newsread.for_story(sym, str(story["title"]))
+                        if isinstance(story, dict) and story.get("title") else None)
+                t["pre_ctx"] = premarket_record.pre_context(
+                    t, spy_gap=spy_gap, sector_pct=pct if isinstance(pct, (int, float)) else None,
+                    rvol=rvol, rvol_est=est, read=read)
+        except Exception:  # noqa: BLE001 - the list still draws
+            traceback.print_exc()
+
+    def _premarket_list(self, got: dict[str, Any], now: datetime) -> None:
+        """The pre-market list as it stood near 09:25, one line in the pre-market record
+        (premarket_record.list_line). Never fatal."""
+        try:
+            phase = got.get("phase") or {}
+            premarket_record.append(premarket_record.list_line(
+                str(phase.get("day") or now.astimezone(ET).date().isoformat()),
+                now.astimezone(ET).strftime("%H:%M"), got.get("rows") or []))
+        except Exception:  # noqa: BLE001 - a record line must never stop the pool's job
+            traceback.print_exc()
+
+    #: How often the pre-market record's after-the-bell work runs, and how many names it
+    #: may read bars for each time (a Yahoo download each).
+    PRE_OUTCOME_SEC = 120.0
+    PRE_OUTCOME_READS = 6
+    PRE_OUTCOME_TRIES = 3
+
+    def _premarket_outcomes(self, now: datetime | None = None) -> None:
+        """Each finished day's pre-market list, held to what its names did
+        (premarket_record.day_result), whenever the app next runs after that day's bell.
+        A name's bars are read for it if the ones held were not read after the bell; a
+        few names a pass. A day's line is written once every name has a result or has
+        been tried PRE_OUTCOME_TRIES times. Never raises."""
+        now = now or datetime.now(UTC)
+        t = time.monotonic()
+        if t - self._pre_outcome_at < self.PRE_OUTCOME_SEC:
+            return
+        self._pre_outcome_at = t
+        try:
+            lines = premarket_record.read()
+            owed = premarket_record.owed(lines, now.astimezone(ET).date(), now.timestamp())
+            reads = 0
+            for day, syms in sorted(owed.items()):
+                d = date.fromisoformat(day)
+                got = self._pre_progress.setdefault(day, {})
+                for sym in syms:
+                    if sym in got:
+                        continue
+                    sig = self.scan.day_signals(d, [sym])
+                    if sym not in sig:
+                        if reads >= self.PRE_OUTCOME_READS:
+                            continue  # this pass's reads are spent: the next pass reads it
+                        reads += 1
+                        self.scan.ensure_adhoc(sym)
+                        sig = self.scan.day_signals(d, [sym])
+                    if sym in sig:
+                        signals, _final = sig[sym]
+                        got[sym] = premarket_record.day_result(
+                            sym, d, signals, list(self.scan.bars.get(sym) or []),
+                            float(self.scan.fetched.get(sym) or now.timestamp()),
+                            list(self.scan.daily.get(sym) or []), now.timestamp())
+                        continue
+                    tries = self._pre_tries.get((day, sym), 0) + 1
+                    self._pre_tries[(day, sym)] = tries
+                    if tries >= self.PRE_OUTCOME_TRIES:
+                        got[sym] = {"error": "no bars for the day after its bell"}
+                if all(s in got for s in syms):
+                    premarket_record.append(premarket_record.outcome_line(day, got, now))
+                    self._pre_progress.pop(day, None)
+        except Exception:  # noqa: BLE001 - the record waits for the next pass
+            traceback.print_exc()
 
     def _today_log(self, now: datetime | None = None) -> None:
         """Each phase's list as it stood near its end, one line in cache/today_marks.jsonl,
@@ -1127,6 +1417,9 @@ class Collector:
         try:
             got = self.today(now)
             today_mod.log_list(os.path.join(config.CACHE_DIR, today_mod.MARKS_NAME), got, now)
+            # The pre-market list's own record, with its four figures (premarket_record).
+            if phase.key == "pre":
+                self._premarket_list(got, now)
         except Exception as e:  # noqa: BLE001 — a log line must never stop the pool's job
             with contextlib.suppress(Exception):
                 print(f"today: the {phase.key} list was not logged: {e}", flush=True)
@@ -1138,7 +1431,7 @@ class Collector:
         basis = uni_src.basis_at(now)
         out = self.momentum.table(
             read=lambda s: self.universe.read_one(s, ctx, now), raw=self.universe.raw,
-            catalyst=ctx.catalyst, spark=self.universe.spark, tracked=ctx.tracked,
+            catalyst=ctx.catalyst, spark=self.universe.fill_spark, tracked=ctx.tracked,
             pinned=ctx.pinned, basis=basis, today=now.astimezone(ET).date(), min_move=min_move,
             cap=cap, chip=chip,
             forming=self.universe.forming(ctx, min_move=min_move, cap=cap, now=now))
@@ -1160,7 +1453,80 @@ class Collector:
     def stream_health(self) -> dict[str, Any]:
         st = self.stream.status().as_dict()
         return {"status": st, "connected": self.stream.connected,
-                "subscribed": self.stream.subscribed, "check": self.stream.check.days}
+                "subscribed": self.stream.subscribed, "check": self.stream.check.days,
+                "feed": self.feed()}
+
+    def _webull_wanted(self) -> list[str]:
+        """Webull's names, most wanted first: it carries 100 on its one connection
+        (webull_src.CONNECTIONS says why one), so the order is what gets real-time trades.
+        The charts open now, the tracked names (the engine's rows, the index funds and the
+        Magnificent 7), the Scanner list, then the rest of what Yahoo's socket is given."""
+        tracked = self.scan.symbols()
+        return list(dict.fromkeys([*self.stream.touched(), *tracked, *self._today_syms,
+                                   *self.stream.wanted()]))
+
+    def feed(self) -> dict[str, Any]:
+        """Which live-price feed is on, why, and each one's health."""
+        mode, why = webull_src.feed_mode()
+        now = time.time()
+        heard, raw = self.webull.pace(now)
+        # The first names wanted: Webull's own last trade beside the one the books hold,
+        # so a feed that is connected but losing to Yahoo shows itself. Then the first
+        # names the snapshots read, the same way.
+        running = self.webull.running()
+        wanted = self._webull_wanted()
+        snap_first = self.webull.snap_names()[:6] if running else []
+        sample = []
+        for sym in list(dict.fromkeys([*wanted[:8], *self._today_syms[:6], *snap_first])):
+            w = self.webull.last_of(sym)
+            s = self.webull.snap_of(sym)
+            q = self.stream.quote(sym) or {}
+            sample.append({"sym": sym, "webull_at": w[0] if w else None,
+                           "webull_price": w[1] if w else None,
+                           "snap_at": s[0] if s else None, "snap_price": s[1] if s else None,
+                           "book_feed": q.get("feed"), "book_at": q.get("at"),
+                           "book_price": q.get("price")})
+        return {"feed": mode, "why": why, "choices": list(webull_src.FEEDS),
+                "webull_keys": webull_src.credentials() is not None,
+                "webull": self.webull.status().as_dict() if running else None,
+                "yahoo": self.stream.status().as_dict(),
+                "webull_pace": {"trades_last_min": heard, "recv_less_trade_sec": raw,
+                                "now": now},
+                "webull_connections": self.webull.slots(),
+                "snapshots": self.webull.snap_status(now) if running else None,
+                "coverage": self._feed_coverage(wanted, now),
+                "sample": sample}
+
+    def _feed_coverage(self, wanted: list[str], now: float) -> dict[str, Any]:
+        """Which feed's trade each wanted name's last price is, and how old those trades are
+        (the median, in seconds): the whole list's answer to "is it live", where `sample`
+        is a few names'. A name no feed has heard from today counts under "none"."""
+        today = datetime.fromtimestamp(now, ET).date()
+        ages: dict[str, list[float]] = {}
+        none = 0
+        for sym in wanted:
+            q = self.stream.quote(sym) or {}
+            at = q.get("at")
+            if not isinstance(at, int | float) or datetime.fromtimestamp(at, ET).date() != today:
+                none += 1
+                continue
+            ages.setdefault(str(q.get("feed") or "?"), []).append(max(0.0, now - float(at)))
+        return {"names": len(wanted), "none": none,
+                "by_feed": {f: {"names": len(a), "age_p50_sec": round(statistics.median(a), 1)}
+                            for f, a in sorted(ages.items())}}
+
+    def set_feed(self, feed: str | None) -> dict[str, Any]:
+        """Switch the live-price feed now ("webull" / "yahoo"), or None to go back to what
+        .env.local says. Applied here at once, not on the next tick."""
+        webull_src.set_feed_mode(feed)
+        mode, _ = webull_src.feed_mode()
+        if mode == "webull":
+            self.webull.start()
+        else:
+            self.webull.stop()
+            with self._lock:
+                self._status.pop("webull", None)
+        return self.feed()
 
     def _do_options(self) -> None:
         clock = self.scan.clock(datetime.now(UTC))
@@ -1183,6 +1549,25 @@ class Collector:
             st = pre_src.covered_by_screener(st, covered, len(watch))
         # Like the chains: the reads stay in the store and join the rows on read.
         self._commit("premarket", None, st)
+
+    def _held_spark(self, sym: str) -> tuple[list[float], float | None] | None:
+        """One name's spark off the scanner's own five-minute bars, live trade laid on, as
+        the slide-out chart draws them (`scanner_bars`), cut to the chart's opening view
+        (`scan.spark_of`). None when the scanner does not hold the name, or its copy is
+        older than the spark read would be: an ad-hoc chart's bars are read when the chart
+        opens and then sit, while the tracked names rotate every ninety seconds."""
+        if sym not in self.scan.bars:
+            return None
+        now = datetime.now(UTC)
+        clock = self.scan.clock(now)
+        age = time.time() - self.scan.fetched.get(sym, 0.0)
+        if age > (HELD_SPARK_IDLE_SEC if clock.session == "closed" else HELD_SPARK_SEC):
+            return None
+        bars = self.scan.live_bars(sym, clock)
+        if not bars:
+            return None
+        return scan_mod.spark_of(bars, int(now.timestamp()), self.scan.daily.get(sym),
+                                 self.scan.daily_at.get(sym))
 
     def _pm_range(self, sym: str, td: date) -> tuple[float | None, float | None] | None:
         """`td`'s pre-market (high, low) for one name from a read that is not the
@@ -1237,6 +1622,136 @@ class Collector:
         if read:
             self._commit("pool", self.pool.view(self.scan.pinned()), st)
         self._today_log()
+
+    def _rotation_candidates(self, tracked: set[str], on_list: list[dict[str, Any]],
+                             t: float) -> list[str]:
+        """This round's names to score (rotation.py, step 1): the ones the owner opened in
+        the last hour, newest first, then the wide read's through their levels now."""
+        for s in [s for s, at in self._opened.items() if t - at > rot_mod.OPENED_SEC]:
+            self._opened.pop(s, None)
+        opened = [s for s, _ in sorted(self._opened.items(), key=lambda x: -x[1])
+                  if s not in tracked][: rot_mod.OPENED_MAX]
+        firms = {k for r in on_list if (k := pool_src.company_key(r.get("name")))}
+        # Only names the pool counts as tradable ($10+, the turnover, the range); a name the
+        # owner opened is theirs to judge and is not held to it.
+        found = self.universe.rotation_finder(
+            self.stream.quote, skip=tracked | set(opened), skip_companies=firms,
+            limit=rot_mod.CANDIDATES - len(opened), only=set(self.pool.by_sym))
+        return opened + [str(e["sym"]) for e in found]
+
+    def _rotation_scores(self, cands: list[str], t: float) -> list[dict[str, Any]]:
+        """Each candidate scored as a name on the list is (rotation.py, step 2): its bars read
+        when due (`rotation.reads_due`), its technical row, then the payload's scoring."""
+        for s in rot_mod.reads_due(cands, dict(self.scan.fetched), t):
+            self.scan.ensure_adhoc(s)
+        extra: dict[str, dict[str, Any]] = {}
+        for s in cands:
+            if s not in self.scan.bars:
+                continue
+            raw = self.universe.raw(s)
+            one = self.scan.compute_one(s, sector=raw["sector"] if raw else None)
+            if one is not None:
+                extra[s] = one
+        if not extra:
+            return []
+        got = self._payload(watch=list(extra), extra_rows=extra, news_limit=1)
+        out = []
+        for r in got.get("rows") or []:
+            total = (r.get("score") or {}).get("total")
+            if r.get("ok") and isinstance(total, int | float):
+                out.append({"sym": str(r["sym"]), "score": float(total),
+                            "name": r.get("name"), "sector": r.get("sector"),
+                            "side": (r.get("score") or {}).get("side"), "last": r.get("last")})
+        return sorted(out, key=lambda c: -c["score"])
+
+    def _rotation_outcome(self, now: datetime) -> None:
+        """Once a session, from the first wide read whose bar is final (16:30 ET; the rule
+        `_do_universe` writes the momentum ledger on): the close of every name the day's
+        rotation moved, so the record can judge each swap (rotation.outcome_line)."""
+        basis = uni_src.basis_at(now)
+        et = now.astimezone(ET)
+        final = basis == "last" or (basis == "post" and
+                                    et.hour * 60 + et.minute >= scan_mod.rth_end(et.date()) + 30)
+        day = uni_src.session_day(now).isoformat()
+        if not final or self._rot_outcome_day == day or not self.universe.rows:
+            return
+        path = os.path.join(config.CACHE_DIR, rot_mod.LOG_NAME)
+        names, done = rot_mod.day_names(rot_mod.read_lines(path), day)
+        self._rot_outcome_day = day
+        if names and not done:
+            line = rot_mod.outcome_line(day, names, self.universe.raw)
+            if line is not None:
+                rot_mod.append(path, line)
+
+    def _do_rotation(self) -> float:
+        """One round of the live rotation (rotation.py): score the best names off the list,
+        and swap in any that beat the weakest of the pool's picks by the margin twice in a
+        row. Outside its window it clears the streaks and waits."""
+        now = datetime.now(UTC)
+        if not rot_mod.in_window(now) or not self.pool.enabled:
+            self._rot_streak = {}
+            self._rotation_outcome(now)
+            return rot_mod.IDLE_SEC
+        t = now.timestamp()
+        started = time.monotonic()
+        watch = self.scan.watchlist()
+        tracked = set(self.scan.symbols())
+        payload = self.scanner_payload()
+        day = str(payload.get("trading_day") or "")
+        rows = [r for r in payload.get("rows") or [] if isinstance(r, dict)]
+        scores = {str(r.get("sym")): (r.get("score") or {}).get("total") for r in rows
+                  if r.get("ok")}
+        if not rot_mod.scores_ready(watch, scores):
+            # A half-built list (just after a restart): no round, and no streak carried.
+            self._rot_streak = {}
+            return rot_mod.ROUND_SEC
+        cands = self._rotation_candidates(tracked, rows, t)
+        scored = self._rotation_scores(cands, t)
+        # Each name's side and price now, for the record (rotation.log_line).
+        at_swap = {str(r.get("sym")): {"side": (r.get("score") or {}).get("side"),
+                                       "last": r.get("last")} for r in rows if r.get("ok")}
+        at_swap.update({c["sym"]: {"side": c.get("side"), "last": c.get("last")}
+                        for c in scored})
+        signalled = self.events.holding(day, t, trade_sec=rot_mod.TRADE_HOLD_SEC,
+                                        break_sec=rot_mod.BREAK_HOLD_SEC)
+        picks = rot_mod.held(self.pool.picks(), watch, scores, signalled, t,
+                             tradable=set(self.pool.by_sym) if self.pool.by_sym else None,
+                             mine=set(self._opened))
+        room = max(0, scan_src.MAX_SYMBOLS - len(watch))
+        moves, self._rot_streak = rot_mod.decide(scored, picks, room, self._rot_streak)
+        moved = False
+        if moves:
+            at = now.astimezone(ET).strftime("%H:%M")
+            moved = self.pool.rotate(moves, {c["sym"]: c for c in scored}, at, t)
+            if moved:
+                self._apply_promotions()
+                self._wake_scan_jobs()
+                path = os.path.join(config.CACHE_DIR, rot_mod.LOG_NAME)
+                for m in moves:
+                    rot_mod.append(path, rot_mod.log_line(day, now, m, scored, at_swap))
+        st = SourceStatus("Rotation")
+        st.ok, st.source, st.items = True, "live", len(scored)
+        weakest = min((p for p in picks if not p["locked"]),
+                      key=lambda p: p["score"] if p["score"] is not None else 0.0, default=None)
+        best = scored[0] if scored else None
+        note = (f"{len(scored)} of {len(cands)} scored"
+                + (f" · best off the list {best['sym']} {best['score']:.0f}" if best else "")
+                + (f" · weakest pick {weakest['sym']} {weakest['score'] or 0:.0f}"
+                   if weakest else "")
+                + (f" · {room} free" if room else "")
+                + f" · {time.monotonic() - started:.1f}s")
+        st.notes = [note]
+        if moved:
+            st.notes.append("; ".join(
+                f"{m['in']} {m['in_score']:.0f} in" + (f" for {m['out']} {m['out_score'] or 0:.0f}"
+                                                       if m["out"] else "") for m in moves))
+        with self._lock:
+            self._status["rotation"] = st
+            self._updated["rotation"] = time.time()
+        if moved or time.monotonic() - self._rot_logged >= 600.0:
+            self._rot_logged = time.monotonic()
+            self._log("rotation", st)
+        return rot_mod.ROUND_SEC
 
     def _apply_promotions(self) -> bool:
         """The pool's promotions, and today's tracked favourites, into the scanner's
@@ -1328,6 +1843,62 @@ class Collector:
             out["books"][book] = {"card": card, "label": label,
                                   "lean": daytype.lean(card, tables.get(book) or {})}
         return out
+
+    def _do_bias_record(self) -> float | None:
+        """The bias record (bias_record.py): at each mark every book's board read and the
+        stocks tape's, with the price each is judged from; at the close each book's last.
+        What is on file is read once, so a restart neither repeats a mark nor loses one
+        still inside its slack. A minute's retry while the board has not been built."""
+        now = datetime.now(UTC)
+        if self._bias_done is None:
+            self._bias_done = bias_record.done_keys(bias_record.read())
+        marks, closes = self._bias_done
+        key = bias_record.due_mark(now, marks)
+        close_td = bias_record.close_due(now, closes)
+        if key is None and close_td is None:
+            return None
+        snap = self.snapshot()
+        quotes = {q.get("key"): q for q in snap.get("quotes") or [] if isinstance(q, dict)}
+
+        def last_of(book: str) -> float | None:
+            q = quotes.get(volterm_mod.quote_key(book)) or {}
+            v = q.get("last")
+            return float(v) if isinstance(v, (int, float)) else None
+
+        lines: list[dict[str, Any]] = []
+        if key is not None:
+            boards = (snap.get("drivers") or {}).get("books") or {}
+            if not boards:
+                return 60.0
+            st = drivestats.Stats([c for c in snap.get("context") or [] if isinstance(c, dict)],
+                                  now.astimezone(ET).date())
+            for book in bias_record.BOOKS:
+                r = boards.get(book)
+                if not isinstance(r, dict):
+                    continue
+                q = quotes.get(volterm_mod.quote_key(book)) or {}
+                pct = q.get("pct") if isinstance(q.get("pct"), (int, float)) else None
+                lines.append(bias_record.read_line(
+                    key[0], key[1], now, book, r, last_of(book), pct,
+                    st.usual(drivestats.BOOK_KEY[book])[0]))
+            # The stocks tape, judged on the S&P future: it trades at every mark.
+            try:
+                conv = ((self.scanner_payload().get("regime") or {}).get("conviction")) or None
+            except (ValueError, TypeError, KeyError, ZeroDivisionError):
+                conv = None
+            if isinstance(conv, dict):
+                es = quotes.get("ES") or {}
+                lines.append(bias_record.read_line(
+                    key[0], key[1], now, bias_record.TAPE, conv, last_of("ES"),
+                    es.get("pct") if isinstance(es.get("pct"), (int, float)) else None,
+                    st.usual("ES")[0]))
+            marks.add(key)
+        if close_td is not None:
+            lines.append(bias_record.close_line(close_td, now,
+                                                {b: last_of(b) for b in bias_record.BOOKS}))
+            closes.add(close_td)
+        bias_record.append(lines)
+        return None
 
     def _do_daytype(self) -> float | None:
         """The session-type record (daytype.py): at CARD_AT one card per book with
@@ -1498,7 +2069,7 @@ class Collector:
                                               "iv_history.jsonl", "scanner_momentum.json",
                                               "scanner_universe.json", "stream_check.json",
                                               "oi_log.jsonl", "cboe_pc.jsonl",
-                                              "session_types.jsonl"))
+                                              "session_types.jsonl", "bias_record.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
         self._thread = threading.Thread(target=self._run, name="collector", daemon=True)
@@ -1526,6 +2097,7 @@ class Collector:
     def stop(self) -> None:
         self._stop.set()
         self.stream.stop()
+        self.webull.stop()
         for th in (self._thread, self._scan_thread, self._quotes_thread, self._options_thread,
                    self._premarket_thread, self._live_thread, self._wide_thread):
             if th:
@@ -1706,13 +2278,14 @@ class Collector:
             news_limit=news_limit,
             calendar_ok=bool(cal_st.ok) if cal_st is not None else None,
             news_read=self.newsread.for_item,
+            news_dir=self.newsread.direction,
         )
         # Which day of a multi-day move each name is on, for the Day 2/3 preset.
         stages = self._ctx().stage
         self.universe.want_sparks(watch)
         for r in payload.get("rows") or []:
             r["stage"] = stages.get(r.get("sym"))
-            r["spark"] = self.universe.spark(str(r.get("sym")))
+            self.universe.fill_spark(r)
             self._with_insiders(r)
         # No session type here (owner, 2026-11-11): the Scanner's strip carried NQ's
         # trend-or-range lean for a day, and it is a futures read on a stocks page.
@@ -1725,7 +2298,8 @@ class Collector:
         scan = self.scanner_payload()
         with self._lock:
             snap: dict[str, Any] = {k: self._state.get(k) for k in (
-                "quotes", "sectors", "constituents", "calendar", "rates", "fomc", "gex")}
+                "quotes", "sectors", "constituents", "calendar", "rates", "fomc", "gex",
+                "context")}
             snap["status"] = {k: v.as_dict() for k, v in self._status.items()}
         snap["policy_meetings"] = meetings_priced(snap["rates"] or {}, snap["fomc"] or [])
         return marketctx.build(scan, snap)

@@ -19,7 +19,6 @@ import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { HelmMark, HelmSweep, useHelmId } from "@/components/ui/HelmLoader";
 import { useLum, useQuiet } from "@/components/state/UiMode";
-import { NoteAge } from "@/components/ui/NoteAge";
 
 /**
  * The session report — a model's read of the whole terminal.
@@ -184,7 +183,21 @@ export function Report({
    * failure, no key, an old note) is still one card that fills the column.
    */
   const lum = useLum();
-  const board = lum && enabled && !mine && Boolean(rep && !rep.error && rep.report && rep.format === "brief" && rep.facts);
+  /*
+   * ONE CARD FOR THE MARKET REPORT (owner, 2026-11-19: "stocks market report section doesnt
+   * need it sown speerate card for generate and the res tof the content on that card, it
+   * should be like the futures one"). The bar was a card of its own over the report's: two
+   * cards where the page with no report open (the Futures view on a session not yet
+   * written) is one. A market report (brief_version 3 and the briefing, 4) is one sheet, so
+   * it now sits in the bar's card, on both desks, as Quiet draws it. The board of cards
+   * stays for the older briefs, which are laid out as cards.
+   */
+  const board =
+    lum &&
+    enabled &&
+    !mine &&
+    Boolean(rep && !rep.error && rep.report && rep.format === "brief" && rep.facts) &&
+    (rep?.brief_version ?? 1) < 3;
 
   return (
     <div className="qt-board grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)] xl:overflow-hidden">
@@ -288,8 +301,9 @@ export function Report({
             <Failed error={rep.error} raw={rep.raw} />
           ) : rep.report ? (
             <>
-              <NoteAge createdUtc={rep.created_utc} what="brief" />
-              {rep.format === "brief" && rep.facts ? <Brief rep={rep} /> : <Body rep={rep} />}
+              {/* No tinted "written N h ago" banner since 2026-11-19 (owner): the age is
+                  beside the brief's date (panels/Brief, ui/NoteAge WrittenAgo). */}
+              {rep.format === "brief" && rep.facts ? <Brief rep={rep} embedded /> : <Body rep={rep} />}
               <Provenance
                 rep={rep}
                 showDigest={showDigest}
@@ -302,10 +316,6 @@ export function Report({
         </Module>
         {board && rep && (
           <div className="flex min-w-0 flex-col gap-2 lum:gap-[var(--lum-gap)] xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
-            {/* The age banner keeps its tint and takes the cards' corners. */}
-            <div className="shrink-0 overflow-hidden rounded-[12px] empty:hidden">
-              <NoteAge createdUtc={rep.created_utc} what="brief" />
-            </div>
             <Brief rep={rep} />
             <div className="qt-card shrink-0 px-2 py-1 [&>div:first-child]:border-t-0 [&>div:first-child]:bg-transparent [&>div:first-child]:pt-2 [&>div:first-child]:text-[11px]">
               <Provenance rep={rep} showDigest={showDigest} onDigest={() => setShowDigest((v) => !v)} />
@@ -537,7 +547,10 @@ export function Working({
       </div>
       <div className="mt-2 text-[12px] text-ink-2">{stage}…</div>
       <div className="fig mt-4 text-[10px] text-ink-3">
-        {model ? `${model} · ` : ""}usually 1–3 min on the free tier · the {noun} names the
+        {/* A paid model answers in well under a minute (Claude Haiku 5.5 wrote the report in
+            18s on 2026-11-19); a free pool takes one to three. */}
+        {model ? `${model} · ` : ""}
+        {model && !model.endsWith(":free") ? "usually under a minute" : "usually 1–3 min on the free tier"} · the {noun} names the
         model that answered
       </div>
     </div>

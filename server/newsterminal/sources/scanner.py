@@ -130,6 +130,14 @@ BARS_RANGE = "12d"
 BENCH_SEC = 30.0
 CLOSED_SEC = 900.0
 MAX_PER_TICK = 5
+#: THE 3m CHART'S BARS (owner, 2026-11-19: signals "on 3m, 5m and 10m"). Yahoo has no
+#: 3-minute bars, so every name's one-minute bars are read in the regular session, in the
+#: rotation beside the 5-minute read: this many a tick, a name again once its copy is
+#: ACTIVE_SEC old, nothing while a 429 pause holds. Two sessions, so the wave has settled
+#: and the previous session seeds the ATR at the bell. The cache key is the chart's
+#: (`bars_1m`), so an open 1m or 3m chart and the rotation share one read.
+MAX_1M_PER_TICK = 5
+BARS1_RANGE = "2d"
 DAILY_TTL = 6 * 3600.0
 DAILY_PER_TICK = 3
 #: WHO WROTE IT (owner, 2026-11-15: "i just want to make sure we have quality sources
@@ -717,6 +725,10 @@ class ScanStore:
         self.bars: dict[str, list[scan.Bar]] = {}
         self.meta: dict[str, dict[str, Any]] = {}
         self.fetched: dict[str, float] = {}
+        #: The one-minute bars the 3m signals are read on, and when (MAX_1M_PER_TICK).
+        self.bars1: dict[str, list[scan.Bar]] = {}
+        self.fetched1: dict[str, float] = {}
+        self.fails1: dict[str, tuple[int, float]] = {}
         self.errors: dict[str, str] = {}
         self.daily: dict[str, list[scan.DayBar]] = {}
         self.daily_at: dict[str, float] = {}
@@ -915,6 +927,27 @@ class ScanStore:
         self.fetched[sym] = time.time() - (r.age_min or 0.0) * 60.0
         return None if r.source != "stale" else f"stale: {r.error}"
 
+    def _fetch_1m(self, sym: str) -> str | None:
+        """The rotation's one-minute read for the 3m signals (MAX_1M_PER_TICK)."""
+        url = CHART.format(sym=urllib.parse.quote(_yahoo(sym)), rng=BARS1_RANGE, iv="1m")
+        r = fetch(url, key=f"scan1m_{sym}", ttl_sec=20.0, ua=BROWSER_UA, timeout=12,
+                  stale_max_sec=600.0, validate=json_body)
+        if not r.ok or r.source == "stale":
+            self._failed(self.fails1, sym, r.status, time.time())
+        else:
+            self.fails1.pop(sym, None)
+        if not r.ok:
+            return r.error or "unavailable"
+        try:
+            bars, _meta = scan.parse_chart(r.json(), step=60)
+        except ValueError as e:
+            return f"unparseable: {e}"
+        if not bars:
+            return "no bars"
+        self.bars1[sym] = bars
+        self.fetched1[sym] = time.time() - (r.age_min or 0.0) * 60.0
+        return None if r.source != "stale" else f"stale: {r.error}"
+
     def bars_1m(self, sym: str) -> tuple[list[scan.Bar], str | None]:
         """Two sessions of one-minute bars for the chart's 1m and 3m views.
 
@@ -1017,6 +1050,19 @@ class ScanStore:
                 self.errors.pop(sym, None)
         self.burst_left = sum(1 for s in syms if closing(s) and not waiting(s, self.fails))
 
+        # The 3m chart's one-minute bars, in the regular session only (MAX_1M_PER_TICK),
+        # after the 5-minute reads and never while a 429 pause holds.
+        n1 = 0
+        if clock.session == "rth" and not paused:
+            due1 = sorted((s for s in syms if t - self.fetched1.get(s, 0.0) >= ACTIVE_SEC
+                           and not waiting(s, self.fails1)),
+                          key=lambda s: self.fetched1.get(s, 0.0))
+            for sym in due1[:MAX_1M_PER_TICK]:
+                if self.pause_until > time.time():
+                    break
+                if self._fetch_1m(sym) is None:
+                    n1 += 1
+
         # Daily bars must be FINAL for every finished session: the previous
         # close, high and low are read off them (scan.technicals), and a copy
         # fetched at 14:00 carries that afternoon's price as the day's close. So
@@ -1047,6 +1093,8 @@ class ScanStore:
         st.age_min = max(ages) if ages else None
         done = min(len(due), MAX_PER_TICK)
         st.notes = [f"{done} refreshed, {len(due) - done} queued"]
+        if n1:
+            st.notes.append(f"{n1} one-minute read{'s' if n1 != 1 else ''} for the 3m chart")
         if self.burst_left:
             st.notes.append(f"close read: {self.burst_left} left")
         missing = len(syms) - len(have)
@@ -1197,7 +1245,8 @@ class ScanStore:
             return scan.technicals(bars, self.daily.get(s) or [], clock, name=name,
                                    official=scan.official_close(self.meta.get(s)),
                                    asof=self.fetched.get(s), daily_asof=self.daily_at.get(s),
-                                   pm_wide=self.pm_wide(s, clock.trading_day))
+                                   pm_wide=self.pm_wide(s, clock.trading_day),
+                                   bars1=self.bars1.get(s), asof1=self.fetched1.get(s))
 
         t = tech(sym)
         if t is None:
@@ -1229,7 +1278,9 @@ class ScanStore:
                                          official=scan.official_close(self.meta.get(sym)),
                                          asof=self.fetched.get(sym),
                                          daily_asof=self.daily_at.get(sym),
-                                         pm_wide=self.pm_wide(sym, clock.trading_day))
+                                         pm_wide=self.pm_wide(sym, clock.trading_day),
+                                         bars1=self.bars1.get(sym),
+                                         asof1=self.fetched1.get(sym))
         rows: dict[str, dict[str, Any]] = {}
         for sym, tech in techs.items():
             row = scan.row_of(sym, tech, techs.get("SPY"), techs.get("QQQ"), clock)
@@ -1328,29 +1379,36 @@ class ScanStore:
         settled on them checks what was logged and adds nothing (EventLog.settle)."""
         return (self.owed | set(self.adhoc)) - set(self.symbols())
 
-    def day_signals(self, day: date, syms: Iterable[str]
-                    ) -> dict[str, tuple[list[dict[str, Any]], int | None]]:
+    def day_signals(self, day: date, syms: Iterable[str], fast: bool = False
+                    ) -> dict[str, tuple[list[dict[str, Any]], Any]]:
         """Each name's signals for a FINISHED session `day`, replayed from the bars
         held as of that day's bell — what the event log settles the day against
         (scanlog.EventLog.settle). Only names whose bars were read after the bell
         and still reach back to the day: anything else cannot be checked yet.
-        `final_to` is where those bars are final (the bell, when they are whole)."""
+        `final_to` is where those bars are final (the bell, when they are whole).
+
+        `fast` (the settle's, 2026-11-19): the 3m and 5m charts' signals too, with
+        `final_to` as {tf: where that chart's bars are final}. Without it, the ten-minute
+        chart's alone, as the pre-market record reads them."""
         m = scan.rth_end(day)
         bell = datetime(day.year, day.month, day.day, m // 60, m % 60, tzinfo=scan.ET)
         first = datetime(day.year, day.month, day.day, scan.PM_START // 60,
                          tzinfo=scan.ET).timestamp()
         clock = scan.clock_at(bell)
-        out: dict[str, tuple[list[dict[str, Any]], int | None]] = {}
+        out: dict[str, tuple[list[dict[str, Any]], Any]] = {}
         for sym in syms:
             bars, at = self.bars.get(sym), self.fetched.get(sym, 0.0)
             if not bars or at < bell.timestamp() + CLOSE_LAG or bars[0].t > first:
                 continue
             # The same daily copy the live rows read, by the same rule, so the day is
             # settled against the levels its signals fired on.
+            b1, at1 = (self.bars1.get(sym), self.fetched1.get(sym)) if fast else (None, None)
             tech = scan.technicals(bars, self.daily.get(sym) or [], clock, asof=at,
-                                   daily_asof=self.daily_at.get(sym))
+                                   daily_asof=self.daily_at.get(sym), bars1=b1, asof1=at1)
             if tech.ok and tech.rth_today:
-                out[sym] = (tech.signals, tech.final_to)
+                out[sym] = ((tech.signals + tech.signals_fast,
+                             {"10m": tech.final_to, **tech.final_to_tf}) if fast
+                            else (tech.signals, tech.final_to))
         return out
 
     # ---- headlines ----------------------------------------------------------

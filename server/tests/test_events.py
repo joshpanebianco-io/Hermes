@@ -134,8 +134,11 @@ def test_the_prints_vote_waits_for_the_open_and_names_who_is_waiting() -> None:
     assert "reported — the cash move comes at the open" in v["note"]
     moved = [{"symbol": "AAPL", "index_pp": 0.42, "reported": {"reaction_in": True}}, *waiting]
     v = drivers._heavyweight_prints(moved, "NQ")
-    assert v["vote"] == "long" and v["value"] == "+0.42pp · AAPL"
+    # Never a side since 2026-11-19: the reporters' moves are in the index future's price.
+    # The row still says what they did, and `said` keeps the side it would have voted.
+    assert v["vote"] == "neutral" and v["said"] == "long" and v["value"] == "+0.42pp · AAPL"
     assert "by 0.42 percentage points; QCOM, ARM reported" in v["note"]
+    assert v["aside"].startswith("never a side")
 
 
 def test_stories_fold_into_one_and_count_their_tellings() -> None:
@@ -163,7 +166,9 @@ def test_event_risk_is_the_high_wire_since_the_close_grouped_by_story() -> None:
 def test_the_board_votes_on_prints_and_damps_on_events() -> None:
     board = drivers.build(_snap(), "closed", NOW)["books"]["NQ"]
     votes = {v["key"]: v for v in board["votes"]}
-    assert votes["hw_prints"]["vote"] == "short" and "GOOGL" in votes["hw_prints"]["value"]
+    # Read and named, in no family (2026-11-19): it drags the index, and that is NQ's own move.
+    assert votes["hw_prints"]["said"] == "short" and "GOOGL" in votes["hw_prints"]["value"]
+    assert votes["hw_prints"]["vote"] == "neutral" and votes["hw_prints"]["family"] is None
     assert votes["event_risk"]["vote"] == "neutral" and votes["event_risk"]["damper"] is True
     assert board["event_risk"] is True
     assert "Event risk since the close (2)" in board["treatment"]

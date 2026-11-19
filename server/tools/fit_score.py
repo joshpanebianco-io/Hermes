@@ -31,7 +31,16 @@ settled (L) and (E) signals, and reports:
      RVOL gate held out of the top ten against the rest;
  10. the pool's own record (cache/pool_marks.jsonl): at each mark, the top ten of the
      rank against the rest of its top fifty by the day each then had (range and move
-     in daily ATRs), and promoted names against the rest.
+     in daily ATRs), and promoted names against the rest;
+ 11. (from 2026-11-19) the tape's bias at each signal, by side, in counts: with it, no
+     lean, against it, and the Market part's vote count on the same signals (`bias_lines`).
+     The bias calls no index's close (tools/bias_backfill.py); this is whether it picks
+     the trades. Read by day: it is one read for every name at once;
+ 12. (from 2026-11-19) every chart's signals, 3m, 5m and 10m, by side and kind, and the
+     chart that printed a setup first against the ones after (`tf_lines`). Every other
+     table is the 10m chart's alone, so it runs on from before. The same day the (E)
+     became an extended run's entry only and the (V), the VWAP retest, began: read the
+     (E) from 2026-11-19 on its own.
 
 AND, from 2026-11-14, the entry gate: signals with an entry to take against those
 without, then section 4 again on the first group alone (`entry_lines`). A part is worth
@@ -85,7 +94,8 @@ from typing import Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from newsterminal.config import CACHE_DIR
-from newsterminal.scanlog import PREOPEN_NAME, TRADES, held_r
+from newsterminal.premarket_record import RECORD_NAME as PREMARKET_NAME
+from newsterminal.scanlog import PREOPEN_NAME, TF_DEFAULT, TRADES, held_r, tf_of
 from newsterminal.sources.pool import MARKS_NAME
 
 #: Below this many settled signals the report says the sample is too small
@@ -221,12 +231,33 @@ def by_day(evs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     return days
 
 
+#: A day counts in a "every day counting the same" line only with this many signals. On
+#: the record check of 2026-11-18 the window held 49 scored signals on 16 Nov and ONE on
+#: 17 Nov (the app was stopped), and that one short reaching +2R weighed as much as the
+#: other 49: "every signal +2R 68.4%, held +2.43", against 38% and +1.00 pooled.
+MIN_DAY_SIGNALS = 5
+
+
+def full_days(days: dict[str, list[dict[str, Any]]]) -> tuple[list[str], int]:
+    """The days with MIN_DAY_SIGNALS or more, in order, and how many were left out. Pure."""
+    keep = sorted(d for d, evs in days.items() if len(evs) >= MIN_DAY_SIGNALS)
+    return keep, len(days) - len(keep)
+
+
+def _left_out(n: int) -> str:
+    return (f" ({n} day{'s' if n != 1 else ''} with fewer than {MIN_DAY_SIGNALS} signals "
+            "left out)") if n else ""
+
+
 def equal_day_lines(scored: list[dict[str, Any]]) -> list[str]:
     """Every signal, then the top of each day's list, with every day counting the same.
 
     Two of the first ten sessions held 126 of 325 signals, and a top third that read
-    53.8% at +1R pooled read 43.6% once each day counted the same (2026-11-05)."""
-    lists = [sorted(r, key=lambda e: e["score"], reverse=True) for r in by_day(scored).values()]
+    53.8% at +1R pooled read 43.6% once each day counted the same (2026-11-05). A day
+    with fewer than MIN_DAY_SIGNALS is left out (2026-11-18)."""
+    days = by_day(scored)
+    keep, dropped = full_days(days)
+    lists = [sorted(days[d], key=lambda e: e["score"], reverse=True) for d in keep]
 
     def line(label: str, pick: Callable[[list[dict[str, Any]]], list[dict[str, Any]]]) -> str:
         picked = [r for r in (pick(x) for x in lists) if r]
@@ -235,7 +266,7 @@ def equal_day_lines(scored: list[dict[str, Any]]) -> list[str]:
         h = mean([mean([held(e) for e in r]) or 0.0 for r in picked])
         return f"  {label:<13} {_pct(w1)}  {_pct(w2)}  {_signed(h)}"
 
-    return ["With every day counting the same:",
+    return [f"With every day counting the same{_left_out(dropped)}:",
             "                   +1R     +2R    held",
             line("every signal", lambda r: r),
             line("top 5 a day", lambda r: r[:5]),
@@ -251,7 +282,7 @@ def trend_lines(scored: list[dict[str, Any]]) -> list[str]:
     gap between the thirds with the days the top was ahead, and the same gap on each
     half of the days: a gap that holds on one half only is that fortnight's market."""
     days = by_day(scored)
-    order = sorted(days)
+    order, dropped = full_days(days)
     lists = {d: sorted(days[d], key=rank_score, reverse=True) for d in order}
 
     def stats(evs: list[dict[str, Any]]) -> tuple[float, float, float]:
@@ -290,7 +321,8 @@ def trend_lines(scored: list[dict[str, Any]]) -> list[str]:
 
     top, bottom = thirds_of(order)
     half = len(order) // 2
-    return ["Trending, what the list is for: +2R reached and R held, every day counting the same:",
+    return ["Trending, what the list is for: +2R reached and R held, every day counting the same"
+            f"{_left_out(dropped)}:",
             "                    +2R    held     +1R",
             row("every signal", [stats(lists[d]) for d in order]),
             row("top 5 a day", [stats(lists[d][:5]) for d in order]),
@@ -320,7 +352,11 @@ def side_lines(scored: list[dict[str, Any]]) -> list[str]:
             lines.append(f"    {side + 's':<7} none")
             continue
         days = by_day(evs)
-        order = sorted(days)
+        order, dropped = full_days(days)
+        if not order:
+            lines.append(f"    {side + 's':<7} {len(evs):>4} signals, no day with "
+                         f"{MIN_DAY_SIGNALS} or more")
+            continue
         lists = [sorted(days[d], key=rank_score, reverse=True) for d in order]
 
         def avg(rows: list[list[dict[str, Any]]], f: Callable[[list[dict[str, Any]]], float | None]) -> float:
@@ -332,7 +368,8 @@ def side_lines(scored: list[dict[str, Any]]) -> list[str]:
 
         split = [(x[:len(x) // 3], x[-(len(x) // 3):]) for x in lists if len(x) // 3 >= 2]
         tops, bots = [t for t, _ in split], [b for _, b in split]
-        head = (f"    {side + 's':<7} {len(evs):>4} signals, {len(order)} days | every signal +2R "
+        head = (f"    {side + 's':<7} {len(evs):>4} signals, {len(order)} days"
+                f"{f' (+{dropped} thin)' if dropped else ''} | every signal +2R "
                 f"{_pct(avg(lists, win_2r))} held {_signed(avg(lists, held_of))} | top 5 +2R "
                 f"{_pct(avg([x[:5] for x in lists], win_2r))} held "
                 f"{_signed(avg([x[:5] for x in lists], held_of))}")
@@ -505,6 +542,114 @@ def news_lines(evs: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+#: The bias split is a hint until the record holds this many days: the tape is one read for
+#: every name at once, so its unit is the day, not the signal.
+MIN_BIAS_DAYS = 10
+TAPE_GRADES = ("moderate", "strong")
+
+
+def _tape(e: dict[str, Any]) -> dict[str, Any] | None:
+    t = (e.get("ctx") or {}).get("tape")
+    return t if isinstance(t, dict) else None
+
+
+def _with(e: dict[str, Any], key: str) -> str | None:
+    """'with' or 'against' when the tape's `key` (bias or vote) has a side, else None."""
+    s = (_tape(e) or {}).get(key)
+    if s not in ("long", "short"):
+        return None
+    return "with" if s == e.get("side") else "against"
+
+
+def _bias_row(label: str, evs: list[dict[str, Any]]) -> str:
+    """One group as counts: reached +1R, +2R, stopped, of n; held R; on how many days."""
+    if not evs:
+        return f"    {label:<28} none"
+    n, nd = len(evs), len({e["day"] for e in evs})
+    h1 = sum(1 for e in evs if e["outcome"].get("hit_1r"))
+    h2 = sum(1 for e in evs if e["outcome"].get("hit_2r"))
+    st = sum(1 for e in evs if e["outcome"].get("stopped"))
+    return (f"    {label:<28} +1R {h1:>3} of {n:<4} +2R {h2:>3}   stopped {st:>3}   "
+            f"held {_signed(mean([held(e) for e in evs]))} R   {nd} day{'s' if nd != 1 else ''}")
+
+
+def bias_lines(evs: list[dict[str, Any]]) -> list[str]:
+    """The tape's bias at each signal against how the trade went, by side (scanlog.tape_ctx,
+    logged from 2026-11-19, never scored).
+
+    WHY (owner, 2026-11-19): the backfill found the bias calls no index's close, and it is
+    not used as one: it is the weather a stock trade is taken in. So it is read here on the
+    trades. Each side apart, in counts: with the bias, no lean, against it, and with or
+    against a moderate or strong one. Then the vote count the Market part pays ("tape
+    agrees", scanscore.regime) on the same signals, and the two rows that decide which read
+    should carry those points: signals with the bias but not the vote, and the reverse."""
+    with_tape = [e for e in evs if _tape(e)]
+    if not with_tape:
+        return ["The tape's bias at the signal: no signal carries it yet (logged from 2026-11-19)"]
+    nd = len({e["day"] for e in with_tape})
+    lines = [f"The tape's bias at the signal ({len(with_tape)} signals on {nd} days carry it, "
+             "logged from 2026-11-19, never scored), by side:"]
+    if nd < MIN_BIAS_DAYS:
+        lines.append(f"  under {MIN_BIAS_DAYS} days: a hint, change no weight on it")
+
+    def strong(e: dict[str, Any]) -> bool:
+        return (_tape(e) or {}).get("grade") in TAPE_GRADES
+
+    for side in ("long", "short"):
+        s = [e for e in with_tape if e.get("side") == side]
+        lines.append(f"  {side}s ({len(s)})")
+        if not s:
+            continue
+        lines += [
+            _bias_row("with the bias", [e for e in s if _with(e, "bias") == "with"]),
+            _bias_row("no lean", [e for e in s if _with(e, "bias") is None]),
+            _bias_row("against the bias", [e for e in s if _with(e, "bias") == "against"]),
+            _bias_row("with a moderate or strong", [e for e in s if _with(e, "bias") == "with"
+                                                    and strong(e)]),
+            _bias_row("against a moderate or strong", [e for e in s
+                                                       if _with(e, "bias") == "against"
+                                                       and strong(e)]),
+            _bias_row("with the vote count", [e for e in s if _with(e, "vote") == "with"]),
+            _bias_row("against the vote count", [e for e in s if _with(e, "vote") == "against"]),
+            _bias_row("with the bias, not the vote", [e for e in s if _with(e, "bias") == "with"
+                                                      and _with(e, "vote") != "with"]),
+            _bias_row("with the vote, not the bias", [e for e in s if _with(e, "vote") == "with"
+                                                      and _with(e, "bias") != "with"]),
+        ]
+    return lines
+
+
+def tf_lines(evs: list[dict[str, Any]]) -> list[str]:
+    """Each chart's settled signals against the others, by side and kind, in counts
+    (owner, 2026-11-19: signals on 3m, 5m and 10m). From the first day a faster chart's
+    signal is on file, so the 10m's line covers the same days. Then, per side, the chart
+    that printed a setup first (the one that alerted) against the ones that printed it
+    after (`alert: false`)."""
+    fast = [e for e in evs if tf_of(e) != TF_DEFAULT]
+    if not fast:
+        return ["By chart: no 3m or 5m signal settled yet (logged from 2026-11-19)"]
+    since = min(str(e["day"]) for e in fast)
+    rows = [e for e in evs if str(e["day"]) >= since]
+    nd = len({e["day"] for e in rows})
+    lines = [f"By chart, from {since} ({len(rows)} signals on {nd} days), each side and kind:"]
+    if nd < MIN_BIAS_DAYS:
+        lines.append(f"  under {MIN_BIAS_DAYS} days: a hint, change nothing on it")
+    for side in ("long", "short"):
+        lines.append(f"  {side}s")
+        for kind in TRADES:
+            for tf in ("3m", "5m", "10m"):
+                g = [e for e in rows if e.get("side") == side and e.get("kind") == kind
+                     and tf_of(e) == tf]
+                if g:
+                    lines.append(_bias_row(f"({kind}) {tf}", g))
+        mine = [e for e in rows if e.get("side") == side]
+        lines.append(_bias_row("first to print a setup", [e for e in mine
+                                                          if e.get("alert") is not False]))
+        lines.append(_bias_row("printed it after", [e for e in mine
+                                                    if e.get("alert") is False]))
+    return lines
+
+
 def load_marks(path: str, since: date | None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     try:
@@ -522,13 +667,34 @@ def load_marks(path: str, since: date | None) -> list[dict[str, Any]]:
     return out
 
 
+#: A mark run this long after its time is a collector catching up (sources/pool `due_marks`
+#: runs the missed ones), and reads figures from after it: on 2026-11-17 the "10:00" mark
+#: ran at 18:30 ET on the whole day's (NKE's volume 257% of a day, its price the close), so
+#: its top ten "had" the day it was ranked on. Read on the record check of 2026-11-18.
+LATE_MARK_MIN = 30
+
+
+def _late(m: dict[str, Any]) -> bool:
+    """Whether a mark was taken more than LATE_MARK_MIN after its own time. Pure."""
+    try:
+        lh, lm = (int(x) for x in str(m.get("mark") or "").split(":"))
+        ah, am = (int(x) for x in str(m.get("at_et") or "").split(":"))
+    except ValueError:
+        return False
+    return (ah * 60 + am) - (lh * 60 + lm) > LATE_MARK_MIN
+
+
 def pool_lines(lines: list[dict[str, Any]]) -> list[str]:
     """The pool's rank against the day each name then had (sources/pool MARKS_NAME):
-    the day's range and its move from the previous close, both in daily ATRs."""
+    the day's range and its move from the previous close, both in daily ATRs. A mark run
+    late (LATE_MARK_MIN) is left out: it saw the day it is held to."""
     outcome = {e["day"]: e.get("rows") or {} for e in lines if e.get("kind") == "outcome"}
-    marks = [e for e in lines if e.get("kind") == "mark" and e.get("day") in outcome]
+    every = [e for e in lines if e.get("kind") == "mark" and e.get("day") in outcome]
+    marks = [m for m in every if not _late(m)]
+    late = len(every) - len(marks)
     if not marks:
-        return ["Pool marks: no mark with its day's outcome on file yet (logged from 2026-11-13)"]
+        return ["Pool marks: no mark with its day's outcome on file yet (logged from 2026-11-13)"
+                + (f"; {late} run late left out" if late else "")]
 
     def day_of(sym: str, day: str) -> tuple[float, float] | None:
         o = outcome[day].get(sym) or {}
@@ -550,14 +716,136 @@ def pool_lines(lines: list[dict[str, Any]]) -> list[str]:
                 continue
             groups["top 10" if i < 10 else "11-50"].append(d)
             groups["promoted" if r.get("promoted") else "not promoted"].append(d)
-    out = [f"Pool marks ({len(marks)} marks over {len({m['day'] for m in marks})} days): "
-           "the day each name then had, in daily ATRs",
+    out = [f"Pool marks ({len(marks)} marks over {len({m['day'] for m in marks})} days"
+           + (f", {late} run late left out" if late else "")
+           + "): the day each name then had, in daily ATRs",
            "  group           n    range   |move|"]
     for g in ("top 10", "11-50", "promoted", "not promoted"):
         xs = groups.get(g) or []
         if xs:
             out.append(f"  {g:<13} {len(xs):>4}   {mean([x[0] for x in xs]) or 0.0:5.2f}   "
                        f"{mean([x[1] for x in xs]) or 0.0:5.2f}")
+    return out
+
+
+#: A day counts in a pre-market group's figures only with this many retests in it.
+PRE_MIN_DAY = 2
+#: Own move this far with the retest's side, in daily ATRs, is the stock's own push.
+PRE_OWN_MIN = 0.25
+#: Pre-market volume this many times the name's usual is unusual.
+PRE_RVOL_MIN = 2.0
+
+
+def premarket_lines(lines: list[dict[str, Any]], since: date | None = None) -> list[str]:
+    """DOES THE PRE-MARKET LIST FIND THE NAMES WHOSE RETEST HOLDS AND TRENDS? (owner,
+    2026-11-18: "the purpose of the scoring is to show potential strong stocks where the
+    break and retest will hold and continue trending (both bearish or bullish) with
+    momentum"). cache/premarket_record.jsonl (newsterminal/premarket_record.py): the
+    list at 09:25 with its four unscored figures, and each name's first (L) retest
+    settled by the signal log's own rule. For each group, on each side: how many retests
+    held to +1R before the stop, reached +2R, the R held at the close, and how many days
+    closed in the top quarter of the range on the retest's side. Every day counts the
+    same, a day with fewer than PRE_MIN_DAY retests in the group left out. A figure earns
+    points only where it separates on BOTH sides."""
+    outcome = {e["day"]: e.get("rows") or {} for e in lines if e.get("kind") == "outcome"}
+    lists: dict[str, dict[str, Any]] = {}
+    for e in lines:
+        if e.get("kind") == "list" and isinstance(e.get("day"), str):
+            lists[e["day"]] = e   # the day's last list line
+    days = sorted(d for d in lists if d in outcome and (since is None or d >= since.isoformat()))
+    if not days:
+        return ["Pre-market record: no day with its outcome on file yet (logged from 2026-11-18)"]
+    recs: list[dict[str, Any]] = []
+    listed = fired = 0
+    for d in days:
+        rows = lists[d].get("rows") or []
+        listed += len(rows)
+        for i, r in enumerate(rows):
+            rt = (outcome[d].get(str(r.get("sym"))) or {}).get("retest")
+            if not rt or not rt.get("final"):
+                continue
+            fired += 1
+            side = rt.get("side")
+            way = 1 if side == "long" else -1
+            cat = r.get("catalyst") or {}
+            md = {"bullish": 1, "bearish": -1}.get(str(cat.get("direction")), 0)
+            gap = r.get("gap")
+            hold = r.get("hold")
+            recs.append({
+                "day": d, "side": side, "top": i < max(1, len(rows) // 3),
+                "own": isinstance(r.get("own"), (int, float)) and r["own"] * way >= PRE_OWN_MIN,
+                "rvol": (isinstance(r.get("rvol"), (int, float)) and not r.get("rvol_est")
+                         and r["rvol"] >= PRE_RVOL_MIN),
+                "news_with": md == way, "news_against": md == -way,
+                "big": cat.get("size") == "big",
+                "with_gap": isinstance(gap, (int, float)) and gap * way > 0,
+                "held_gap": (isinstance(gap, (int, float)) and gap * way > 0
+                             and isinstance(hold, (int, float)) and hold >= 0.75),
+                "h1": bool(rt.get("hit_1r")), "h2": bool(rt.get("hit_2r")),
+                "held": rt.get("held_r") if isinstance(rt.get("held_r"), (int, float)) else 0.0,
+                "trend": bool((outcome[d].get(str(r.get("sym"))) or {}).get("trend_day")),
+            })
+
+    def day_avg(rs: list[dict[str, Any]], key: str) -> tuple[float | None, int]:
+        by: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for x in rs:
+            by[x["day"]].append(x)
+        vals = [sum(float(x[key]) for x in xs) / len(xs) for xs in by.values()
+                if len(xs) >= PRE_MIN_DAY]
+        return (sum(vals) / len(vals) if vals else None), len(vals)
+
+    def row(label: str, rs: list[dict[str, Any]]) -> list[str]:
+        out = []
+        for side in ("long", "short"):
+            s = [x for x in rs if x["side"] == side]
+            h1, nd = day_avg(s, "h1")
+            if not s or h1 is None:
+                out.append(f"  {label:<26} {side:<5} {len(s):>4}   too few a day")
+            else:
+                out.append(f"  {label:<26} {side:<5} {len(s):>4} {nd:>3}d  {_pct(h1)}  "
+                           f"{_pct(day_avg(s, 'h2')[0])}  {_signed(day_avg(s, 'held')[0])}  "
+                           f"{_pct(day_avg(s, 'trend')[0])}")
+            label = ""
+        return out
+
+    out = [f"Pre-market record ({len(days)} days, {listed} names listed at 09:25, {fired} gave "
+           "an (L) retest): did the retest hold and trend? Days equal, by side.",
+           "  group                      side     n  days  held1R    +2R    held  trend day"]
+    groups: list[tuple[str, Callable[[dict[str, Any]], bool]]] = [
+        ("every retest", lambda x: True),
+        ("top third of the list", lambda x: x["top"]),
+        ("rest of the list", lambda x: not x["top"]),
+        ("own move with the side", lambda x: x["own"]),
+        ("own move not with it", lambda x: not x["own"]),
+        (f"volume {PRE_RVOL_MIN:g}x its usual+", lambda x: x["rvol"]),
+        (f"volume under {PRE_RVOL_MIN:g}x", lambda x: not x["rvol"]),
+        ("news read with the side", lambda x: x["news_with"]),
+        ("news read against it", lambda x: x["news_against"]),
+        ("no directional read", lambda x: not x["news_with"] and not x["news_against"]),
+        ("story read as big", lambda x: x["big"]),
+        ("retest with the gap", lambda x: x["with_gap"]),
+        ("retest against the gap", lambda x: not x["with_gap"]),
+        ("held its gap pre-market", lambda x: x["held_gap"]),
+    ]
+    for label, pick in groups:
+        out += row(label, [x for x in recs if pick(x)])
+    return out
+
+
+def load_premarket(path: str) -> list[dict[str, Any]]:
+    """The pre-market record's lines, none if there is no file yet."""
+    out: list[dict[str, Any]] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(e, dict):
+                    out.append(e)
+    except OSError:
+        return []
     return out
 
 
@@ -617,8 +905,13 @@ def logistic_slope(evs: list[dict[str, Any]], iters: int = 200, lr: float = 0.01
 
 
 def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] | None = None,
-           marks: list[dict[str, Any]] | None = None) -> str:
-    lines = [f"Settled (L)/(E) signals over {days} days: {len(evs)}"]
+           marks: list[dict[str, Any]] | None = None,
+           premarket: list[dict[str, Any]] | None = None, since: date | None = None) -> str:
+    # THE RECORD IS THE 10m CHART'S (scanlog.SAME_SETUP_SEC): every table but the
+    # by-chart one reads it alone, so it runs on from before the 3m and 5m charts.
+    every = evs
+    evs = [e for e in evs if tf_of(e) == TF_DEFAULT]
+    lines = [f"Settled (L)/(E)/(V) signals on the 10m chart over {days} days: {len(evs)}"]
     if len(evs) < MIN_TOTAL:
         lines.append(f"  under the {MIN_TOTAL}-signal guard: read as a hint, change no weight on it")
     lines.append("")
@@ -644,6 +937,9 @@ def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] |
     lines.append("")
     lines += preopen_lines(preopen or [], scored)
     lines.append("")
+    if premarket is not None:
+        lines += premarket_lines(premarket, since)
+        lines.append("")
     with_parts = [e for e in scored if isinstance(e.get("parts"), dict)]
     lines.append(f"Per-part lift ({len(with_parts)} signals carry parts):")
     if not with_parts:
@@ -673,6 +969,10 @@ def report(evs: list[dict[str, Any]], days: int, preopen: list[dict[str, Any]] |
     lines += penalty_lines(with_parts)
     lines.append("")
     lines += news_lines(scored)
+    lines.append("")
+    lines += bias_lines(scored)
+    lines.append("")
+    lines += tf_lines(every)
     if marks is not None:
         lines.append("")
         lines += pool_lines(marks)
@@ -699,7 +999,8 @@ def main() -> int:
     here = os.path.dirname(args.path)
     days = (datetime.now().date() - args.since).days + 1 if args.since else args.days
     print(report(evs, days, load_preopen(os.path.join(here, PREOPEN_NAME)),
-                 load_marks(os.path.join(here, MARKS_NAME), args.since)))
+                 load_marks(os.path.join(here, MARKS_NAME), args.since),
+                 load_premarket(os.path.join(here, PREMARKET_NAME)), args.since))
     return 0
 
 

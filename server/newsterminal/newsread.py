@@ -18,6 +18,18 @@ the report's EPS against the estimate where the story is a report, and up to thr
 of the name's headlines since the close. A figure in its line that is not in that text
 is struck with the line (the briefs' numerals guard, report.known_numerals).
 
+THE STORY'S TEXT AND ITS DIRECTION (owner, 2026-11-18: "so what is the ai reading? just
+the headline or the content too?" → "do what you recommend to make our scanner more
+accurate"). The headline and a cut-off sentence was all it had; a story TradingView
+carries now comes with its opening paragraphs (sources/tvstory.py, up to
+tvstory.BODY_MAX). And the model says which way the story pushes the name (DIRECTIONS):
+that replaces the headline's words and the report's EPS sign in the score's read of a
+story's direction (scanscore.catalyst_read `model_dir`), which since 2026-11-14 decides
+the "reads against" flag and the tie-break and never the points. The stock's own stated
+move ("jumps 8%") still comes first, and the tape still overrules. It reads the story
+that decided the catalyst part, the story the row flags as reading against the side,
+and the major story of every name on the Scanner's list, tracked or not.
+
 ONLY MAJOR STORIES, ONLY NAMES ON THE LIST, A FEW AT A TIME. The models are OpenRouter's
 free pool (report.py has what that means): slow, shared and rate-limited, and the 09:00
 overview and the briefs draw on the same key. So one request reads up to BATCH stories,
@@ -45,7 +57,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import report as rp
-from .catalysts import MAJOR
+from .catalysts import MAJOR, grade
 from .config import BROWSER_UA, CACHE_DIR
 
 ET = ZoneInfo("America/New_York")
@@ -65,11 +77,14 @@ OTHERS_MAX = 3
 SUMMARY_MAX = 320
 
 SYSTEM = """You grade stock news for a day trader who trades momentum breakouts in US stocks.
-For each story, judge how big it is as a reason for that stock to keep moving today.
+For each story, judge how big it is as a reason for that stock to keep moving today, and
+which way it pushes that stock.
 
-Use ONLY the text you are given for the story: its headline, its summary, the report
-figures and the other headlines. Do not use anything you know about the company, and do
-not guess at what the text does not say.
+Use ONLY the text you are given for the story: its headline, its text (the story's own
+opening paragraphs, where there is one) or its summary, the report figures and the other
+headlines. Do not use anything you know about the company, and do not guess at what the
+text does not say. The text outranks the headline where they differ: a beat with the
+outlook cut further down is a beat with the outlook cut.
 
 size:
 - "big": news that changes what the company earns or is worth: results with the outlook
@@ -80,12 +95,27 @@ size:
   reason.
 - "unclear": the text does not say enough to judge.
 
+direction: which way the story pushes THIS ticker's price today, by what the text says
+happened to this company:
+- "bullish": better than expected results or guidance, an upgrade, a bid for the company,
+  a regulator's approval, a major contract or partnership won.
+- "bearish": a miss, guidance cut or withdrawn, a downgrade, an offering that dilutes
+  holders, a probe or lawsuit against it, a failed trial, a recall, a profit warning.
+- "mixed": good and bad together, as a beat with the outlook cut.
+- "unclear": the text does not say, it is routine, or the story is really about another
+  company or person rather than this ticker's business.
+
 line: at most 14 words of plain English saying what happened, with the key figure if one
 is given. Write figures exactly as they appear in the text. No advice, no prediction, and
 never the words bullish, bearish, buy or sell."""
 
 SKELETON = """{ "reads": [ { "id": "s1", "size": "big" | "ordinary" | "unclear",
+               "direction": "bullish" | "bearish" | "mixed" | "unclear",
                "line": "at most 14 words" } ] }   // one per story, by its id"""
+#: Which way the model read a story, as the store keeps it.
+DIRECTIONS = ("bullish", "bearish", "mixed", "unclear")
+#: What the score reads of it (scanscore.catalyst_read): a side, or "" for read and none.
+DIR_WORD = {"bullish": "bull", "bearish": "bear", "mixed": "", "unclear": ""}
 
 _NORM = re.compile(r"[^a-z0-9 ]")
 _SPACE = re.compile(r"\s+")
@@ -125,16 +155,44 @@ def report_text(earnings: dict[str, Any] | None) -> str | None:
     return out
 
 
-def candidate(row: dict[str, Any],
-              summary_of: Callable[[str], str | None] | None = None) -> dict[str, Any] | None:
-    """A scanner row → what the model would be shown for its deciding story, or None
-    where there is nothing to read (no major story decided its catalyst part). Pure."""
-    sym = str(row.get("sym") or "")
+def _catalyst_read(row: dict[str, Any]) -> dict[str, Any]:
+    """A scanner row's catalyst part's read ({} when it has none). Pure."""
     parts = (row.get("score") or {}).get("parts") if isinstance(row.get("score"), dict) else None
     part = next((p for p in parts or [] if isinstance(p, dict) and p.get("key") == "catalyst"),
                 None)
     read = part.get("read") if isinstance(part, dict) else None
-    item = read.get("item") if isinstance(read, dict) else None
+    return read if isinstance(read, dict) else {}
+
+
+#: The grades a report's own headline carries: the one the model is shown beside the
+#: report's figures, not whatever the name's newest headline was (2026-11-18: Nvidia's
+#: report was shown as "Kevin O'Leary Says Nvidia Needs Leader Who Can Manage …").
+REPORT_TAGS = frozenset({"Earnings", "Guidance", "Move"})
+
+
+def _near(row: dict[str, Any], reach: float) -> list[dict[str, Any]]:
+    return [n for n in row.get("news") or [] if isinstance(n, dict) and n.get("title")
+            and isinstance(n.get("age_min"), (int, float)) and n["age_min"] <= reach]
+
+
+def _shape(key: str, sym: str, tag: Any, head: str, url: str, news: list[dict[str, Any]],
+           earn: dict[str, Any] | None,
+           summary_of: Callable[[str], str | None] | None) -> dict[str, Any]:
+    others = [str(n["title"]).strip() for n in news
+              if norm(str(n["title"])) != norm(head)][:OTHERS_MAX]
+    summary = (summary_of(head) if summary_of and head else None) or ""
+    return {"key": key, "sym": sym, "tag": tag, "headline": head, "url": url,
+            "summary": _SPACE.sub(" ", summary).strip()[:SUMMARY_MAX],
+            "report": report_text(earn), "others": others, "text": ""}
+
+
+def candidate(row: dict[str, Any],
+              summary_of: Callable[[str], str | None] | None = None) -> dict[str, Any] | None:
+    """A scanner row → what the model would be shown for its deciding story, or None
+    where there is nothing to read (no major story decided its catalyst part). Pure.
+    Its "text" is filled by the caller (sources/tvstory.py) for the ones it will ask."""
+    sym = str(row.get("sym") or "")
+    item = _catalyst_read(row).get("item")
     earn = row.get("earnings") if isinstance(row.get("earnings"), dict) else None
     key = story_key(sym, item, earn)
     if not sym or key is None or not isinstance(item, dict):
@@ -143,41 +201,93 @@ def candidate(row: dict[str, Any],
     # The name's other headlines from about the same time: the story's own age and six
     # hours, eighteen at least. A report has no age and may be Friday's on a Monday, so
     # its headlines reach back four days.
+    report = item.get("tag") == "Report"
     age = item.get("age_min")
-    reach = (4 * 1440.0 if item.get("tag") == "Report"
+    reach = (4 * 1440.0 if report
              else max((age if isinstance(age, (int, float)) else 0.0) + 360.0, 18 * 60.0))
-    news = [n for n in row.get("news") or [] if isinstance(n, dict) and n.get("title")
-            and isinstance(n.get("age_min"), (int, float)) and n["age_min"] <= reach]
-    head = title or next((str(n["title"]) for n in news), "")
+    news = _near(row, reach)
+    pick = None
+    if not title and report:
+        pick = next((n for n in news if grade(str(n["title"])).tag in REPORT_TAGS), None)
+    head = title or (str(pick["title"]) if pick else "")
     if not head and report_text(earn) is None:
         return None
-    others = [str(n["title"]).strip() for n in news
-              if norm(str(n["title"])) != norm(head)][:OTHERS_MAX]
-    summary = (summary_of(head) if summary_of and head else None) or ""
-    return {"key": key, "sym": sym, "tag": item.get("tag"), "headline": head,
-            "summary": _SPACE.sub(" ", summary).strip()[:SUMMARY_MAX],
-            "report": report_text(earn), "others": others}
+    url = str((pick or next((n for n in news if n.get("title") == head), None) or {})
+              .get("url") or "")
+    return _shape(key, sym, item.get("tag"), head, url, news, earn, summary_of)
+
+
+def flag_candidate(row: dict[str, Any],
+                   summary_of: Callable[[str], str | None] | None = None
+                   ) -> dict[str, Any] | None:
+    """The story a row flags as reading against its side, to be read too: where the
+    words alone flagged it, the model's read is what clears or keeps the flag (NVDA,
+    2026-11-18: "Cantor Fitzgerald's Nvidia business interests targeted in Democrats'
+    Lutnick probe" flagged a long by its "probe"). Any tier. Pure."""
+    sym = str(row.get("sym") or "")
+    title = str(_catalyst_read(row).get("reads_against_title") or "").strip()
+    if not sym or not title:
+        return None
+    news = _near(row, 4 * 1440.0)
+    url = str((next((n for n in news if n.get("title") == title), None) or {}).get("url") or "")
+    return _shape(f"{sym}|{norm(title)}", sym, grade(title).tag, title, url, news, None,
+                  summary_of)
+
+
+def story_candidate(sym: str, story: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A Scanner list row's own major story (sources/tvnews `catalyst`), for a name the
+    engine does not track: its rows carry no catalyst part to read. Pure."""
+    if not sym or not isinstance(story, dict) or story.get("tier") != MAJOR:
+        return None
+    title = str(story.get("title") or "").strip()
+    if not title:
+        return None
+    return {"key": f"{sym}|{norm(title)}", "sym": sym, "tag": story.get("tag"),
+            "headline": title, "url": str(story.get("url") or ""), "summary": "",
+            "report": None, "others": [], "text": ""}
 
 
 def candidates(rows: Iterable[dict[str, Any]],
-               summary_of: Callable[[str], str | None] | None = None) -> list[dict[str, Any]]:
-    """Every row's story worth a read, in the list's order, one a key. Pure."""
+               summary_of: Callable[[str], str | None] | None = None,
+               listed: Iterable[dict[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Every story worth a read, one a key: the Scanner list's rows first in its order
+    (`listed`, today.py rows: a tracked name's deciding and flagged stories, an untracked
+    name's own major story), then the rest of the engine's rows. Pure."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for r in rows:
-        if not isinstance(r, dict) or not r.get("ok"):
-            continue
-        c = candidate(r, summary_of)
+    engine = {str(r.get("sym")): r for r in rows if isinstance(r, dict) and r.get("ok")}
+
+    def add(c: dict[str, Any] | None) -> None:
         if c is not None and c["key"] not in seen:
             seen.add(c["key"])
             out.append(c)
+
+    def both(r: dict[str, Any]) -> None:
+        add(candidate(r, summary_of))
+        add(flag_candidate(r, summary_of))
+
+    done: set[str] = set()
+    for t in listed:
+        sym = str(t.get("sym") or "")
+        if sym in engine:
+            both(engine[sym])
+            done.add(sym)
+        # The story the row shows, which for a tracked name is not always the one that
+        # decided its catalyst part (HPE, 2026-11-18: its row led with a major Legal story
+        # its score had not counted).
+        add(story_candidate(sym, t.get("story")))
+    for sym, r in engine.items():
+        if sym not in done:
+            both(r)
     return out
 
 
 def shown(c: dict[str, Any]) -> dict[str, Any]:
     """One story as the model sees it (no key: the id stands for it). Pure."""
     out: dict[str, Any] = {"ticker": c["sym"], "kind": c.get("tag"), "headline": c["headline"]}
-    if c.get("summary"):
+    if c.get("text"):
+        out["text"] = c["text"]
+    elif c.get("summary"):
         out["summary"] = c["summary"]
     if c.get("report"):
         out["report"] = c["report"]
@@ -196,9 +306,10 @@ def messages(cands: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 def schema(n: int) -> dict[str, Any]:
     one = {"type": "object", "additionalProperties": False,
-           "required": ["id", "size", "line"],
+           "required": ["id", "size", "direction", "line"],
            "properties": {"id": {"type": "string", "enum": [f"s{i}" for i in range(1, n + 1)]},
                           "size": {"type": "string", "enum": list(SIZES)},
+                          "direction": {"type": "string", "enum": list(DIRECTIONS)},
                           "line": {"type": "string"}}}
     return {"type": "object", "additionalProperties": False, "required": ["reads"],
             "properties": {"reads": {"type": "array", "items": one}}}
@@ -219,8 +330,8 @@ def clean_line(line: Any, seen: str) -> str:
 
 
 def sanitize(obj: Any, cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The model's answer → {story key: {size, line}}, only for stories it was shown and
-    sizes on the list. Pure."""
+    """The model's answer → {story key: {size, direction, line}}, only for stories it was
+    shown and sizes on the list; a direction off the list is "unclear". Pure."""
     reads = obj.get("reads") if isinstance(obj, dict) else None
     out: dict[str, dict[str, Any]] = {}
     for r in reads if isinstance(reads, list) else []:
@@ -233,7 +344,11 @@ def sanitize(obj: Any, cands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
             continue
         c = cands[i]
         seen = json.dumps(shown(c), ensure_ascii=False)
-        out[c["key"]] = {"size": size, "line": clean_line(r.get("line"), seen)}
+        way = str(r.get("direction") or "").lower()
+        out[c["key"]] = {"size": size, "direction": way if way in DIRECTIONS else "unclear",
+                         "line": clean_line(r.get("line"), seen),
+                         # Whether it had the story's own text, or the headline alone.
+                         "text": bool(c.get("text"))}
     return out
 
 
@@ -383,7 +498,8 @@ class ReadStore:
         out: list[dict[str, Any]] = []
         with self._lock:
             for c in cands:
-                if c["key"] in self.reads:
+                # A read from before 2026-11-18 has a size and no direction: read again.
+                if (self.reads.get(c["key"]) or {}).get("direction") in DIRECTIONS:
                     continue
                 at, n = self.tried.get(c["key"], (0.0, 0))
                 if n >= 3 or (n and now - at < 3600.0):
@@ -419,14 +535,39 @@ class ReadStore:
     def for_item(self, sym: str, item: dict[str, Any] | None,
                  earnings: dict[str, Any] | None) -> dict[str, Any] | None:
         """The read of a row's deciding story, as the row carries it, or None."""
-        key = story_key(sym, item, earnings)
+        return self._out(story_key(sym, item, earnings))
+
+    def for_story(self, sym: str, title: str | None) -> dict[str, Any] | None:
+        """The read of a headline under a name (a Scanner row's own story), or None."""
+        t = norm(title or "")
+        return self._out(f"{sym}|{t}") if sym and t else None
+
+    def _out(self, key: str | None) -> dict[str, Any] | None:
         if key is None:
             return None
         with self._lock:
             v = self.reads.get(key)
         if v is None:
             return None
-        return {"size": v["size"], "line": v.get("line") or "", "headline": v.get("headline")}
+        return {"size": v["size"], "direction": v.get("direction"), "line": v.get("line") or "",
+                "headline": v.get("headline"), "text": bool(v.get("text"))}
+
+    def direction(self, sym: str, title: str | None,
+                  earnings: dict[str, Any] | None = None) -> str | None:
+        """Which way the model read a story, as the score reads it (DIR_WORD): "bull",
+        "bear", "" for read and neither, None for not read (or read before it gave a
+        direction). `title` None asks about the name's report."""
+        if title is None:
+            day = (earnings or {}).get("date")
+            key: str | None = f"{sym}|report|{day}" if day else None
+        else:
+            t = norm(title)
+            key = f"{sym}|{t}" if t else None
+        if key is None:
+            return None
+        with self._lock:
+            way = (self.reads.get(key) or {}).get("direction")
+        return DIR_WORD.get(way) if isinstance(way, str) else None
 
     def health(self, now: float) -> dict[str, Any]:
         with self._lock:

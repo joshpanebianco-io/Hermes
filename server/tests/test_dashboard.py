@@ -169,12 +169,31 @@ def test_in_and_after_the_session_the_sectors_are_the_sessions() -> None:
     assert [f["key"] for f in p["plan"]["focus"]] == ["XLK", "XLC"]
 
 
-def test_the_top_setups_are_the_engines_own_order_of_what_scored() -> None:
+def test_without_the_scanner_list_the_top_setups_are_the_engines_order_of_what_scored() -> None:
     p = page()
     # HOOD did not build, so it is not in the list.
     assert p["ok"] and [r["sym"] for r in p["top"]] == ["SPCX", "COIN", "ADD"]
-    assert p["top"][0]["score"] == {"total": 40, "side": "long"}                 # no parts, no news
+    assert p["top"][0]["score"] == {"total": 40, "side": "long", "kind": None}  # no parts, no news
     assert "news" not in p["top"][0]
+
+
+def test_the_top_setups_are_the_scanner_lists_first_ten() -> None:
+    # Owner, 2026-11-19: "top setups ... show mag7 and the indicies, not the top 10". At
+    # 05:58 ET the engine held only the benchmarks and the MAG 7 while the Scanner led
+    # with PANW, GOOG and BABA; the card is the list's first ten, in the list's order.
+    listed = [row(s, 51 - i, "short" if s == "BABA" else "long",
+                  score={"total": 51 - i, "side": "short" if s == "BABA" else "long",
+                         "kind": "inplay", "parts": []})
+              for i, s in enumerate(["PANW", "GOOG", "GOOGL", "BABA", "SKHY", "ASML", "FTNT",
+                                     "OKTA", "NXPI", "AMZN", "CRWD", "SNDK"])]
+    p = d.build({"session": "pre", "trading_day": "2026-11-19", "regime": regime(),
+                 "rows": [row("META", 81, "long"), row("NVDA", 71, "long")]},
+                {}, {}, {}, [], session_day=date(2026, 11, 18), listed=listed)
+    assert [r["sym"] for r in p["top"]] == ["PANW", "GOOG", "GOOGL", "BABA", "SKHY", "ASML",
+                                            "FTNT", "OKTA", "NXPI", "AMZN"]
+    assert p["top"][3]["score"] == {"total": 48, "side": "short", "kind": "inplay"}
+    # The read's count is still the engine's: two active setups.
+    assert p["read"]["foot"].startswith("2 active setups")
 
 
 def test_in_play_is_the_pools_rank_with_the_engines_verdict() -> None:

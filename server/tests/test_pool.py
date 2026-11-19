@@ -547,3 +547,49 @@ def test_the_store_knows_each_names_place(monkeypatch: Any, tmp_path: Any) -> No
                                  "mark": "09:00", "at": "09:00"}
     assert store.entry("GME")["mark"] == "hand" and store.entry("GME")["score"] == 0.0
     assert store.entry("NOPE") is None
+
+
+# ---- one ticker a company (owner, 2026-11-19: "why do i see GOOG and GOOGL?") ----------
+
+
+def test_share_classes_of_one_company_have_one_key_and_two_companies_two() -> None:
+    assert pool.company_key("Alphabet Inc. Class C") == pool.company_key("Alphabet Inc. Class A")
+    fox = pool.company_key("Fox Corporation Class B")
+    assert fox == pool.company_key("Fox Corporation Class A")
+    assert pool.company_key("Berkshire Hathaway Inc. Class B") == "berkshire hathaway inc"
+    # A tracking stock keeps its tracker's name: Live and Formula One are two companies.
+    live = pool.company_key("Liberty Media Corporation Series C Liberty Live")
+    f1 = pool.company_key("Liberty Media Corporation Series C Liberty Formula One")
+    assert live != f1
+    assert live == pool.company_key("Liberty Media Corporation Series A Liberty Live")
+    assert pool.company_key("Classic Rock Inc.") == "classic rock inc"   # a word, not a class
+    assert pool.company_key(None) is None and pool.company_key("  ") is None
+
+
+def _ranked(*rows: tuple[str, str, float]) -> list[dict[str, Any]]:
+    return [{"symbol": s, "name": n, "score": sc, "gap_atr": 1.0} for s, n, sc in rows]
+
+
+def test_the_pool_never_promotes_a_share_class_of_a_name_already_on_the_list() -> None:
+    # 19 Nov 2026, 07:00 ET: GOOG ranked fourth (15.9) and was promoted beside GOOGL, which
+    # the core holds for good. One company, two slots.
+    ranked = _ranked(("PANW", "Palo Alto Networks, Inc.", 16.3),
+                     ("GOOG", "Alphabet Inc. Class C", 15.9),
+                     ("GOOGL", "Alphabet Inc. Class A", 15.7),
+                     ("FOXA", "Fox Corporation Class A", 9.0),
+                     ("FOX", "Fox Corporation Class B", 8.5))
+    got = pool.promote(ranked, [], [], "07:00", favs=[], core=scan_src.CORE)
+    assert [r["symbol"] for r in got] == ["PANW", "FOXA"]
+
+
+def test_the_list_keeps_one_row_a_company_and_the_one_held_for_good() -> None:
+    rows = [{"sym": "PANW", "name": "Palo Alto Networks, Inc."},
+            {"sym": "GOOG", "name": "Alphabet Inc. Class C"},
+            {"sym": "GOOGL", "name": "Alphabet Inc. Class A"},
+            {"sym": "XYZ", "name": None}, {"sym": "XYZ2", "name": None}]
+    got = pool.one_per_company(rows, sym_of=lambda r: r["sym"], prefer=set(scan_src.CORE))
+    # GOOGL takes GOOG's place (fourth on the list, not fifth); unnamed rows are kept.
+    assert [r["sym"] for r in got] == ["PANW", "GOOGL", "XYZ", "XYZ2"]
+    # With neither held, the first of the two stays.
+    assert [r["sym"] for r in pool.one_per_company(rows, sym_of=lambda r: r["sym"])][:2] == [
+        "PANW", "GOOG"]

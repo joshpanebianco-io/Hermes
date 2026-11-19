@@ -13,6 +13,7 @@ import {
   RvolBar,
   Showing,
   Spark,
+  SPARK_TIP,
   StatCard,
   TD,
   TH,
@@ -246,7 +247,7 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
                     <th scope="col" className={TH}><Head label="PD range" hint="vs PDH / PDL" /></th>
                   </>
                 )}
-                {has("chart") && <th scope="col" className={TH}><Head label="Spark" hint="today" /></th>}
+                {has("chart") && <th scope="col" className={TH} title={SPARK_TIP}><Head label="Spark" hint="from 04:00" /></th>}
                 {has("volume") && <th scope="col" className={TH}>{header("vol", "Volume", "vs ADV")}</th>}
               </tr>
             </thead>
@@ -291,7 +292,7 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
                   )}
                   {has("chart") && (
                     <td className={TD}>
-                      <Spark pts={r.spark} />
+                      <Spark pts={r.spark} base={r.spark_ref} />
                     </td>
                   )}
                   {has("volume") && (

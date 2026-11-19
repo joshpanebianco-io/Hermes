@@ -351,6 +351,8 @@ export interface ScoreFamily {
   weight: number;
   /** -100 to +100; null when none of its reads can vote at this hour. */
   score: number | null;
+  /** What it puts on the score, in the score's points (bias.py, 2026-11-19). Absent from an older collector. */
+  points?: number;
   live: number;
   total: number;
 }
@@ -369,8 +371,12 @@ export interface DriverVote {
   live: boolean;
   /** For a read in no family: why it is never a side, in the collector's words. */
   aside?: string;
-  /** Which family it scores in; event risk (a damper) and dealer gamma (a regime) have none. */
+  /** Which family it scores in; event risk (a damper), dealer gamma and the VIX curve (regimes) and the heavyweights' prints (already in the price) have none. */
   family: string | null;
+  /** How much of a full vote a long or short read's size earns, 0 to 1 (drivestats.py, 2026-11-19); absent is a whole vote. */
+  strength?: number;
+  /** The heavyweights' prints only: the side they would have voted before 2026-11-19. */
+  said?: "long" | "short" | "neutral";
 }
 
 /** What a move will find — positioning, the market-wide put/call, OpEx — never a vote. */
@@ -958,6 +964,33 @@ export interface ShortBriefBody {
   today: { id: string; note: string }[];
   risks: string[];
   headlines: { id: string; books: Book[]; note: string }[];
+  /**
+   * Version 4, the briefing (2026-11-19): what can move prices, each item a row of the
+   * facts (a `catalysts` id, a `headlines` id, or a `context_movers` id). Absent before.
+   */
+  movers?: BriefMover[];
+}
+
+/** One item of the briefing's list (server report._movers). */
+export interface BriefMover {
+  id: string;
+  impact: "high" | "medium" | "low";
+  /** What it does to the book. "regime" is the VIX's alone: the ranges it makes, never a side. */
+  effect: "supportive" | "pressure" | "two-way" | "neutral" | "priced" | "regime";
+  /** The model's line on why it moves the book; the server's where it wrote none. */
+  why: string;
+  /** Put on the list by the server: a high-impact release the model left off twice. */
+  server?: boolean;
+}
+
+/** A list item that is no calendar row or headline (server report.context_movers). */
+export interface BriefContextMover {
+  id: "rates" | "vix" | "positioning";
+  /** What it is, in the collector's words: "10Y 5.145% (+2.4bp) · Dollar 103.61 (+0.06%)". */
+  what: string;
+  /** The VIX's: the ranges its band makes ("Wider ranges"), the effect column's word. */
+  regime?: string;
+  why?: string;
 }
 
 /**
@@ -1142,6 +1175,8 @@ export interface BriefCatalyst {
   also?: Array<{ title: string; actual: string | null; consensus: string | null; previous: string | null }>;
   /** Whose figure the actual is, when it is the agency's own: "BLS", "Census", "BEA", "EIA". */
   official?: string;
+  /** Printed earlier this week, before the twelve hours the calendar reads (2026-11-19). */
+  earlier?: boolean;
 }
 
 export interface BriefRatio {
@@ -1193,6 +1228,23 @@ export interface BriefFacts {
   market?: BriefBoard | null;
   /** Its table, printed once above the calls (server report.factors_of("TAPE")). */
   market_factors?: BriefFactor[];
+  /** The briefing's rows that are no calendar row or headline (version 4). */
+  context_movers?: BriefContextMover[];
+  /** How the engine's bias counts each item the list can hold, by id (server report.bias_links). */
+  bias_links?: Record<string, BriefBiasLink>;
+}
+
+/**
+ * The factor of the engine's bias an item is counted in, as the report's table prints it,
+ * or (`key` null) why the bias does not count it.
+ */
+export interface BriefBiasLink {
+  key: string | null;
+  name: string;
+  weight?: number | null;
+  tag?: string;
+  lean?: BriefFactor["lean"];
+  note?: string;
 }
 
 export type ReportSession = "asia" | "london" | "ny";

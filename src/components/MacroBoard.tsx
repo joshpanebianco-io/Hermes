@@ -10,6 +10,7 @@ import { Earnings } from "@/components/panels/Earnings";
 import { Movers } from "@/components/panels/Movers";
 import type { MarketFeed } from "@/lib/useMarket";
 import { useWatchlistEarnings } from "@/lib/useWatchlistEarnings";
+import { inWindow } from "@/lib/earningsOrder";
 import { boardReady } from "@/lib/ready";
 import { PageLoader } from "@/components/ui/HelmLoader";
 import { ageStep } from "@/lib/format";
@@ -85,6 +86,15 @@ const EMPTY = {} as Record<string, never>;
 // Hoisted: an array literal in JSX is a new prop every render and would defeat the memo.
 // The order drawn: VIX and its curve, then rates, then the rest as they were.
 const MACRO_GROUPS: React.ComponentProps<typeof Board>["groups"] = ["vol", "rates", "global", "fx", "energy", "metals", "crypto"];
+/**
+ * THE ROWS FURTHEST FROM THE BOOKS, OFF THE CARD (owner, 2026-11-17: "reduce the height of
+ * the macro board card a bit and increase the Earnings card", the third such ask; the rows
+ * were already at their 16.5px floor, so the room came from rows). Shanghai, KOSPI and the
+ * ASX (Nikkei and Hang Seng carry Asia), the CAC (Stoxx 50 and the DAX carry Europe),
+ * platinum, wheat and corn. Hidden here only: the collector still reads them, and Hermes
+ * and the bias still have them.
+ */
+const OFF_BOARD = new Set(["SHCOMP", "KOSPI", "ASX", "CAC", "PLAT", "WHEAT", "CORN"]);
 
 /** The sources this page reads — the board waits for each to have reported once. */
 const SOURCES = ["quotes", "wire", "calendar", "constituents", "rates", "fed", "auctions", "earnings"];
@@ -95,14 +105,16 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
   const age = (k: string) => ageStep(raw[k]) ?? undefined;
   const { watch, extra } = useWatchlistEarnings();
 
-  // The index-minded block plus the watchlist's own reports, once each.
+  // The index-minded block plus the watchlist's own reports, once each, and the
+  // watchlist's only inside the block's own window (lib/earningsOrder inWindow).
+  const today = data.expiry?.today ?? "";
   const earnings = useMemo(() => {
     const base = data.earnings ?? NONE;
     if (extra.length === 0) return base;
     const have = new Set(base.map((r) => `${r.date}:${r.symbol}`));
-    const add = extra.filter((r) => !have.has(`${r.date}:${r.symbol}`));
+    const add = extra.filter((r) => !have.has(`${r.date}:${r.symbol}`) && inWindow(r.date, today));
     return [...base, ...add].sort((a, b) => a.date.localeCompare(b.date) || (b.market_cap ?? 0) - (a.market_cap ?? 0));
-  }, [data.earnings, extra]);
+  }, [data.earnings, extra, today]);
 
   // GOLD LEADS METALS & AGS (owner, 2026-11-14: "i dont see gold in the metals and
   // ags?"). The collector files the gold future with the books (group "core", which
@@ -111,7 +123,7 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
   // of the metals. A copy made here, not a second row in the collector: one fetch,
   // one price, and nothing else that reads the books sees gold twice.
   const boardQuotes = useMemo(() => {
-    const all = data.quotes ?? NONE;
+    const all = (data.quotes ?? NONE).filter((q) => !OFF_BOARD.has(q.key));
     const gc = all.find((q) => q.key === "GC");
     const at = all.findIndex((q) => q.group === "metals");
     if (!gc || at < 0) return all;

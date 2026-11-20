@@ -4,6 +4,7 @@ import type { ExpiryState, GexAsset } from "@/types/terminal";
 import { Popover } from "@/components/ui/Popover";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { expiryTag } from "@/lib/expiryWords";
 
 /**
  * The gamma panel's click-through: the regime, spot against the flip in points
@@ -47,7 +48,11 @@ export function gammaLine(a: GexAsset, sigma: number | null | undefined, expiry?
   if (above && below) {
     bits.push(`walls ${num(below.price, 0)} under and ${num(above.price, 0)} over`);
   }
-  if (expiry?.opex_week) bits.push("OpEx week: the walls are at their heaviest into Friday");
+  // On the day itself the week's line was wrong ("into Friday" on the Friday): the near book
+  // expires at today's close, so the walls pin into it and carry nothing after (2026-11-20).
+  const tag = expiryTag(expiry);
+  if (tag?.next.is_today) bits.push(`${tag.text}: the walls pin into the close, then roll off`);
+  else if (expiry?.opex_week) bits.push("OpEx week: the walls are at their heaviest into Friday");
   const s = bits.join(" · ");
   return s.charAt(0).toUpperCase() + s.slice(1) + ".";
 }

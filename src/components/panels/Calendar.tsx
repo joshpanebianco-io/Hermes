@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AuctionEvent, CalendarRow, FedEvent, HolidayNotice, Impact, Region } from "@/types/terminal";
+import type { AuctionEvent, CalendarRow, ExpiryState, FedEvent, HolidayNotice, Impact, Region } from "@/types/terminal";
+import { expiryTitle } from "@/lib/expiryWords";
 import { Module } from "@/components/ui/Module";
 import { cn } from "@/lib/cn";
 import { isBool, manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
@@ -117,6 +118,7 @@ export function Calendar({
   fed = NO_FED,
   auctions = NO_AUCTIONS,
   holidays = NO_HOLIDAYS,
+  expiry = null,
   ageMin,
   error,
   scope = "futures",
@@ -136,6 +138,12 @@ export function Calendar({
    * collector's own table (holidays.py): US stocks and bonds, London, Tokyo.
    */
   holidays?: HolidayNotice[];
+  /**
+   * The options expiries and the month and quarter ends (owner, 2026-11-20: "should opex
+   * week day be mentioned somewhere in macro?"): the collector's own table (expiry.py), one
+   * line beside the holidays, as neither calendar feed lists them either.
+   */
+  expiry?: ExpiryState | null;
   ageMin?: number | null;
   error?: string | null;
   scope?: CalendarScope;
@@ -239,6 +247,12 @@ export function Calendar({
   const foldAbroad = region === "all";
   const nearHols = hols.filter((x) => x.days <= HOLIDAY_NEAR_DAYS);
   const farHols = hols.filter((x) => x.days > HOLIDAY_NEAR_DAYS);
+  // The next three expiry and rebalancing dates inside a month, US ones, so they show with
+  // the US or every region in view. Today's in full ink.
+  const expiries = useMemo(
+    () => (region === "all" || region === "us" ? (expiry?.next ?? []).filter((x) => x.days >= 0 && x.days <= 31).slice(0, 3) : []),
+    [expiry, region],
+  );
 
   return (
     <Module
@@ -333,6 +347,21 @@ export function Calendar({
                 {i > 0 && " · "}
                 <span className="fig">{dayWord(days, h.date)}</span>{" "}
                 <span className={h.score >= 5 ? "text-ink" : "text-ink-2"}>{h.label}</span>
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+
+      {expiries.length > 0 && (
+        <div className="flex items-baseline gap-2 border-b border-ring/40 px-3 py-1" title={expiryTitle(expiries)}>
+          <span className="eyebrow shrink-0 text-[9px]">Expiries</span>
+          <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-3">
+            {expiries.map((x, i) => (
+              <span key={x.key}>
+                {i > 0 && " · "}
+                <span className={cn("fig", x.is_today && "text-ink")}>{dayWord(x.days, x.date)}</span>{" "}
+                <span className={x.is_today ? "text-ink" : x.kind === "monthly" || x.kind === "quarterly" ? "text-ink-2" : "text-ink-3"}>{x.label}</span>
               </span>
             ))}
           </span>

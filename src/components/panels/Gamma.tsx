@@ -9,6 +9,7 @@ import { num, pct, signed } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
+import { expiryTag, expiryTitle } from "@/lib/expiryWords";
 
 /**
  * Gamma levels, borrowed from GEXYGEN.
@@ -55,7 +56,7 @@ export function Gamma({
   error?: string | null;
   /** Each book's one-sigma day (the Volatility panel's rows), so the flip's distance reads in sigma. */
   implied?: ImpliedBook[] | null;
-  /** The expiry block, for the OpEx-week note on the read. */
+  /** The expiry block, for the OpEx tag on the head and the note on the read. */
   expiry?: ExpiryState | null;
 }) {
   const keys = Object.keys(assets);
@@ -64,6 +65,26 @@ export function Gamma({
   const active = only ? assets[only] : (assets[sel] ?? assets[keys[0]]);
   const book = only ?? (assets[sel] ? sel : keys[0]);
   const sigma = implied?.find((b) => b.key === book)?.sigma ?? null;
+  /*
+   * OPEX ON THE CARD'S HEAD (owner, 2026-11-20: "we should also mention the opex thing in the
+   * gamma level cards of the futures section"). It was a clause at the end of the read, and
+   * only in OpEx week. Now a tag beside the age: lit in the flip's hue on the day and in its
+   * week ("OpEx today", "OpEx Fri · 3d"), the date in plain ink otherwise, the rule on hover.
+   */
+  const tag = expiryTag(expiry);
+  const opex = tag && (
+    <span
+      title={`${expiryTitle([tag.next])}\n\nIn OpEx week the near book is at its largest and price pins to the walls into Friday; the Monday after, the same strikes carry almost nothing and the map is rebuilt around the next cycle.`}
+      className={cn(
+        "fig shrink-0 whitespace-nowrap",
+        tag.hot
+          ? "qt-pill rounded bg-flip/15 px-1.5 py-px text-[10px] text-flip [--pill-hue:var(--flip-fig)] qt:text-[10.5px]"
+          : "text-[10px] text-ink-3 qt:text-[10.5px]",
+      )}
+    >
+      {tag.text}
+    </span>
+  );
 
   return (
     <Module
@@ -77,21 +98,24 @@ export function Gamma({
       error={error}
       bodyClassName="px-0 py-0"
       right={
-        !only && keys.length > 1 && (
-          <div className="seg">
-            {keys.map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setSel(k)}
-                {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
-              >
-                <AssetIcon id={k} size={13} className="block shrink-0" />
-                {k}
-              </button>
-            ))}
-          </div>
-        )
+        <>
+          {opex}
+          {!only && keys.length > 1 && (
+            <div className="seg">
+              {keys.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setSel(k)}
+                  {...segItem(k === sel, { className: "text-[10px] normal-case tracking-normal" })}
+                >
+                  <AssetIcon id={k} size={13} className="block shrink-0" />
+                  {k}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       }
     >
       {!enabled ? (

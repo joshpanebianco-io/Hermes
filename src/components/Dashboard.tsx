@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { setAskFocus } from "@/lib/ask/open";
-import type { CalendarRow, Terminal as TerminalData } from "@/types/terminal";
+import type { CalendarRow, ExpiryState, Terminal as TerminalData } from "@/types/terminal";
+import { expiryLine, expiryTitle, nextExpiries } from "@/lib/expiryWords";
 import { DASH_BOOKS, futuresBrief, nextEvent, sessionStrip, weightsWord } from "@/lib/futDash";
 import { DAY_TYPED, FUT_NAME, QUOTE_KEY, type FutView } from "@/lib/futures";
 import { CALL_HUE } from "@/lib/daytype";
@@ -27,6 +28,7 @@ import { openTicker, useTicker } from "@/lib/ticker";
 import { useNow } from "@/lib/useNow";
 import { oneOf, persist, usePersisted } from "@/lib/usePersisted";
 import { usePinsChanged } from "@/lib/usePinsChanged";
+import { useRefresh } from "@/lib/refresh";
 
 /**
  * The Dashboard: the session on one page.
@@ -68,8 +70,11 @@ export function Dashboard({
   onScan,
   prices = null,
   futures = null,
+  expiry = null,
 }: {
   calendar: CalendarRow[];
+  /** The options expiry calendar, from the Terminal's poll (server expiry.py), for the game plan's Expiry line. */
+  expiry?: ExpiryState | null;
   onOpen: (t: Tab) => void;
   onScan: (v: ScanView) => void;
   /** The Futures card's data, the Terminal's poll, and where a row opens (FuturesCard). */
@@ -100,6 +105,8 @@ export function Dashboard({
   }, []);
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
   usePinsChanged(load);
+  // The header's refresh button reads this page again too (lib/refresh).
+  useRefresh(load);
 
   const live = data?.session === "rth";
   useEffect(() => {
@@ -181,7 +188,7 @@ export function Dashboard({
           so that it looks more even", the flip mock at 2560 approved: "the dashboard mock is
           good"). 841px a card at 2560, 629 at 1920; it was 1071 | 622 | 829. */}
       <div className="grid shrink-0 gap-3 lum:gap-[var(--lum-gap)] lg:grid-cols-2 xl:grid-cols-[repeat(3,minmax(0,1fr))]">
-        <PlanCard d={data} later={later} now={now} prices={prices} onWire={() => onOpen("terminal")} toScanner={toScanner} />
+        <PlanCard d={data} later={later} now={now} prices={prices} expiry={expiry} onWire={() => onOpen("terminal")} toScanner={toScanner} />
         <BreadthCard d={data} />
         {futures && <FuturesCard {...futures} />}
       </div>
@@ -354,6 +361,7 @@ function PlanCard({
   later,
   now,
   prices,
+  expiry,
   onWire,
   toScanner,
 }: {
@@ -361,6 +369,7 @@ function PlanCard({
   later: CalendarRow | null;
   now: number | null;
   prices?: React.ReactNode;
+  expiry?: ExpiryState | null;
   onWire: () => void;
   toScanner: (view: ScanView, also?: Record<string, unknown>) => void;
 }) {
@@ -377,6 +386,7 @@ function PlanCard({
       : d.plan.calendar_ok === false
         ? "Calendar feed down — the next release is unknown"
         : "None scheduled";
+  const expiryText = expiryLine(expiry);
   const b = d.plan.bias;
   const hue = b.side === "long" ? "text-call-fig" : b.side === "short" ? "text-put-fig" : "text-ink-3";
   const tip = b.live != null && b.total != null ? `${b.live} of ${b.total} reads live${b.cap != null ? ` · plans capped at ${b.cap}` : ""}` : undefined;
@@ -468,6 +478,15 @@ function PlanCard({
           <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Next</dt>
           <dd className="min-w-0 text-ink-2">{next}</dd>
         </div>
+        {/* THE OPTIONS EXPIRIES (owner, 2026-11-20: "do we also mention when it's opex week?
+            or what day is opex etc?"): the next OpEx and the quarter's triple witching, from
+            the collector's table (lib/expiryWords). Bright on the day and in OpEx week. */}
+        {expiryText && (
+          <div className="flex gap-3" title={expiryTitle(nextExpiries(expiry).slice(0, 2))}>
+            <dt className="qt-cap w-[54px] shrink-0 pt-px text-[10px] text-ink-3">Expiry</dt>
+            <dd className={cn("min-w-0", expiry?.opex_week ? "text-ink" : "text-ink-2")}>{expiryText}</dd>
+          </div>
+        )}
       </dl>
     </section>
   );

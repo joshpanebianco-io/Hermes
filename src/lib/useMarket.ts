@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MarketCtx } from "@/types/market";
+import { REFRESH_EVENT } from "@/lib/refresh";
 
 /**
  * The stocks desk's market context, polled every twenty seconds while the
@@ -51,8 +52,11 @@ export function useMarket(initial: MarketCtx | null = null, active = true): Mark
     if (!active) return;
     void load();
     const id = setInterval(load, POLL_SEC * 1000);
+    // The header's refresh button reads it again while Macro is open (lib/refresh).
+    window.addEventListener(REFRESH_EVENT, load);
     return () => {
       clearInterval(id);
+      window.removeEventListener(REFRESH_EVENT, load);
       // Anything still in flight belongs to a tab that has gone.
       seq.current += 1;
     };

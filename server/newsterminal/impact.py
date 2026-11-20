@@ -200,8 +200,27 @@ def ipo_rows(wire: Iterable[dict[str, Any]], now_ts: float
     return rows, covered
 
 
+def expiry_rows(expiry: dict[str, Any] | None, now: datetime) -> list[dict[str, Any]]:
+    """The day's expiry and rebalancing dates (owner, 2026-11-20: "do we also mention when
+    it's opex week? or what day is opex etc?"): monthly OpEx, triple witching, month end
+    and quarter end, from the collector's own table (expiry.py), on the day itself. They
+    settle into the close, so a row sits before the after-the-close reports and reads as
+    done from 16:00. Pure."""
+    et = now.astimezone(ET)
+    out = []
+    for e in (expiry or {}).get("next") or []:
+        if not isinstance(e, dict) or not e.get("is_today"):
+            continue
+        note = str(e.get("note") or "")
+        line = f"{e.get('label')}: {note[:1].lower()}{note[1:]}" if note else str(e.get("label"))
+        out.append({"t": "Today", "sort": "15:59", "kind": "Expiry", "line": line,
+                    "done": et.hour >= 16})
+    return out
+
+
 def today_rows(calendar: Iterable[dict[str, Any]], earnings: Iterable[dict[str, Any]],
-               wire: Iterable[dict[str, Any]], now: datetime
+               wire: Iterable[dict[str, Any]], now: datetime,
+               expiry: dict[str, Any] | None = None
                ) -> tuple[list[dict[str, Any]], set[str]]:
     """The day's scheduled movers in time order (module docstring), and the IPO headlines
     they cover. Pure."""
@@ -235,6 +254,7 @@ def today_rows(calendar: Iterable[dict[str, Any]], earnings: Iterable[dict[str, 
     wire = list(wire)
     ipos, covered = ipo_rows(wire, now.timestamp())
     rows += ipos
+    rows += expiry_rows(expiry, now)
     rows.sort(key=lambda r: r["sort"])
     return [{k: v for k, v in r.items() if k != "sort"} for r in rows], covered
 
@@ -273,9 +293,11 @@ def headlines(wire: Iterable[dict[str, Any]], now_ts: float, skip: Iterable[str]
 
 
 def build(wire: Iterable[dict[str, Any]], calendar: Iterable[dict[str, Any]],
-          earnings: Iterable[dict[str, Any]], now: datetime, live: bool = True) -> dict[str, Any]:
-    """The card: {today, heads, live}. `live` is whether the wire is reading. Pure."""
+          earnings: Iterable[dict[str, Any]], now: datetime, live: bool = True,
+          expiry: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The card: {today, heads, live}. `live` is whether the wire is reading; `expiry` is
+    the collector's expiry block (expiry_rows). Pure."""
     wire = list(wire)
-    today, covered = today_rows(calendar, earnings, wire, now)
+    today, covered = today_rows(calendar, earnings, wire, now, expiry)
     return {"today": today, "heads": headlines(wire, now.timestamp(), skip=covered),
             "live": live}

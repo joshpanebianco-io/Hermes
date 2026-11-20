@@ -189,6 +189,7 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
           fed={data.fed ?? NONE}
           auctions={data.auctions ?? NONE}
           holidays={data.holidays ?? NONE}
+          expiry={data.expiry ?? null}
           ageMin={age("calendar")}
           // The diary and the auctions are rows of this card now: if either source is
           // down, this is the card that says so.

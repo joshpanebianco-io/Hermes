@@ -327,7 +327,7 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
         # prints, the Fed, the big reports, an IPO, then the wire's high-impact headlines.
         "impact": impact_mod.build(_list(snap.get("wire")), _list(snap.get("calendar")),
                                    _list(snap.get("earnings")), now or datetime.now(UTC),
-                                   live=bool(wire_st.get("ok"))),
+                                   live=bool(wire_st.get("ok")), expiry=_d(snap.get("expiry"))),
         "rotation": _rotation(sectors, leaders),
         # What the focus lists and the rotation row are moves of: the pre-market's
         # before the bell, else the session's (the last one before the open).

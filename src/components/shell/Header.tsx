@@ -7,6 +7,8 @@ import { HERMES_MARK_D } from "@/lib/hermesMark";
 import { TABS, type Tab } from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
 import { localClock, readerClock } from "@/lib/clock";
+import { useRefreshPress } from "@/lib/refresh";
+import { RefreshGlyph, refreshWord } from "@/components/shell/RefreshGlyph";
 
 /**
  * The header rail — identity on the left, the pages in the centre, state on the right.
@@ -92,12 +94,14 @@ export function Header({
    * "offline" when the collector behind the server is down.
    */
   link: "live" | "lost" | "offline";
-  onRefresh: () => void;
+  /** Reads everything again; the button spins until the promise settles (lib/refresh). */
+  onRefresh: () => void | Promise<void>;
   tab: Tab;
   onTab: (t: Tab) => void;
 }) {
   // The header owns its own second hand — the rest of the shell does not tick.
   const now = useNow(1000);
+  const { phase, press } = useRefreshPress(onRefresh);
   const clock = localClock(rawClock, now);
   // The reader's own time beside New York's: the owner trades the NY session
   // from Australia, where 09:30 ET is past midnight. Null on New York time.
@@ -213,19 +217,19 @@ export function Header({
             )}
             <button
               type="button"
-              onClick={onRefresh}
-              aria-label={`Refresh · ${LINK_WORD[link]}`}
-              title={LINK_TITLE[link]}
+              onClick={press}
+              aria-busy={phase === "busy"}
+              aria-label={`${refreshWord(phase, "Refresh")} · ${LINK_WORD[link]}`}
+              title={refreshWord(phase, LINK_TITLE[link])}
               className={cn(
-                "hit flex items-center justify-center gap-2 text-ink-3 hover:bg-surface-3/60 hover:text-ink-2",
+                // Pressed in on the click, lit while it reads (lib/refresh).
+                "hit flex items-center justify-center gap-2 text-ink-3 transition-[transform,background-color] duration-100 hover:bg-surface-3/60 hover:text-ink-2 active:scale-90",
+                phase !== "idle" && "bg-surface-3/60",
                 clock ? "rounded-r-[11px]" : "rounded-[11px]",
                 link === "live" ? "w-[46px]" : "px-3.5",
               )}
             >
-              <svg aria-hidden width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />
-                <path d="M21 3v5h-5" />
-              </svg>
+              <RefreshGlyph phase={phase} />
               {/* Nothing while all is well: the icon alone (owner, 2026-11-20: "i dont like the
                   dot next to the refresh button icon"). In words, in their hue, the moment it
                   is not. */}

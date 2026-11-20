@@ -28,6 +28,7 @@ import type { PhaseKey, TodayPayload, TodayPhase } from "@/types/today";
 import { etDay, useNextPrint } from "@/lib/nextPrint";
 import type { CalendarRow } from "@/types/terminal";
 import { usePinsChanged } from "@/lib/usePinsChanged";
+import { useRefresh } from "@/lib/refresh";
 
 /**
  * The Scanner — the Pine script's scanner table, ranked, with the tape and the
@@ -323,6 +324,8 @@ export function Scanner({
   }, [load, loadToday, wantToday]);
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
   usePinsChanged(refresh);
+  // The header's refresh button reads this page again too (lib/refresh).
+  useRefresh(refresh);
 
   const live = data?.session === "rth";
   useEffect(() => {

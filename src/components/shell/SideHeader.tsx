@@ -7,6 +7,8 @@ import { cn } from "@/lib/cn";
 import { localClock, readerClock } from "@/lib/clock";
 import { openSearch } from "@/lib/ticker";
 import { useNow } from "@/lib/useNow";
+import { useRefreshPress } from "@/lib/refresh";
+import { RefreshGlyph, refreshWord } from "@/components/shell/RefreshGlyph";
 
 /**
  * The Sidebar interface's header: one card across the top of the page with the page's
@@ -42,10 +44,12 @@ export function SideHeader({
   clock: Clock | null;
   /** The page's link to its data, as the other header says it (shell/Header). */
   link: "live" | "lost" | "offline";
-  onRefresh: () => void;
+  /** Reads everything again; the button spins until the promise settles (lib/refresh). */
+  onRefresh: () => void | Promise<void>;
 }) {
   // The header owns its own second hand: the rest of the shell does not tick.
   const now = useNow(1000);
+  const { phase: pressPhase, press } = useRefreshPress(onRefresh);
   const clock = localClock(rawClock, now);
   const local = readerClock(now);
   const ny = nyClock(clock);
@@ -120,15 +124,16 @@ export function SideHeader({
         )}
         <button
           type="button"
-          onClick={onRefresh}
-          aria-label="Refresh"
-          title={link === "live" ? "Live — refresh now" : "Refresh"}
-          className="hit inline-flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border border-ring-2 text-ink-3 hover:text-ink"
+          onClick={press}
+          aria-busy={pressPhase === "busy"}
+          aria-label={refreshWord(pressPhase, "Refresh")}
+          title={refreshWord(pressPhase, link === "live" ? "Live — refresh now" : "Refresh")}
+          className={cn(
+            "hit inline-flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border border-ring-2 text-ink-3 transition-[transform,background-color] duration-100 hover:text-ink active:scale-90",
+            pressPhase !== "idle" && "bg-surface-3/60",
+          )}
         >
-          <svg aria-hidden width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />
-            <path d="M21 3v5h-5" />
-          </svg>
+          <RefreshGlyph phase={pressPhase} size={14} />
         </button>
       </div>
     </header>

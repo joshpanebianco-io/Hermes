@@ -54,6 +54,7 @@ import { useLegacyViews } from "@/lib/legacyViews";
 import { useNow } from "@/lib/useNow";
 import { shareUnchanged } from "@/lib/share";
 import { placeCookie } from "@/lib/place";
+import { refreshPages } from "@/lib/refresh";
 import type { MarketCtx } from "@/types/market";
 
 /**
@@ -330,6 +331,13 @@ export function Terminal({
     return () => clearInterval(id);
   }, [load]);
 
+  // The refresh button: the open page reads its own feed again too, and the button spins
+  // until the shell's read has landed (lib/refresh).
+  const refreshAll = useCallback(async () => {
+    refreshPages();
+    await load();
+  }, [load]);
+
   const st = data.status ?? {};
   const raw = data.age_min ?? {};
   const link = data.offline || !data.ok ? "offline" : lost ? "lost" : "live";
@@ -387,6 +395,7 @@ export function Terminal({
               prices={side ? undefined : quoteRow(DASH_GROUPS, { spread: true })}
               // The Futures card reads the Terminal's poll; a row opens that contract.
               futures={{ data, onBook: openFut }}
+              expiry={data.expiry ?? null}
             />
           ) : tab === "settings" ? (
             <Settings theme={theme} onTheme={setTheme} ui={ui} onUi={setUi} />
@@ -435,14 +444,14 @@ export function Terminal({
                 search={tab !== "futures"}
                 clock={data.clock ?? null}
                 link={link}
-                onRefresh={load}
+                onRefresh={refreshAll}
               />
               {below}
             </div>
           </div>
         ) : (
           <>
-            <Header clock={data.clock ?? null} link={link} onRefresh={load} tab={tab} onTab={setTab} />
+            <Header clock={data.clock ?? null} link={link} onRefresh={refreshAll} tab={tab} onTab={setTab} />
             {below}
           </>
         )}

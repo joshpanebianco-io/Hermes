@@ -140,3 +140,27 @@ def test_a_release_in_many_rows_is_named_once() -> None:
     assert im._family(["GDP q/q", "GDP y/y"]) == "GDP"
     assert im._family(["Trade Balance"]) == "Trade Balance"
     assert im._family(["Tankan Index", "Tankan Outlook"]) == "Tankan Index and 1 more"
+
+
+# The collector's expiry block on Fri 20 Nov 2026, monthly OpEx (expiry.py).
+EXPIRY = {"today": "2026-11-20", "opex_week": True, "next": [
+    {"key": "opex-2026-11", "date": "2026-11-20", "kind": "monthly", "label": "Monthly OpEx",
+     "note": "Monthly options expire; the near book empties and the walls rebuild",
+     "days": 0, "is_today": True},
+    {"key": "eom-2026-11", "date": "2026-11-30", "kind": "month-end", "label": "Month end",
+     "note": "Month-end rebalancing into the close", "days": 10, "is_today": False}]}
+
+
+def test_an_expiry_is_a_row_on_its_day_and_done_from_the_close() -> None:
+    fri = datetime(2026, 11, 20, 9, 40, tzinfo=ET)
+    rows = im.expiry_rows(EXPIRY, fri)
+    assert rows == [{"t": "Today", "sort": "15:59", "kind": "Expiry", "done": False,
+                     "line": "Monthly OpEx: monthly options expire; the near book empties "
+                             "and the walls rebuild"}]
+    assert im.expiry_rows(EXPIRY, datetime(2026, 11, 20, 16, 5, tzinfo=ET))[0]["done"]
+    # Not on its day, nothing: month end is ten days off.
+    assert im.expiry_rows({"next": EXPIRY["next"][1:]}, fri) == []
+    assert im.expiry_rows(None, fri) == []
+    # On the card, in time order and before the reports after the close.
+    today = im.build([], [], [], fri, expiry=EXPIRY)["today"]
+    assert [r["kind"] for r in today] == ["Expiry"] and "sort" not in today[0]

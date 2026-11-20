@@ -37,6 +37,7 @@ import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
 import { manyOf, oneOf, usePersisted } from "@/lib/usePersisted";
 import { usePinsChanged } from "@/lib/usePinsChanged";
+import { useRefresh } from "@/lib/refresh";
 
 /**
  * Sectors: where the money is, and the stocks in it.
@@ -139,6 +140,12 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
   }, [q]);
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
   usePinsChanged(loadTable);
+  // The header's refresh button reads the cards and the table again (lib/refresh).
+  const reread = useCallback(() => {
+    void loadHeat();
+    void loadTable();
+  }, [loadHeat, loadTable]);
+  useRefresh(reread);
 
   // Stable, so the memoised cards and rows below skip a poll that changed nothing of theirs:
   // the cards were redrawn by every five-second read of the table (the sweep, 2026-11-20).

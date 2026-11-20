@@ -12,6 +12,7 @@ import { BreadthBars } from "@/components/panels/Breadth";
 import { setupLabel } from "@/components/panels/ScanDetail";
 import { CARD, CatalystCell, Chips, Spark, TD, TH, ageWord, dayName, rowProps } from "@/components/panels/ScanWide";
 import { PageLoader, PageNote } from "@/components/ui/HelmLoader";
+import { AgeChip } from "@/components/ui/Module";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { SectorGlyph } from "@/components/ui/SectorGlyph";
 import { scoreText } from "@/lib/bias";
@@ -192,9 +193,9 @@ export function Dashboard({
           its last one. */}
       <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[repeat(3,minmax(0,1fr))] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
-        <TopSetups rows={data.top} onAll={() => toScanner("today", { "today.side": "all" })} />
-        <HighImpact d={data.impact} onWire={() => onOpen("terminal")} />
-        <StockNews stories={data.stories} live={data.news_live} />
+        <TopSetups rows={data.top} age={data.ages?.top} onAll={() => toScanner("today", { "today.side": "all" })} />
+        <HighImpact d={data.impact} age={data.ages?.impact} onWire={() => onOpen("terminal")} />
+        <StockNews stories={data.stories} live={data.news_live} age={data.ages?.stories} />
       </div>
       <Rotation d={data} onHeat={() => toSectors()} onSector={(k) => toSectors({ "sec.mode": "cards", "sec.sel": k })} />
     </main>
@@ -205,14 +206,27 @@ export function Dashboard({
 /* The pieces                                                                  */
 /* -------------------------------------------------------------------------- */
 
-function Head({ title, sub, right }: { title: React.ReactNode; sub?: string; right?: React.ReactNode }) {
+/**
+ * A card's head. `age` is how long ago its figures were read, in minutes (owner, 2026-11-20:
+ * "have the cards show how recently they were updated eg "4m ago" or "4m""): Macro's chip,
+ * at the far right as a module has it, "now" under a minute, amber past ten, red past sixty.
+ */
+function Head({ title, sub, right, age }: { title: React.ReactNode; sub?: string; right?: React.ReactNode; age?: number | null }) {
+  const aged = age != null && Number.isFinite(age);
   return (
     <div className="flex shrink-0 items-start justify-between gap-3">
       <div className="min-w-0">
         <h2 className="text-[13.5px] font-semibold text-ink">{title}</h2>
         {sub && <p className="mt-0.5 text-[11.5px] text-ink-3">{sub}</p>}
       </div>
-      {right}
+      {aged ? (
+        <span className="flex shrink-0 items-center gap-3">
+          {right}
+          <AgeChip m={age} />
+        </span>
+      ) : (
+        right
+      )}
     </div>
   );
 }
@@ -257,6 +271,8 @@ function FuturesCard({ data, onBook }: { data: TerminalData; onBook: (v: FutView
         title="Futures"
         sub={[phase, ev ? `${ev.label} ${ev.next} in ${inMin(ev.min)}` : null].filter(Boolean).join(" · ") || undefined}
         right={<Go onClick={() => onBook("report")}>Market report</Go>}
+        // The prices' read, the Terminal poll's (the CME's own ten minutes are the foot's).
+        age={data.age_min?.quotes}
       />
       {/* The four boxes of the futures day: done, trading now, still to come. */}
       <div className="-mx-4 flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-ring/60 px-4 py-2 text-[11.5px]">
@@ -367,6 +383,7 @@ function PlanCard({
       <Head
         title="Today's RTH game plan"
         sub={`${d.read.title} · levels for ${dayName(d.trading_day)}`}
+        age={d.ages?.plan}
         right={
           <span className="flex shrink-0 items-center gap-4">
             {/* The written note for this desk: the Stocks tab's Market Report view since
@@ -465,6 +482,7 @@ function BreadthCard({ d }: { d: DashboardPayload }) {
       <Head
         title="Breadth"
         sub="Advancers against decliners, by the size of the move"
+        age={d.ages?.breadth}
         right={
           d.breadth ? (
             // Before the bell the count is the names that have traded pre-market, of all at
@@ -557,7 +575,7 @@ function Name({ r }: { r: DashRow }) {
   );
 }
 
-function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
+function TopSetups({ rows, age, onAll }: { rows: DashRow[]; age?: number | null; onAll: () => void }) {
   const [chip, setChip] = usePersisted<TopChip>("dash.top", "all", oneOf("all", "long", "short", "news"));
   const ticker = useTicker();
   const shown = rows.filter(TOP_TEST[chip]);
@@ -572,7 +590,7 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
     // overnight that is the evening's movers and the names in play, not the MAG 7 the
     // engine holds until the pool's 06:00 mark. From 1536px it is the game plan's track.
     <section className={cn(CARD, "@container flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Top setups" sub={inPlay ? "The Scanner's top ten · in play until the open" : "The Scanner's top ten"} right={<Go onClick={onAll}>Open the Scanner</Go>} />
+      <Head title="Top setups" sub={inPlay ? "The Scanner's top ten · in play until the open" : "The Scanner's top ten"} right={<Go onClick={onAll}>Open the Scanner</Go>} age={age} />
       <div className="shrink-0">
         <Chips items={TOP_CHIPS} on={chip} set={setChip} counts={counts} />
       </div>
@@ -634,7 +652,7 @@ function TopSetups({ rows, onAll }: { rows: DashRow[]; onAll: () => void }) {
  *    energy and policy of the last six, one a story, newest first.
  * Stock news beside it is the names' own stories; this card is the market's.
  */
-function HighImpact({ d, onWire }: { d: DashImpact | undefined; onWire: () => void }) {
+function HighImpact({ d, age, onWire }: { d: DashImpact | undefined; age?: number | null; onWire: () => void }) {
   const today = d?.today ?? [];
   const heads = d?.heads ?? [];
   return (
@@ -653,6 +671,7 @@ function HighImpact({ d, onWire }: { d: DashImpact | undefined; onWire: () => vo
         }
         sub="What can move the whole market today: the day's prints, reports and listings, then the headlines"
         right={<Go onClick={onWire}>Open the wire</Go>}
+        age={age}
       />
       {d == null ? (
         <p className="py-8 text-center text-[12px] text-ink-3">Reading the wire and the calendar…</p>
@@ -714,7 +733,7 @@ function HighImpact({ d, onWire }: { d: DashImpact | undefined; onWire: () => vo
   );
 }
 
-function StockNews({ stories, live }: { stories: DashStory[]; live: boolean }) {
+function StockNews({ stories, live, age }: { stories: DashStory[]; live: boolean; age?: number | null }) {
   return (
     <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2 xl:min-h-0")}>
       <Head
@@ -730,6 +749,7 @@ function StockNews({ stories, live }: { stories: DashStory[]; live: boolean }) {
           </span>
         }
         sub="Major stories, newest first"
+        age={age}
       />
       <ul className="min-h-0 flex-1 overflow-auto pr-1">
         {stories.length === 0 && <li className="py-8 text-center text-[12px] text-ink-3">No major stories in the last thirty hours.</li>}
@@ -771,6 +791,7 @@ function Rotation({ d, onHeat, onSector }: { d: DashboardPayload; onHeat: () => 
             : "Where money is moving, and the stocks pushing each sector"
         }
         right={<Go onClick={onHeat}>View heat map</Go>}
+        age={d.ages?.rotation}
       />
       <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 min-[106.25rem]:grid-cols-11">
         {d.rotation.map((s) => (

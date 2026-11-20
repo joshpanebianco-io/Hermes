@@ -106,8 +106,10 @@ export function Module({
  * it"; red past an hour says "this is not current". A continuous colour ramp
  * would make every module faintly alarming all the time, which trains you to
  * ignore the one that matters.
+ *
+ * The Dashboard's cards wear it too (2026-11-20): the same job, the same chip.
  */
-function AgeChip({ m, every, note }: { m: number; every?: number; note?: string | null }) {
+export function AgeChip({ m, every, note }: { m: number; every?: number; note?: string | null }) {
   // A slow source is late once it has missed a read, not ten minutes after its last one.
   const warnAt = every ? Math.max(10, every * 2) : 10;
   const errAt = every ? Math.max(60, every * 6) : 60;

@@ -149,8 +149,17 @@ export interface DashboardPayload {
   rotation: Array<{ key: string; label: string; day_pct: number | null; rs_day: number | null; leaders: string[] }>;
   /** "pre" before the bell: the focus lists and the rotation row are the funds' pre-market moves (2026-11-16). */
   sectors_basis?: "pre" | "session";
+  /**
+   * How long ago each card's figures were read, in minutes at this build (server
+   * dashboard.card_ages): the oldest block a card is drawn from. Null for a block not read
+   * yet; absent from a collector older than 2026-11-20.
+   */
+  ages?: Partial<Record<DashCard, number | null>>;
   offline?: { reason: string; api: string };
 }
+
+/** The cards with an age of their own; the Futures card's is the Terminal poll's quotes. */
+export type DashCard = "plan" | "breadth" | "top" | "impact" | "stories" | "rotation";
 
 /* -------------------------------------------------------------------------- */
 /* GET /api/scanner/sectors (sources/universe.py heatmap)                      */

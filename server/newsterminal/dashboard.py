@@ -211,6 +211,34 @@ def in_play(ranked: list[dict[str, Any]], view: dict[str, Any], *,
             "on": bool(view.get("on"))}
 
 
+def card_ages(ages: dict[str, Any], pre: bool) -> dict[str, float | None]:
+    """How long ago each card's figures were read, in minutes (owner, 2026-11-20: "have
+    the cards show how recently they were updated eg "4m ago" or "4m""). The collector's
+    own ages (snapshot `age_min`, a stale fallback dated by its bytes), the oldest of the
+    blocks a card is drawn from, as Macro's modules each state their block's.
+
+    The engine's rows are one block written by two jobs, the bar pass (`scanner`) and,
+    in the session, the live pass (`scan_live`): the newer of the two is the rows' age.
+    Before the bell the sector figures are the funds' pre-market (`sector_ext`). The
+    calendar and the earnings feed only the game plan's foot and the High impact news
+    card's schedule, and are read every ten and thirty minutes, so they do not date
+    either card: the wire's headlines date High impact news."""
+    def at(k: str) -> float | None:
+        v = ages.get(k)
+        return float(v) if isinstance(v, int | float) else None
+
+    def oldest(*vals: float | None) -> float | None:
+        got = [v for v in vals if v is not None]
+        return max(got) if got else None
+
+    runs = [v for v in (at("scanner"), at("scan_live")) if v is not None]
+    engine = min(runs) if runs else None
+    sectors = at("sector_ext" if pre else "sectors")
+    return {"plan": oldest(engine, sectors), "breadth": at("breadth_all"), "top": engine,
+            "impact": at("wire"), "stories": at("stock_news"),
+            "rotation": oldest(sectors, at("breadth_all"))}
+
+
 def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: dict[str, Any],
           stories: list[dict[str, Any]], *, session_day: date,
           inplay: dict[str, Any] | None = None,
@@ -304,4 +332,6 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
         # What the focus lists and the rotation row are moves of: the pre-market's
         # before the bell, else the session's (the last one before the open).
         "sectors_basis": "pre" if pre else "session",
+        # Each card's age, for the chip on its head (card_ages).
+        "ages": card_ages(_d(snap.get("age_min")), pre),
     }

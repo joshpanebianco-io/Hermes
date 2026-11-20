@@ -32,6 +32,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { OUTSIDE_DAY_TITLE, THROUGH_DAY_TITLE } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
@@ -106,7 +107,7 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
   const [sort, setSort] = usePersisted<Sort>("brk.sort", "rank", oneOf("rank", "rvol", "chg", "gap", "vol"));
   const [cols, setCols] = usePersisted<Col[]>("brk.cols", [...COLS], manyOf(...COLS));
   const [find, setFind] = useState("");
-  const [data, setData] = useState<BreakoutsPayload | null>(null);
+  const [data, setData] = useState<BreakoutsPayload | null>(() => lastRead<BreakoutsPayload>("scan.breakouts"));
   const seq = useRef(0);
   const ticker = useTicker();
 
@@ -122,7 +123,7 @@ export function ScanBreakouts({ onTrackChanged }: { onTrackChanged?: () => void 
     try {
       const r = await fetch(`/api/scanner/breakouts?${q}`, { cache: "no-store" });
       const d = (await r.json()) as BreakoutsPayload;
-      if (mine === seq.current) setData(d);
+      if (mine === seq.current) setData(keepRead("scan.breakouts", d));
     } catch {
       /* the last read stays on screen */
     }

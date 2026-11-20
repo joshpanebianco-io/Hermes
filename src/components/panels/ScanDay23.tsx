@@ -31,6 +31,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { THROUGH_DAY_TITLE } from "@/lib/outsideDay";
 import { useTicker } from "@/lib/ticker";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
@@ -76,7 +77,7 @@ export function ScanDay23({ onTrackChanged }: { onTrackChanged?: () => void }) {
   const [chip, setChip] = usePersisted<Day23Chip>("d23.chip", "all", oneOf("all", "long", "short", "day1", "day2", "day3", "inside", "through"));
   const [move, setMove] = usePersisted<number>("d23.move", 20, isNum);
   const [cap, setCap] = usePersisted<number>("d23.cap", 2e9, isNum);
-  const [data, setData] = useState<Day23Payload | null>(null);
+  const [data, setData] = useState<Day23Payload | null>(() => lastRead<Day23Payload>("scan.day23"));
   const seq = useRef(0);
   const ticker = useTicker();
 
@@ -86,7 +87,7 @@ export function ScanDay23({ onTrackChanged }: { onTrackChanged?: () => void }) {
     try {
       const r = await fetch(`/api/scanner/day23?${q}`, { cache: "no-store" });
       const d = (await r.json()) as Day23Payload;
-      if (mine === seq.current) setData(d);
+      if (mine === seq.current) setData(keepRead("scan.day23", d));
     } catch {
       /* the last read stays on screen */
     }

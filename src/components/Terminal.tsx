@@ -53,6 +53,8 @@ import {
 import { useLegacyViews } from "@/lib/legacyViews";
 import { useNow } from "@/lib/useNow";
 import { shareUnchanged } from "@/lib/share";
+import { placeCookie } from "@/lib/place";
+import type { MarketCtx } from "@/types/market";
 
 /**
  * The terminal.
@@ -107,9 +109,17 @@ export function Terminal({
   initialUi = DEFAULT_UI,
   initialScanView,
   initialFutView,
+  initialMarket = null,
+  rememberedScanView,
+  rememberedFutView,
 }: {
   initial: TerminalData;
   initialReport: ReportFeed | null;
+  /** Macro's market context, read by the server when the page opens on Macro (useMarket). */
+  initialMarket?: MarketCtx | null;
+  /** The views each desk was left on, from the place cookie (lib/place): the first frame's. */
+  rememberedScanView?: ScanView;
+  rememberedFutView?: FutView;
   initialTab?: Tab;
   /** The URL named a tab — see `urlPinned` below. */
   initialTabPinned?: boolean;
@@ -143,7 +153,7 @@ export function Terminal({
   // The stocks desk's market context, polled here rather than by the board
   // that reads it (Macro: prints, the Fed path, peers, cross-asset), so leaving
   // the page and coming back does not start it over.
-  const market = useMarket();
+  const market = useMarket(initialMarket);
 
   /*
    * NO CHASSIS LIGHT (owner, 2026-11-13: "get rid of the ... frame light and lets
@@ -225,7 +235,9 @@ export function Terminal({
    * open a view by name and the question to Hermes is labelled with it. The Scanner's
    * own strip reads and writes the same value.
    */
-  const [savedScanView, setScanView] = usePersisted<ScanView>("scan.view", "today", oneOf(...SCAN_VIEW_KEYS));
+  // The first frame's view is the URL's, else the cookie's (lib/place), so the page does
+  // not draw another view first and swap when storage lands.
+  const [savedScanView, setScanView] = usePersisted<ScanView>("scan.view", initialScanView ?? rememberedScanView ?? "today", oneOf(...SCAN_VIEW_KEYS));
   // An old view (Setups, Breakouts, Extended hours, Day 2/3) opens only while Settings
   // keeps them; otherwise the remembered one opens Today (lib/tabs.ts shownView).
   const legacyViews = useLegacyViews();
@@ -233,7 +245,7 @@ export function Terminal({
   // The Futures section's view: a book, or the Market Report (since 2026-11-16). It opens on
   // NQ; a remembered "overview" or "brief" (the views removed on 2026-11-14 and 2026-11-15)
   // fails the check and opens NQ too.
-  const [futView, setFutView] = usePersisted<FutView>("fut.view", "NQ", oneOf(...FUT_VIEW_KEYS));
+  const [futView, setFutView] = usePersisted<FutView>("fut.view", initialFutView ?? rememberedFutView ?? "NQ", oneOf(...FUT_VIEW_KEYS));
   useEffect(() => {
     // The URL's say, once, after storage has had its turn (usePersisted): an old link to
     // the report page opens a desk's Market Report view (lib/tabs LEGACY).
@@ -269,6 +281,11 @@ export function Terminal({
   useEffect(() => {
     document.title = pageTitle(tab);
   }, [tab]);
+
+  // Where the reader is, for the server's first frame on the next load (lib/place).
+  useEffect(() => {
+    document.cookie = placeCookie(tab, savedScanView, futView);
+  }, [tab, savedScanView, futView]);
 
   const [data, setData] = useState<TerminalData>(initial);
   const [lastPoll, setLastPoll] = useState<Date | null>(null);

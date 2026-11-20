@@ -21,8 +21,9 @@ export interface MarketFeed {
   failed: string | null;
 }
 
-export function useMarket(): MarketFeed {
-  const [ctx, setCtx] = useState<MarketCtx | null>(null);
+/** `initial`: the server's read when the page opened on Macro (page.tsx), so the board is its first frame. */
+export function useMarket(initial: MarketCtx | null = null): MarketFeed {
+  const [ctx, setCtx] = useState<MarketCtx | null>(initial);
   const [failed, setFailed] = useState<string | null>(null);
   const seq = useRef(0);
 

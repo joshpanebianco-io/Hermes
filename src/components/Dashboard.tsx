@@ -20,6 +20,7 @@ import { BiasScale } from "@/components/ui/BiasScale";
 import { cn } from "@/lib/cn";
 import { dir, inMin, num, pct } from "@/lib/format";
 import { heatMax, heatStyle } from "@/lib/heat";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { etDay, useNextPrint } from "@/lib/nextPrint";
 import type { ScanView, Tab } from "@/lib/tabs";
 import { openTicker, useTicker } from "@/lib/ticker";
@@ -83,7 +84,8 @@ export function Dashboard({
 }) {
   const now = useNow(30_000);
   const later = useNextPrint(calendar, now);
-  const [data, setData] = useState<DashboardPayload | null>(null);
+  // A return to the page opens on what it last showed, until its first poll lands (lib/lastRead).
+  const [data, setData] = useState<DashboardPayload | null>(() => lastRead<DashboardPayload>("dashboard"));
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -91,7 +93,7 @@ export function Dashboard({
     try {
       const r = await fetch("/api/dashboard", { cache: "no-store" });
       const d = (await r.json()) as DashboardPayload;
-      if (mine === seq.current) setData(d);
+      if (mine === seq.current) setData(keepRead("dashboard", d));
     } catch {
       /* the last read stays on screen */
     }

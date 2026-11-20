@@ -41,6 +41,7 @@ import { mergeTick, nextEma } from "@/lib/chartLive";
 import { CHART_COLORS, setChartColors, useChartColors } from "@/lib/chartColors";
 import { extKind, shadeRuns, type ExtKind } from "@/lib/chartShade";
 import { wallRank } from "@/lib/walls";
+import { keepRead, lastRead } from "@/lib/lastRead";
 
 /**
  * One name's chart, drawn the way the Pine script draws it: the candles, the four
@@ -1128,14 +1129,10 @@ export function ScanChart({
   }, [paint, refreshOffScale]);
 
   // ---- the whole series, on its slow poll ----------------------------------------
-  const load = useCallback(async () => {
-    const mine = ++seq.current;
-    try {
-      const r = await fetch(`${barsUrl ?? `/api/scanner/bars/${encodeURIComponent(sym)}`}?tf=${tf}`, { cache: "no-store" });
-      const d = (await r.json()) as ScanBars & { offline?: { reason: string } };
-      if (mine !== seq.current) return;
-      setErr(d.offline ? d.offline.reason : d.ok ? null : (d.error ?? "no bars"));
-      if (!d.ok) return;
+  const barsKey = `${barsUrl ?? `/api/scanner/bars/${encodeURIComponent(sym)}`}?tf=${tf}`;
+  /** A series in hand: held, and drawn. */
+  const take = useCallback(
+    (d: ScanBars) => {
       data.current = d;
       onLevelsRef.current?.(d.levels ?? null);
       setAnchored(d.vwaps != null);
@@ -1145,18 +1142,35 @@ export function ScanChart({
       setReady(true);
       paint();
       if (readout.current && readout.current.dataset.touched !== "1") readout.current.textContent = restingLine(d);
+    },
+    [paint],
+  );
+  const load = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const r = await fetch(barsKey, { cache: "no-store" });
+      const d = (await r.json()) as ScanBars & { offline?: { reason: string } };
+      if (mine !== seq.current) return;
+      setErr(d.offline ? d.offline.reason : d.ok ? null : (d.error ?? "no bars"));
+      if (!d.ok) return;
+      take(keepRead(barsKey, d));
     } catch (e) {
       if (mine === seq.current) setErr(e instanceof Error ? e.message : "request failed");
     }
-  }, [sym, tf, paint, barsUrl]);
+  }, [barsKey, take]);
 
   useEffect(() => {
-    // A new name or timeframe starts blank rather than showing the last one's candles.
+    // A new name or timeframe starts blank rather than showing the last one's candles,
     first.current = true;
     data.current = null;
     setReady(false);
     setErr(null);
     setLive(null);
+    // or on its own last series this session (lib/lastRead): a return to a page drew the
+    // chart's loader for a second over candles it had just shown. The read below
+    // replaces them, the view as it was left.
+    const kept = lastRead<ScanBars>(barsKey);
+    if (kept) take(kept);
     void load();
     let id = 0;
     const again = () => {
@@ -1171,7 +1185,7 @@ export function ScanChart({
     };
     again();
     return () => clearTimeout(id);
-  }, [load, tf]);
+  }, [load, tf, barsKey, take]);
 
   // ---- the last trade, every second ----------------------------------------------
   useEffect(() => {

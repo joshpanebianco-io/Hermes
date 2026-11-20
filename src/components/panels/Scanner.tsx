@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Regime, ScannerPayload, ScanRow, Side } from "@/types/scanner";
 import { HelmLoader } from "@/components/ui/HelmLoader";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { useSide } from "@/components/state/UiMode";
 import { ScanBreakouts } from "@/components/panels/ScanBreakouts";
 import { ScanExtended } from "@/components/panels/ScanExtended";
@@ -214,7 +215,8 @@ export function Scanner({
 }) {
   const ownNow = useMinuteClock();
   const now = shellNow ?? ownNow;
-  const [data, setData] = useState<ScannerPayload | null>(null);
+  // A return to the page opens on what it last showed, until its first poll lands (lib/lastRead).
+  const [data, setData] = useState<ScannerPayload | null>(() => lastRead<ScannerPayload>("scanner"));
   const [failed, setFailed] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const ticker = useTicker();
@@ -274,7 +276,7 @@ export function Scanner({
       const r = await fetch("/api/scanner", { cache: "no-store" });
       const next = (await r.json()) as ScannerPayload;
       if (mine === seq.current) {
-        setData(next);
+        setData(keepRead("scanner", next));
         setFailed(null);
       }
     } catch (e) {
@@ -289,7 +291,7 @@ export function Scanner({
    * score the phase's (in play before 10:00, the setup score after). So the chips, the
    * columns, the colours and the slide-out are the ones this table has always had.
    */
-  const [today, setToday] = useState<TodayPayload | null>(null);
+  const [today, setToday] = useState<TodayPayload | null>(() => lastRead<TodayPayload>("scanner.today"));
   // The list was asked for and did not come: the charts then fall back to the engine's
   // rows, and until it is known which, they wait (see `pool`).
   const [todayMiss, setTodayMiss] = useState(false);
@@ -301,7 +303,7 @@ export function Scanner({
       const next = (await r.json()) as TodayPayload & { offline?: unknown };
       if (mine !== todaySeq.current) return;
       if (!next.offline && next.phase) {
-        setToday(next);
+        setToday(keepRead("scanner.today", next));
         setTodayMiss(false);
       } else {
         setTodayMiss(true);
@@ -447,6 +449,8 @@ export function Scanner({
     openTicker(s);
   };
 
+  // The list has not been read yet: the table's own wait (TableSkeleton) is on screen.
+  const listing = !data || (isToday && !today && !data.offline);
   const counts = useMemo(() => {
     const c: Partial<Record<SideFilter, number>> = {};
     for (const { key } of PRESET_NAME) {
@@ -490,9 +494,13 @@ export function Scanner({
           {/* The row sums up the table, so it is the Setups view's alone. Over the charts
               its height would be theirs (on a 1920 screen it is a sixth of what two rows of
               them have). */}
-          {(view === "setups" || isToday) && data && !data.offline && (
+          {(view === "setups" || isToday) && !listing && data && !data.offline && (
             <SetupStats data={isToday ? { ...data, rows: listRows } : data} later={later} now={now} phase={isToday ? (today?.phase ?? null) : null} />
           )}
+          {/* The row's room is kept while the first read lands: it came in over the chips and
+              pushed the whole list 83px down, and with the engine's read in and the list's not
+              yet it counted an empty list (the loading sweep, 2026-11-20). */}
+          {(view === "setups" || isToday) && listing && <StatsRoom />}
           {/*
             * ONE BAR UNDER THE BAND, AND WHAT IT HOLDS IS THE VIEW'S. Setups: the chips and
             * the table's tools. The Signal log: a line of words. Multicharts: the charts'
@@ -528,7 +536,8 @@ export function Scanner({
             </div>
           ) : (
           <div className="qt-bar flex shrink-0 flex-wrap items-center gap-2 border-b border-ring px-4 py-2">
-            <Chips items={PRESET_NAME} on={sideF} set={setSideF} counts={counts} />
+            {/* No counts until the list is read: every chip said 0 while it loaded. */}
+            <Chips items={PRESET_NAME} on={sideF} set={setSideF} counts={listing ? null : counts} />
             <div className="ml-auto flex items-center gap-2">
               {/*
                 * NO "HOW TO TRADE THIS" (owner, 2026-11-13: "can we remove the 'how to
@@ -559,7 +568,7 @@ export function Scanner({
                 <Choice label="Relative strength against" options={BENCH_CHOICES} value={bench} set={setBench} />
                 <p className="text-[11px] leading-[1.4] text-ink-3">Overview is what matters, Levels every column the Pine&apos;s scanner has, Options the chain. The score always uses SPY.</p>
               </Menu>
-              <Showing shown={rows.length} total={isToday ? (today?.rows.length ?? null) : (data?.watchlist.length ?? null)} word="on the list" />
+              {!listing && <Showing shown={rows.length} total={isToday ? (today?.rows.length ?? null) : (data?.watchlist.length ?? null)} word="on the list" />}
             </div>
           </div>
           )}
@@ -673,6 +682,20 @@ const BENCH_CHOICES: ReadonlyArray<{ value: Bench; label: string }> = [
  */
 function TableSkeleton() {
   return <HelmLoader label="Loading the scanner" size={56} className="h-full min-h-[240px]" />;
+}
+
+/**
+ * The stats row's room while the first read lands: the row as SetupStats draws it, one
+ * card tall, its contents hidden, so the chips and the table do not move when it fills.
+ */
+function StatsRoom() {
+  return (
+    <div aria-hidden className="qt-stats shrink-0 border-b border-ring">
+      <div className="qt-stats-row invisible flex flex-wrap">
+        <StatCard glyph="clock" tint="setup" value="—" hue="text-ink-3" label="Ranked by in play" sub="—" />
+      </div>
+    </div>
+  );
 }
 
 /* -------------------------------------------------------------------------- */

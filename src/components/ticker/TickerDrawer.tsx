@@ -12,6 +12,7 @@ import { setAskFocus } from "@/lib/ask/open";
 import { dir, num, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { closeTicker, openSearch, togglePin, useTicker } from "@/lib/ticker";
 import { useNow } from "@/lib/useNow";
 import { oneOf, usePersisted } from "@/lib/usePersisted";
@@ -42,6 +43,8 @@ export function TickerDrawer() {
   const sym = useTicker();
   const [data, setData] = useState<NamePayload | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  // This opening's own read has landed (a held last read does not count: see the star).
+  const [fresh, setFresh] = useState(false);
   const [width, setWidth] = usePersisted<number>("drawer.pct", 62, isPct);
   const [full, setFull] = useState(false);
   const [bench] = usePersisted<"SPY" | "QQQ">("scan.bench", "SPY", oneOf("SPY", "QQQ"));
@@ -55,7 +58,8 @@ export function TickerDrawer() {
       const r = await fetch(`/api/scanner/name/${encodeURIComponent(name)}`, { cache: "no-store" });
       const d = (await r.json()) as NamePayload;
       if (mine === seq.current) {
-        setData(d);
+        setData(keepRead(`name:${name}`, d));
+        setFresh(true);
         setFailed(null);
       }
     } catch (e) {
@@ -79,9 +83,12 @@ export function TickerDrawer() {
   }, [sym, load]);
   usePinsChanged(reload);
 
-  // A new name starts blank rather than showing the last one's row under its ticker.
+  // A new name starts blank rather than showing the last one's row under its ticker, or on
+  // its own last read if it was open earlier this session (lib/lastRead): its poll then
+  // replaces it, as it would have had the slide-out stayed open.
   useEffect(() => {
-    setData(null);
+    setData(sym ? lastRead<NamePayload>(`name:${sym}`) : null);
+    setFresh(false);
     setFailed(null);
   }, [sym]);
 
@@ -187,14 +194,16 @@ export function TickerDrawer() {
         </button>
 
         <div className="flex items-center gap-2">
-          {data && !data.tracked && <TrackButton sym={sym} tracked={false} onDone={() => void load(sym)} />}
+          {data && fresh && !data.tracked && <TrackButton sym={sym} tracked={false} onDone={() => void load(sym)} />}
           <button
             type="button"
             onClick={() => void togglePin(sym).then(() => load(sym))}
             // Not until the name has been read: the star showed ☆ for every name while
-            // it loaded, and a click in that half second on a pinned one unpinned it.
-            disabled={!data}
-            title={!data ? "Reading the name…" : data.pinned ? "A favourite. Click to take it off your favourites." : "Add to your favourites"}
+            // it loaded, and a click in that half second on a pinned one unpinned it. A
+            // last read held from earlier (lib/lastRead) is not enough: the star may have
+            // changed since, so it waits for this opening's own read.
+            disabled={!data || !fresh}
+            title={!data || !fresh ? "Reading the name…" : data.pinned ? "A favourite. Click to take it off your favourites." : "Add to your favourites"}
             aria-pressed={data?.pinned ?? false}
             {...segItem(data?.pinned ?? false, { className: "border border-ring-2 disabled:opacity-40" })}
           >

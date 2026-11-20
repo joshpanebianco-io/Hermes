@@ -32,6 +32,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { compact } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { THROUGH_DAY_TITLE } from "@/lib/outsideDay";
 import { segItem } from "@/lib/seg";
 import { openTicker, useTicker } from "@/lib/ticker";
@@ -100,7 +101,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
   const [cols, setCols] = usePersisted<Col[]>("ext.cols", COL_DEFAULT, manyOf(...COLS));
   // The news-led order the collector sends, or the biggest gap up or down first.
   const [sort, setSort] = usePersisted<"news" | "up" | "down">("ext.sort", "news", oneOf("news", "up", "down"));
-  const [data, setData] = useState<ExtendedPayload | null>(null);
+  const [data, setData] = useState<ExtendedPayload | null>(() => lastRead<ExtendedPayload>("scan.extended"));
   const seq = useRef(0);
   const ticker = useTicker();
 
@@ -128,7 +129,7 @@ export function ScanExtended({ onTrackChanged, onDay23 }: { onTrackChanged?: () 
     try {
       const r = await fetch(`/api/scanner/extended?${q}`, { cache: "no-store" });
       const d = (await r.json()) as ExtendedPayload;
-      if (mine === seq.current) setData(d);
+      if (mine === seq.current) setData(keepRead("scan.extended", d));
     } catch {
       /* the last read stays on screen */
     }

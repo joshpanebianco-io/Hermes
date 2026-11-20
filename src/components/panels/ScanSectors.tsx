@@ -27,6 +27,7 @@ import {
   volWord,
 } from "@/components/panels/ScanWide";
 import { cn } from "@/lib/cn";
+import { keepRead, lastRead } from "@/lib/lastRead";
 import { OUTSIDE_DAY_TITLE } from "@/lib/outsideDay";
 import { compact, dir, num, pct } from "@/lib/format";
 import { heatMax, heatStyle } from "@/lib/heat";
@@ -99,15 +100,16 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
   const [vol, setVol] = usePersisted<number>("sec.vol", 5e5, isNum);
   const [sort, setSort] = usePersisted<Sort>("sec.sort", "chg", oneOf("rank", "rvol", "chg", "gap", "vol"));
   const [cols, setCols] = usePersisted<Col[]>("sec.cols", [...COLS], manyOf(...COLS));
-  const [heat, setHeat] = useState<HeatmapPayload | null>(null);
-  const [table, setTable] = useState<BreakoutsPayload | null>(null);
+  // A return to the page opens on what it last showed, until its first poll lands (lib/lastRead).
+  const [heat, setHeat] = useState<HeatmapPayload | null>(() => lastRead<HeatmapPayload>("sectors.heat"));
+  const [table, setTable] = useState<BreakoutsPayload | null>(() => lastRead<BreakoutsPayload>("sectors.table"));
   const seq = useRef(0);
   const ticker = useTicker();
 
   const loadHeat = useCallback(async () => {
     try {
       const r = await fetch("/api/scanner/sectors", { cache: "no-store" });
-      setHeat((await r.json()) as HeatmapPayload);
+      setHeat(keepRead("sectors.heat", (await r.json()) as HeatmapPayload));
     } catch {
       /* the last read stays on screen */
     }
@@ -125,7 +127,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     try {
       const r = await fetch(`/api/scanner/breakouts?${q}`, { cache: "no-store" });
       const d = (await r.json()) as BreakoutsPayload;
-      if (mine === seq.current) setTable(d);
+      if (mine === seq.current) setTable(keepRead("sectors.table", d));
     } catch {
       /* the last read stays on screen */
     }
@@ -263,10 +265,17 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
         </p>
       </div>
 
-      {table?.ok && (
+      {/* Its room is kept while the list is read (the box drawn, the figures not): it came
+          in after the cards and pushed the bars under it 67px down (the loading sweep,
+          2026-11-20). A list that failed says so below and has no tally. */}
+      {(table?.ok || !table) && (
         <div className="qt-tally mx-4 mt-2 grid grid-cols-2 divide-x divide-ring rounded-[6px] border border-ring bg-surface/40 qt:rounded-[4px]">
-          <Tally value={table.stats.pdh} hue="text-call-fig" glyph="▲" word="Advancing" sub="Above PDH" />
-          <Tally value={table.stats.pdl} hue="text-put-fig" glyph="▼" word="Declining" sub="Below PDL" />
+          <div className={cn(!table && "invisible")}>
+            <Tally value={table?.ok ? table.stats.pdh : 0} hue="text-call-fig" glyph="▲" word="Advancing" sub="Above PDH" />
+          </div>
+          <div className={cn(!table && "invisible")}>
+            <Tally value={table?.ok ? table.stats.pdl : 0} hue="text-put-fig" glyph="▼" word="Declining" sub="Below PDL" />
+          </div>
         </div>
       )}
 

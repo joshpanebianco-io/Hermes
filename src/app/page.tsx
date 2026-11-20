@@ -6,6 +6,8 @@ import { cookies } from "next/headers";
 import { THEME_COOKIE, parseTheme } from "@/lib/theme";
 import { UI_COOKIE, parseUi } from "@/lib/ui";
 import { pageTitle, resolveTab } from "@/lib/tabs";
+import { PLACE_COOKIE, parsePlace } from "@/lib/place";
+import type { MarketCtx } from "@/types/market";
 
 /**
  * The terminal, server-rendered once and then polled by the client.
@@ -47,6 +49,20 @@ async function getInitial(): Promise<TerminalData> {
  * never be able to delay or break the board. Same rule GEXYGEN applies to its
  * reference data.
  */
+/** The stocks desk's market context for Macro's first frame; null leaves it to the page's own poll. */
+async function getMarket(): Promise<MarketCtx | null> {
+  try {
+    const r = await fetch(`${API.replace(/\/$/, "")}/api/market`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as MarketCtx;
+  } catch {
+    return null;
+  }
+}
+
 async function getReport(): Promise<ReportFeed | null> {
   try {
     const r = await fetch(`${API.replace(/\/$/, "")}/api/report`, {
@@ -72,7 +88,8 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const sp = await searchParams;
   const named = resolveTab(sp.tab);
-  return { title: pageTitle(named?.tab ?? "terminal") };
+  const place = parsePlace((await cookies()).get(PLACE_COOKIE)?.value);
+  return { title: pageTitle(named?.tab ?? place.tab ?? "terminal") };
 }
 
 /**
@@ -95,7 +112,11 @@ export default async function Page({
   // report or the Analysis tab opens the Futures tab's Market Report view, the plan the
   // Stocks tab's.
   const named = resolveTab(sp.tab);
-  const initialTab = named?.tab ?? "terminal";
+  const jar = await cookies();
+  // Where the reader was (lib/place): a bare address opens there, and each desk on the
+  // view it was left on, in the first frame rather than a second after it.
+  const place = parsePlace(jar.get(PLACE_COOKIE)?.value);
+  const initialTab = named?.tab ?? place.tab ?? "terminal";
   /*
    * WHETHER THE URL ASKED AT ALL, which is not the same question as which tab
    * it asked for. `?tab=terminal` and a bare `/` both resolve to "terminal"
@@ -106,20 +127,28 @@ export default async function Page({
    * you go, not a place you arrive.
    */
   const initialTabPinned = named !== null;
-  const jar = await cookies();
   const theme = parseTheme(jar.get(THEME_COOKIE)?.value);
   const ui = parseUi(jar.get(UI_COOKIE)?.value);
-  const [initial, initialReport] = await Promise.all([getInitial(), getReport()]);
+  // Macro waits for the market context before it draws (lib/ready boardReady), and it is
+  // the page the shortcut opens: read with the rest, the board is the first frame.
+  const [initial, initialReport, initialMarket] = await Promise.all([
+    getInitial(),
+    getReport(),
+    initialTab === "terminal" ? getMarket() : Promise.resolve(null),
+  ]);
   return (
     <Terminal
       initial={initial}
       initialReport={initialReport}
+      initialMarket={initialMarket}
       initialTab={initialTab}
       initialTabPinned={initialTabPinned}
       initialTheme={theme}
       initialUi={ui}
       initialScanView={named?.scan}
       initialFutView={named?.fut}
+      rememberedScanView={place.scan ?? undefined}
+      rememberedFutView={place.fut ?? undefined}
     />
   );
 }

@@ -14,9 +14,6 @@
  * on a side of price, which is what those colours are for.
  */
 
-/** The class for the regime's word, whichever regime it is. */
-export const REGIME_INK = "text-ink-2";
-
 /** What the regime ("POS" or "NEG") does to a move, in two words; empty when there is none to read. */
 export function regimeMeans(r: string | null | undefined): string {
   return r === "POS" ? "moves damped" : r === "NEG" ? "moves amplified" : "";

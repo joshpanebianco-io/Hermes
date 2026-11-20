@@ -58,24 +58,13 @@ INDEX_OF = {"NQ": "NDX", "ES": "SPX"}
 COT_BOOKS: tuple[str, ...] = ("NQ", "ES", "GC")
 
 # ---- the thresholds, the stocks desk's where one exists ----------------------
-YIELD_BP = marketctx.YIELD_BP  # the 10Y's day change at or beyond this votes
-DXY_FLAT = marketctx.DXY_FLAT
-HYG_FLAT = marketctx.HYG_FLAT
-VIX_FLAT = marketctx.VIX_FLAT
+# (The fixed day-move thresholds for the 10Y, the dollar, credit, the VIX, silver, copper,
+# gold and the products went on 2026-11-20, unread since the votes were sized on 2026-11-19.)
 CURVE_CALM = marketctx.CURVE_CALM
 CURVE_STRESS = marketctx.CURVE_STRESS
 PART_LONG = marketctx.PART_LONG
 PART_SHORT = marketctx.PART_SHORT
 PART_MIN = marketctx.PART_MIN
-#: Silver's day move at or beyond this votes for gold (the metals bid or offered).
-SILVER_FLAT = 0.5
-#: Copper's day move past this is named in silver's note (industrial, not monetary),
-#: and votes on silver's own board (its industrial half) and on crude's (demand).
-COPPER_FLAT = 0.5
-#: Gold's day move at or beyond this votes for silver: a quarter of a usual gold day.
-GOLD_FLAT = 0.4
-#: Gasoline and heating oil, averaged: their day move at or beyond this votes for crude.
-PRODUCTS_FLAT = 0.75
 #: The weekly crude inventories: a change, or a miss against consensus, of this many
 #: barrels votes. The weekly figure is routinely a few million either way.
 INVENTORY_FLAT = 1_000_000.0

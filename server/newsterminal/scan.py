@@ -58,7 +58,6 @@ ET = ZoneInfo("America/New_York")
 # at 17:00 — `rth_end` / `post_end` read the holiday table, these are the norm.
 PM_START = 4 * 60
 RTH_START = 9 * 60 + 30
-RTH_END = 16 * 60
 POST_END = 20 * 60
 POST_END_HALF = 17 * 60
 

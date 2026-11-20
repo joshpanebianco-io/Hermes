@@ -344,8 +344,6 @@ export interface Overview extends Omit<Plan, "facts" | "plan" | "kind"> {
   plan: OverviewBody | null;
 }
 
-export const isOverview = (x: Plan | Overview | null | undefined): x is Overview => x?.kind === "overview";
-
 export interface PlanFeed {
   config: { enabled: boolean; model: string };
   latest: Plan | Overview | null;
@@ -355,7 +353,3 @@ export interface PlanFeed {
   /** The plan being written right now, if any, or the job a poll settled. */
   job?: NoteJob | null;
 }
-
-/** How many of the scanner's top names a plan covers. */
-export type PlanTop = 4 | 6 | 8 | 10;
-export const PLAN_TOPS: readonly PlanTop[] = [4, 6, 8, 10];

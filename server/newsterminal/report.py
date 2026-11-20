@@ -2268,12 +2268,6 @@ EARNINGS_REPORTED = 8
 #: How many of the reports still to come it carries, soonest first.
 EARNINGS_AHEAD = 8
 
-#: Where in the ET day a report lands, by Nasdaq's timing field: before the
-#: open prints around 08:00, after the close in the first minutes past 16:00,
-#: and an unspecified one is placed at noon so it sorts inside its own day.
-_EARNINGS_HOUR = {"pre": (8, 0), "after": (16, 5)}
-
-
 def _earnings_moment(e: dict[str, Any]) -> datetime | None:
     """When a report row prints, in ET; None for a row with no readable date. Pure.
     The table is events.py's (PRINT_HOUR), read from there so the heavyweights

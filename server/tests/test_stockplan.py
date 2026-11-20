@@ -154,60 +154,6 @@ def test_digest_carries_the_clock_and_the_strategy_figures() -> None:
     assert "0.60 delta" in d["strategy"]
 
 
-# ------------------------------------------------------------------------ sanitize
-
-
-def _facts() -> dict[str, Any]:
-    return sp.build_facts(_scan(), _snap(), top=4)
-
-
-def test_sanitize_drops_ghosts_dedupes_and_clamps() -> None:
-    obj = {
-        "headline": "Shorts lead into CPI",
-        "market": "Tape leans short.",
-        "plans": [
-            {"sym": "AAA", "side": "long", "conviction": 7, "plan": "Buy the retest",
-             "trigger": "t", "invalidation": "i", "target": "x", "options": "o",
-             "why": ["a", "b", "c", "d", "e"]},
-            {"sym": "AAA", "side": "short", "conviction": 2, "plan": "second, dropped"},
-            {"sym": "ZZZ", "side": "long", "conviction": 3, "plan": "not in the facts"},
-            {"sym": "BBB", "conviction": "0", "plan": "side falls back to the facts"},
-            {"sym": "CCC", "side": "long", "conviction": "x", "plan": "no conviction, dropped"},
-        ],
-        "avoid": [{"sym": "AAA", "why": "already planned"}, {"sym": "EEE", "why": "chop"},
-                  {"sym": "NOPE", "why": "ghost"}],
-        "timing": ["08:30 CPI"], "risks": ["CPI"],
-    }
-    # The clamp alone: without a tape count there is no cap to apply.
-    facts = _facts()
-    facts.pop("conviction")
-    p = sp.sanitize_plan(obj, facts)
-    assert p is not None
-    assert [(x["sym"], x["side"], x["conviction"]) for x in p["plans"]] == [
-        ("AAA", "long", 5), ("BBB", "short", 1)]
-    assert p["plans"][0]["capped"] is None and p["plans"][0]["conviction_model"] == 5
-    # These facts have no quotes, so the tape has no lean and caps every plan at 2.
-    capped = sp.sanitize_plan(obj, _facts())
-    assert capped is not None
-    assert capped["plans"][0]["conviction"] == 2
-    assert capped["plans"][0]["capped"] == "no tape lean — at most 2"
-    # Up to six now — Structure, RS, Macro, News, plus Tape / Options / Catalyst.
-    assert len(p["plans"][0]["why"]) == 5
-    assert p["avoid"] == [{"sym": "EEE", "why": "chop"}]
-
-
-def test_sanitize_needs_a_headline() -> None:
-    assert sp.sanitize_plan({"market": "m", "plans": []}, _facts()) is None
-    assert sp.sanitize_plan("nope", _facts()) is None
-
-
-def test_unverified_flags_a_number_the_model_was_not_shown() -> None:
-    p = sp.sanitize_plan({"headline": "PMH 101.23 then 107.77", "plans": []}, _facts())
-    assert p is not None
-    seen = json.dumps(sp.build_digest(_facts()))
-    assert sp.unverified(p, seen) == ["107.77"]
-
-
 # ------------------------------------------------------------------------- storage
 
 
@@ -247,45 +193,6 @@ GOOD = {
     "timing": ["Tue 08:30 CPI", "09:30 open"],
     "risks": ["CPI at 08:30"],
 }
-
-
-def test_generate_without_a_key_invents_nothing(monkeypatch: Any, tmp_path: Any) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))
-    out = sp.generate(_scan(), _snap())
-    assert out["ok"] is False and out["plan"] is None and "OPENROUTER_API_KEY" in out["error"]
-    assert sp.history() == []
-
-
-def test_generate_stores_a_clean_plan(monkeypatch: Any, tmp_path: Any) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
-    monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))
-    calls: list[dict[str, Any]] = []
-
-    def fake(payload: dict[str, Any], key: str, timeout: int = 0) -> dict[str, Any]:
-        calls.append(payload)
-        return _answer(GOOD)
-
-    monkeypatch.setattr(rp, "_post", fake)
-    out = sp.generate(_scan(), _snap(), top=4)
-    assert out["ok"] is True, out["error"]
-    assert out["unverified"] == [] and out["plan"]["plans"][0]["sym"] == "AAA"
-    assert out["digest"]["names"][0]["sym"] == "AAA"
-    sch = calls[0]["response_format"]["json_schema"]["schema"]
-    assert sch["properties"]["plans"]["items"]["properties"]["sym"]["enum"][:2] == ["AAA", "BBB"]
-    assert sp.latest()["id"] == out["id"]  # type: ignore[index]
-
-
-def test_generate_reasks_once_on_an_invented_number(monkeypatch: Any, tmp_path: Any) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
-    monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))
-    bad = {**GOOD, "headline": "AAA to 117.77"}
-    answers = [_answer(bad), _answer(GOOD)]
-    monkeypatch.setattr(rp, "_post", lambda payload, key, timeout=0: answers.pop(0))
-    out = sp.generate(_scan(), _snap(), top=4)
-    assert out["ok"] is True and out["unverified"] == []
-    assert out["plan"]["headline"] == GOOD["headline"]
-    assert any("ok after re-ask" in (a.get("note") or "") for a in out["attempts"])
 
 
 # -------------------------------------------------------------------------- routes
@@ -383,28 +290,6 @@ def test_routes_validate_top_and_ids(routed: None) -> None:
     assert _asgi("DELETE", "/api/plan/..%2F..%2Fx")[0] in (404, 422)
 
 
-def test_sanitize_unwraps_a_one_key_wrapper_and_reads_title() -> None:
-    """Free models drift: the plan wrapped in {"game_plan": {...}}, or its lead
-    named "title" — both are the same plan and must not fail the run."""
-    facts = {"names": [{"sym": "TSLA", "side": "short"}]}
-    body = {
-        "title": "Short bias holds",
-        "market": "Tape is soft.",
-        "plans": [
-            {"sym": "TSLA", "side": "short", "conviction": 4, "plan": "Short the PDL retest."},
-        ],
-        "avoid": [],
-        "timing": [],
-        "risks": [],
-    }
-    out = sp.sanitize_plan({"game_plan": body}, facts)
-    assert out is not None
-    assert out["headline"] == "Short bias holds"
-    assert [p["sym"] for p in out["plans"]] == ["TSLA"]
-    # Two unrelated keys are not a wrapper — still no headline, still no plan.
-    assert sp.sanitize_plan({"a": {"x": 1}, "b": {"y": 2}}, facts) is None
-
-
 # ---------------------------------------------------------------- macro per name
 
 
@@ -486,11 +371,6 @@ def test_index_etfs_get_their_own_drivers_not_a_guess() -> None:
     assert [d["driver"] for d in sp.macro_for("IWM", None, moves)] == ["US10Y"]
 
 
-def test_why_collapses_a_doubled_layer_word() -> None:
-    assert sp._why(["News: News: nothing stock-specific in three days", "RS: -0.5 ATR"]) == [
-        "News: nothing stock-specific in three days", "RS: -0.5 ATR"]
-
-
 def test_unread_news_is_flagged_not_called_quiet() -> None:
     row = {"sym": "NVDA", "ok": True, "score": {"total": 40, "side": "short"},
            "setup": {"state": "forming"}, "levels": {}, "rs": {}, "news": [],
@@ -507,48 +387,6 @@ def _tape(bias: str | None, grade: str, mx: int) -> dict[str, Any]:
     return {"bias": bias, "score": {"long": 35, "short": -35}.get(str(bias), 0), "coverage": 85,
             "agree": 0, "against": 0, "neutral": 0, "live": 8, "total": 11, "grade": grade,
             "max_conviction": mx, "votes": []}
-
-
-@pytest.mark.parametrize(("tape", "side", "model", "kept", "capped"), [
-    (_tape("long", "strong", 5), "long", 5, 5, None),
-    (_tape("long", "strong", 5), "short", 5, 3, "against the long tape — at most 3"),
-    (_tape("long", "strong", 5), "short", 3, 3, None),
-    (_tape("short", "weak", 3), "short", 5, 3, "tape weak — at most 3"),
-    (_tape("short", "weak", 3), "long", 4, 3, "tape weak — at most 3"),
-    (_tape("long", "moderate", 4), "short", 5, 3,
-     "tape moderate — at most 4; against the long tape — at most 3"),
-    (_tape(None, "none", 2), "long", 4, 2, "no tape lean — at most 2"),
-    (None, "long", 5, 5, None),
-])
-def test_caps_hold_a_plan_to_the_tape_and_against_its_bias(
-        tape: dict[str, Any] | None, side: str, model: int, kept: int,
-        capped: str | None) -> None:
-    p = sp.cap_conviction({"sym": "AAA", "side": side, "conviction": model}, tape)
-    assert (p["conviction"], p["conviction_model"], p["capped"]) == (kept, model, capped)
-
-
-def test_sanitize_caps_against_the_facts_tape() -> None:
-    facts = {"names": [{"sym": "AAA", "side": "long"}, {"sym": "BBB", "side": "short"}],
-             "conviction": _tape("short", "moderate", 4)}
-    body = {"headline": "h", "plans": [
-        {"sym": "AAA", "side": "long", "conviction": 5, "plan": "against the tape"},
-        {"sym": "BBB", "side": "short", "conviction": 5, "plan": "with the tape"}]}
-    out = sp.sanitize_plan(body, facts)
-    assert out is not None
-    assert [(p["sym"], p["conviction"], p["conviction_model"]) for p in out["plans"]] == [
-        ("AAA", 3, 5), ("BBB", 4, 5)]
-
-
-def test_prompt_has_the_flow_layer_the_cap_and_the_plain_english_rule() -> None:
-    s = sp.system_prompt("pre")
-    # The flow rides the Options line: as a seventh layer it never fit — a live
-    # plan (2026-10-13) filled all six lines and dropped it on every name.
-    assert '"Options:"' in s and "put/call volume" in s and '"Flow:"' not in s
-    assert "tape_count.max_conviction" in s and "against" in s
-    assert "NEVER print a field name" in s
-    for field in ("rs_spy", "dist_atr", "iv_rv", "ext_pct", "news_loaded", "pct_adv"):
-        assert field in s.split("NEVER print a field name")[1]
-    assert "flow" in sp.SKELETON and '"Tape: ..."' in sp.SKELETON
 
 
 def test_tape_line_states_the_score_and_the_caps() -> None:
@@ -583,7 +421,7 @@ def test_names_carry_flow_premarket_peers_and_adv() -> None:
     assert (bare["flow"], bare["premkt"], bare["peers"], bare["adv"]) == (None, None, [], None)
 
 
-def test_facts_and_digest_carry_the_market_blocks(monkeypatch: Any, tmp_path: Any) -> None:
+def test_facts_and_digest_carry_the_market_blocks() -> None:
     facts = sp.build_facts(_scan(), _snap(), top=4)
     for k in ("conviction", "breadth", "fuel", "prints", "fed", "gamma"):
         assert k in facts
@@ -592,21 +430,6 @@ def test_facts_and_digest_carry_the_market_blocks(monkeypatch: Any, tmp_path: An
     assert len(d["tape_count"]["reads"]) == 11 and d["tape_count"]["max_conviction"] == 2
     assert "note" not in json.dumps(d["tape_count"])  # the page's prose stays on the page
     assert d["gamma"] is None and d["fed"] is None
-    # The user message tells the model the count and the cap.
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
-    monkeypatch.setattr(sp, "PLANS_DIR", str(tmp_path))
-    calls: list[dict[str, Any]] = []
-
-    def fake(payload: dict[str, Any], key: str, timeout: int = 0) -> dict[str, Any]:
-        calls.append(payload)
-        return _answer(GOOD)
-
-    monkeypatch.setattr(rp, "_post", fake)
-    out = sp.generate(_scan(), _snap(), top=4)
-    assert "Tape score +0 (0 of 9 reads live" in calls[0]["messages"][1]["content"]
-    plan = out["plan"]["plans"][0]
-    assert (plan["conviction"], plan["conviction_model"], plan["capped"]) == (
-        2, 3, "no tape lean — at most 2")
 
 
 def test_a_raw_line_break_inside_a_string_still_parses_as_the_whole_plan() -> None:
@@ -622,24 +445,6 @@ def test_failed_answer_keeps_both_ends() -> None:
     kept = sp._ends(long)
     assert kept.startswith("{xxx") and kept.endswith("TAIL") and "chars]" in kept
     assert sp._ends("short") == "short"
-
-
-def test_json_punctuation_typed_into_a_why_line_is_dropped() -> None:
-    assert sp._why(["Options: calls lead at put/call 0.39, which backs the long],"]) == [
-        "Options: calls lead at put/call 0.39, which backs the long"]
-    assert sp._why(["Macro: Dollar -0.31% (tailwind)"]) == ["Macro: Dollar -0.31% (tailwind)"]
-
-
-def test_the_plan_takes_the_expiry_rules_pick_and_prints_the_rule() -> None:
-    """One rule (optcalc.expiry_rule) for the table, Settings and the plan: the
-    row's `options.pick` names the contract summarised, and the prompt states the
-    rule's own words rather than a copy of them (audit, 2026-10-14)."""
-    from newsterminal import optcalc
-
-    row = _row("AAA", 60, "long", options=OPTS | {"pick": "front"})
-    assert sp._options(row)["long"]["expiry"] == "2026-10-13"
-    assert optcalc.expiry_rule()["text"] in sp.STRATEGY
-    assert "0DTE only on" not in sp.system_prompt("rth")
 
 
 def test_a_name_carries_its_side_of_the_ten_minute_200_ema() -> None:

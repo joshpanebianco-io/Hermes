@@ -783,15 +783,24 @@ def _pats(sym: str, names: tuple[str, ...]) -> _Pats:
 
 def lead(title: str, sym: str = "", names: Sequence[str] = ()) -> list[str]:
     """The headline's lead, in pieces: up to its first joiner, past a label that names
-    nobody, split at its commas. Pure."""
-    t = (title or "").strip()
+    nobody, split at its commas. Pure.
+
+    KEPT PER (headline, name) (the performance sweep, 2026-11-20): asked for every story
+    under every row on every read, it was 4.7% of the collector's CPU under load. A new
+    list each call, as before, from the kept pieces."""
+    return list(_lead(title or "", sym, tuple(names)))
+
+
+@lru_cache(maxsize=16384)
+def _lead(title: str, sym: str, names: tuple[str, ...]) -> tuple[str, ...]:
+    t = title.strip()
     m = _LABEL.match(t)
-    if m and not any(p.search(m.group(1)) for p in _pats(sym, tuple(names)).any if sym):
+    if m and not any(p.search(m.group(1)) for p in _pats(sym, names).any if sym):
         t = t[m.end():]
     j = _JOIN.search(t)
     if j:
         t = t[:j.start()]
-    return [pc for pc in _PIECE.split(t) if pc.strip()]
+    return tuple(pc for pc in _PIECE.split(t) if pc.strip())
 
 
 def about(title: str, sym: str, names: Sequence[str] = ()) -> bool | None:

@@ -25,11 +25,14 @@ export function etHm(sec: number | null | undefined): string {
   return sec == null ? "—" : FMT.format(new Date(sec * 1000));
 }
 
+/** One formatter, kept: `toLocaleDateString` with options built one per card per redraw. */
+const WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" });
+
 /** "Fri" from "2026-11-13". */
 export function weekday(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(`${iso}T12:00:00Z`);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+  return Number.isNaN(d.getTime()) ? iso : WEEKDAY.format(d);
 }
 
 const signed = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`;

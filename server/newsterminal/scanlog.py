@@ -114,7 +114,6 @@ HELD_CAP = 5.0
 #: the price is 0.0005c on a $20 stock and 0.025c on a $1,000 one, under any tick.
 TOUCH_REL = 2.5e-7
 KEEP_DAYS = 30
-LIVE_LAG_SEC = 2 * BAR_SEC  # found within two bars of the bar closing
 #: A day whose last bars never arrived settles anyway this long after its
 #: close, on what there is — the bars will not get any better.
 SETTLE_ANYWAY_SEC = 3600

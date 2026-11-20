@@ -46,7 +46,6 @@ from .holidays import close_time, is_trading_day
 ET = ZoneInfo("America/New_York")
 
 RTH_OPEN = time(9, 30)
-RTH_CLOSE = time(16, 0)
 GLOBEX_OPEN = time(18, 0)
 
 # GOLD'S DAY IS NOT THE EQUITY DAY (review, 2026-10-14). The COMEX day session

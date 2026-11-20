@@ -313,12 +313,6 @@ export function hermesSlimParts(
   return { fixed, live };
 }
 
-/** The two parts as one message. */
-export function hermesSlimSystem(ctx: SlimContext, sym: string | null, extras: { summary: string; tools: string[]; prefs?: ReaderPrefs | null }): string {
-  const p = hermesSlimParts(ctx, sym, extras);
-  return p.fixed + p.live;
-}
-
 const NUM = /\d+(?:[.,]\d+)*/g;
 
 /** A numeral as a comparable key: "30,707" = "30707", "1.10" = "1.1". */

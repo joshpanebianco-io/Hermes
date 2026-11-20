@@ -51,7 +51,8 @@ def _serve(monkeypatch: pytest.MonkeyPatch, body: bytes | None) -> None:
         if body is None:
             raise urllib.error.URLError("down")
         return _Resp(body)
-    monkeypatch.setattr(http_mod.urllib.request, "urlopen", fake)
+    # fetch opens through http.urlopen, the shared TLS context's (2026-11-20).
+    monkeypatch.setattr(http_mod, "urlopen", fake)
 
 
 def test_a_dead_upstream_serves_the_copy_and_says_it_is_stale(

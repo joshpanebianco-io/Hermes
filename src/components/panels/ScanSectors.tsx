@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { BreakoutChip, BreakoutsPayload } from "@/types/scanner";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { BreakoutChip, BreakoutRow, BreakoutsPayload } from "@/types/scanner";
 import type { HeatCard, HeatIndustry, HeatSpan, HeatmapPayload } from "@/types/dashboard";
 import { HelmLoader, PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import { TickerLogo } from "@/components/ui/TickerLogo";
@@ -28,6 +28,7 @@ import {
 } from "@/components/panels/ScanWide";
 import { cn } from "@/lib/cn";
 import { keepRead, lastRead } from "@/lib/lastRead";
+import { shareRows } from "@/lib/share";
 import { OUTSIDE_DAY_TITLE } from "@/lib/outsideDay";
 import { compact, dir, num, pct } from "@/lib/format";
 import { heatMax, heatStyle } from "@/lib/heat";
@@ -127,13 +128,29 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     try {
       const r = await fetch(`/api/scanner/breakouts?${q}`, { cache: "no-store" });
       const d = (await r.json()) as BreakoutsPayload;
-      if (mine === seq.current) setTable(keepRead("sectors.table", d));
+      // Each unchanged row stays the one on screen, so its memoised row skips the redraw
+      // (lib/share shareRows): a third of the 200 change in a five-second poll.
+      if (mine === seq.current) {
+        setTable((was) => keepRead("sectors.table", was?.ok && d.ok ? { ...d, rows: shareRows(was.rows, d.rows, (r) => r.sym) } : d));
+      }
     } catch {
       /* the last read stays on screen */
     }
   }, [q]);
   // A star elsewhere, or the Undo on the unpin notice, changed the list: read it again.
   usePinsChanged(loadTable);
+
+  // Stable, so the memoised cards and rows below skip a poll that changed nothing of theirs:
+  // the cards were redrawn by every five-second read of the table (the sweep, 2026-11-20).
+  const pick = useCallback((k: string) => setSel((was) => (was === k ? "" : k)), [setSel]);
+  const loadRef = useRef(loadTable);
+  loadRef.current = loadTable;
+  const trackRef = useRef(onTrackChanged);
+  trackRef.current = onTrackChanged;
+  const onTracked = useCallback(() => {
+    void loadRef.current();
+    trackRef.current?.();
+  }, []);
 
   // Quick while anything is moving: the screener's hours, and the funds' own pre-market
   // from 04:00, a quarter hour before the screener reaches it.
@@ -184,7 +201,6 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
   // The industries' medians are the stocks' own: the pre-market's once the screener has
   // reached it, so their SPY is the pre-market's then too.
   const spyInd = heat.counts_pre && span === "day" ? (heat.spy.ext ?? null) : heat.spy[span];
-  const pick = (k: string) => setSel(sel === k ? "" : k);
   const cardOf = (k: string) => heat.cards.find((c) => c.key === k) ?? null;
   const selCard = sel && !sel.startsWith("i:") ? cardOf(sel) : null;
   const parent = selCard ? (selCard.kind === "sector" ? selCard.key : selCard.parent) : null;
@@ -210,6 +226,10 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
   );
   const summary = [capWord(cap), vol ? volWord(vol) : null].filter(Boolean).join(" · ");
   const inds = [...heat.industries].sort((a, b) => (b[span].median ?? -Infinity) - (a[span].median ?? -Infinity));
+  // Once a render rather than once a card (they were inside the map), and plain numbers, so
+  // the memoised industry cards compare them as equal from one table read to the next.
+  const indTint = heatMax(inds.map((i) => i[span].median));
+  const indBar = heatMax(inds.map((i) => (i[span].median == null || spyInd == null ? null : (i[span].median as number) - spyInd)));
 
   return (
     <div className="qt-sheet min-h-0 flex-1 overflow-auto">
@@ -255,7 +275,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
         ) : (
           <div className={GRID}>
             {inds.map((g) => (
-              <IndustryCard key={g.key} g={g} span={span} spy={spyInd} tint={heatMax(inds.map((i) => i[span].median))} barMax={heatMax(inds.map((i) => (i[span].median == null || spyInd == null ? null : (i[span].median as number) - spyInd)))} on={sel === `i:${g.key}`} onPick={() => pick(`i:${g.key}`)} />
+              <IndustryCard key={g.key} g={g} span={span} spy={spyInd} tint={indTint} barMax={indBar} on={sel === `i:${g.key}`} onPick={pick} />
             ))}
           </div>
         )}
@@ -383,65 +403,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
           </thead>
           <tbody>
             {table.rows.map((r) => (
-              <tr key={r.sym} {...rowProps(r.sym, ticker === r.sym)}>
-                <td className={cn(TD, "sticky left-0 z-10", ticker === r.sym ? "bg-surface-2" : "bg-bg group-hover:bg-surface")}>
-                  <div className="flex items-center gap-1.5 whitespace-nowrap">
-                    <span className={cn("w-[10px] text-[11px]", r.pd_state === "above" ? "text-call-fig" : r.pd_state === "below" ? "text-put-fig" : "text-ink-3")}>
-                      {r.pd_state === "above" ? "▲" : r.pd_state === "below" ? "▼" : "·"}
-                    </span>
-                    <TickerLogo sym={r.sym} size={18} />
-                    <div className="min-w-0 leading-[1.25]">
-                      <p className="text-[13px]">
-                        <span className="font-semibold text-ink">{r.sym}</span>
-                        <span className="fig ml-1.5 text-[12px] text-ink-2">{num(r.last)}</span>
-                        <span className={cn("fig ml-1.5 text-[12px]", dir(r.chg))}>{pctText(r.chg)}</span>
-                      </p>
-                      <p className="text-[10px] text-ink-3">
-                        {[r.inside ? "Inside day" : null, r.catalyst ? "News" : null, (r.stage ?? 0) >= 2 ? `Day ${r.stage}` : null, r.live ? "Live" : null].filter(Boolean).join(" · ") || " "}
-                      </p>
-                    </div>
-                  </div>
-                </td>
-                {has("themes") && (
-                  <td className={TD}>
-                    <ThemeChips keys={r.themes} />
-                  </td>
-                )}
-                {has("momentum") && (
-                  <>
-                    <td className={cn(TD, "fig text-right text-[12px]", (r.rvol ?? 0) >= 3 ? "text-ink" : "text-ink-2")}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</td>
-                    <td className={cn(TD, "fig text-right text-[12px]", dir(r.chg))}>{pctText(r.chg)}</td>
-                    <td className={cn(TD, "fig text-right text-[12px]", dir(r.gap))}>{pctText(r.gap)}</td>
-                    <td className={cn(TD, "fig text-right text-[12px]", dir(r.week))}>{pctText(r.week, 1)}</td>
-                  </>
-                )}
-                {has("volume") && (
-                  <>
-                    <td className={cn(TD, "fig text-right text-[12px] text-ink-2")}>{r.vol != null ? compact(r.vol) : "—"}</td>
-                    <td className={cn(TD, "fig text-right text-[12px]", (r.adv_pct ?? 0) >= 200 ? "text-ink" : "text-ink-3")}>{r.adv_pct != null ? `${Math.round(r.adv_pct)}%` : "—"}</td>
-                  </>
-                )}
-                {has("levels") && (
-                  <>
-                    <td className={TD}><RangeCell state={r.pm_state} hi={r.pmh} lo={r.pml} hiName="PMH" loName="PML" /></td>
-                    <td className={TD}><RangeCell state={r.pd_state} hi={r.pdh} lo={r.pdl} hiName="PDH" loName="PDL" /></td>
-                  </>
-                )}
-                {has("news") && (
-                  <td className={TD}>{r.catalyst ? <CatalystCell c={r.catalyst} width={380} /> : <span className="text-[11.5px] text-ink-3">No news</span>}</td>
-                )}
-                {has("chart") && <td className={TD}><Spark pts={r.spark} base={r.spark_ref} /></td>}
-                <td className={cn(TD, "text-right")}>
-                  <TrackButton
-                    sym={r.sym}
-                    tracked={r.tracked}
-                    onDone={() => {
-                      void loadTable();
-                      onTrackChanged?.();
-                    }}
-                  />
-                </td>
-              </tr>
+              <SectorRow key={r.sym} r={r} cols={cols} selected={ticker === r.sym} onTracked={onTracked} />
             ))}
           </tbody>
         </table>
@@ -449,6 +411,65 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
     </div>
   );
 }
+
+/** One stock of the table, redrawn only when its row, the columns or the selection change. */
+const SectorRow = memo(function SectorRow({ r, cols, selected, onTracked }: { r: BreakoutRow; cols: readonly Col[]; selected: boolean; onTracked: () => void }) {
+  const has = (c: Col) => cols.includes(c);
+  return (
+    <tr {...rowProps(r.sym, selected)}>
+      <td className={cn(TD, "sticky left-0 z-10", selected ? "bg-surface-2" : "bg-bg group-hover:bg-surface")}>
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
+          <span className={cn("w-[10px] text-[11px]", r.pd_state === "above" ? "text-call-fig" : r.pd_state === "below" ? "text-put-fig" : "text-ink-3")}>
+            {r.pd_state === "above" ? "▲" : r.pd_state === "below" ? "▼" : "·"}
+          </span>
+          <TickerLogo sym={r.sym} size={18} />
+          <div className="min-w-0 leading-[1.25]">
+            <p className="text-[13px]">
+              <span className="font-semibold text-ink">{r.sym}</span>
+              <span className="fig ml-1.5 text-[12px] text-ink-2">{num(r.last)}</span>
+              <span className={cn("fig ml-1.5 text-[12px]", dir(r.chg))}>{pctText(r.chg)}</span>
+            </p>
+            <p className="text-[10px] text-ink-3">
+              {[r.inside ? "Inside day" : null, r.catalyst ? "News" : null, (r.stage ?? 0) >= 2 ? `Day ${r.stage}` : null, r.live ? "Live" : null].filter(Boolean).join(" · ") || " "}
+            </p>
+          </div>
+        </div>
+      </td>
+      {has("themes") && (
+        <td className={TD}>
+          <ThemeChips keys={r.themes} />
+        </td>
+      )}
+      {has("momentum") && (
+        <>
+          <td className={cn(TD, "fig text-right text-[12px]", (r.rvol ?? 0) >= 3 ? "text-ink" : "text-ink-2")}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</td>
+          <td className={cn(TD, "fig text-right text-[12px]", dir(r.chg))}>{pctText(r.chg)}</td>
+          <td className={cn(TD, "fig text-right text-[12px]", dir(r.gap))}>{pctText(r.gap)}</td>
+          <td className={cn(TD, "fig text-right text-[12px]", dir(r.week))}>{pctText(r.week, 1)}</td>
+        </>
+      )}
+      {has("volume") && (
+        <>
+          <td className={cn(TD, "fig text-right text-[12px] text-ink-2")}>{r.vol != null ? compact(r.vol) : "—"}</td>
+          <td className={cn(TD, "fig text-right text-[12px]", (r.adv_pct ?? 0) >= 200 ? "text-ink" : "text-ink-3")}>{r.adv_pct != null ? `${Math.round(r.adv_pct)}%` : "—"}</td>
+        </>
+      )}
+      {has("levels") && (
+        <>
+          <td className={TD}><RangeCell state={r.pm_state} hi={r.pmh} lo={r.pml} hiName="PMH" loName="PML" /></td>
+          <td className={TD}><RangeCell state={r.pd_state} hi={r.pdh} lo={r.pdl} hiName="PDH" loName="PDL" /></td>
+        </>
+      )}
+      {has("news") && (
+        <td className={TD}>{r.catalyst ? <CatalystCell c={r.catalyst} width={380} /> : <span className="text-[11.5px] text-ink-3">No news</span>}</td>
+      )}
+      {has("chart") && <td className={TD}><Spark pts={r.spark} base={r.spark_ref} /></td>}
+      <td className={cn(TD, "text-right")}>
+        <TrackButton sym={r.sym} tracked={r.tracked} onDone={onTracked} />
+      </td>
+    </tr>
+  );
+});
 
 /* -------------------------------------------------------------------------- */
 /* The cards                                                                   */
@@ -494,7 +515,14 @@ function SpyBar({ v, max }: { v: number | null; max: number }) {
   );
 }
 
-function Card({ c, rank, span, pctOf, rsOf, noteOf, countsWord, tint, barMax, on, onPick }: CardBase & { c: HeatCard; rank?: number; barMax: number }) {
+/*
+ * THE CARDS AND ROWS ARE MEMOISED (the performance sweep, 2026-11-20). Every five-second
+ * read of the table redrew the 86 cards above it, which change only with the funds' own
+ * read, and all 200 rows, of which about a third had moved: 2.4 s of a frozen page in
+ * every 20 under `next dev`. Their props are stable now (`pick`, `onTracked`, the rows
+ * shared by lib/share shareRows), so each redraws only when what it shows changed.
+ */
+const Card = memo(function Card({ c, rank, span, pctOf, rsOf, noteOf, countsWord, tint, barMax, on, onPick }: CardBase & { c: HeatCard; rank?: number; barMax: number }) {
   const p = pctOf(c);
   const note = noteOf(c);
   return (
@@ -513,9 +541,9 @@ function Card({ c, rank, span, pctOf, rsOf, noteOf, countsWord, tint, barMax, on
       <SpyBar v={rsOf(c)} max={barMax} />
     </button>
   );
-}
+});
 
-function TopMover({ c, span, word, pctOf, rsOf, noteOf, countsWord, tint, on, onPick }: CardBase & { c: HeatCard; word: string }) {
+const TopMover = memo(function TopMover({ c, span, word, pctOf, rsOf, noteOf, countsWord, tint, on, onPick }: CardBase & { c: HeatCard; word: string }) {
   const p = pctOf(c);
   const note = noteOf(c);
   const read = c[span];
@@ -546,13 +574,13 @@ function TopMover({ c, span, word, pctOf, rsOf, noteOf, countsWord, tint, on, on
       </p>
     </button>
   );
-}
+});
 
-function IndustryCard({ g, span, spy, tint, barMax, on, onPick }: { g: HeatIndustry; span: HeatSpan; spy: number | null; tint: number; barMax: number; on: boolean; onPick: () => void }) {
+const IndustryCard = memo(function IndustryCard({ g, span, spy, tint, barMax, on, onPick }: { g: HeatIndustry; span: HeatSpan; spy: number | null; tint: number; barMax: number; on: boolean; onPick: (key: string) => void }) {
   const read = g[span];
   const lead = read.leaders[0];
   return (
-    <button type="button" aria-pressed={on} onClick={onPick} style={heatStyle(read.median, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")} title={`${g.names} stocks at $2bn+${g.sector ? ` · ${g.sector}` : ""}`}>
+    <button type="button" aria-pressed={on} onClick={() => onPick(`i:${g.key}`)} style={heatStyle(read.median, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")} title={`${g.names} stocks at $2bn+${g.sector ? ` · ${g.sector}` : ""}`}>
       <p className="truncate text-[12.5px] font-semibold text-ink">{g.label}</p>
       <p className="mt-0.5 flex items-baseline justify-between gap-2">
         <span className={cn("fig text-[13px]", dir(read.median))}>{pct(read.median)}</span>
@@ -562,7 +590,7 @@ function IndustryCard({ g, span, spy, tint, barMax, on, onPick }: { g: HeatIndus
       <SpyBar v={read.median == null || spy == null ? null : read.median - spy} max={barMax} />
     </button>
   );
-}
+});
 
 function Tally({ value, hue, glyph, word, sub }: { value: number; hue: string; glyph: string; word: string; sub: string }) {
   return (

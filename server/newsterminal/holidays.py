@@ -106,11 +106,6 @@ def holiday_name(d: date) -> str | None:
     return HOLIDAYS.get(d)
 
 
-def is_holiday(d: date) -> bool:
-    """A weekday the NYSE does not open. Weekends are not holidays — they are weekends."""
-    return d in HOLIDAYS
-
-
 def is_trading_day(d: date) -> bool:
     return d.weekday() < 5 and d not in HOLIDAYS
 
@@ -329,20 +324,10 @@ JP_HOLIDAYS: dict[date, str] = {
 JP_COVERED = (date(2026, 1, 1), date(2027, 1, 1))
 
 
-def _in(span: tuple[date, date], d: date) -> bool:
-    return span[0] <= d <= span[1]
-
-
 def bond_closed(d: date) -> str | None:
     """The holiday the cash Treasury market is shut for on `d`, or None: a day it
     trades, or one past the end of the table."""
     return BOND_HOLIDAYS.get(d)
-
-
-def bond_early(d: date) -> time | None:
-    """When the bond market closes early on `d`, or None."""
-    e = BOND_EARLY.get(d)
-    return e[0] if e else None
 
 
 def _hm(t: time) -> str:

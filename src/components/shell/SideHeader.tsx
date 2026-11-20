@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import type { Clock } from "@/types/terminal";
 import { nyClock } from "@/components/shell/Header";
 import { Glyph } from "@/components/panels/ScanWide";
@@ -26,19 +24,6 @@ import { useNow } from "@/lib/useNow";
  * pages' Watchlist): the band it used to sit in is not drawn in this interface.
  */
 export const SHELL_ACTIONS_ID = "shell-actions";
-
-/**
- * A page's own button, drawn in the header's slot. The header is mounted before any
- * page, so the slot is there by the time a page's first effect looks for it; in an
- * interface with no such header there is no slot and nothing is drawn.
- */
-export function ShellAction({ children }: { children: React.ReactNode }) {
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    setSlot(document.getElementById(SHELL_ACTIONS_ID));
-  }, []);
-  return slot ? createPortal(children, slot) : null;
-}
 
 export function SideHeader({
   title,

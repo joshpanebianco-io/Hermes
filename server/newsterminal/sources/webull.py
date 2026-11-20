@@ -69,7 +69,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import CACHE_DIR
-from ..http import SourceStatus
+from ..http import SourceStatus, urlopen
 
 try:
     import websockets
@@ -77,14 +77,12 @@ try:
 except ImportError:  # pragma: no cover — requirements.txt has it
     websockets = None  # type: ignore[assignment]
 
-REGION = "au"
 API_HOST = "api.webull.com.au"
 MQTT_URL = "wss://data-api.webull.com.au:8883/mqtt"
 API_VERSION = "v3"
 SIGN_ALGORITHM = "HMAC-SHA256"
 SIGN_VERSION = "1.0"
 CATEGORY_STOCK = "US_STOCK"
-CATEGORY_ETF = "US_ETF"
 TOKEN_FILE = os.path.join(CACHE_DIR, "webull_token.json")
 #: The client tag Webull's logs see: no name, no address, nothing of the owner's.
 USER_AGENT = "hermes-terminal/1.0"
@@ -182,7 +180,8 @@ def call(method: str, path: str, *, query: dict[str, Any] | None = None, body: A
     req = urllib.request.Request(url, data=text.encode("utf-8") if text is not None else None,
                                  headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        # The shared TLS context (http.urlopen): not the certificate store again per call.
+        with urlopen(req, timeout=timeout) as r:
             raw = r.read()
             status = r.status
     except urllib.error.HTTPError as e:
@@ -463,18 +462,6 @@ def parse_tick(payload: bytes) -> dict[str, Any] | None:
         return None
     return {"sym": str(sym), "price": price, "at": at, "volume": _num(m.get(4)),
             "side": m.get(5), "session": basic.get(4)}
-
-
-def parse_snapshot(payload: bytes) -> dict[str, Any] | None:
-    """A "snapshot" message → {sym, price, at, ext_price, ext_at, session}, or None. Pure."""
-    m = decode(payload)
-    basic = _basic(m)
-    sym = basic.get(1)
-    if not sym:
-        return None
-    return {"sym": str(sym), "price": _num(m.get(3)), "at": _epoch(m.get(2)),
-            "ext_price": _num(m.get(12)), "ext_at": _epoch(m.get(11)),
-            "volume": _num(m.get(8)), "session": basic.get(4)}
 
 
 # MQTT 3.1.1, the four packets a subscriber needs. A broker's PUBLISH can come at QoS 1,

@@ -697,9 +697,14 @@ _EARN = re.compile(
 _FILING = re.compile(r"\b8-K\b|\b10-[QK]\b|SEC filing|files? for|offering|prospectus", re.I)
 
 
+@lru_cache(maxsize=32768)
 def news_kind(title: str) -> str:
     """rating | earnings | filing | news, from the headline alone. Pure.
-    An upgrade is a rating only in an analyst's sentence (catalysts.analyst_upgrade)."""
+    An upgrade is a rating only in an analyst's sentence (catalysts.analyst_upgrade).
+
+    KEPT PER HEADLINE (the performance sweep, 2026-11-20): four patterns a headline, under
+    every name, on every read of the Scanner, the Dashboard and the slide-out, was 4.7% of
+    the collector's CPU under load. Pure on the title, so a kept answer is the answer."""
     if _RATING.search(title) or analyst_upgrade(title):
         return "rating"
     if _EARN.search(title):
@@ -717,6 +722,37 @@ def names_of(aliases: Sequence[str], own: Sequence[str] = ()) -> list[str]:
     """The words a headline calls the company: the table's or the filer's short
     name, and the own feed's looser first word. Pure."""
     return [*aliases, *(n for n in own if n and n not in aliases)]
+
+
+#: (sym, aliases) → (the wire list matched, its stories that name the name). See _wire_hits.
+_Stories = list[dict[str, Any]]
+_WIRE_HITS: dict[tuple[str, tuple[str, ...]], tuple[_Stories, _Stories]] = {}
+
+
+def _wire_hits(sym: str, aliases: tuple[str, ...],
+               wire: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The wire's stories that name `sym`: its cashtag, or a name of it on a word boundary.
+
+    KEPT UNTIL THE WIRE CHANGES (the performance sweep, 2026-11-20). Every headline on the
+    wire was searched with every name's patterns on every read of the Scanner, the
+    Dashboard and the slide-out: 9% of the collector's CPU under load. The collector
+    replaces the wire's list when it reads the wire (every two minutes), never edits it,
+    so the same list object holds the same headlines, and the answer is kept against it
+    (`is`, not an id that a new list could reuse). The stories are new dicts that
+    news_for only reads."""
+    key = (sym, aliases)
+    held = _WIRE_HITS.get(key)
+    if held is not None and held[0] is wire:
+        return held[1]
+    pats = [re.compile(rf"\${re.escape(sym)}\b")]
+    pats += [re.compile(rf"\b{re.escape(a)}\b") for a in aliases if a]
+    hits = [{"title": w.get("title") or "", "url": w.get("url") or "",
+             "publisher": w.get("publisher") or "", "ts": w.get("ts"), "utc": w.get("utc")}
+            for w in wire if any(p.search(w.get("title") or "") for p in pats)]
+    if len(_WIRE_HITS) > 4096:
+        _WIRE_HITS.clear()
+    _WIRE_HITS[key] = (wire, hits)
+    return hits
 
 
 def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
@@ -752,16 +788,9 @@ def news_for(sym: str, own: list[dict[str, Any]], wire: list[dict[str, Any]],
     cutoff = now_ts - NEWS_DAYS * 86400
     if isinstance(reach_min, (int, float)):
         cutoff = min(cutoff, now_ts - reach_min * 60.0)
-    pats = [re.compile(rf"\${re.escape(sym)}\b")]
-    pats += [re.compile(rf"\b{re.escape(a)}\b") for a in aliases if a]
     called = names or names_of(aliases)
     items: list[dict[str, Any]] = [dict(x) for x in own]
-    for w in wire:
-        title = w.get("title") or ""
-        if any(p.search(title) for p in pats):
-            items.append({"title": title, "url": w.get("url") or "",
-                          "publisher": w.get("publisher") or "", "ts": w.get("ts"),
-                          "utc": w.get("utc")})
+    items += _wire_hits(sym, tuple(aliases), wire)
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for it in sorted(items, key=lambda x: -(x.get("ts") or 0)):

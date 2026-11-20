@@ -415,7 +415,8 @@ def test_fetch_posts_when_given_a_body(monkeypatch: Any, tmp_path: Any) -> None:
         seen["ct"] = req.get_header("Content-type")
         return Reply()
 
-    monkeypatch.setattr(http_mod.urllib.request, "urlopen", urlopen)
+    # fetch opens through http.urlopen, the shared TLS context's (2026-11-20).
+    monkeypatch.setattr(http_mod, "urlopen", urlopen)
     monkeypatch.setattr(http_mod, "CACHE", http_mod.DiskCache(str(tmp_path)))
     r = http_mod.fetch("https://example.invalid/scan", key="t_post", ttl_sec=0.0, data=b'{"a":1}',
                        headers={"Content-Type": "application/json"})

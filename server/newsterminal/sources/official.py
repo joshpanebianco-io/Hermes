@@ -56,7 +56,7 @@ import io
 import json
 import re
 import time
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -171,13 +171,6 @@ AGENCY: dict[str, str] = {
     **{k: "BEA" for k in ("gdp", "income_mm", "spending_mm", "trade")},
     **{k: "EIA" for k in ("crude", "gasoline", "distillate", "gas_storage")},
 }
-#: A possessive for the sentence on the page: "the BLS's", "the Census Bureau's".
-AGENCY_NAME: dict[str, str] = {
-    "BLS": "the Bureau of Labor Statistics", "Census": "the Census Bureau",
-    "BEA": "the Bureau of Economic Analysis", "EIA": "the Energy Information Administration",
-}
-
-
 def key_of(event: Any) -> str | None:
     """The figure a US calendar row is the print of, or None. Pure."""
     name = " ".join(str(event or "").split())
@@ -725,8 +718,3 @@ def collect(rows: list[dict[str, Any]] | None = None,
     if figures:
         _held = figures
     return figures, st
-
-
-def window(today: date) -> tuple[date, date]:
-    """The days a figure can belong to a row on the calendar held (for the tests)."""
-    return today - timedelta(days=1), today + timedelta(days=7)

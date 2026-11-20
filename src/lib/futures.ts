@@ -10,7 +10,7 @@
  * the profile, gamma and the ladder, under the book's own.
  */
 
-import type { CalendarRow, Quote } from "@/types/terminal";
+import type { CalendarRow } from "@/types/terminal";
 
 export const FUT_BOOKS = ["NQ", "ES", "GC", "SIL", "CL"] as const;
 export type FutBook = (typeof FUT_BOOKS)[number];
@@ -25,17 +25,6 @@ export const FUT_NAME: Record<FutBook, string> = {
 
 /** The board's key for a book's quote. */
 export const QUOTE_KEY: Record<FutBook, string> = { NQ: "NQ", ES: "ES", GC: "GC", SIL: "SILVER", CL: "WTI" };
-
-/**
- * A board row that is a futures contract, and not the fund beside it.
- *
- * WHY (owner, 2026-11-12, of the Futures overview: "where it has the book we should
- * only have the futures"). The board's "core" group was built for one screen that
- * showed both desks, so each contract is followed by its ETF: NQ then QQQ, ES then
- * SPY, GC then GLD, RTY then IWM. On the Futures tab the funds are another page's.
- * The feed's own symbol says which a row is: every contract's ends "=F" (NQ=F).
- */
-export const isFuture = (q: Pick<Quote, "symbol">): boolean => q.symbol?.endsWith("=F") ?? false;
 
 /**
  * The books the driver board scores: all five since 2026-11-15, when silver and crude

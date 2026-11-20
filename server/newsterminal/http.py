@@ -18,6 +18,7 @@ import gzip
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +29,29 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .config import CACHE_DIR, UA
+
+
+def _tls_context() -> ssl.SSLContext:
+    """The context `http.client` builds for a connection given none, built once."""
+    ctx = ssl.create_default_context()
+    ctx.set_alpn_protocols(["http/1.1"])
+    if ctx.post_handshake_auth is not None:
+        ctx.post_handshake_auth = True
+    return ctx
+
+
+#: ONE TLS CONTEXT FOR EVERY REQUEST (the performance sweep, 2026-11-20). `urlopen` with
+#: no context had `http.client` build a fresh default one per connection, and on Windows
+#: that reloads the system certificate store each time: 3.5% of the collector's CPU in a
+#: profile under load (seen first on 2026-11-11). The same context, the same settings
+#: (`_tls_context`), made once; an SSLContext is safe to share between threads, and the
+#: opener is the default one with this context in its HTTPS handler.
+_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_tls_context()))
+
+
+def urlopen(req: urllib.request.Request | str, timeout: float) -> Any:
+    """`urllib.request.urlopen` on the shared TLS context."""
+    return _OPENER.open(req, timeout=timeout)
 
 
 @dataclass
@@ -202,7 +226,7 @@ def fetch(
     )
     code: int | None = None
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen(req, timeout=timeout) as r:
             raw = r.read()
             body = _decompress(raw, (r.headers.get("Content-Encoding") or "").lower())
             status = getattr(r, "status", 200)

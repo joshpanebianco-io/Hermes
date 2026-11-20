@@ -9,10 +9,27 @@
  * judgement a person makes without thinking about it.
  */
 
+/**
+ * ONE FORMATTER PER DECIMAL COUNT (the performance sweep, 2026-11-20). `toLocaleString`
+ * with options builds an Intl.NumberFormat on every call, and `num` is called for every
+ * figure on every redraw: 117 ms of the Sectors page's 1.2 s of work in 12 s. The spec
+ * defines that call as `new Intl.NumberFormat(locale, options).format(v)`, so a kept
+ * formatter prints the same text.
+ */
+const FIXED = new Map<number, Intl.NumberFormat>();
+function fixed(d: number): Intl.NumberFormat {
+  let f = FIXED.get(d);
+  if (!f) {
+    f = new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+    FIXED.set(d, f);
+  }
+  return f;
+}
+
 export function num(v: number | null | undefined, dp?: number): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   const d = dp ?? autoDp(v);
-  return v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  return fixed(d).format(v);
 }
 
 /** Decimals appropriate to the magnitude. */
@@ -36,7 +53,7 @@ export function pct(v: number | null | undefined, dp = 2): string {
 export function signed(v: number | null | undefined, dp?: number): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   const d = dp ?? autoDp(v);
-  const text = v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const text = fixed(d).format(v);
   // A small negative that rounds away prints "-0", and with a sign in front of
   // it "+-0" on a level sitting on the price. It is flat, so it reads flat.
   if (/^-?0(\.0+)?$/.test(text)) return text.replace("-", "");

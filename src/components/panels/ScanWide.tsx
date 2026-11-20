@@ -9,7 +9,7 @@ import { scoreText } from "@/lib/bias";
 import { compact, num } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { segItem } from "@/lib/seg";
-import { closeTicker, openTicker, togglePin, trackName } from "@/lib/ticker";
+import { openTicker, togglePin, trackName } from "@/lib/ticker";
 
 /**
  * What the wide tables share: Breakouts, Extended hours and Day 2/3 read the same
@@ -809,38 +809,6 @@ export function rowProps(sym: string, on: boolean): React.HTMLAttributes<HTMLTab
   };
 }
 
-/** The ticker cell of a wide table: the side, the logo, the symbol and price under it. */
-export function NameCell({
-  sym,
-  side,
-  price,
-  cap,
-  sub,
-}: {
-  sym: string;
-  side: "long" | "short" | null;
-  price?: string;
-  cap?: number | null;
-  sub?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-1.5 whitespace-nowrap">
-      <span className={cn("w-[10px] text-[11px]", side === "long" ? "text-call-fig" : side === "short" ? "text-put-fig" : "text-ink-3")}>
-        {side === "long" ? "▲" : side === "short" ? "▼" : "·"}
-      </span>
-      <TickerLogo sym={sym} size={18} />
-      <div className="min-w-0 leading-[1.25]">
-        <p className="text-[13px] font-semibold text-ink">{sym}</p>
-        <p className="fig text-[11px] text-ink-3">
-          {price}
-          {cap !== undefined && <span>{price ? " · " : ""}{capShort(cap)}</span>}
-          {sub}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 /** Track: onto today's list, where it is read live and signals fire. Rolls off with the day. */
 export function TrackButton({ sym, tracked, onDone }: { sym: string; tracked: boolean; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -936,20 +904,8 @@ export function StagePips({ stage }: { stage: number }) {
   );
 }
 
-/** The volume cell's two lines. */
-export function VolCell({ vol, adv }: { vol: number | null; adv: number | null }) {
-  return (
-    <div className="fig text-right leading-[1.3]">
-      <p className="text-[12px] text-ink-2">{vol != null ? compact(vol) : "—"}</p>
-      <p className={cn("text-[10.5px]", (adv ?? 0) >= 200 ? "text-ink" : "text-ink-3")}>{adv != null ? `${Math.round(adv)}% ADV` : ""}</p>
-    </div>
-  );
-}
-
 /** How old the read is and that it is delayed, said once per page. */
 export function delayedLine(ageMin: number | null, delayed: number, liveCount?: number): string {
   const age = ageMin == null ? "" : ageMin < 1 ? " · read just now" : ` · read ${Math.round(ageMin)}m ago`;
   return `${delayed} min delayed${liveCount ? ` · ${liveCount} on the live stream` : ""}${age}`;
 }
-
-export { closeTicker };

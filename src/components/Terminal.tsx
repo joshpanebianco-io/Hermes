@@ -150,10 +150,6 @@ export function Terminal({
   // The Hermes tab's chats and its stream, owned here so an answer being
   // written survives a tab switch (useHermes).
   const hermes = useHermes();
-  // The stocks desk's market context, polled here rather than by the board
-  // that reads it (Macro: prints, the Fed path, peers, cross-asset), so leaving
-  // the page and coming back does not start it over.
-  const market = useMarket(initialMarket);
 
   /*
    * NO CHASSIS LIGHT (owner, 2026-11-13: "get rid of the ... frame light and lets
@@ -171,6 +167,10 @@ export function Terminal({
   // opens the default; the report is a view of Futures and Stocks now.
   const [storedTab, setStoredTab] = usePersisted<Tab>("tab", initialTab, oneOf(...TAB_KEYS));
   const [tab, setTabState] = useState<Tab>(initialTab);
+  // The stocks desk's market context, held here rather than by the board that reads it
+  // (Macro: prints, the Fed path, peers, cross-asset), so leaving the page and coming back
+  // does not start it over. Polled while Macro is open, kept while it is not (useMarket).
+  const market = useMarket(initialMarket, tab === "terminal");
   /*
    * INFERRING THIS FROM THE TAB ITSELF IS WHAT BROKE IT. `initialTab !== "terminal"`
    * reads a pin off the destination, which cannot tell `?tab=terminal` — an

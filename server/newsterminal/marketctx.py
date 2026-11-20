@@ -60,15 +60,11 @@ ET = ZoneInfo("America/New_York")
 
 # ---- the votes' thresholds ------------------------------------------------------
 GAP_FLAT = 0.15  # % — a pre-market gap smaller than this casts no level vote
-VIX_FLAT = 1.5  # % — VIX's day change inside this is no vote (scanscore's VIX_FLAT)
 CURVE_CALM = 0.90  # VIX ÷ VIX3M below this: steep contango, a calm tape → long
 CURVE_STRESS = 1.00  # at or above: flat-to-inverted, protection bid now → short
 SECTOR_SHARE = 0.6  # share of the reporting sectors moving one way for a vote (7 of 11)
 SECTOR_MIN = 6  # fewer sectors reporting than this: no vote
 RSP_EDGE = 0.25  # pp — RSP minus SPY beyond this: the average stock leads / lags the index
-HYG_FLAT = 0.15  # % — high yield's day move inside this is no vote
-YIELD_BP = 4.0  # bp — the 10Y's day change at or beyond this votes (rising → short)
-DXY_FLAT = 0.25  # % — the dollar's day move at or beyond this votes (rising → short)
 RVOL_HEAVY = 1.2  # index RVOL at or above this: the move is on real volume
 RVOL_LIGHT = 0.8  # below this: thin
 INDEX_FLAT = 0.15  # % — SPY moved less than this: no direction for volume to confirm
@@ -86,8 +82,7 @@ FUEL_VOL = {"SPY": "VIX", "QQQ": "VXN"}  # the index vol each ETF's implied move
 PRINT_SCORE = 3
 # THE READ IS RELEASES' NOW (hot / cold / inline, and what each means per
 # book): the futures Calendar and the driver board read the same prints, so
-# the rule is stated once, there. Re-exported for the tests that pin it.
-INLINE_REL = releases.INLINE_REL
+# the rule is stated once, there.
 read_of = releases.read_of
 
 INDEX_ETFS = ("SPY", "QQQ", "IWM")
@@ -347,22 +342,6 @@ def _equal_weight(sectors: list[dict[str, Any]], session: str) -> dict[str, Any]
     if v != "neutral":
         note += f", counts {round(s * 100)}%"
     return _vote(key, label, value, v, note, strength=s)
-
-
-def _pct_vote(quotes: list[dict[str, Any]], session: str, now: datetime, *, key: str,
-              label: str, sym: str, flat: float, rising: str,
-              notes: tuple[str, str], td: date | None = None) -> dict[str, Any]:
-    """A vote on one quote's day change: `rising` is the side a rise votes for."""
-    q, pct, why = _quote(quotes, sym, "pct", session, now, td)
-    if pct is None or q is None:
-        return _vote(key, label, "—", "neutral", why or f"no {sym}", live=False)
-    last = _num(q.get("last"))
-    value = f"{sym} " + (f"{last:.2f} " if last is not None else "") + _signed(pct, 2, "%")
-    if abs(pct) < flat:
-        return _vote(key, label, value, "neutral", f"inside ±{flat}% — no read")
-    up = pct > 0
-    falling = "short" if rising == "long" else "long"
-    return _vote(key, label, value, rising if up else falling, notes[0] if up else notes[1])
 
 
 #: A 10-year note future's price move in basis points of yield, near enough.

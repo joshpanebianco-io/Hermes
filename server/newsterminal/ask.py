@@ -37,7 +37,6 @@ STOCKS_TABS = frozenset({"dashboard", "market", "tape", "scanner", "sectors", "p
 #: The Hermes tab — the assistant on a page of its own, reading BOTH desks
 #: (owner, 2026-10-30: "complete access to the hermesx context of everything").
 HERMES_TAB = "hermes"
-TABS = FUTURES_TABS | STOCKS_TABS | {"settings", HERMES_TAB}
 
 #: Headlines and filings kept on the selected row — enough to name the
 #: catalyst, not a reading list.

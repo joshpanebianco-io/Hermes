@@ -59,6 +59,7 @@ import urllib.parse
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from typing import Any, NamedTuple
 
 from .. import scan
@@ -535,7 +536,16 @@ def mentions(title: str, sym: str, names: list[str]) -> bool:
     YAHOO'S PER-TICKER FEED IS NOT PER-TICKER. NVDA's carried Motley Fool pieces
     on Eli Lilly and Generac (observed 2026-10-13) — anything that tags the
     symbol anywhere. The title has to name the ticker or the company.
+
+    KEPT PER (headline, name) (the performance sweep, 2026-11-20): a pattern built per
+    name per headline on every read, past what `re` keeps compiled, was 3.3% of the
+    collector's CPU under load.
     """
+    return _mentions(title, sym, tuple(names))
+
+
+@lru_cache(maxsize=32768)
+def _mentions(title: str, sym: str, names: tuple[str, ...]) -> bool:
     if re.search(rf"\b{re.escape(sym)}\b", title):
         return True
     return any(re.search(rf"\b{re.escape(n)}\b", title, re.I) for n in names if n)

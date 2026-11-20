@@ -244,13 +244,6 @@ def features(session: date, prev: dict[str, Any] | None, prev_prev: dict[str, An
 Cond = tuple[str, Callable[[dict[str, Any]], bool | None]]
 
 
-def vix_band(v: float | None) -> str | None:
-    if v is None:
-        return None
-    return ("grind" if v < 13 else "quiet" if v < 18 else "heavy" if v < 20
-            else "elevated" if v < 28 else "stressed" if v < 35 else "panic")
-
-
 def _is(key: str, value: Any) -> Callable[[dict[str, Any]], bool | None]:
     return lambda f: (f.get(key) == value) if f.get(key) is not None else None
 

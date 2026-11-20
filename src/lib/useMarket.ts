@@ -21,8 +21,15 @@ export interface MarketFeed {
   failed: string | null;
 }
 
-/** `initial`: the server's read when the page opened on Macro (page.tsx), so the board is its first frame. */
-export function useMarket(initial: MarketCtx | null = null): MarketFeed {
+/**
+ * `initial`: the server's read when the page opened on Macro (page.tsx), so the board is its first frame.
+ *
+ * `active`: polled only while Macro is open (the performance sweep, 2026-11-20). Every page
+ * asked for it every twenty seconds and only Macro's board reads it; each answer costs the
+ * collector a whole Scanner build (about 170 ms). The last answer is kept while the page is
+ * away, so Macro opens on it, and it is read again the moment Macro opens.
+ */
+export function useMarket(initial: MarketCtx | null = null, active = true): MarketFeed {
   const [ctx, setCtx] = useState<MarketCtx | null>(initial);
   const [failed, setFailed] = useState<string | null>(null);
   const seq = useRef(0);
@@ -41,6 +48,7 @@ export function useMarket(initial: MarketCtx | null = null): MarketFeed {
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     void load();
     const id = setInterval(load, POLL_SEC * 1000);
     return () => {
@@ -48,7 +56,7 @@ export function useMarket(initial: MarketCtx | null = null): MarketFeed {
       // Anything still in flight belongs to a tab that has gone.
       seq.current += 1;
     };
-  }, [load]);
+  }, [load, active]);
 
   return { ctx, failed };
 }

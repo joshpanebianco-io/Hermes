@@ -67,13 +67,6 @@ export function readerZone(now: number | null): { tz: string; zone: string } | n
   return { tz, zone };
 }
 
-/** "11:00–15:00" — a box's window on the reader's clock. */
-export function localWindow(opensUtc: string, closesUtc: string, tz: string): string {
-  const fmt = (iso: string) =>
-    new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: tz });
-  return `${fmt(opensUtc)}–${fmt(closesUtc)}`;
-}
-
 /**
  * The reader's own wall clock and zone, for the header — the owner trades New
  * York from Australia, and "09:30 ET" is a sum they should not have to do at

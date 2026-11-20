@@ -339,14 +339,41 @@ def expiry_rule() -> dict[str, Any]:
 # ---------------------------------------------------------------- the readings
 
 
-def atm_pair(opts: list[Opt], spot: float) -> tuple[Opt, Opt] | None:
-    """The call and put at the strike nearest spot that both have a price. Pure."""
+#: id(opts) → (opts, priced calls by strike, priced puts by strike, strikes with both).
+_ATM: dict[int, tuple[list[Opt], dict[float, Opt], dict[float, Opt], list[float]]] = {}
+
+
+def _atm_index(opts: list[Opt]) -> tuple[dict[float, Opt], dict[float, Opt], list[float]]:
+    """An expiry's priced calls and puts by strike, and the strikes that have both.
+
+    BUILT ONCE PER CHAIN (the performance sweep, 2026-11-20). `atm_pair` is asked several
+    times a row on every read (the expected moves, the term structure, liquidity, the
+    report's move, the live move), and built these two maps each time: with the rest of
+    the options maths it was 16% of the collector's CPU under load. A chain's contract
+    lists are made when it is parsed and never changed after (a refresh is a new Chain),
+    so the index is kept against the list itself (`is`)."""
+    if not opts:
+        return {}, {}, []  # a caller's stand-in `[]`: nothing to keep, nothing kept
+    held = _ATM.get(id(opts))
+    if held is not None and held[0] is opts:
+        return held[1], held[2], held[3]
     calls = {o.strike: o for o in opts if o.right == "C" and o.mid is not None}
     puts = {o.strike: o for o in opts if o.right == "P" and o.mid is not None}
-    both = sorted(set(calls) & set(puts), key=lambda k: (abs(k - spot), k))
+    both = sorted(set(calls) & set(puts))
+    if len(_ATM) > 4096:
+        _ATM.clear()
+    _ATM[id(opts)] = (opts, calls, puts, both)
+    return calls, puts, both
+
+
+def atm_pair(opts: list[Opt], spot: float) -> tuple[Opt, Opt] | None:
+    """The call and put at the strike nearest spot that both have a price. Pure."""
+    calls, puts, both = _atm_index(opts)
     if not both:
         return None
-    k = both[0]
+    # The nearest strike, the lower on a tie: what sorting every strike and taking the
+    # first did.
+    k = min(both, key=lambda s: (abs(s - spot), s))
     return calls[k], puts[k]
 
 

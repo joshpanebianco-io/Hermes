@@ -53,14 +53,6 @@ def entry_of(n: dict[str, Any]) -> float | None:
     return float(p) if isinstance(p, (int, float)) else None
 
 
-def forming_levels(n: dict[str, Any]) -> list[float]:
-    """The pre-market high and low while they are still forming. Pure."""
-    if not n.get("pm_forming"):
-        return []
-    lv = n.get("levels") or {}
-    return [float(v) for k in ("pmh", "pml") if isinstance(v := lv.get(k), (int, float))]
-
-
 def target_candidates(n: dict[str, Any], keep: int = 3) -> list[dict[str, Any]]:
     """The first targets a plan may take, nearest first (module docstring). Pure."""
     sign, e = sign_of(n), entry_of(n)

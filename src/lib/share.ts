@@ -35,6 +35,27 @@ export function shareUnchanged<T extends object>(prev: T, next: T): T {
   return out as T;
 }
 
+/**
+ * A table's rows with each row the one ON SCREEN wherever the new poll says the same
+ * thing about that name, matched by `key` and not by position (a table re-sorts as it
+ * moves). A memoised row then skips a poll that changed nothing it shows.
+ *
+ * WHY (the performance sweep, 2026-11-20): the Sectors table asked for its 200 rows every
+ * five seconds and redrew every one, half a second of a frozen page under `next dev`,
+ * while about a third of them had changed. Pure, and safe to run twice in an updater for
+ * the reason `shareUnchanged` gives.
+ */
+export function shareRows<T extends object>(prev: readonly T[] | null | undefined, next: T[], key: (r: T) => string): T[] {
+  if (!prev?.length) return next;
+  const was = new Map(prev.map((r) => [key(r), r]));
+  return next.map((r) => {
+    const o = was.get(key(r));
+    if (o === undefined || o === r) return r;
+    const s = serial(r);
+    return s !== null && s === serial(o) ? o : r;
+  });
+}
+
 /** A block's serialisation, kept with the block and dropped with it. */
 const SERIAL = new WeakMap<object, string | null>();
 

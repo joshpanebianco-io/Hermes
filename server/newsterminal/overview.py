@@ -55,9 +55,6 @@ STORY_N = 12
 TODAY_N = 8
 NEWS_MAX = 5
 
-STAGES = ("Reading the indexes against their levels", "Reading the sectors and the macro tape",
-          "Picking the stories that matter", "Writing the overview")
-
 
 # --------------------------------------------------------------------------
 # The facts.

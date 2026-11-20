@@ -428,12 +428,6 @@ def session_state(
     }
 
 
-# Which desks make an overnight phase. New York is deliberately absent: its
-# sub-phases are finer than open/closed and come from the ET ladder instead.
-_ASIA = {"sydney", "tokyo", "hongkong", "shanghai"}
-_EUROPE = {"london", "frankfurt"}
-
-
 def _phase(et: datetime) -> dict[str, str]:
     """
     The one-line answer to "where are we in the day".

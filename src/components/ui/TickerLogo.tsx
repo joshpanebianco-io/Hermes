@@ -20,7 +20,11 @@ const fileKey = (sym: string) => sym.toUpperCase().replace(/\./g, "-");
 
 export const logoSrc = (sym: string): string | null => {
   const k = fileKey(sym);
-  return LOGO_TICKERS.has(k) ? `/logos/${k}.webp` : null;
+  if (LOGO_TICKERS.has(k)) return `/logos/${k}.webp`;
+  // A share class with no file of its own wears its company's (2026-11-20): BIO.B is
+  // Bio-Rad's as BIO is, HEI.A HEICO's, LEN.B Lennar's, PBR.A Petrobras's.
+  const base = k.includes("-") ? k.slice(0, k.indexOf("-")) : null;
+  return base && LOGO_TICKERS.has(base) ? `/logos/${base}.webp` : null;
 };
 
 export function TickerLogo({ sym, size = 16, className }: { sym: string; size?: number; className?: string }) {

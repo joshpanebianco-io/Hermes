@@ -26,17 +26,57 @@ import { localClock, readerClock } from "@/lib/clock";
  */
 
 /**
- * The New York clock, beside the session. `short` is the stacked form's: under the
- * "Overlap" label "closes in 5h 45m" read as the overlap ending, so it names New York.
+ * The New York clock, under the session. It names New York: under "Overlap", "closes in
+ * 5h 45m" alone read as the overlap ending.
  */
-export function nyClock(clock: Clock | null): { label: string; short: string; value: string; title: string } | null {
+export function nyClock(clock: Clock | null): { label: string; value: string; title: string } | null {
   const ny = clock?.sessions.find((x) => x.key === "newyork");
   if (!ny) return null;
-  if (ny.holiday) return { label: "NYSE", short: "NYSE", value: "Holiday", title: `${ny.holiday} — US markets are closed` };
+  if (ny.holiday) return { label: "NYSE", value: "Holiday", title: `${ny.holiday} — US markets are closed` };
   return ny.open
-    ? { label: "NY closes in", short: "NY close", value: inMin(ny.next_min), title: "Time to the 16:00 ET close" }
-    : { label: "NY opens in", short: "NY open", value: inMin(ny.next_min), title: "Time to the next 09:30 ET open" };
+    ? { label: "NY closes in", value: inMin(ny.next_min), title: "Time to the 16:00 ET close" }
+    : { label: "NY opens in", value: inMin(ny.next_min), title: "Time to the next 09:30 ET open" };
 }
+
+/**
+ * The session dot's three states: New York's cash session (green, the live hue), futures
+ * alone (amber, the hue the Futures card marks the box trading now with), shut (grey,
+ * still): the 17:00 ET maintenance hour and a holiday.
+ */
+type SessionTone = "cash" | "futures" | "shut";
+const SESSION_DOT: Record<SessionTone, string> = { cash: "text-call", futures: "text-desk-policy", shut: "text-ink-4" };
+
+function sessionTone(key: string): SessionTone {
+  if (key === "open" || key === "midday" || key === "close") return "cash";
+  if (key === "halt" || key === "holiday") return "shut";
+  return "futures";
+}
+
+/**
+ * The session's name in the card, in Title Case as the chips are ("US pre-market" reads
+ * "Pre-Market": the US is the card's whole subject). London's last hour into the
+ * pre-market is "Pre-Market" too (owner, 2026-11-20: "i like 'Pre-Market' better than
+ * overlap maybe we can ahve both and one in brakcets?"): London still being in is what
+ * the "(Overlap)" after it says.
+ */
+const SMALL_WORDS = new Set(["and", "into", "the", "of", "to"]);
+const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+
+function sessionWord(key: string, label: string): string {
+  if (key === "handover") return "Pre-Market";
+  return label
+    .replace(/^US /, "")
+    .split(" ")
+    .map((w, i) => (i > 0 && SMALL_WORDS.has(w) ? w : w.split("-").map(cap).join("-")))
+    .join(" ");
+}
+
+const LINK_WORD = { live: "Live", lost: "Stale", offline: "Offline" } as const;
+const LINK_TITLE = {
+  live: "Live · click to refresh now",
+  lost: "The last refresh failed: the figures on screen are from the last one that landed. Click to try again",
+  offline: "The collector is offline. Click to try again",
+} as const;
 
 export function Header({
   clock: rawClock,
@@ -120,107 +160,80 @@ export function Header({
             time, session, feed state and the refresh are all "is this thing
             current" answers, and they read better as one cluster than with
             the clock orphaned beside the tabs. */}
-        <div className="ml-auto flex shrink-0 items-center gap-2 md:col-start-3 md:ml-0 md:justify-self-end qt:gap-3 roomy:gap-2">
-          {/* A narrow Quiet window stacks it, about 250px narrower than the one line:
-              the session over the New York countdown, New York's time over the
-              reader's. In the overlap "Overlap" takes the session's line, and the phase
-              it replaces is on the hover. A wide window and Classic keep the one line. */}
-          {clock && (
-            <>
-              <div
-                className="hidden shrink-0 flex-col justify-center gap-1 qt:flex roomy:hidden"
-                title={[clock.phase.label, ny?.title].filter(Boolean).join(" · ")}
-              >
-                <span className={cn("qt-cap text-[10.5px]", clock.overlap ? "text-flip-fig" : "text-ink-3")}>
-                  {clock.overlap ? "Overlap" : clock.phase.label}
-                </span>
-                {ny && (
-                  <span className="fig text-[12.5px] leading-none text-ink-2">
-                    {ny.short} <span className="text-ink">{ny.value}</span>
+        {/*
+          * ONE CARD, THREE PARTS (owner, 2026-11-20: "can we touch this section up a bit ... i
+          * dont have anything in mind myself", then of the flip mock: "ye ai like that"). It
+          * was six loose things on one line in four kinds of type, "US pre-market · NY opens
+          * in 1h 36m 07:54:42 ET 22:54 AEST ● LIVE [Refresh]", with a stacked form for a
+          * narrower window. Now, at every width: the session with New York's countdown under
+          * it; New York's time with yours under it; the refresh, wearing the live dot. Stale
+          * and Offline still say so in words, on the button.
+          */}
+        <div className="ml-auto flex shrink-0 items-center md:col-start-3 md:ml-0 md:justify-self-end">
+          <div className="flex h-[46px] items-stretch rounded-[12px] border border-ring-2 bg-surface-2/55 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--ink)_6%,transparent)]">
+            {clock && (
+              <>
+                <div
+                  className="flex flex-col justify-center gap-[5px] px-4"
+                  title={[clock.phase.label, clock.phase.note, clock.overlap ? "Overlap: London and New York both open" : null, ny?.title].filter(Boolean).join(" · ")}
+                >
+                  <span className="flex items-center gap-[7px] text-[12.5px] leading-none font-semibold whitespace-nowrap text-ink">
+                    <span
+                      aria-hidden
+                      className={cn("h-[7px] w-[7px] shrink-0 rounded-full bg-current", SESSION_DOT[sessionTone(clock.phase.key)], sessionTone(clock.phase.key) !== "shut" && "live-dot shadow-[0_0_8px_currentColor]")}
+                    />
+                    {sessionWord(clock.phase.key, clock.phase.label)}
+                    {/* The session first, the overlap after it in its own hue (owner, 2026-11-20). */}
+                    {clock.overlap && <span className="font-normal text-flip-fig">(Overlap)</span>}
                   </span>
-                )}
-              </div>
-              <div className="hidden shrink-0 flex-col justify-center gap-1 qt:flex roomy:hidden">
-                <span className="flex items-baseline gap-1">
-                  <span className="fig text-[14.5px] leading-none text-ink">{clock.et_time}</span>
-                  <span className="eyebrow text-[9px]">ET</span>
-                </span>
-                {local && (
-                  <span className="flex items-baseline gap-1" title={`Your local time (${local.zone})`}>
-                    <span className="fig text-[11px] leading-none text-ink-3">{local.time}</span>
-                    <span className="eyebrow text-[9px]">{local.zone}</span>
+                  {ny && (
+                    <span className="pl-[14px] text-[11.5px] leading-none whitespace-nowrap text-ink-3">
+                      {ny.label} <span className="fig text-ink-2">{ny.value}</span>
+                    </span>
+                  )}
+                </div>
+                <span aria-hidden className="my-[9px] w-px bg-ring-2" />
+                <div className="flex flex-col justify-center gap-[5px] px-4">
+                  <span className="flex items-baseline gap-1.5 leading-none" title="New York's time">
+                    <span className="fig text-[16px] tracking-[0.01em] text-ink">
+                      {clock.et_time.slice(0, 5)}
+                      <span className="text-ink-3">{clock.et_time.slice(5)}</span>
+                    </span>
+                    <span className="eyebrow text-[9px]">ET</span>
                   </span>
-                )}
-              </div>
-              <div className="mr-2 flex items-baseline gap-2 qt:hidden roomy:flex">
-                {clock.overlap && (
-                  <span className="fig qt-pill rounded bg-flip/15 px-1.5 py-px text-[9px] text-flip [--pill-hue:var(--flip-fig)] qt:text-[10.5px]">
-                    OVERLAP
-                  </span>
-                )}
-                <span className="hidden text-[10.5px] text-ink-3 sm:inline qt:text-[12px]">{clock.phase.label}</span>
-                {ny && (
-                  <span className="mr-2 hidden text-[10.5px] whitespace-nowrap text-ink-3 sm:inline qt:text-[12px]" title={ny.title}>
-                    <span aria-hidden className="mr-2 text-ink-4">·</span>
-                    {ny.label} <span className="fig text-ink">{ny.value}</span>
-                  </span>
-                )}
-                <span className="fig text-[13px] text-ink qt:text-[15px]">{clock.et_time}</span>
-                <span className="eyebrow text-[9px]">ET</span>
-                {local && (
-                  <span className="fig ml-1 text-[11px] text-ink-3 qt:text-[12.5px]" title={`Your local time (${local.zone})`}>
-                    {local.time} <span className="eyebrow text-[9px]">{local.zone}</span>
-                  </span>
-                )}
-              </div>
-            </>
-          )}
-          <span
-            className={cn(
-              "h-[7px] w-[7px] rounded-full",
-              link === "live" ? "bg-call live-dot" : link === "lost" ? "bg-warn" : "bg-err",
+                  {local && (
+                    <span className="flex items-baseline gap-1.5 leading-none" title={`Your local time (${local.zone})`}>
+                      <span className="fig text-[11.5px] text-ink-3">{local.time}</span>
+                      <span className="eyebrow text-[9px] text-ink-4">{local.zone}</span>
+                    </span>
+                  )}
+                </div>
+                <span aria-hidden className="my-[9px] w-px bg-ring-2" />
+              </>
             )}
-            title={link === "live" ? "Live" : undefined}
-            aria-hidden
-          />
-          {/* Compact: quiet when all is well, loud when it is not, on the dot alone
-              while the feed is live, in words the moment it is stale or offline. */}
-          <span
-            className={cn(
-              "fig text-[9.5px] uppercase qt:text-[10.5px]",
-              link === "lost" ? "text-warn" : "text-ink-3",
-              link === "live" && "qt:sr-only roomy:not-sr-only",
-            )}
-            title={link === "lost" ? "The last refresh failed — the figures on screen are from the last one that landed" : undefined}
-          >
-            {link === "live" ? "Live" : link === "lost" ? "Stale" : "Offline"}
-          </span>
-          {/* Compact: an icon. Quiet's button is in the same key as Generate — one
-              button family across the chrome. */}
-          <button
-            type="button"
-            onClick={onRefresh}
-            aria-label="Refresh"
-            title="Refresh"
-            className="fig hit rounded border border-ring px-2 py-px text-[9.5px] text-ink-3 uppercase hover:text-ink-2 qt:inline-flex qt:h-[28px] qt:w-[28px] qt:items-center qt:justify-center qt:rounded-[4px] qt:border-ring-2 qt:p-0 qt:hover:border-ink-4 qt:hover:bg-surface-2 roomy:ml-1 roomy:w-auto roomy:px-3 roomy:font-sans roomy:text-[12.5px] roomy:font-semibold roomy:tracking-normal roomy:normal-case"
-          >
-            <span className="qt:hidden roomy:inline">Refresh</span>
-            <svg
-              aria-hidden
-              className="hidden qt:block roomy:hidden"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <button
+              type="button"
+              onClick={onRefresh}
+              aria-label={`Refresh · ${LINK_WORD[link]}`}
+              title={LINK_TITLE[link]}
+              className={cn(
+                "hit flex items-center justify-center gap-2 text-ink-3 hover:bg-surface-3/60 hover:text-ink-2",
+                clock ? "rounded-r-[11px]" : "rounded-[11px]",
+                link === "live" ? "w-[46px]" : "px-3.5",
+              )}
             >
-              <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />
-              <path d="M21 3v5h-5" />
-            </svg>
-          </button>
+              <svg aria-hidden width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+              {/* Nothing while all is well: the icon alone (owner, 2026-11-20: "i dont like the
+                  dot next to the refresh button icon"). In words, in their hue, the moment it
+                  is not. */}
+              {link !== "live" && (
+                <span className={cn("fig text-[10.5px] uppercase", link === "lost" ? "text-warn" : "text-err")}>{LINK_WORD[link]}</span>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </header>

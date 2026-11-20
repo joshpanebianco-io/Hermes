@@ -158,6 +158,10 @@ EXT_ATR = 2.5
 #: carries the official open in one downloaded this long after 09:30.
 DAILY_SETTLE_SEC = 15 * 60.0
 DAILY_OPEN_SEC = 60.0
+#: An official or daily close further than this from its day's last 5-minute bar is on
+#: another share basis (a split's first day, `close_of`): the auction moves a close by
+#: cents, and the mildest common split, 5-for-4, moves it 20%.
+SPLIT_GUARD = 0.10
 
 # The script's daily ATR is seeded at the first day it has bars for: four
 # thousand 10-minute extended bars (calc_bars_count) is ~41 sessions back. The
@@ -1033,10 +1037,21 @@ def technicals(bars5: list[Bar], daily: list[DayBar], clock: Clock,
     daily_close = {d.day: d.close for d in daily}
     today_cal = clock.now.astimezone(ET).date()
 
+    # A CLOSE ON ANOTHER BASIS IS NOT THE DAY'S CLOSE (owner, 2026-11-20: "why does it say
+    # sndk -88.12%?"). On a split's first day Yahoo's bars come split-adjusted while the
+    # chart's `regularMarketPrice` (`official`) is still the old share's close: SanDisk's
+    # 8-for-1 left PDH and PDL at $105.85 and $94.16 and the previous close at $755.16, so
+    # the pre-market read -88.12% where it was down 5%, its day +678%, and it led the
+    # list as the top mover. The official close and the bar it settles differ by cents
+    # (the auction), so one further from its day's last bar than SPLIT_GUARD is on another
+    # basis, and the bar's close, which is on today's, stands.
+    def same_basis(v: float, bar_close: float) -> bool:
+        return bar_close > 0 and abs(v / bar_close - 1.0) <= SPLIT_GUARD
+
     def close_of(d: date, fallback: float) -> float:
-        if official is not None and official[0] == d:
+        if official is not None and official[0] == d and same_basis(official[1], fallback):
             return official[1]
-        if d < today_cal and d in daily_close:
+        if d < today_cal and d in daily_close and same_basis(daily_close[d], fallback):
             return daily_close[d]
         return fallback
 

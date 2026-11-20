@@ -742,6 +742,23 @@ def test_previous_close_prefers_the_official_print() -> None:
     assert (t.pdh, t.pdl) == (105, 99)
 
 
+def test_a_close_on_the_old_share_basis_is_not_the_previous_close() -> None:
+    """SNDK, Fri 20 Nov 2026, the first day of an 8-for-1 split: Yahoo's bars came
+    split-adjusted and the chart's official close was still Thursday's $755.16, so the
+    page read -88.12% before the bell where the stock was down 5%."""
+    thu = day_bars(date(2026, 11, 19), [(96.0, 105.845, 94.1588, 94.395)])  # 755.16 / 8
+    pm = day_bars(date(2026, 11, 20), [], pm=[(90.0, 91.0, 89.0, 89.70)])
+    clk = scan.clock_at(et(2026, 11, 20, 9, 25))
+    old = [scan.DayBar(date(2026, 11, 19), 768.0, 846.76, 753.27, 755.16, 0)]  # not yet split
+    t = scan.technicals(thu + pm, old, clk, official=(date(2026, 11, 19), 755.16))
+    assert t.pdc == pytest.approx(94.395)
+    assert t.ext_pct == pytest.approx((89.70 / 94.395 - 1) * 100)  # about -5%, not -88%
+    # Once the daily copy is split too, its close stands again: a cent off the bar's.
+    new = [scan.DayBar(date(2026, 11, 19), 96.0, 105.845, 94.1588, 94.40, 0)]
+    assert scan.technicals(thu + pm, new, clk, official=(date(2026, 11, 19), 755.16)).pdc \
+        == pytest.approx(94.40)
+
+
 # --- the previous day's range and the open are the official day's (audit, 2026-11-11) ----
 
 

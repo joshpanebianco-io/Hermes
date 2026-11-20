@@ -11,9 +11,11 @@ THE BUDGET, MEASURED (2026-10-13). Cboe serves the documents gzipped: SPY's
 13,474 contracts are 0.77 MB on the wire (6.0 MB once inflated), QQQ 0.74 MB,
 IWM 0.32 MB, a single name 0.18-0.30 MB. During the stocks session window
 (08:00-16:15 ET on a trading day) the three daily-expiry ETFs refresh every
-five minutes and single names every ten; outside it, hourly. With the default
-21-name list that is ~144 requests and ~45 MB an hour in session, ~21 requests
-an hour otherwise — one request at most every ten seconds, never a burst.
+five minutes and single names every fifteen (ten until 2026-11-20); outside it,
+hourly. With a 40-name list that is ~184 requests an hour in session, ~40 an
+hour otherwise — one request at most every twenty seconds, never a burst, so
+that with GEXYGEN on the same host this machine stays under Cboe's ceiling
+(`TICK_SEC`).
 The data is fifteen minutes delayed at source, so faster would buy nothing.
 
 NOTHING RAW IS KEPT. A chain is parsed straight down to what the desk reads
@@ -46,21 +48,42 @@ from ..config import BROWSER_UA, CACHE_DIR
 from ..holidays import is_trading_day, prev_trading_day
 from ..http import CACHE, SourceStatus, fetch, json_body
 
-CBOE = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
+#: CBOE'S NEW HOST, AS GEXYGEN READS IT (owner, 2026-11-20: "i think just for now do what
+#: gexygen does"). Cboe moved the delayed quotes from cdn.cboe.com to cdn-api.cboe.com
+#: (GEXYGEN found it on 2026-09-24). The old host answered a 307 to the new one, which
+#: from about 14:00 ET on 19 Nov 2026 refused this collector with a Cloudflare 403 for
+#: every name: the chains froze on that afternoon's. GEXYGEN kept reading because it sends
+#: the headers Cboe's own page does (`CBOE_HEADERS`), so this sends the same. It is the
+#: owner's stopgap, not an arrangement with Cboe: Webull's official option snapshots
+#: (OPRA, a paid OpenAPI subscription) are the way off it, and if Cboe closes this too
+#: the chains say stale, as they did.
+CBOE = "https://cdn-api.cboe.com/api/global/delayed_quotes/options/{sym}.json"
+CBOE_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Encoding": "gzip",
+    "Referer": "https://www.cboe.com/",
+    "Origin": "https://www.cboe.com",
+}
 IV_HISTORY_FILE = os.path.join(CACHE_DIR, "iv_history.jsonl")
 OI_LOG_FILE = os.path.join(CACHE_DIR, "oi_log.jsonl")
 #: Sessions of per-contract open interest kept, and of chain volumes.
 OI_KEEP_DAYS = 2
 VOL_KEEP_DAYS = 40
 
-TICK_SEC = 10.0
+#: THREE A MINUTE AT MOST, SINGLE NAMES EVERY FIFTEEN (2026-11-20). GEXYGEN reads the same
+#: host from this machine at six to nine a minute, and Cboe's 429 ceiling is about twelve
+#: to fifteen a minute from one address (GEXYGEN measured it, 2026-08-14): one a ten-second
+#: tick here, with forty names, was another four to six, enough together to throttle the
+#: gamma levels. The chains are fifteen minutes delayed at source and Cboe rewrites them
+#: every six to thirty, so fifteen minutes a single name buys back little.
+TICK_SEC = 20.0
 #: Refresh cadence in the stocks session window, and outside it.
 ETF_SEC = 300.0
-SINGLE_SEC = 600.0
+SINGLE_SEC = 900.0
 IDLE_SEC = 3600.0
 SESSION_FROM = 8 * 60
 SESSION_TO = 16 * 60 + 15
-#: One chain per tick — the budget above is one request per ten seconds at most.
+#: One chain per tick — the budget above is one request per twenty seconds at most.
 MAX_PER_TICK = 1
 #: A name whose copy is older than this many cadences counts as stale.
 STALE_CADENCES = 2.0
@@ -336,8 +359,7 @@ class OptionsStore:
         `keep_after` is the name's next report date, whose expiry the chain
         keeps beyond the nearest four (optcalc.parse_chain)."""
         r = fetch(CBOE.format(sym=sym), key=f"cboe_{sym}", ttl_sec=0, ua=BROWSER_UA, timeout=40,
-                  headers={"Accept": "application/json", "Accept-Encoding": "gzip"},
-                  stale_ok=False, store=False, validate=json_body)
+                  headers=CBOE_HEADERS, stale_ok=False, store=False, validate=json_body)
         t = now.timestamp()
         if not r.ok or r.body is None:
             n = self.fails.get(sym, (0, 0.0))[0] + 1

@@ -541,6 +541,45 @@ CONNACK_WHY = {1: "bad protocol version", 2: "invalid client id", 3: "empty app 
                100: "unknown", 101: "internal error", 102: "already authenticated",
                103: "authentication failed", 104: "invalid app key",
                105: "five connections already open on this key"}
+#: 101 IS WEBULL'S OWN FAILURE, NOT ANYTHING SENT TO IT. Seen on Friday 20 Nov 2026 from
+#: 20:52 ET, the app's start (the feed's first weekend, the market shut since 20:00): every
+#: sign-in answered 101 in a tenth of a second, while the key, the token and the snapshots
+#: all answered over HTTP.
+#: A made-up key of the right length got 101 as well, where a key that had been looked up
+#: and not found is 104, and an empty user name still got its 3: the packet was read, and
+#: the key lookup behind it was down for everyone. Webull's docs give the code two words
+#: ("Internal error") and say nothing of hours or maintenance.
+CONNACK_THEIRS = 101
+
+
+class Refused(ConnectionError):
+    """Webull's streaming server answered the sign-in (CONNECT) with a refusal: `code`."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(f"refused: {CONNACK_WHY.get(code, code)}")
+        self.code = code
+
+
+def link_error(e: BaseException, slot: int = 0, connections: int = 1) -> str:
+    """What a failed connection is called wherever the feed's health is shown. Pure.
+
+    THE CAUSE IS IN THE FIRST WORDS (owner, 2026-11-21: "getting this error", of a rail
+    that read "connection 1: ConnectionError: refused"). The rail gives a reason 240px, so
+    the class name and the connection's number took the room and the reason, "internal
+    error", was cut off: what was left read as a fault on this PC's network. Whose failure
+    it is comes first, then what the app is doing about it; the connection is numbered
+    only when there is more than one."""
+    which = f"connection {slot + 1}: " if connections > 1 else ""
+    if isinstance(e, Refused):
+        why = CONNACK_WHY.get(e.code, "no reason given")
+        if e.code == CONNACK_THEIRS:
+            text = (f"{why} on Webull's side (code {e.code}) at the stream sign-in, "
+                    "not the key or the token; the app keeps trying")
+        else:
+            text = f"stream sign-in refused by Webull: {why} (code {e.code})"
+    else:
+        text = f"{e.__class__.__name__}: {e}"
+    return (which + text)[:200]
 
 
 # ---- the feed ------------------------------------------------------------------------------
@@ -648,6 +687,8 @@ class WebullFeed:
         self._slot_notice: dict[int, dict[str, Any]] = {}
         #: Per connection, the names it holds now (`held`): the snapshots read the rest.
         self._held: dict[int, set[str]] = {}
+        #: The connection whose failure `error` is (`link_error`), cleared when it is back.
+        self._error_slot: int | None = None
         #: A failed token ask, and when the next may be made, for every thread at once.
         self._token_retry_at = 0.0
         #: The snapshot pass: its last result, its calls in the last minute, each name's last.
@@ -760,7 +801,8 @@ class WebullFeed:
                 continue
             except Exception as e:  # noqa: BLE001 — a feed that fails must not take the thread
                 with self._lock:
-                    self.error = f"connection {slot + 1}: {e.__class__.__name__}: {e}"[:200]
+                    self.error = link_error(e, slot, self.connections)
+                    self._error_slot = slot
                     # A refused token is asked about again, not reused for ten minutes.
                     if "401" in str(e) or "403" in str(e):
                         self._token_held = (None, 0.0)
@@ -787,8 +829,9 @@ class WebullFeed:
             with self._lock:
                 self._connected[slot] = now
                 self._slot_last[slot] = now
-                if self.error and self.error.startswith(f"connection {slot + 1}:"):
+                if self._error_slot == slot:
                     self.error = None
+                    self._error_slot = None
             # THE READ LOOP DOES NOTHING BUT READ (2026-11-18, the first live session): it
             # waited on each message through asyncio.wait_for, a new task and timer per
             # message, with the subscription and the keep-alive in the same loop. The busiest
@@ -850,7 +893,7 @@ class WebullFeed:
                 if kind == 2:
                     rc = body[1] if len(body) > 1 else -1
                     if rc != 0:
-                        raise ConnectionError(f"refused: {CONNACK_WHY.get(rc, rc)}")
+                        raise Refused(rc)
                     return
         raise TimeoutError("no CONNACK")
 
@@ -1103,13 +1146,13 @@ class WebullFeed:
         d["on"] = self.snapshots_on
         return d
 
-    def status(self) -> SourceStatus:
-        from .stream import lag_of
+    def status(self, now: float | None = None) -> SourceStatus:
+        from .stream import lag_of, session_of_ts
         st = SourceStatus("Webull")
         if websockets is None:
             st.error, st.source = "the websockets package is not installed", "unavailable"
             return st
-        now = time.time()
+        now = time.time() if now is None else now
         with self._lock:
             conns, subscribed, err, note = (len(self._connected), sum(self._subs.values()),
                                             self.error, self.note)
@@ -1138,8 +1181,15 @@ class WebullFeed:
         if st.ok and lag is not None and lag > LATE_SEC:
             st.source = "stale"
             st.notes.insert(0, f"trades arriving about {lag:.0f}s late")
-        if err and not st.ok:
-            st.error = err
+        if not st.ok:
+            # What stands in the way now: a token waiting on the owner's phone (nothing
+            # connects without it) ahead of the connection's last failure. And whether it
+            # costs anything: with the market shut there is no trade to miss, and a red
+            # row on a Saturday should say so.
+            why = note or err
+            if why and session_of_ts(now) is None:
+                why += "; the market is closed, so no trade is missed"
+            st.error = why
         if st.ok:
             st.last_ok_utc = datetime.now(UTC).isoformat()
         return st

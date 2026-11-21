@@ -181,6 +181,58 @@ def test_another_session_taking_the_data_ends_the_connection() -> None:
         assert "Permission grabbed" in str(e)
 
 
+def test_a_refused_sign_in_is_read_for_its_code() -> None:
+    class Ws:
+        def __init__(self, raw: bytes) -> None:
+            self.raw = raw
+
+        async def recv(self) -> bytes:
+            return self.raw
+
+    feed = wb.WebullFeed(lambda *a, **k: None, lambda: [])
+    asyncio.run(feed._connack(Ws(bytes.fromhex("20020000")), bytearray()))   # accepted
+    try:
+        # As Webull answered every sign-in from 20:52 ET on Fri 20 Nov 2026.
+        asyncio.run(feed._connack(Ws(bytes.fromhex("20020065")), bytearray()))
+        raise AssertionError("a refusal must end the session")
+    except wb.Refused as e:
+        assert e.code == 101 and isinstance(e, ConnectionError)
+
+
+def test_a_failed_connection_says_whose_failure_in_its_first_words() -> None:
+    # The rail gives a reason 240px, about forty characters. It read "connection 1:
+    # ConnectionError: refused" and the reason, "internal error", was cut off.
+    said = wb.link_error(wb.Refused(101))
+    assert said[:40] == "internal error on Webull's side (code 10"
+    assert "not the key or the token" in said and "keeps trying" in said
+    # Any other refusal is about what was sent, and is said as Webull numbers it.
+    assert wb.link_error(wb.Refused(105)) == \
+        "stream sign-in refused by Webull: five connections already open on this key (code 105)"
+    assert wb.link_error(wb.Refused(9)) == \
+        "stream sign-in refused by Webull: no reason given (code 9)"
+    # Anything else as it was raised; the connection numbered only when there are several.
+    assert wb.link_error(TimeoutError("no CONNACK")) == "TimeoutError: no CONNACK"
+    assert wb.link_error(TimeoutError("no CONNACK"), 1, 3) == \
+        "connection 2: TimeoutError: no CONNACK"
+
+
+def test_a_feed_that_is_down_says_why_and_what_a_shut_market_costs() -> None:
+    feed = wb.WebullFeed(lambda *a, **k: None, lambda: [])
+    feed.error = wb.link_error(wb.Refused(101))
+    # In the session the reason alone; on a Saturday, that nothing is missed.
+    st = feed.status(_et(2026, 11, 20, 10, 40))
+    assert not st.ok and st.error == feed.error
+    st = feed.status(_et(2026, 11, 21, 12, 0))
+    assert st.error == feed.error + "; the market is closed, so no trade is missed"
+    # A token waiting on the owner's phone is what stands in the way, ahead of an older
+    # failure of the connection: nothing connects without it.
+    feed.note = "approve the API sign-in in your Webull app (within 5 minutes)"
+    assert feed.status(_et(2026, 11, 20, 10, 40)).error == feed.note
+    # Nothing wrong and nothing connected yet (the first seconds): no reason invented.
+    quiet = wb.WebullFeed(lambda *a, **k: None, lambda: [])
+    assert quiet.status(_et(2026, 11, 21, 12, 0)).error is None
+
+
 def test_each_connection_holds_its_own_hundred() -> None:
     names = [f"S{i}" for i in range(250)]
     feed = wb.WebullFeed(lambda *a, **k: None, lambda: names, connections=3)

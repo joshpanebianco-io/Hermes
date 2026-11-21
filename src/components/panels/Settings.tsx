@@ -481,7 +481,9 @@ function PriceFeedPart() {
           f.feed === "webull"
             ? w?.ok
               ? `Webull live, ${w.items} names`
-              : `Webull not live yet${w?.notes?.[0] || w?.error ? `: ${w?.notes?.[0] ?? w?.error}` : ""}`
+              : // The reason first (a token to approve, Webull's own refusal), which the
+                // server says as `error`; the names-held count only when it gave none.
+                `Webull not live yet${w?.error || w?.notes?.[0] ? `: ${w?.error ?? w?.notes?.[0]}` : ""}`
             : "Webull off",
           snaps,
           `Yahoo stream ${f.yahoo.ok ? "live" : "down"}, ${f.yahoo.items} names`,

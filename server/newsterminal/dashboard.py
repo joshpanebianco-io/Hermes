@@ -236,6 +236,8 @@ def card_ages(ages: dict[str, Any], pre: bool) -> dict[str, float | None]:
     sectors = at("sector_ext" if pre else "sectors")
     return {"plan": oldest(engine, sectors), "breadth": at("breadth_all"), "top": engine,
             "impact": at("wire"), "stories": at("stock_news"),
+            # The Market Outlook reads the board's own quotes.
+            "outlook": at("quotes"),
             "rotation": oldest(sectors, at("breadth_all"))}
 
 
@@ -328,6 +330,12 @@ def build(scan: dict[str, Any], snap: dict[str, Any], brk: dict[str, Any], d23: 
         "impact": impact_mod.build(_list(snap.get("wire")), _list(snap.get("calendar")),
                                    _list(snap.get("earnings")), now or datetime.now(UTC),
                                    live=bool(wire_st.get("ok")), expiry=_d(snap.get("expiry"))),
+        # THE MARKET OUTLOOK IN STOCK NEWS'S PLACE (owner, 2026-11-21: "lets remove the stock
+        # news card and amke it a toggle option on High IMpact News Card and then add the
+        # Market Outlook card in its plac eon dashboard"). The snapshot's own read
+        # (outlook.py), as Macro's board shows it; the stories above are still served, for
+        # the news card's second view.
+        "outlook": _d(snap.get("outlook")) or None,
         "rotation": _rotation(sectors, leaders),
         # What the focus lists and the rotation row are moves of: the pre-market's
         # before the bell, else the session's (the last one before the open).

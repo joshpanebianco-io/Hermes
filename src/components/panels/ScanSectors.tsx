@@ -31,7 +31,7 @@ import { keepRead, lastRead } from "@/lib/lastRead";
 import { shareRows } from "@/lib/share";
 import { OUTSIDE_DAY_TITLE } from "@/lib/outsideDay";
 import { compact, dir, num, pct } from "@/lib/format";
-import { heatMax, heatStyle } from "@/lib/heat";
+import { heatMax, heatVar } from "@/lib/heat";
 import { cardNote, cardPct, cardRs, phaseLine, showsPre } from "@/lib/sectorPhase";
 import { segItem } from "@/lib/seg";
 import { useTicker } from "@/lib/ticker";
@@ -243,7 +243,7 @@ export function ScanSectors({ onTrackChanged }: { onTrackChanged?: () => void })
       <div className="flex flex-wrap items-center gap-3 px-4 pt-3 pb-2">
         <span className="seg">
           <button type="button" onClick={() => setMode("cards")} {...segItem(mode === "cards")}>
-            Sectors &amp; themes<span className="seg-n">{heat.cards.length}</span>
+            Sectors &amp; Themes<span className="seg-n">{heat.cards.length}</span>
           </button>
           <button type="button" onClick={() => setMode("industries")} {...segItem(mode === "industries")}>
             Industries<span className="seg-n">{heat.industries.length}</span>
@@ -487,7 +487,14 @@ const SectorRow = memo(function SectorRow({ r, cols, selected, onTracked }: { r:
  * px one lands before every named (rem) one, and xl: would beat it at any width.
  */
 const GRID = "grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5 min-[137.5rem]:grid-cols-7";
-const CARD_BOX = "hit min-w-0 rounded-[6px] border px-3 py-2.5 text-left qt:rounded-[4px]";
+// A CARD UNDER THE POINTER LIFTS (owner, 2026-11-21: "when you hover over a card it
+// highlights like the XLV one does currently", then of an outline built by mistake: "i
+// didnt want the outline just the slightly opqauge effect like what happens when you hover
+// over the xlv card"). XLV was the one card that did: its move was too small to tint, so
+// the shell's hover showed on it. Every other card's heat was an inline background, which
+// beats any hover rule. The heat is a layer now (`heat-card`, lib/heat `heatVar`) and the
+// ground under it lifts on all of them alike.
+const CARD_BOX = "hit heat-card min-w-0 rounded-[6px] border px-3 py-2.5 text-left qt:rounded-[4px]";
 
 interface CardBase {
   span: HeatSpan;
@@ -533,7 +540,7 @@ const Card = memo(function Card({ c, rank, span, pctOf, rsOf, noteOf, countsWord
   const p = pctOf(c);
   const note = noteOf(c);
   return (
-    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={note?.title} style={heatStyle(p, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")}>
+    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={note?.title} style={heatVar(p, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")}>
       <p className="flex items-center gap-2">
         <SectorGlyph fund={c.key} size={15} className="block shrink-0 text-ink-2" />
         <span className="fig text-[13px] font-semibold text-ink">{c.key}</span>
@@ -556,7 +563,7 @@ const TopMover = memo(function TopMover({ c, span, word, pctOf, rsOf, noteOf, co
   const read = c[span];
   const led = read.leaders.map((x) => `${x.sym} ${x.chg >= 0 ? "+" : ""}${x.chg.toFixed(1)}%`).join(", ");
   return (
-    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={note?.title} style={heatStyle(p, tint)} className={cn(CARD_BOX, "col-span-2 row-span-2 flex flex-col justify-between px-4 py-3", on ? "border-ink-3" : "border-ring")}>
+    <button type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={note?.title} style={heatVar(p, tint)} className={cn(CARD_BOX, "col-span-2 row-span-2 flex flex-col justify-between px-4 py-3", on ? "border-ink-3" : "border-ring")}>
       <div>
         <p className="qt-cap text-[10px] text-ink-3">Top mover</p>
         <p className="mt-1 flex items-center justify-between gap-3">
@@ -587,7 +594,7 @@ const IndustryCard = memo(function IndustryCard({ g, span, spy, tint, barMax, on
   const read = g[span];
   const lead = read.leaders[0];
   return (
-    <button type="button" aria-pressed={on} onClick={() => onPick(`i:${g.key}`)} style={heatStyle(read.median, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")} title={`${g.names} stocks at $2bn+${g.sector ? ` · ${g.sector}` : ""}`}>
+    <button type="button" aria-pressed={on} onClick={() => onPick(`i:${g.key}`)} style={heatVar(read.median, tint)} className={cn(CARD_BOX, on ? "border-ink-3" : "border-ring")} title={`${g.names} stocks at $2bn+${g.sector ? ` · ${g.sector}` : ""}`}>
       <p className="truncate text-[12.5px] font-semibold text-ink">{g.label}</p>
       <p className="mt-0.5 flex items-baseline justify-between gap-2">
         <span className={cn("fig text-[13px]", dir(read.median))}>{pct(read.median)}</span>

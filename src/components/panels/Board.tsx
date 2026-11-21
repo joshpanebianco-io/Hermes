@@ -86,10 +86,13 @@ export function Board({
   groups,
   title = "Board",
   twoUp = false,
+  right,
 }: {
   quotes: Quote[];
   ageMin?: number | null;
   error?: string | null;
+  /** The head's right slot: the Macro board's Board | Market Outlook switch. */
+  right?: React.ReactNode;
   /** Which groups this instance renders — the board is split across columns. */
   groups?: Quote["group"][];
   title?: string;
@@ -102,7 +105,7 @@ export function Board({
   const shown = wanted.flatMap((k) => GROUPS.filter((g) => g.key === k));
 
   return (
-    <Module title={title} ageMin={ageMin} error={error} bodyClassName="px-0 py-0">
+    <Module title={title} ageMin={ageMin} error={error} right={right} bodyClassName="px-0 py-0">
       {quotes.length === 0 ? (
         ageMin == null && !error ? (
           <Skeleton rows={6} label={`Loading ${title.toLowerCase()}`} />

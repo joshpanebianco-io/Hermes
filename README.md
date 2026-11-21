@@ -108,7 +108,7 @@ The score is a heuristic rank, not a probability. Every signal is logged with it
     <td width="50%"><img src="docs/media/sectors.png" alt="Sectors" /></td>
   </tr>
   <tr>
-    <td valign="top"><sub><b>Dashboard.</b> The session on one page: the game plan (market bias, focus sectors and themes, the day's reports, the next release and options expiry), breadth across every US stock at $2bn and up, the futures at a glance, the scanner's top ten, high-impact news, stock news and sector rotation.</sub></td>
+    <td valign="top"><sub><b>Dashboard.</b> The session on one page: the game plan (market bias, focus sectors and themes, the day's reports, the next release and options expiry), breadth across every US stock at $2bn and up, the futures at a glance, the scanner's top ten, high-impact and stock news in one card, the Market Pulse and sector rotation.</sub></td>
     <td valign="top"><sub><b>Sectors.</b> The 11 sector and 25 theme funds as heat cards (day, week and month, with the pre-market move before the bell), 91 industries, and every $2bn+ stock in a chosen group with its levels and news.</sub></td>
   </tr>
   <tr>
@@ -128,6 +128,8 @@ The score is a heuristic rank, not a probability. Every signal is logged with it
     <td valign="top"><sub><b>Hermes AI.</b> A chat that reads the whole desk through tools, with every figure it quotes checked against live data. It is also a side panel on every page.</sub></td>
   </tr>
 </table>
+
+**Market Pulse**, on the Dashboard and as a view of Macro's board, reads stocks, bonds, the dollar, gold, silver, oil and bitcoin against each other: a fear-to-greed scale of the day's risk appetite, each market's move sized in its own usual day, and the pattern they make together (risk-on, risk-off, a rates shock, forced selling, or none). It is context for the day, not a signal: it feeds neither the bias nor the score.
 
 **Settings** holds three interfaces (Quiet, Luminous Glass and a sidebar layout), chart colour presets, signal alerts by desktop notification and sound, and the live price feed.
 

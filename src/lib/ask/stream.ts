@@ -50,6 +50,7 @@ const PANEL_WORDS: Record<string, string> = {
   dashboard: "the dashboard",
   sector_heatmap: "the sector heat map",
   macro_board: "the macro board",
+  market_outlook: "the market pulse",
   regime: "the scanner's regime strip",
   driver_board: "the driver board",
   the_book: "the book",

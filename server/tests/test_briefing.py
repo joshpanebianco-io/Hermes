@@ -213,6 +213,60 @@ def test_hermes_reads_the_list_joined_to_what_each_item_is() -> None:
     assert lines[1].startswith("VIX 22.9 (+0.0%)")
 
 
+# --------------------------------------------------------- the Market Context's words
+#
+# Owner, 2026-11-21, of the section's first build (three engine lines): "it needs to have
+# nisce visuals and it is way too bland. use the ai model to summarise and tlak about it
+# and how it affects the market". The page charts the engine's figures; the model writes a
+# lead and a paragraph under each chart, held to the charts the report has.
+
+_CTX = {"as_of": "Fri 20 Nov · close", "rows": [
+    {"key": "pulse", "label": "Market Pulse", "text": "Extreme fear (-78). Forced selling."},
+    {"key": "rotation", "label": "Sector Rotation", "text": "1 of 11 sectors up."}]}
+
+
+def test_both_schemas_ask_for_the_backdrop_in_words() -> None:
+    for schema in (report.SCHEMA, report.SCHEMA_ETFS):
+        ctx = schema["properties"]["context"]
+        assert ctx["required"] == ["lead", "pulse", "rotation", "gamma"]
+        assert list(schema["properties"])[:2] == ["thesis", "context"]
+    for shape in (report.LOOSE_SHAPE, report.LOOSE_SHAPE_ETFS):
+        assert '"context"' in shape and '"rotation"' in shape
+    assert report.LIMITS["context_lead"] == 45 and report.LIMITS["context"] == 55
+
+
+def test_a_paragraph_is_kept_only_for_a_chart_the_report_has() -> None:
+    facts = {**_facts(), "market_context": _CTX}
+    said = {"lead": "  Risk was sold everywhere at once. ", "pulse": "- Gold fell with stocks.",
+            "rotation": "", "gamma": "Dealers are short gamma.", "extra": "x"}
+    # No gamma chart in this report, so no gamma paragraph; an empty one is not there;
+    # the words are cleaned as the rest of the brief's are (a list mark is not prose).
+    assert report._context(said, facts) == {
+        "lead": "Risk was sold everywhere at once.", "pulse": "Gold fell with stocks."}
+    # A report with no section at all holds none of it, whatever the model wrote.
+    assert report._context(said, _facts()) == {}
+    assert report._context(None, facts) == {} and report._context("text", facts) == {}
+
+
+def test_the_backdrops_words_are_counted_and_their_figures_checked() -> None:
+    long = " ".join(["word"] * 80)
+    b = {"thesis": "t", "context": {"lead": long, "pulse": "Stocks fell 3.6% and 9.9%."}}
+    assert report.too_long(b) == ["context lead is 80 words (limit 45)"]
+    # 3.6 is on the chart the model was shown; 9.9 is not.
+    assert "Stocks fell 3.6% and 9.9%." in report.brief_prose(b)
+    assert report.unverified(b, '{"move_pct": -3.6}') == ["9.9"]
+
+
+def test_hermes_reads_the_backdrop_and_what_the_model_said_of_it() -> None:
+    note = {"thesis": "t", "calls": [], "context": {"lead": "A liquidation day.", "gamma": ""}}
+    got = tools._note({"note": note}, "brief", None, {**_facts(), "market_context": _CTX})
+    assert got["note"]["market_context"] == {
+        "as_of": "Fri 20 Nov · close",
+        "lines": ["Market Pulse: Extreme fear (-78). Forced selling.",
+                  "Sector Rotation: 1 of 11 sectors up."],
+        "what_it_means": {"lead": "A liquidation day."}}
+
+
 # ------------------------------------------------------------- how each feeds the bias
 
 

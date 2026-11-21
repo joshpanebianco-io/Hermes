@@ -13,7 +13,12 @@ import { useWatchlistEarnings } from "@/lib/useWatchlistEarnings";
 import { inWindow } from "@/lib/earningsOrder";
 import { boardReady } from "@/lib/ready";
 import { PageLoader } from "@/components/ui/HelmLoader";
+import { Module } from "@/components/ui/Module";
+import { OutlookBody } from "@/components/panels/MarketOutlook";
+import type { MarketOutlook } from "@/types/outlook";
 import { ageStep } from "@/lib/format";
+import { segItem } from "@/lib/seg";
+import { oneOf, usePersisted } from "@/lib/usePersisted";
 
 /**
  * Macro — what is happening, and what is scheduled. One tab for both desks
@@ -74,8 +79,53 @@ import { ageStep } from "@/lib/format";
  * panel, which is the right place for it.
  */
 
+type BoardView = "board" | "outlook";
+const BOARD_VIEWS: ReadonlyArray<{ key: BoardView; label: string; title: string }> = [
+  { key: "board", label: "Board", title: "Every price, by group" },
+  { key: "outlook", label: "Market Pulse", title: "Today's risk appetite, and stocks, bonds, the dollar, metals, oil and bitcoin read against each other" },
+];
+
+/**
+ * THE MACRO BOARD, OR THE MARKET PULSE IN ITS CARD (owner, 2026-11-21, of the card then
+ * named Market Outlook: "have it as a toggle option on the MAcro Board in MAcro"). One
+ * switch in the card's head, as Index movers has its two, remembered like every other
+ * choice. The board is every price a row each; the pulse is eight of those prices read
+ * against each other under a fear-to-greed scale (panels/MarketOutlook), the same body the
+ * Dashboard's card draws, with the board's own quotes for its lines.
+ */
+function BoardCard({
+  quotes,
+  groups,
+  outlook,
+  ageMin,
+  error,
+}: {
+  quotes: React.ComponentProps<typeof Board>["quotes"];
+  groups: React.ComponentProps<typeof Board>["groups"];
+  outlook: MarketOutlook | null | undefined;
+  ageMin?: number | null;
+  error?: string | null;
+}) {
+  const [view, setView] = usePersisted<BoardView>("macro.board", "board", oneOf("board", "outlook"));
+  const pick = (
+    <div className="seg">
+      {BOARD_VIEWS.map((v) => (
+        <button key={v.key} type="button" onClick={() => setView(v.key)} title={v.title} {...segItem(v.key === view, { className: "text-[10px] normal-case tracking-normal" })}>
+          {v.label}
+        </button>
+      ))}
+    </div>
+  );
+  if (view === "board") return <Board title="Macro board" twoUp quotes={quotes} groups={groups} ageMin={ageMin} error={error} right={pick} />;
+  return (
+    <Module title="Macro board" sub={outlook?.ok ? outlook.label : undefined} ageMin={ageMin} error={error} right={pick} bodyClassName="px-0 py-0">
+      <OutlookBody d={outlook} quotes={quotes} dense />
+    </Module>
+  );
+}
+
 const MWire = memo(Wire);
-const MBoard = memo(Board);
+const MBoard = memo(BoardCard);
 const MRates = memo(Rates);
 const MCalendar = memo(Calendar);
 const MEarnings = memo(Earnings);
@@ -174,7 +224,7 @@ export function MacroBoard({ data, market: feed }: { data: TerminalData; market:
         {/* The board and Rates & policy changed places (owner, 2026-11-15: "switch rate and
             policy with macro board"): prices sit with the movers on the left, the Fed's path
             with the calendar it is priced off on the right. */}
-        <MBoard title="Macro board" twoUp quotes={boardQuotes} groups={MACRO_GROUPS} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
+        <MBoard quotes={boardQuotes} groups={MACRO_GROUPS} outlook={data.outlook} ageMin={age("quotes")} error={st.quotes?.ok === false ? st.quotes.error : null} />
       </div>
 
       {/* ---- middle: the wire -------------------------------------------- */}

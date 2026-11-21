@@ -75,6 +75,7 @@ from . import (
 from . import dashboard as dash_mod
 from . import futures as fut_mod
 from . import momentum as mom_mod
+from . import outlook as outlook_mod
 from . import report as report_mod
 from . import rotation as rot_mod
 from . import scan as scan_mod
@@ -287,6 +288,10 @@ class Collector:
         self.daytypes = daytype.SessionLog()
         #: The bias record's (td, mark) pairs and closed days on file, read on its first tick.
         self._bias_done: tuple[set[tuple[str, str]], set[str]] | None = None
+        #: The Market Outlook's record (outlook.py): the days on file and the newest line,
+        #: read on first use. The card shows that line overnight.
+        self._outlook_days: set[str] | None = None
+        self._outlook_last: dict[str, Any] | None = None
         self._dt_record = daytype.load_backfill()
         self._dt_tables: dict[str, dict[str, Any]] = {}
         self._dt_meta: dict[str, Any] = {}
@@ -380,6 +385,10 @@ class Collector:
             # The bias record (bias_record.py): every board read at its marks and each
             # book's price at the close, to test the weights against what followed.
             "bias_record": (self._do_bias_record, 20.0, now + 12.0),
+            # The Market Outlook's record (outlook.py): a finished session's read, written
+            # once while the futures are shut. The daily break is an hour, so five
+            # minutes meets it a dozen times.
+            "outlook_record": (self._do_outlook_record, 300.0, now + 25.0),
         }
         # The live layer, alone (module docstring); it paces itself.
         self._live_jobs: dict[str, Job] = {
@@ -1900,6 +1909,36 @@ class Collector:
         bias_record.append(lines)
         return None
 
+    def _outlook_file(self) -> set[str]:
+        """The record's days, read once; the newest line is kept beside them."""
+        if self._outlook_days is None:
+            lines = outlook_mod.read()
+            self._outlook_days = {str(x.get("day")) for x in lines}
+            self._outlook_last = lines[-1] if lines else None
+        return self._outlook_days
+
+    def _do_outlook_record(self) -> float | None:
+        """The Market Outlook's record (outlook.py): the session's read, once, while the
+        futures are shut and their quotes are that session's final figures. A minute's
+        retry while the quotes have not been read."""
+        days = self._outlook_file()
+        out = self.snapshot().get("outlook") or {}
+        if not out.get("ok"):
+            return 60.0
+        line = outlook_mod.record_line(out, datetime.now(UTC))
+        if line is None:
+            # A close read the daily closes have not sized yet (the first seconds after a
+            # start): again in a minute, not in five.
+            waiting = (out.get("state") == "close" and out.get("from") == "live"
+                       and out.get("day") not in days)
+            return 60.0 if waiting else None
+        if line["day"] in days:
+            return None
+        outlook_mod.append(line)
+        days.add(line["day"])
+        self._outlook_last = line
+        return None
+
     def _do_daytype(self) -> float | None:
         """The session-type record (daytype.py): at CARD_AT one card per book with
         what was known before the bell; from LABEL_AT the label, off the finished
@@ -2069,7 +2108,8 @@ class Collector:
                                               "iv_history.jsonl", "scanner_momentum.json",
                                               "scanner_universe.json", "stream_check.json",
                                               "oi_log.jsonl", "cboe_pc.jsonl",
-                                              "session_types.jsonl", "bias_record.jsonl"))
+                                              "session_types.jsonl", "bias_record.jsonl",
+                                              "outlook_record.jsonl"))
         if gone and config.TICK_LOG:
             print(f"cache: pruned {gone} file(s) untouched for 7 days", flush=True)
         self._thread = threading.Thread(target=self._run, name="collector", daemon=True)
@@ -2182,6 +2222,14 @@ class Collector:
             snap["daytype"] = self._session_types(snap)
         except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
             snap["daytype"] = {"books": {}, "error": f"{e.__class__.__name__}: {e}"}
+        # The Market Outlook (outlook.py): the board's own changes read against each
+        # other, each in its usual day off the context closes. Arithmetic on the blocks
+        # above, so on read as well.
+        try:
+            self._outlook_file()
+            snap["outlook"] = outlook_mod.build(snap, at, last=self._outlook_last)
+        except (ValueError, TypeError, KeyError, ZeroDivisionError) as e:
+            snap["outlook"] = {"ok": False, "why": f"{e.__class__.__name__}: {e}"}
         return snap
 
     def scanner_payload(self) -> dict[str, Any]:

@@ -348,7 +348,7 @@ export function Terminal({
    * once (`below`) and set under whichever header this interface has.
    */
   const side = ui === "side";
-  const quoteRow = (groups: readonly (readonly string[])[], form: { spread?: boolean; pills?: boolean } = {}) => (
+  const quoteRow = (groups: readonly (readonly string[])[], form: { spread?: boolean; pills?: boolean; marks?: boolean } = {}) => (
     <QuoteTiles quotes={data.quotes ?? NONE} groups={groups} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} {...form} />
   );
 
@@ -392,7 +392,7 @@ export function Terminal({
               onScan={openScan}
               // In the Sidebar interface the four are in the header beside the page's
               // name, so the read's card does not carry them a second time.
-              prices={side ? undefined : quoteRow(DASH_GROUPS, { spread: true })}
+              prices={side ? undefined : quoteRow(DASH_GROUPS, { spread: true, marks: true })}
               // The Futures card reads the Terminal's poll; a row opens that contract.
               futures={{ data, onBook: openFut }}
               expiry={data.expiry ?? null}
@@ -406,7 +406,7 @@ export function Terminal({
           ) : tab === "futures" ? (
             <FuturesBoard data={data} view={futView} onView={setFutView} report={report} />
           ) : tab === "sectors" ? (
-            <SectorsBoard prices={quoteRow(SCAN_GROUPS)} />
+            <SectorsBoard prices={quoteRow(SCAN_GROUPS, { marks: true })} />
           ) : (
             <MacroBoard data={data} market={market} />
           )}
@@ -415,7 +415,7 @@ export function Terminal({
           <BiasDrawer drivers={data.drivers} />
         </div>
 
-        <MStatusRail status={st} ages={raw} feeds={data.wire_feeds} pollSec={POLL_SEC} lastPoll={lastPoll} />
+        <MStatusRail status={st} ages={raw} feeds={data.wire_feeds} />
     </>
   );
 
@@ -504,7 +504,7 @@ function ScannerTab({
       view={view}
       onView={onView}
       report={view === "report" ? <MarketReportView data={data} report={report} desk="stocks" /> : null}
-      prices={<QuoteTiles quotes={data.quotes ?? []} groups={SCAN_GROUPS} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} />}
+      prices={<QuoteTiles quotes={data.quotes ?? []} groups={SCAN_GROUPS} implied={data.volterm?.books} vixMonth={data.volterm?.vix_month} marks />}
     />
   );
 }

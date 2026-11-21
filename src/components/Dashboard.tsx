@@ -9,11 +9,15 @@ import { DAY_TYPED, FUT_NAME, QUOTE_KEY, type FutView } from "@/lib/futures";
 import { CALL_HUE } from "@/lib/daytype";
 import { wholeScore } from "@/lib/biasScale";
 import type { DashImpact, DashRow, DashStory, DashboardPayload } from "@/types/dashboard";
+import type { MarketOutlook } from "@/types/outlook";
 import { BreadthBars } from "@/components/panels/Breadth";
+import { OutlookBody } from "@/components/panels/MarketOutlook";
+import { segItem } from "@/lib/seg";
 import { setupLabel } from "@/components/panels/ScanDetail";
 import { CARD, CatalystCell, Chips, Spark, TD, TH, ageWord, dayName, rowProps } from "@/components/panels/ScanWide";
 import { PageLoader, PageNote } from "@/components/ui/HelmLoader";
 import { AgeChip } from "@/components/ui/Module";
+import { AssetIcon } from "@/components/ui/AssetIcon";
 import { TickerLogo } from "@/components/ui/TickerLogo";
 import { SectorGlyph } from "@/components/ui/SectorGlyph";
 import { scoreText } from "@/lib/bias";
@@ -203,8 +207,22 @@ export function Dashboard({
       <div className="grid gap-3 lum:gap-[var(--lum-gap)] xl:min-h-[320px] xl:flex-1 xl:grid-cols-[repeat(3,minmax(0,1fr))] xl:grid-rows-[minmax(0,1fr)]">
         {/* The table, on the whole list: the Stocks tab's charts are a choice of their own. */}
         <TopSetups rows={data.top} age={data.ages?.top} onAll={() => toScanner("today", { "today.side": "all" })} />
-        <HighImpact d={data.impact} age={data.ages?.impact} onWire={() => onOpen("terminal")} />
-        <StockNews stories={data.stories} live={data.news_live} age={data.ages?.stories} />
+        {/* STOCK NEWS IS THE NEWS CARD'S SECOND VIEW, AND THE MARKET PULSE HAS ITS PLACE
+            (owner, 2026-11-21: "lets remove the stock news card and amke it a toggle option on
+            High IMpact News Card and then add the Market Outlook card in its plac eon
+            dashboard"; it was renamed Market Pulse the same day). */}
+        <NewsCard d={data.impact} stories={data.stories} storiesLive={data.news_live} ages={data.ages} onWire={() => onOpen("terminal")} />
+        <OutlookCard
+          d={data.outlook}
+          // Each row's line is its quote's session path, off the Terminal's poll.
+          quotes={futures?.data.quotes}
+          age={data.ages?.outlook}
+          // Macro's board opens on the same read (its Board | Market Pulse switch).
+          onMacro={() => {
+            persist("macro.board", "outlook");
+            onOpen("terminal");
+          }}
+        />
       </div>
       <Rotation d={data} onHeat={() => toSectors()} onSector={(k) => toSectors({ "sec.mode": "cards", "sec.sel": k })} />
     </main>
@@ -306,7 +324,11 @@ function FuturesCard({ data, onBook }: { data: TerminalData; onBook: (v: FutView
         {/* Captions (owner, 2026-11-16: "why are the nq and es both the same amount of bias
             points but nq says no lean and es says trend say mor eposisble"): the last column
             is the session-type record (will New York trend or range), not a second bias. */}
-        <div aria-hidden className="qt-cap grid grid-cols-[34px_minmax(0,1fr)_minmax(0,1fr)_64px_minmax(0,1.1fr)] gap-x-2.5 px-1.5 pb-0.5 text-[9.5px] text-ink-3">
+        {/* EACH CONTRACT WEARS ITS MARK (owner, 2026-11-21, after the Market Pulse card's:
+            "can we also add the icons for the futures car[d] in dashboard"): the index badges,
+            the ingots and the drop the Futures tab and that card already draw (ui/AssetIcon).
+            The first column is 56px for the mark beside the code; it was 34. */}
+        <div aria-hidden className="qt-cap grid grid-cols-[56px_minmax(0,1fr)_minmax(0,1fr)_64px_minmax(0,1.1fr)] gap-x-2.5 px-1.5 pb-0.5 text-[9.5px] text-ink-3">
           <span />
           <span>Price</span>
           <span className="col-span-2">Bias · which way</span>
@@ -324,9 +346,12 @@ function FuturesCard({ data, onBook }: { data: TerminalData; onBook: (v: FutView
               type="button"
               onClick={() => onBook(k)}
               title={`Open ${k} · ${FUT_NAME[k]} on the Futures tab`}
-              className="hit grid w-full grid-cols-[34px_minmax(0,1fr)_minmax(0,1fr)_64px_minmax(0,1.1fr)] items-center gap-x-2.5 rounded-[4px] px-1.5 py-[5px] text-left text-[12px]"
+              className="hit grid w-full grid-cols-[56px_minmax(0,1fr)_minmax(0,1fr)_64px_minmax(0,1.1fr)] items-center gap-x-2.5 rounded-[4px] px-1.5 py-[5px] text-left text-[12px]"
             >
-              <span className="fig font-semibold text-ink">{k}</span>
+              <span className="flex items-center gap-1.5">
+                <AssetIcon id={k} size={17} className="block shrink-0 text-ink-2" />
+                <span className="fig font-semibold text-ink">{k}</span>
+              </span>
               <span className="fig truncate text-ink">
                 {num(q?.last)} <span className={cn("ml-1", dir(q?.pct))}>{pct(q?.pct)}</span>
               </span>
@@ -393,7 +418,7 @@ function PlanCard({
   return (
     <section className={cn(CARD, "flex flex-col gap-3")}>
       <Head
-        title="Today's RTH game plan"
+        title="Today's RTH Game Plan"
         sub={`${d.read.title} · levels for ${dayName(d.trading_day)}`}
         age={d.ages?.plan}
         right={
@@ -553,10 +578,16 @@ function useBoxHeight<T extends HTMLElement>(): [React.RefObject<T | null>, numb
 function FocusLine({ rows, none }: { rows: DashboardPayload["plan"]["focus"]; none: string }) {
   if (!rows.length) return <p className="text-[12.5px] text-ink-3">{none}</p>;
   return (
-    <p className="flex flex-wrap gap-x-4 gap-y-0.5 text-[12.5px] text-ink-2">
+    <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-[12.5px] text-ink-2">
+      {/* A sector or a theme named here wears its fund's glyph, the one the Sector Rotation
+          row and the Sectors page draw (owner, 2026-11-21: "whenever we mention a sector or
+          theme etc we also include it's icons"). */}
       {rows.map((f) => (
-        <span key={f.key} className="whitespace-nowrap" title={`${f.key}: ${pct(f.rs)} against SPY`}>
-          {f.label} <span className={cn("fig", dir(f.pct))}>{pct(f.pct)}</span>
+        <span key={f.key} className="inline-flex items-center gap-1 whitespace-nowrap" title={`${f.key}: ${pct(f.rs)} against SPY`}>
+          <SectorGlyph fund={f.key} size={12} className="block shrink-0 text-ink-3" />
+          <span>
+            {f.label} <span className={cn("fig", dir(f.pct))}>{pct(f.pct)}</span>
+          </span>
         </span>
       ))}
     </p>
@@ -611,7 +642,9 @@ function TopSetups({ rows, age, onAll }: { rows: DashRow[]; age?: number | null;
     // overnight that is the evening's movers and the names in play, not the MAG 7 the
     // engine holds until the pool's 06:00 mark. From 1536px it is the game plan's track.
     <section className={cn(CARD, "@container flex min-h-[260px] min-w-0 flex-col gap-2.5 xl:min-h-0")}>
-      <Head title="Top setups" sub={inPlay ? "The Scanner's top ten · in play until the open" : "The Scanner's top ten"} right={<Go onClick={onAll}>Open the Scanner</Go>} age={age} />
+      {/* Title Case, as the card beside it and the chips are (owner, 2026-11-21: "can we make
+          High Impact News casing fixed and same for Top Setups"). */}
+      <Head title="Top Setups" sub={inPlay ? "The Scanner's top ten · in play until the open" : "The Scanner's top ten"} right={<Go onClick={onAll}>Open the Scanner</Go>} age={age} />
       <div className="shrink-0">
         <Chips items={TOP_CHIPS} on={chip} set={setChip} counts={counts} />
       </div>
@@ -671,18 +704,44 @@ function TopSetups({ rows, age, onAll }: { rows: DashRow[]; age?: number | null;
  *    headlines are full of, the night's big foreign print;
  *  - HEADLINES: the wire's high-impact stories of the last twelve hours, then geopolitics,
  *    energy and policy of the last six, one a story, newest first.
- * Stock news beside it is the names' own stories; this card is the market's.
+ * Stock news is the names' own stories; this view is the market's.
+ *
+ * ONE NEWS CARD, TWO VIEWS (owner, 2026-11-21: "lets remove the stock news card and amke it
+ * a toggle option on High IMpact News Card"). Stock news was the card beside this one; the
+ * Market Pulse has that place now, and the stories are a switch away in this card's head,
+ * as Index movers has its switches on Macro. The card's name, its line, its live dot and its
+ * age are the open view's. "Open the wire" moved from the head, which the switch needs,
+ * to the Headlines caption it belongs to.
  */
-function HighImpact({ d, age, onWire }: { d: DashImpact | undefined; age?: number | null; onWire: () => void }) {
-  const today = d?.today ?? [];
-  const heads = d?.heads ?? [];
+type NewsView = "impact" | "stocks";
+const NEWS_VIEWS: ReadonlyArray<{ key: NewsView; label: string; title: string }> = [
+  { key: "impact", label: "High Impact", title: "What can move the whole market today" },
+  { key: "stocks", label: "Stock News", title: "Major stories of named stocks, newest first" },
+];
+
+function NewsCard({
+  d,
+  stories,
+  storiesLive,
+  ages,
+  onWire,
+}: {
+  d: DashImpact | undefined;
+  stories: DashStory[];
+  storiesLive: boolean;
+  ages: DashboardPayload["ages"];
+  onWire: () => void;
+}) {
+  const [view, setView] = usePersisted<NewsView>("dash.news", "impact", oneOf("impact", "stocks"));
+  const impact = view === "impact";
+  const live = impact ? d?.live : storiesLive;
   return (
     <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2 xl:min-h-0")}>
       <Head
         title={
           <span className="flex items-center gap-2">
-            High impact news
-            {d?.live && (
+            {impact ? "High Impact News" : "Stock News"}
+            {live && (
               <span className="qt-cap flex items-center gap-1 text-[9.5px] font-normal text-ink-3">
                 <span aria-hidden className="h-[5px] w-[5px] rounded-full bg-call" />
                 live
@@ -690,10 +749,28 @@ function HighImpact({ d, age, onWire }: { d: DashImpact | undefined; age?: numbe
             )}
           </span>
         }
-        sub="What can move the whole market today: the day's prints, reports and listings, then the headlines"
-        right={<Go onClick={onWire}>Open the wire</Go>}
-        age={age}
+        sub={impact ? "What can move the whole market today: the day's prints, reports and listings, then the headlines" : "Major stories, newest first"}
+        right={
+          <div className="seg shrink-0">
+            {NEWS_VIEWS.map((v) => (
+              <button key={v.key} type="button" onClick={() => setView(v.key)} title={v.title} {...segItem(v.key === view, { className: "text-[10px] normal-case tracking-normal" })}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        }
+        age={impact ? ages?.impact : ages?.stories}
       />
+      {impact ? <ImpactBody d={d} onWire={onWire} /> : <StoriesBody stories={stories} />}
+    </section>
+  );
+}
+
+function ImpactBody({ d, onWire }: { d: DashImpact | undefined; onWire: () => void }) {
+  const today = d?.today ?? [];
+  const heads = d?.heads ?? [];
+  return (
+    <>
       {d == null ? (
         <p className="py-8 text-center text-[12px] text-ink-3">Reading the wire and the calendar…</p>
       ) : (
@@ -723,7 +800,10 @@ function HighImpact({ d, age, onWire }: { d: DashImpact | undefined; age?: numbe
               ))}
             </ul>
           )}
-          <p className="qt-cap mt-3 mb-0.5 text-[10px] text-ink-3">Headlines</p>
+          <div className="mt-3 mb-0.5 flex items-baseline justify-between gap-3">
+            <p className="qt-cap text-[10px] text-ink-3">Headlines</p>
+            <Go onClick={onWire}>Open the wire</Go>
+          </div>
           {heads.length === 0 ? (
             <p className="py-2 text-[12px] text-ink-3">No high-impact headlines in the last twelve hours.</p>
           ) : (
@@ -750,52 +830,74 @@ function HighImpact({ d, age, onWire }: { d: DashImpact | undefined; age?: numbe
           )}
         </div>
       )}
-    </section>
+    </>
   );
 }
 
-function StockNews({ stories, live, age }: { stories: DashStory[]; live: boolean; age?: number | null }) {
+/** The names' own major stories, the news card's second view (it was a card of its own until 2026-11-21). */
+function StoriesBody({ stories }: { stories: DashStory[] }) {
+  return (
+    <ul className="min-h-0 flex-1 overflow-auto pr-1">
+      {stories.length === 0 && <li className="py-8 text-center text-[12px] text-ink-3">No major stories in the last thirty hours.</li>}
+      {stories.map((s) => (
+        <li key={`${s.syms.join()}-${s.title}`} className="border-b border-ring/60 py-2 last:border-b-0">
+          <p className="text-[11.5px]">
+            {s.syms.map((x, i) => (
+              <span key={x}>
+                {i > 0 && <span className="text-ink-3">, </span>}
+                <button type="button" onClick={() => openTicker(x)} className="hit fig font-semibold text-ink">
+                  {x}
+                </button>
+              </span>
+            ))}
+            <span className="text-ink-3"> · {s.tag}</span>
+          </p>
+          <a href={s.url} target="_blank" rel="noreferrer noopener" className="hit mt-0.5 line-clamp-2 text-[12px] leading-[1.35] text-ink-2 hover:text-ink">
+            {s.title}
+          </a>
+          <p className="fig mt-0.5 text-[10.5px] text-ink-3">
+            {ageWord(s.age_min)} ago · {s.provider}
+          </p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * THE MARKET PULSE (owner, 2026-11-21, where Stock news was: "add the Market Outlook card
+ * in its plac[e] on dashboard"; named Market Pulse that evening, of the picture with the
+ * scale, the marks and the lines: "i like it"): a fear-to-greed scale of the day's risk
+ * appetite, then stocks, bonds, the dollar, gold, silver, oil and bitcoin read against each
+ * other, the pattern they make and each one's move in its own usual day (server outlook.py;
+ * panels/MarketOutlook draws it, here and on Macro's board). Context for the day: it is in
+ * neither the bias nor a score, and it opens Macro on the same read.
+ */
+function OutlookCard({
+  d,
+  quotes,
+  age,
+  onMacro,
+}: {
+  d: MarketOutlook | null | undefined;
+  quotes?: TerminalData["quotes"];
+  age?: number | null;
+  onMacro: () => void;
+}) {
   return (
     <section className={cn(CARD, "flex min-h-[260px] min-w-0 flex-col gap-2 xl:min-h-0")}>
       <Head
-        title={
-          <span className="flex items-center gap-2">
-            Stock news
-            {live && (
-              <span className="qt-cap flex items-center gap-1 text-[9.5px] font-normal text-ink-3">
-                <span aria-hidden className="h-[5px] w-[5px] rounded-full bg-call" />
-                live
-              </span>
-            )}
-          </span>
-        }
-        sub="Major stories, newest first"
+        title="Market Pulse"
+        sub={d?.ok && d.label ? `${d.label} · each move against its own usual day` : "Stocks, bonds, the dollar, metals, oil and bitcoin, read against each other"}
+        right={<Go onClick={onMacro}>Open Macro</Go>}
         age={age}
       />
-      <ul className="min-h-0 flex-1 overflow-auto pr-1">
-        {stories.length === 0 && <li className="py-8 text-center text-[12px] text-ink-3">No major stories in the last thirty hours.</li>}
-        {stories.map((s) => (
-          <li key={`${s.syms.join()}-${s.title}`} className="border-b border-ring/60 py-2 last:border-b-0">
-            <p className="text-[11.5px]">
-              {s.syms.map((x, i) => (
-                <span key={x}>
-                  {i > 0 && <span className="text-ink-3">, </span>}
-                  <button type="button" onClick={() => openTicker(x)} className="hit fig font-semibold text-ink">
-                    {x}
-                  </button>
-                </span>
-              ))}
-              <span className="text-ink-3"> · {s.tag}</span>
-            </p>
-            <a href={s.url} target="_blank" rel="noreferrer noopener" className="hit mt-0.5 line-clamp-2 text-[12px] leading-[1.35] text-ink-2 hover:text-ink">
-              {s.title}
-            </a>
-            <p className="fig mt-0.5 text-[10.5px] text-ink-3">
-              {ageWord(s.age_min)} ago · {s.provider}
-            </p>
-          </li>
-        ))}
-      </ul>
+      {/* Scrolls if it must, but not by the `overflow-auto` class: under Luminous that class
+          fades a card's last 36px as "more below" (globals.css), and this card's rows fit
+          themselves to it, so the fade only dimmed its closing sentence. */}
+      <div className="min-h-0 flex-1 [overflow-y:auto] pr-1">
+        <OutlookBody d={d} quotes={quotes} />
+      </div>
     </section>
   );
 }
@@ -805,7 +907,7 @@ function Rotation({ d, onHeat, onSector }: { d: DashboardPayload; onHeat: () => 
   return (
     <section className={cn(CARD, "shrink-0")}>
       <Head
-        title="Sector rotation"
+        title="Sector Rotation"
         sub={
           d.sectors_basis === "pre"
             ? "Where money is moving before the bell: each fund's pre-market move, and the stocks pushing each sector"
@@ -814,7 +916,7 @@ function Rotation({ d, onHeat, onSector }: { d: DashboardPayload; onHeat: () => 
         right={<Go onClick={onHeat}>View heat map</Go>}
         age={d.ages?.rotation}
       />
-      <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 min-[106.25rem]:grid-cols-11">
+      <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11">
         {d.rotation.map((s) => (
           <button key={s.key} type="button" onClick={() => onSector(s.key)} title={`Open ${s.label} on the heat map`} style={heatStyle(s.day_pct, max)} className="hit min-w-0 rounded-[4px] border border-ring px-2.5 py-2 text-left">
             <p className="flex min-w-0 items-center gap-1.5 text-[12px] font-semibold text-ink">

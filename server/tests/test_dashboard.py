@@ -262,7 +262,8 @@ def test_a_page_with_nothing_loaded_says_not_ok_and_does_not_raise() -> None:
 
 # The collector's ages at 19:31 ET on Thursday 19 November 2026 (snapshot `age_min`).
 AGES = {"scanner": 0.08, "scan_live": 412.0, "sectors": 0.74, "sector_ext": 0.72,
-        "breadth_all": 0.74, "wire": 3.34, "stock_news": 0.73, "calendar": 5.81}
+        "breadth_all": 0.74, "wire": 3.34, "stock_news": 0.73, "calendar": 5.81,
+        "quotes": 0.21}
 
 
 def test_each_card_is_as_old_as_the_oldest_block_it_is_drawn_from() -> None:
@@ -270,7 +271,9 @@ def test_each_card_is_as_old_as_the_oldest_block_it_is_drawn_from() -> None:
         # The live pass last ran at the close; the bar pass a few seconds ago.
         "plan": 0.74, "breadth": 0.74, "top": 0.08,
         # The calendar's six minutes do not date the card: the wire's headlines do.
-        "impact": 3.34, "stories": 0.73, "rotation": 0.74}
+        "impact": 3.34, "stories": 0.73, "rotation": 0.74,
+        # The Market Outlook reads the board's quotes (2026-11-21).
+        "outlook": 0.21}
 
 
 def test_before_the_bell_the_sector_cards_are_as_old_as_the_pre_market_read() -> None:
@@ -284,6 +287,13 @@ def test_in_the_session_the_live_pass_dates_the_engines_rows() -> None:
 
 def test_a_block_never_read_has_no_age() -> None:
     assert d.card_ages({}, pre=False) == dict.fromkeys(
-        ("plan", "breadth", "top", "impact", "stories", "rotation"))
+        ("plan", "breadth", "top", "impact", "stories", "outlook", "rotation"))
     built = d.build({}, {"age_min": {"wire": 2.0}}, {}, {}, [], session_day=FRI)
     assert built["ages"]["impact"] == 2.0
+
+
+def test_the_market_outlook_is_the_snapshots_own_read() -> None:
+    # The card in Stock news's place since 2026-11-21: the same object Macro's board shows.
+    read = {"ok": True, "name": "Forced selling", "rows": []}
+    assert d.build({}, {"outlook": read}, {}, {}, [], session_day=FRI)["outlook"] == read
+    assert d.build({}, {}, {}, {}, [], session_day=FRI)["outlook"] is None

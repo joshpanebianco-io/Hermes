@@ -28,6 +28,17 @@ export function heatStyle(v: number | null | undefined, max: number): CSSPropert
   return { background: `color-mix(in oklab, var(${(v as number) >= 0 ? "--call" : "--put"}) ${p}%, transparent)` };
 }
 
+/**
+ * The same tint as the `--heat` property, for a card of class `heat-card` (globals.css),
+ * which lays it OVER its own ground instead of being its ground. An inline `background`
+ * wins over every hover rule, so a tinted card could not lift under the pointer; with the
+ * tint as a layer, the ground beneath it can (owner, 2026-11-21, of the Sectors cards).
+ */
+export function heatVar(v: number | null | undefined, max: number): CSSProperties | undefined {
+  const tint = heatStyle(v, max)?.background;
+  return tint ? ({ "--heat": tint } as CSSProperties) : undefined;
+}
+
 /** The biggest move on the board, never under a point, so a dead day is not painted loud. */
 export function heatMax(values: ReadonlyArray<number | null | undefined>): number {
   return Math.max(1, ...values.map((v) => (v == null || !Number.isFinite(v) ? 0 : Math.abs(v))));

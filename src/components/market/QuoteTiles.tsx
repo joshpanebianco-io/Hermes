@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { lagText, quoteGroups, quoteInk } from "@/lib/quoteTiles";
 import { curveShape } from "@/lib/vix";
 import { Tick } from "@/components/ui/Tick";
+import { TickerLogo, logoSrc } from "@/components/ui/TickerLogo";
 import { VixPopover, type VixFacts } from "@/components/vol/VixBands";
 
 /**
@@ -28,10 +29,19 @@ export function QuoteTiles({
   vixMonth,
   spread = false,
   pills = false,
+  marks = false,
   className,
 }: {
   quotes: readonly Quote[];
   groups: readonly (readonly string[])[];
+  /**
+   * Each fund's logo beside its name, where it has one (owner, 2026-11-21, of the Dashboard's
+   * game plan: "can we add the icons for spy and qqq and iwm"; then of the Stocks band:
+   * "inscanner can we add the icons to spy qqq iwm at the top next to the ticker/company
+   * search box"). The Sectors page's band is the same row and wears them too. The VIX has
+   * none and draws none.
+   */
+  marks?: boolean;
   /**
    * Each figure on one line in a capsule of its own, "SPY 759.81 +1.32%": the Sidebar
    * interface's header, where the prices stand beside the page's name (shell/SideHeader).
@@ -86,7 +96,7 @@ export function QuoteTiles({
             </VixPopover>
           ) : (
             <div key={q.key} className="flex shrink-0" title={shownQuote(q).note ?? feedNote(q) ?? undefined}>
-              <Figure q={q} />
+              <Figure q={q} mark={marks} />
             </div>
           ),
         ),
@@ -114,7 +124,7 @@ function Pill({ q: raw }: { q: Quote }) {
 }
 
 /** One instrument. Phrasing content only: on VIX this sits inside a <button>. */
-function Figure({ q: raw }: { q: Quote }) {
+function Figure({ q: raw, mark = false }: { q: Quote; mark?: boolean }) {
   // Outside the session a US-listed fund shows its pre-market or after-hours trade (lib/quoteExt).
   const { q, tag } = shownQuote(raw);
   const chg = quoteChg(q);
@@ -123,7 +133,9 @@ function Figure({ q: raw }: { q: Quote }) {
     <span className="flex flex-col justify-center gap-1 text-left">
       {/* How late a delayed print is rides under its own label, in lower case: "NQ · 10M"
           read as ten million or a ten-minute chart. */}
-      <span className="qt-cap text-[10.5px] whitespace-nowrap text-ink-3">
+      <span className={cn("qt-cap text-[10.5px] whitespace-nowrap text-ink-3", mark && "flex items-center gap-1.5")}>
+        {/* A fund's own logo, only where there is a file for it: no letter tile for the VIX. */}
+        {mark && logoSrc(q.key) && <TickerLogo sym={q.key} size={14} />}
         {q.key}
         {lag && <span className="text-ink-4 normal-case"> · {lag}</span>}
       </span>

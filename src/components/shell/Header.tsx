@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { HERMES_MARK_D } from "@/lib/hermesMark";
 import { TABS, type Tab } from "@/lib/tabs";
 import { useNow } from "@/lib/useNow";
-import { localClock, readerClock } from "@/lib/clock";
+import { localClock } from "@/lib/clock";
 import { useRefreshPress } from "@/lib/refresh";
 import { RefreshGlyph, refreshWord } from "@/components/shell/RefreshGlyph";
 
@@ -103,9 +103,7 @@ export function Header({
   const now = useNow(1000);
   const { phase, press } = useRefreshPress(onRefresh);
   const clock = localClock(rawClock, now);
-  // The reader's own time beside New York's: the owner trades the NY session
-  // from Australia, where 09:30 ET is past midnight. Null on New York time.
-  const local = readerClock(now);
+  // New York's time alone: the reader's own was under it until 2026-11-21 (the card's note).
   const ny = nyClock(clock);
   const tabs = TABS;
 
@@ -169,49 +167,59 @@ export function Header({
           * dont have anything in mind myself", then of the flip mock: "ye ai like that"). It
           * was six loose things on one line in four kinds of type, "US pre-market · NY opens
           * in 1h 36m 07:54:42 ET 22:54 AEST ● LIVE [Refresh]", with a stacked form for a
-          * narrower window. Now, at every width: the session with New York's countdown under
-          * it; New York's time with yours under it; the refresh, wearing the live dot. Stale
-          * and Offline still say so in words, on the button.
+          * narrower window. Then, at every width: the session with New York's countdown under
+          * it; New York's time with yours under it; the refresh. Stale and Offline still say
+          * so in words, on the button.
+          *
+          * ONE LINE, AND NEW YORK'S TIME ALONE (owner, 2026-11-21: "lets remove the aest time
+          * and lets move NY opens in from the bottom to the side or something so its all
+          * inline"). The two stacks are four parts side by side, a hairline between each: the
+          * session, New York's countdown, New York's time, the refresh. The countdown has a
+          * part of its own so that "NY Morning (Overlap)" and "NY closes in" do not run into
+          * one sentence. With one line to hold, the card is 38px where it was 46.
+          *
+          * A line is wider than two stacks: 500px in the overlap hours where the stacks were
+          * 370, and beside the tabs that needs a frame about 1690px wide. From a 1280 window up
+          * the frame is at least 1840 of its own pixels (globals.css, ONE LAYOUT, SCALED DOWN,
+          * 2026-11-21), so the full line fits there. Under 1280, where nothing is scaled and
+          * the pages reflow, the parts sit closer and "(Overlap)" and the seconds are left out
+          * (the hover still says the overlap): 385px. That short form was for every window
+          * under 1700px for the few hours before the scaling was built.
           */}
         <div className="ml-auto flex shrink-0 items-center md:col-start-3 md:ml-0 md:justify-self-end">
-          <div className="flex h-[46px] items-stretch rounded-[12px] border border-ring-2 bg-surface-2/55 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--ink)_6%,transparent)]">
+          <div className="flex h-[38px] items-stretch rounded-[11px] border border-ring-2 bg-surface-2/55 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--ink)_6%,transparent)]">
             {clock && (
               <>
-                <div
-                  className="flex flex-col justify-center gap-[5px] px-4"
-                  title={[clock.phase.label, clock.phase.note, clock.overlap ? "Overlap: London and New York both open" : null, ny?.title].filter(Boolean).join(" · ")}
+                <span
+                  className="flex items-center gap-[7px] px-3.5 text-[12.5px] leading-none font-semibold whitespace-nowrap text-ink max-xl:px-2.5"
+                  title={[clock.phase.label, clock.phase.note, clock.overlap ? "Overlap: London and New York both open" : null].filter(Boolean).join(" · ")}
                 >
-                  <span className="flex items-center gap-[7px] text-[12.5px] leading-none font-semibold whitespace-nowrap text-ink">
-                    <span
-                      aria-hidden
-                      className={cn("h-[7px] w-[7px] shrink-0 rounded-full bg-current", SESSION_DOT[sessionTone(clock.phase.key)], sessionTone(clock.phase.key) !== "shut" && "live-dot shadow-[0_0_8px_currentColor]")}
-                    />
-                    {sessionWord(clock.phase.key, clock.phase.label)}
-                    {/* The session first, the overlap after it in its own hue (owner, 2026-11-20). */}
-                    {clock.overlap && <span className="font-normal text-flip-fig">(Overlap)</span>}
-                  </span>
-                  {ny && (
-                    <span className="pl-[14px] text-[11.5px] leading-none whitespace-nowrap text-ink-3">
+                  <span
+                    aria-hidden
+                    className={cn("h-[7px] w-[7px] shrink-0 rounded-full bg-current", SESSION_DOT[sessionTone(clock.phase.key)], sessionTone(clock.phase.key) !== "shut" && "live-dot shadow-[0_0_8px_currentColor]")}
+                  />
+                  {sessionWord(clock.phase.key, clock.phase.label)}
+                  {/* The session first, the overlap after it in its own hue (owner, 2026-11-20). */}
+                  {clock.overlap && <span className="font-normal text-flip-fig max-xl:hidden">(Overlap)</span>}
+                </span>
+                {ny && (
+                  <>
+                    <span aria-hidden className="my-[9px] w-px bg-ring-2" />
+                    <span className="flex items-center gap-1.5 px-3.5 text-[12px] leading-none whitespace-nowrap text-ink-3 max-xl:px-2.5" title={ny.title}>
                       {ny.label} <span className="fig text-ink-2">{ny.value}</span>
                     </span>
-                  )}
-                </div>
+                  </>
+                )}
                 <span aria-hidden className="my-[9px] w-px bg-ring-2" />
-                <div className="flex flex-col justify-center gap-[5px] px-4">
-                  <span className="flex items-baseline gap-1.5 leading-none" title="New York's time">
-                    <span className="fig text-[16px] tracking-[0.01em] text-ink">
+                <span className="flex items-center px-3.5 max-xl:px-2.5" title="New York's time">
+                  <span className="flex items-baseline gap-1.5 leading-none">
+                    <span className="fig text-[15px] tracking-[0.01em] text-ink">
                       {clock.et_time.slice(0, 5)}
-                      <span className="text-ink-3">{clock.et_time.slice(5)}</span>
+                      <span className="text-ink-3 max-xl:hidden">{clock.et_time.slice(5)}</span>
                     </span>
                     <span className="eyebrow text-[9px]">ET</span>
                   </span>
-                  {local && (
-                    <span className="flex items-baseline gap-1.5 leading-none" title={`Your local time (${local.zone})`}>
-                      <span className="fig text-[11.5px] text-ink-3">{local.time}</span>
-                      <span className="eyebrow text-[9px] text-ink-4">{local.zone}</span>
-                    </span>
-                  )}
-                </div>
+                </span>
                 <span aria-hidden className="my-[9px] w-px bg-ring-2" />
               </>
             )}
@@ -225,8 +233,8 @@ export function Header({
                 // Pressed in on the click, lit while it reads (lib/refresh).
                 "hit flex items-center justify-center gap-2 text-ink-3 transition-[transform,background-color] duration-100 hover:bg-surface-3/60 hover:text-ink-2 active:scale-90",
                 phase !== "idle" && "bg-surface-3/60",
-                clock ? "rounded-r-[11px]" : "rounded-[11px]",
-                link === "live" ? "w-[46px]" : "px-3.5",
+                clock ? "rounded-r-[10px]" : "rounded-[10px]",
+                link === "live" ? "w-[40px]" : "px-3.5",
               )}
             >
               <RefreshGlyph phase={phase} />

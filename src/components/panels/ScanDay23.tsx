@@ -270,7 +270,7 @@ function Card({ glyph, hue, value, word, sub, part }: { glyph: string; hue: stri
       <div className="min-w-0">
         <p className={cn("fig text-[15px] leading-none", hue)}>{value}</p>
         <p className="mt-[3px] text-[12px] leading-none font-semibold text-ink">{word}</p>
-        <p className="mt-[3px] text-[10.5px] leading-none whitespace-nowrap text-ink-3 max-[1599px]:hidden">{sub}</p>
+        <p className="mt-[3px] text-[10.5px] leading-none whitespace-nowrap text-ink-3 max-xl:hidden">{sub}</p>
       </div>
     </div>
   );

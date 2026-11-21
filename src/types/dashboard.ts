@@ -1,5 +1,6 @@
 import type { ScanRow, ScanSession, Side, Verdict, WideBasis } from "@/types/scanner";
 import type { BreadthAll } from "@/types/terminal";
+import type { MarketOutlook } from "@/types/outlook";
 
 /** GET /api/dashboard — the session on one page (server dashboard.py). */
 
@@ -146,6 +147,8 @@ export interface DashboardPayload {
   news_live: boolean;
   /** The High impact news card; absent from a collector older than 2026-11-19. */
   impact?: DashImpact;
+  /** The Market Outlook card (server outlook.py), in Stock news's place since 2026-11-21. */
+  outlook?: MarketOutlook | null;
   rotation: Array<{ key: string; label: string; day_pct: number | null; rs_day: number | null; leaders: string[] }>;
   /** "pre" before the bell: the focus lists and the rotation row are the funds' pre-market moves (2026-11-16). */
   sectors_basis?: "pre" | "session";
@@ -159,7 +162,7 @@ export interface DashboardPayload {
 }
 
 /** The cards with an age of their own; the Futures card's is the Terminal poll's quotes. */
-export type DashCard = "plan" | "breadth" | "top" | "impact" | "stories" | "rotation";
+export type DashCard = "plan" | "breadth" | "top" | "impact" | "stories" | "outlook" | "rotation";
 
 /* -------------------------------------------------------------------------- */
 /* GET /api/scanner/sectors (sources/universe.py heatmap)                      */

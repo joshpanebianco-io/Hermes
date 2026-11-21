@@ -294,15 +294,25 @@ def test_the_model_is_shown_no_gamma_and_no_moving_average() -> None:
 
 @pytest.mark.parametrize("session", ["asia", "london", "ny"])
 @pytest.mark.parametrize("asset", ["indexes", "GC", "SIL", "CL"])
-def test_the_prompt_names_gamma_and_averages_only_to_rule_them_out(session: str,
-                                                                   asset: str) -> None:
+def test_the_prompt_names_gamma_only_as_context_and_averages_only_to_rule_them_out(
+        session: str, asset: str) -> None:
+    # Gamma was ruled out of the report whole on 15 Nov 2026. Since 21 Nov it has a chart
+    # and a paragraph in the Market Context section (briefctx.py), and the prompt may
+    # speak of it in two places only: the paragraph that says what the section is, and
+    # the `context.gamma` field's own description. In both it is a regime, never a
+    # direction, and never a level to trade from.
     for prog in ({"underway": False, "opens_et": "09:30", "phrase": "3h", "hours": "h"},
                  {"underway": True, "opened_et": "09:30", "phrase": "1h", "hours": "h",
                   "minutes_in": 60}):
         p = report.system_prompt(session, asset, prog)
         for line in p.splitlines():
             if re.search(r"gamma|\bflip\b|call wall|put wall", line, re.I):
-                assert line.startswith("DEALER GAMMA IS NOT IN THIS REPORT"), line[:120]
+                assert "never a direction" in line, line[:120]
+                if line.startswith("THE MARKET CONTEXT IS PRINTED UNDER THE CALL"):
+                    assert "Do not trade from a gamma level" in line
+                else:
+                    assert line.startswith("      gamma    "), line[:120]
+                    assert "no trade from a wall" in line
             if re.search(r"\b(?:EMAs?|SMAs?|200-day|moving average|trend line)\b", line):
                 assert "NO MOVING AVERAGES" in line or "moving average votes" in line, line[:120]
         assert "`movers`" in p and "`factors`" not in p and "`why`" not in p

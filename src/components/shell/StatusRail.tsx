@@ -55,15 +55,11 @@ export function StatusRail({
   status,
   ages,
   feeds,
-  pollSec,
-  lastPoll,
 }: {
   status: Record<string, SourceStatus>;
   ages: Record<string, number>;
   /** The wire's publishers, one row each. */
   feeds?: SourceStatus[];
-  pollSec: number;
-  lastPoll: Date | null;
 }) {
   const names = [
     ...ORDER.filter((n) => n in status),
@@ -127,14 +123,11 @@ export function StatusRail({
         })}
       </div>
 
+      {/* NO POLL LINE AND NO "PERSONAL USE" (owner, 2026-11-21: "can we get rid of this poll
+          20s · 15:08:55 PERSONAL USE"). The poll's cadence and its last time were the
+          shell's own workings, which the header's refresh and each card's age already
+          answer for; the licence note is the README's to carry. */}
       <div className="ml-auto flex items-center gap-3">
-        <span className="fig text-[9px] text-ink-3 qt:text-[10px]">
-          poll {pollSec}s
-          {lastPoll ? ` · ${lastPoll.toLocaleTimeString("en-US", { hour12: false })}` : ""}
-        </span>
-        <span className="fig text-[9px] text-ink-3 qt:text-[10px]" title="This terminal is for one desk only. Yahoo quotes and publisher RSS are personal-use; neither may be redistributed.">
-          PERSONAL USE
-        </span>
         {/* The assistant's door — on the rail rather than in the header,
             whose strip already gives up instruments for want of width. */}
         <button

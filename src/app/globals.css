@@ -141,6 +141,10 @@
 }
 
 @theme inline {
+  /* `2xl` IS `xl`'s 1280 (it was 1536): from 1280 the frame is zoomed out to a 1920
+     page's width, so a rule that waited for a wider window must not change the layout
+     half-way down the scaling (the block headed ONE LAYOUT, SCALED DOWN, further on). */
+  --breakpoint-2xl: 80rem;
   --color-void: var(--void);
   --color-bg: var(--bg);
   --color-surface: var(--surface);
@@ -1290,8 +1294,11 @@
  * so the owner's 1920 screens get the full form too. After `qt`, because a later
  * variant wins over an earlier one.
  */
+/* FROM 1280 SINCE 2026-11-21: below 1840 the frame is zoomed out to a 1920 page's width
+   (the block headed ONE LAYOUT, SCALED DOWN, further on), so the 1,700 the band needs
+   are there from the window width the scaling starts at. */
 @custom-variant roomy {
-  @media (min-width: 1700px) {
+  @media (min-width: 1280px) {
     &:where(.ui-qt, .ui-qt *) {
       @slot;
     }
@@ -2236,25 +2243,126 @@
  *   .tip        the tooltip, also on <body>: a larger font, no zoom, so its placement
  *               from the pointer needs no correction.
  */
-.ui-lum {
-  --ui-zoom: 1;
-  --ui-unzoom: 1;
-}
+/* `:root.ui-lum`, so it outranks the plain `:root` the scale's default is set on below. */
 @media (min-width: 2200px) {
-  .ui-lum {
+  :root.ui-lum {
     --ui-zoom: 1.1;
     --ui-unzoom: 0.909091;
   }
 }
-.ui-lum .app-frame,
-.ui-lum .qt-pop {
+.ui-lum .tip {
+  /* Not under 10px: on a small screen the frame is scaled down (below), and a hover's
+     sentence at 70% of 11px is not read. */
+  font-size: calc(11px * max(var(--ui-zoom), 0.92));
+}
+
+/* ---- ONE LAYOUT, SCALED DOWN TO A 13-INCH SCREEN ---------------------------------------
+ * Owner, 2026-11-21: "can we amke sure that the app scales downresolution with screen size
+ * at least for as low as a 13 inch screen before it starts to dynamically response". The
+ * pages are drawn for a 1920 window. Between 1280 and 1840 they were the same three
+ * columns squeezed: the tabs left the window's centre, cards wrapped their lines, and
+ * four rules changed the layout part-way (the 1536 and 1700 marks). A 13-inch laptop is
+ * 1280 to 1470 CSS pixels wide (1920 at 150%, a MacBook Air's 1440 or 1470), which is the
+ * squeezed range's low end.
+ *
+ * SO BELOW 1840 THE FRAME IS ZOOMED OUT, in steps, by the same `zoom` that makes the
+ * 2560 screen 10% larger: every step keeps the frame between 1840 and 1945 of its own
+ * pixels wide, so from 1280 up the page IS the 1920 page, smaller. Steps and not a
+ * formula, because a media query needs no script and so cannot paint one size and then
+ * another; seven of them, about 5% apart, each `zoom` its lower edge over 1840.
+ *
+ * BELOW 1280 NOTHING IS ZOOMED and the pages reflow as they always have (`xl` is 1280):
+ * that is where "dynamically respond" starts.
+ *
+ * WHAT HAS TO AGREE WITH IT. A media query reads the WINDOW, not the zoomed frame, so
+ * every rule that changed the layout between 1280 and 1840 now changes it at 1280, where
+ * the scaling starts: Tailwind's `2xl` (the @theme block: 80rem, it was 96), `roomy`
+ * (it was 1700px), and in the components the Sector Rotation row's eleven columns, the
+ * header card's short form and Day 2/3's caption. Container queries read the frame's
+ * own pixels and needed nothing. A size taken from the window's height or width inside
+ * the frame is unscaled first (`--ui-unzoom`: the Ask panel, the driver board's sheet).
+ *
+ * EVERY INTERFACE: Quiet had no zoom at all until this, so the three hooks below are no
+ * longer Luminous's alone. TO GO BACK: the files as they stood are in
+ * .git\scale-down-2026-11-21\before\.
+ */
+:root {
+  --ui-zoom: 1;
+  --ui-unzoom: 1;
+}
+@media (min-width: 1750px) and (max-width: 1839.98px) {
+  :root {
+    --ui-zoom: 0.951;
+    --ui-unzoom: 1.051525;
+  }
+}
+@media (min-width: 1660px) and (max-width: 1749.98px) {
+  :root {
+    --ui-zoom: 0.902;
+    --ui-unzoom: 1.108647;
+  }
+}
+@media (min-width: 1580px) and (max-width: 1659.98px) {
+  :root {
+    --ui-zoom: 0.859;
+    --ui-unzoom: 1.164144;
+  }
+}
+@media (min-width: 1500px) and (max-width: 1579.98px) {
+  :root {
+    --ui-zoom: 0.815;
+    --ui-unzoom: 1.226994;
+  }
+}
+@media (min-width: 1425px) and (max-width: 1499.98px) {
+  :root {
+    --ui-zoom: 0.774;
+    --ui-unzoom: 1.29199;
+  }
+}
+@media (min-width: 1355px) and (max-width: 1424.98px) {
+  :root {
+    --ui-zoom: 0.736;
+    --ui-unzoom: 1.358696;
+  }
+}
+@media (min-width: 1280px) and (max-width: 1354.98px) {
+  :root {
+    --ui-zoom: 0.696;
+    --ui-unzoom: 1.436782;
+  }
+}
+.app-frame,
+.qt-pop {
   zoom: var(--ui-zoom);
 }
-.ui-lum .qt-chart {
+.qt-chart {
   zoom: var(--ui-unzoom);
 }
-.ui-lum .tip {
-  font-size: calc(11px * var(--ui-zoom));
+
+/* ---- a heat card lifts under the pointer ----------------------------------------------
+ * The Sectors page's cards (owner, 2026-11-21: "i didnt want the outline just the slightly
+ * opqauge effect like what happens when you hover over the xlv card currenlty"). A card's
+ * heat was its inline `background`, which no hover rule can change, so only a card too
+ * flat to be tinted (XLV that day, -0.12%) took the shell's hover. The heat is `--heat`
+ * now (lib/heat heatVar), laid as a layer OVER the card's ground: at rest the ground is
+ * clear, under the pointer it is the hover every `.hit` has, and the heat stays on top.
+ * The layer is there at rest too, so only the ground's colour changes and it fades as
+ * any `.hit` does. */
+.heat-card {
+  background:
+    linear-gradient(var(--heat, transparent), var(--heat, transparent)),
+    transparent;
+}
+.heat-card:hover {
+  background:
+    linear-gradient(var(--heat, transparent), var(--heat, transparent)),
+    color-mix(in oklab, var(--ink) 4%, transparent);
+}
+.ui-lum .heat-card:hover {
+  background:
+    linear-gradient(var(--heat, transparent), var(--heat, transparent)),
+    var(--lum-sheet-hover);
 }
 .ui-lum .qt-cap {
   letter-spacing: 0.06em;

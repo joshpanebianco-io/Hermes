@@ -143,9 +143,20 @@ PANELS: dict[str, str] = {
                  "tape's bias, the focus sectors and themes, the counts of best setups, who "
                  "reports), breadth, the top setups by score, the names in play by the pool's "
                  "rank with whether the engine took each, the freshest major stock stories, the "
-                 "High impact news card (the day's prints, Fed speakers, big reports, an IPO, "
-                 "then the wire's high-impact and geopolitical headlines), and the eleven "
+                 "High Impact News card (the day's prints, Fed speakers, big reports, an IPO, "
+                 "then the wire's high-impact and geopolitical headlines; Stock news is its "
+                 "second view since 2026-11-21), the Market Pulse card, and the eleven "
                  "sectors with the stocks pushing each",
+    # The card was named Market Outlook for its first hours (2026-11-21); the key keeps
+    # that name, as `scanner` kept its own when the tab became Stocks.
+    "market_outlook": "Dashboard, the Market Pulse card, and Macro, the Macro board's "
+                      "Market Pulse view · a fear-to-greed scale of today's risk appetite "
+                      "(-100 to +100, from stocks, the VIX, high-yield credit and bitcoin), and "
+                      "stocks, bonds, the dollar, gold, silver, oil and bitcoin read against "
+                      "each other: each one's move in its own usual day, the pattern they make "
+                      "together (risk-on, risk-off, a rates shock, forced selling, everything "
+                      "sold or rallying, or none) and on how many recent sessions that pattern "
+                      "was seen. Context, never a side or a forecast",
     "sector_heatmap": "Sectors · every sector and theme ETF with its day, week and "
                       "month, how many of its $2bn+ stocks rose and fell and who led, and the "
                       "ninety-odd industry groups by their median stock (group, an ETF or an "
@@ -1038,6 +1049,16 @@ def _note(got: dict[str, Any], kind: str, book: str | None,
                           f"{m.get('why') or ''}".rstrip(": "))
     if movers:
         body["what_can_move_prices"] = movers
+    # The Market Context section under the call (briefctx.py, 2026-11-21): the engine's
+    # line for each chart as it was when the report was written, and what the model said
+    # each means (`what_it_means`: lead, pulse, rotation, gamma).
+    context = _d(_d(facts).get("market_context"))
+    lines = [f"{r.get('label')}: {r.get('text')}" for r in context.get("rows") or []
+             if isinstance(r, dict) and r.get("text")]
+    if lines:
+        said = {k: v for k, v in _d(note.get("context")).items() if isinstance(v, str) and v}
+        body["market_context"] = {"as_of": context.get("as_of"), "lines": lines,
+                                  **({"what_it_means": said} if said else {})}
     return _cap({**head, "note": body}, NOTE_CHARS)
 
 
@@ -1356,6 +1377,38 @@ def _heatmap_body(g: dict[str, Any]) -> dict[str, Any]:
             "industries": [group(i) for i in groups]}
 
 
+def _outlook_body(o: Any) -> dict[str, Any]:
+    """The Market Pulse as its card reads (outlook.build): the scale, the pattern, what
+    moved, each row's move with its size in usual days, and how often the pattern has
+    been seen."""
+    o = _d(o)
+    if not o.get("ok"):
+        return {"error": o.get("why") or "the Market Pulse has not been read yet"}
+    seen = _d(o.get("seen"))
+    night = _d(o.get("overnight"))
+    sent = _d(o.get("sentiment"))
+    return {
+        "as_of": o.get("label"),
+        # The fear-to-greed scale across the card's top: risk appetite today.
+        "sentiment": (f"{sent.get('label')} {int(sent['score']):+d} on a scale of -100 (extreme "
+                      "fear) to +100 (extreme greed), from today's moves in stocks, the VIX, "
+                      "high-yield credit and bitcoin, each in its usual day"
+                      if isinstance(sent.get("score"), int | float) else None),
+        "pattern": o.get("name"), "what_moved": o.get("what"),
+        "in_a_sentence": o.get("tell"),
+        "seen_on": (f"{seen.get('n')} of the last {seen.get('of')} sessions"
+                    if seen.get("of") else None),
+        "rows": [f"{r.get('name') or r.get('group')} {_pc(r.get('pct'))}, "
+                 f"{abs(float(r.get('mult') or 0.0)):.1f}x its usual day"
+                 + (f" ({r.get('note')})" if r.get("note") else "")
+                 for r in o.get("rows") or [] if isinstance(r, dict)],
+        "overnight_so_far": (f"{night.get('name')}: {night.get('what') or 'nothing has moved'}"
+                             if night else None),
+        "how_to_read": "Context for the day, not a side and not a forecast: it is in neither "
+                       "the bias nor the Scanner's score.",
+    }
+
+
 def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
     """The Dashboard as the page shows it."""
     def setup(r: dict[str, Any]) -> str:
@@ -1400,6 +1453,8 @@ def _dashboard_body(g: dict[str, Any]) -> dict[str, Any]:
                 f"{h.get('t')} [{h.get('kind')}{', high impact' if h.get('high') else ''}] "
                 f"{h.get('title')} ({h.get('publisher')})"
                 for h in _d(g.get("impact")).get("heads") or [] if isinstance(h, dict)],
+            # The Market Pulse card (outlook.py), in Stock news's place since 2026-11-21.
+            "market_outlook": _outlook_body(g.get("outlook")),
             "sectors": [f"{s.get('key')} {s.get('label')} {_pc(s.get('day_pct'))} "
                         f"({_pc(s.get('rs_day'))} vs SPY), leaders "
                         f"{', '.join(str(x) for x in s.get('leaders') or []) or 'none yet'}"
@@ -1456,6 +1511,8 @@ def _panel(name: str, a: dict[str, Any], snap: dict[str, Any], scan: dict[str, A
             body = _heatmap_body(got)
     elif name == "macro_board":
         body = {"groups": _macro_board(snap)}
+    elif name == "market_outlook":
+        body = {"market_outlook": _outlook_body(snap.get("outlook"))}
     elif name == "regime":
         body = _regime(scan)
     elif name == "driver_board":

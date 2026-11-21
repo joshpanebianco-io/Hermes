@@ -57,8 +57,9 @@ def _brief(**over: Any) -> dict[str, Any]:
 
 def test_the_shape_is_a_bottom_line_a_list_and_a_call_and_the_older_parts_still_read() -> None:
     # Brief_version 4 (owner, 2026-11-19: a report "given to a ceo"): the bottom line, what
-    # can move prices, a call a book. Nothing else is asked for.
-    assert set(report.SCHEMA["properties"]) == {"thesis", "movers", "calls"}
+    # can move prices, a call a book; and since 2026-11-21 the Market Context's words
+    # (owner: "use the ai model to summarise and tlak about it"). Nothing else is asked for.
+    assert set(report.SCHEMA["properties"]) == {"thesis", "context", "movers", "calls"}
     call = report.SCHEMA["properties"]["calls"]["items"]["properties"]
     assert set(call) == {"book", "open_bias", "conviction"}
     item = report.SCHEMA["properties"]["movers"]["items"]["properties"]

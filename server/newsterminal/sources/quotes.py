@@ -197,7 +197,15 @@ CONTEXT: list[tuple[str, str, str]] = [
     ("COPPER", "HG=F", "Copper"),
     ("RBOB", "RB=F", "Gasoline"),
     ("HEATOIL", "HO=F", "Heating oil"),
+    # THE MARKET OUTLOOK'S EIGHTH ROW (2026-11-21, outlook.py): bitcoin's daily closes, so
+    # its move is sized in its own usual day as the other seven are, and so a weekend read
+    # can give it the Friday the shut markets are still showing.
+    ("BTC", "BTC-USD", "Bitcoin"),
 ]
+
+#: Context rows kept for their daily history alone: marked `stats_only`, and left out of
+#: the brief's week and month figures (report.py `multi_day`), which they were never in.
+STATS_ONLY: frozenset[str] = frozenset({"BTC"})
 
 #: How much daily history the context feed asks for, and how much of it the week and
 #: month figures read. The bias's yardsticks read the whole of it (`hist`): sixty
@@ -520,6 +528,8 @@ def collect_context() -> tuple[list[dict[str, Any]], SourceStatus]:
             continue
         row["closes"] = row["closes"][-23:]
         row["hist"] = daily_hist(resp or {})
+        if key in STATS_ONLY:
+            row["stats_only"] = True
         rows.append(row)
 
     st.items = len(rows)

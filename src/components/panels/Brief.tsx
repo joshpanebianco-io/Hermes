@@ -28,6 +28,7 @@ import { biasInk, biasLabel, convictionWord, scoreText } from "@/lib/bias";
 import { wholeScore } from "@/lib/biasScale";
 import { fromLast, layoutRuler, priceText } from "@/lib/levelRuler";
 import { BiasScale } from "@/components/ui/BiasScale";
+import { ContextSection } from "@/components/panels/BriefContext";
 import { WrittenAgo } from "@/components/ui/NoteAge";
 import { cn } from "@/lib/cn";
 import { bp, dir, num, pct, signed } from "@/lib/format";
@@ -662,6 +663,19 @@ function MarketReportView({ rep, embedded = false }: { rep: Report; embedded?: b
         {/* THE LEAN STAYS AT THE TOP (owner, 2026-11-19: "we should still have the bias lean
             at the top fo the report"): the bottom line, then the call with its scale, table
             and levels, then what can move prices. */}
+        {/* The market context sits under the call and over the list (owner, 2026-11-21): the
+            day's backdrop as three charts with the model's read under each
+            (panels/BriefContext). A report written before then has none. */}
+        {briefing && f.market_context && (
+          <ContextSection
+            head={<SheetHead title="Market Context" right={f.market_context.as_of ?? undefined} />}
+            ctx={f.market_context}
+            words={b.context}
+            who={f.market_factors != null ? "stocks" : f.books.join(" and ")}
+            rule={rule}
+            className={cn(pad, rule)}
+          />
+        )}
         {briefing && <MoversSection b={b} f={f} rep={rep} live={live} className={cn(pad, rule)} />}
 
         {(clockShown.length > 0 || risks.length > 0) && (
@@ -708,8 +722,8 @@ function MarketReportView({ rep, embedded = false }: { rep: Report; embedded?: b
         <footer className={cn(pad, rule, "border-t py-3 text-[11px] leading-relaxed text-ink-3")}>
           {briefing ? (
             <>
-              Each item&apos;s figures, the bias scores, weights, reads and levels are the engine&apos;s, from live data when this was
-              written; the bottom line, the calls and each item&apos;s impact, effect and why are the model&apos;s. The VIX is weather:
+              Each item&apos;s figures, the market context&apos;s charts, the bias scores, weights, reads and levels are the engine&apos;s, from live data when this was
+              written; the bottom line, the market context&apos;s words, the calls and each item&apos;s impact, effect and why are the model&apos;s. The VIX is weather:
               it says how far moves run, never which way. The weights are a judgement, being recorded against outcomes to test them.
             </>
           ) : (

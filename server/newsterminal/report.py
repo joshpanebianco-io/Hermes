@@ -58,9 +58,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import bias as bias_mod
+from . import briefctx, releases, structure
 from . import events as events_mod
 from . import holidays as holidays_mod
-from . import releases, structure
 from .config import CACHE_DIR, UA
 from .holidays import close_time, cme_closed, is_trading_day
 from .profile import reads as profile_reads
@@ -1589,6 +1589,11 @@ def _partial(snap: dict[str, Any], books: list[str]) -> list[str]:
 # Futures page. Event risk is not a side either, but it lowers the ceiling on the
 # call, and the owner named it: it is the last row, marked for what it does.
 #
+# ONE LINE OF IT IS BACK, AS CONTEXT (owner, 2026-11-21: "we should summaries the market
+# pulse, sector rotations and gex context"). Still no row, no card, no walls among the
+# levels and no clause in a plan: the Market Context section under the call carries one
+# engine-written line of the regime and its levels (briefctx.py), and that is all.
+#
 # PLAIN NAMES. "Catalysts" is News & data, "Rates & dollar" is Macro, "Intraday
 # structure" is Volume profile & structure.
 #
@@ -1746,7 +1751,8 @@ def key_levels(snap: dict[str, Any], book: str,
 # THE VIX IS WEATHER (the owner's rule, and bias.BOARD_FAMILY since the evening of
 # 2026-11-19): its row is always on the list, and what it does is said as the ranges it
 # makes, never as a side. No dealer gamma (the owner, 2026-11-15: "i dont think we need to
-# mention gex"), here as everywhere in the report.
+# mention gex"); since 2026-11-21 it has its one line in the Market Context section
+# (briefctx.py) and is still never an item on this list.
 
 #: How far an item can move the book this session, as the page prints it.
 IMPACTS = ("high", "medium", "low")
@@ -2714,6 +2720,9 @@ def build_digest(
                 "week_change": round(r["week_chg"], 3) if r.get("week_chg") is not None else None,
             }
             for r in snap.get("context") or []
+            # A row read for its daily history alone (quotes.STATS_ONLY) is not a figure
+            # of the brief's.
+            if not r.get("stats_only")
         },
         "gamma_levels": gamma,
         # What a move will find: who is crowded, and how hedged the market is.
@@ -2911,6 +2920,9 @@ BRIEF_VERSION = 4
 LIMITS: dict[str, int] = {
     "thesis": 40, "factor": 20, "plan": 28, "wrong_if": 16,
     "today": 14, "risks": 14, "headlines": 12, "mover": 40,
+    # The Market Context's words (briefctx.py, 2026-11-21): a lead over the three charts
+    # and a paragraph under each. The mock the owner passed ran to 45 and to 55.
+    "context_lead": 45, "context": 55,
 }
 #: The list holds at least this many items and at most MOVERS_MAX.
 MOVERS_MIN = 3
@@ -2931,10 +2943,28 @@ _MOVER = _obj({
         "channel, plainly), then what a surprise, a break or an escalation does to the book."
     )},
 })
+# THE MARKET CONTEXT'S WORDS (2026-11-21, owner: "use the ai model to summarise and tlak
+# about it and how it affects the market"). The page charts the Market Pulse, the sector
+# rotation and dealer gamma from the engine's figures (`facts.market_context`); these are
+# what the model says each means for the book. Strict mode wants every property, so a
+# panel the report has no figures for is answered with an empty string and dropped
+# (`_context`).
+_CONTEXT = _obj({
+    "lead": {**_STR, "description": (
+        f"Two sentences, {LIMITS['context_lead']} words at most: what kind of session the "
+        "three charts describe together. Not the call. Empty with no `market_context`."
+    )},
+    **{k: {**_STR, "description": (
+        f"{LIMITS['context']} words at most: what the {name} means for the book, not a "
+        "recital of its figures. Empty when `market_context.panels` does not list it."
+    )} for k, name in (("pulse", "Market Pulse"), ("rotation", "sector rotation"),
+                       ("gamma", "dealer gamma regime, never a direction"))},
+})
 SCHEMA: dict[str, Any] = _obj({
     "thesis": {**_STR, "description": (
         f"The bottom line in one or two plain sentences, {LIMITS['thesis']} words at most."
     )},
+    "context": _CONTEXT,
     "movers": _arr(_MOVER, MOVERS_MIN, MOVERS_MAX),
     "calls": _arr(_obj({
         "book": _BOOK,
@@ -2949,6 +2979,7 @@ _ETF = {"type": "string", "enum": list(ETF_BOOKS)}
 _CALL = SCHEMA["properties"]["calls"]["items"]["properties"]
 SCHEMA_ETFS: dict[str, Any] = _obj({
     "thesis": SCHEMA["properties"]["thesis"],
+    "context": _CONTEXT,
     "movers": SCHEMA["properties"]["movers"],
     "calls": _arr(_obj({
         "book": _ETF, "open_bias": _BIAS, "conviction": _CALL["conviction"],
@@ -3446,10 +3477,18 @@ session"), never as today's. `index_pp` is that name's contribution to the index
 in PERCENTAGE POINTS (weight times return), not index points: write "0.42 \
 percentage points of the index".
 
-DEALER GAMMA IS NOT IN THIS REPORT. It is not a side, the bias does not weigh it \
-and the page does not print it. Never mention gamma, the flip, a call or put wall, \
-dealer hedging or pinning, and never use one of those levels: every level you \
-name is in `key_levels`.
+THE MARKET CONTEXT IS PRINTED UNDER THE CALL, as three charts the page draws from \
+`market_context`, and you write what they mean in `context`: the Market Pulse (how \
+hard risk is being bought or sold today on a fear-to-greed scale, and the pattern \
+stocks, bonds, gold and the dollar make together), the sector rotation, and dealer \
+gamma. None of the three is in the bias and none is a side: the pulse and the rotation \
+say what kind of day this is, and gamma is a regime, how far moves tend to run, never \
+a direction. Their place is `context`: the thesis may lean on one in a clause, the \
+movers list never carries one as an item and its VIX row does not repeat the gamma \
+regime. Do not trade from a gamma level: the flip and the walls belong to the gamma \
+chart and its paragraph, and every level you name elsewhere is in `key_levels`. With \
+no `market_context` in the snapshot, say nothing of the pulse, the rotation or gamma, \
+and leave every `context` field an empty string.
 
 THE CURVE HAS A DATE. `rates.curve` is Treasury's daily curve for \
 `rates.curve_as_of`, published after that day's close, and each `chg_bp` in it is \
@@ -3546,6 +3585,34 @@ Field by field:
 the call and the one thing that decides it, with its level or figure. It is read \
 first, by someone with a minute. With nothing live, say so in one sentence and name \
 the range. Never the last price for its own sake: the page prints it.
+  context    THE BACKDROP, IN WORDS, under the three charts the page draws from \
+`market_context`. THE CHART PRINTS ITS FIGURES AND THE PARAGRAPH SAYS WHAT THEY MEAN: a \
+paragraph that reads its chart aloud has said nothing. Write the cause, then what it \
+does to {book_list}, for a reader who is not a trader, with TWO FIGURES AT MOST in a \
+paragraph (copied from `market_context`, where the point turns on them) and never a \
+list of levels, sectors or markets. Four fields, each an empty string when \
+`market_context.panels` does not list its panel (`lead` when it lists none). Each \
+quoted sentence below is about SOME OTHER DAY, to show the kind of sentence wanted: \
+write this day's in your own words and never reuse its phrasing.
+      lead     {LIMITS["context_lead"]} words at most, two sentences that tie the three \
+together into what kind of session this is ("A rally the whole market joined: havens \
+were sold and the average stock rose with the index"). Not the call, and not the bottom \
+line said again.
+      pulse    {LIMITS["context"]} words at most. What the fear-to-greed reading and the \
+pattern across stocks, bonds, gold, the dollar, oil and bitcoin say about WHO is selling \
+or buying and WHY ("When bonds fall with stocks, it is rates doing the damage, not fear \
+for growth"), then what that tends to do to {book_list} next.
+      rotation {LIMITS["context"]} words at most. Where money went among the sectors and \
+whether the index moved on its largest names or on the average stock (equal weight \
+against the S&P), then what {book_list} needs from that to move. For a metals or crude \
+book: what the stock market's rotation says about risk appetite and growth for it, in a \
+sentence, and no more where there is no link.
+      gamma    {LIMITS["context"]} words at most. What the regime does to the size and \
+speed of moves in {book_list} ("Above the flip, dealer hedging leans against moves, so \
+ranges tend to hold and a break is more likely to fade"), then what the level nearest \
+the price means \
+if it breaks or holds. The map prints the walls and the expected move: name one level, \
+two at most. A regime and never a direction, with no trade from a wall.
   movers     WHAT CAN MOVE PRICES, {MOVERS_MIN} to {MOVERS_MAX} items, the most \
 important first. Rank everything you read by how far it can move {book_list} in THIS \
 session and list the top of it:
@@ -3798,6 +3865,21 @@ def _picks(
     return out[:cap]
 
 
+def _context(v: Any, facts: dict[str, Any]) -> dict[str, str]:
+    """The model's words for the Market Context: `lead` and a paragraph for each panel the
+    report's facts chart (briefctx.panels), nothing for one they do not. A panel it left
+    empty is simply absent, and the page prints the engine's line there. Pure."""
+    have = briefctx.panels(facts.get("market_context"))
+    said = v if isinstance(v, dict) else {}
+    out: dict[str, str] = {}
+    for key in ("lead", *briefctx.PANELS):
+        if not have or (key != "lead" and key not in have):
+            continue
+        if (text := _prose(said.get(key))):
+            out[key] = text
+    return out
+
+
 def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     """The model's brief, checked against the facts it is allowed to point at.
 
@@ -3888,6 +3970,8 @@ def sanitize_brief(obj: Any, facts: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "thesis": thesis,
         **out_top,
+        # The Market Context's words: a paragraph only for a panel the facts chart.
+        "context": _context(obj.get("context"), facts),
         # What can move prices (brief_version 4): each item a row the facts have.
         "movers": _movers(obj.get("movers"), facts),
         "calls": [calls[b] for b in books],
@@ -4081,6 +4165,8 @@ def too_long(b: dict[str, Any]) -> list[str]:
             over.append(f"{what} is {n} words (limit {cap})")
 
     check("thesis", b.get("thesis"), "thesis")
+    for key, text in (b.get("context") or {}).items():
+        check(f"context {key}", text, "context_lead" if key == "lead" else "context")
     # The Stocks report's comments, written once for the market (`sanitize_brief`).
     for f in b.get("factors") or []:
         check(f"market {f.get('key')}", f.get("line"), "factor")
@@ -4234,6 +4320,7 @@ def numerals_in(text: str) -> list[str]:
 def brief_prose(b: dict[str, Any]) -> list[str]:
     """Every string the model wrote in a sanitised brief — what the guard reads. Pure."""
     out: list[str] = [b.get("thesis") or ""]
+    out += [str(x) for x in (b.get("context") or {}).values()]
     out += [f.get("line") or "" for f in b.get("factors") or []]
     for c in b.get("calls") or []:
         out += [*(f.get("line") or "" for f in c.get("factors") or []),
@@ -4335,8 +4422,19 @@ _LOOSE_MOVERS = f"""  "movers": [ {{ "id": "c3" | "h7" | "rates" | "vix" | "posi
                 "why": "{LIMITS['mover']} words at most" }} ],
                 // {MOVERS_MIN}-{MOVERS_MAX} items, the most important first"""
 
+_LOOSE_CONTEXT = f"""  "context": {{
+      "lead": "what kind of session the three charts describe, two sentences, \
+{LIMITS['context_lead']} words at most",
+      "pulse": "what the Market Pulse means for the book, {LIMITS['context']} words at most",
+      "rotation": "what the sector rotation means for the book, \
+{LIMITS['context']} words at most",
+      "gamma": "what the dealer gamma regime does to moves in the book, never a \
+direction, {LIMITS['context']} words at most" }},
+      // each an empty string when `market_context.panels` does not list it"""
+
 LOOSE_SHAPE = f"""{{
   "thesis": "the bottom line, one or two sentences, {LIMITS['thesis']} words at most",
+{_LOOSE_CONTEXT}
 {_LOOSE_MOVERS}
   "calls": [ {{ "book": one of the books in scope ("NQ", "ES", "GC", "SIL", "CL"),
                "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
@@ -4347,6 +4445,7 @@ LOOSE_SHAPE = f"""{{
 
 LOOSE_SHAPE_ETFS = f"""{{
   "thesis": "the bottom line, one or two sentences, {LIMITS['thesis']} words at most",
+{_LOOSE_CONTEXT}
 {_LOOSE_MOVERS}
   "calls": [ {{ "book": one of "SPY", "QQQ", "IWM",
                "open_bias": one of "bullish" | "leaning bullish" | "neutral" |
@@ -4511,6 +4610,15 @@ def generate(
         # And as the REPORT is to read it: no dealer gamma, the key levels, the rows the
         # page prints (`report_view`).
         digest = report_view(shown(build_digest(snap, sess, book, facts)), facts)
+    # THE MARKET CONTEXT (briefctx.py; owner, 2026-11-21: "we should summaries the market
+    # pulse, sector rotations and gex context"): three lines the engine writes from the
+    # pages' own figures, stored with the report so it reads as it was written, printed
+    # under the call, and shown to the model as lines it may lean on. A futures report's
+    # gamma line is its own book's; the Stocks report's is SPY's alone.
+    context = briefctx.build(snap, facts["books"], etf=book == ETF_ASSET, now=_now_et(snap))
+    facts["market_context"] = context
+    if context:
+        digest["market_context"] = briefctx.for_model(context)
     base["digest"] = digest
     base["facts"] = facts
     # ONE progress reading shared by the prompt and the envelope, taken off the

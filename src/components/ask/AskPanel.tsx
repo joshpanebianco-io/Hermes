@@ -239,7 +239,14 @@ export function AskPanel({ tab }: { tab: string }) {
       className={cn(
         "fixed right-4 bottom-12 z-50 flex-col overflow-hidden text-ink transition-[width,height] duration-150",
         open ? "flex" : "hidden",
-        wide ? "h-[calc(100vh-80px)] w-[min(700px,calc(100vw-32px))]" : "h-[min(660px,calc(100vh-80px))] w-[420px]",
+        // THE WINDOW'S HEIGHT IN THE PANEL'S OWN PIXELS (owner, 2026-11-21: "the ask hemres chat
+        // box when you click expand it goes too high and out of reach"). Luminous zooms the
+        // frame 1.1 on a wide window (globals.css --ui-zoom), so "100vh less 80px" drew at
+        // 1,496px on a 1,440px screen and the head, with Shrink and Close on it, was 100px
+        // above the top. Unscaled first (--ui-unzoom), as the driver board's sheet is.
+        wide
+          ? "h-[calc((100vh-80px)*var(--ui-unzoom,1))] w-[min(700px,calc((100vw-32px)*var(--ui-unzoom,1)))]"
+          : "h-[min(660px,calc((100vh-80px)*var(--ui-unzoom,1)))] w-[420px]",
         "rounded-[8px] border border-ring-2 bg-surface shadow-[0_18px_60px_rgba(0,0,0,.6)] qt:rounded-[4px]",
       )}
     >

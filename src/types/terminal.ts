@@ -1,3 +1,5 @@
+import type { MarketOutlook } from "@/types/outlook";
+
 /**
  * The collector's payload, as the browser sees it.
  *
@@ -813,6 +815,8 @@ export interface Terminal {
   ladders?: Record<string, BriefLadder | null>;
   /** Will New York trend or range, per book, computed on read (daytype.py). */
   daytype?: DayType;
+  /** The markets read against each other, computed on read (outlook.py); Macro's board draws it. */
+  outlook?: MarketOutlook | null;
   constituents: { indices: Record<string, IndexMovers> };
   fed: FedEvent[];
   auctions: AuctionEvent[];
@@ -969,6 +973,11 @@ export interface ShortBriefBody {
    * facts (a `catalysts` id, a `headlines` id, or a `context_movers` id). Absent before.
    */
   movers?: BriefMover[];
+  /**
+   * What the Market Context's charts mean, in the model's words: a lead and a paragraph a
+   * panel (2026-11-21). Absent before, and a panel it left empty is not a key.
+   */
+  context?: BriefContextWords;
 }
 
 /** One item of the briefing's list (server report._movers). */
@@ -1232,6 +1241,86 @@ export interface BriefFacts {
   context_movers?: BriefContextMover[];
   /** How the engine's bias counts each item the list can hold, by id (server report.bias_links). */
   bias_links?: Record<string, BriefBiasLink>;
+  /**
+   * The Market Context section (server briefctx.py, 2026-11-21): the figures the page
+   * charts for the Market Pulse, the sector rotation and dealer gamma, and the engine's
+   * line for each, as written with the report. Null when none of the three had anything
+   * to say; absent from an older report.
+   */
+  market_context?: BriefMarketContext | null;
+}
+
+/** The Market Pulse as the report's panel draws it (server briefctx.pulse_data). */
+export interface BriefContextPulse {
+  /** −100 (extreme fear) to +100 (extreme greed); null when the scale had no reading. */
+  score: number | null;
+  label: string | null;
+  /** The pattern the markets make together, "Forced selling", and what was sold and bid. */
+  name: string;
+  what: string;
+  tell: string;
+  /** A market a row: its move in percent and in its own usual days (signed). */
+  rows: { key: string; group: string; name: string; pct: number; mult: number; sized: boolean }[];
+}
+
+/** The sector rotation as the panel draws it (server briefctx.rotation_data). */
+export interface BriefContextRotation {
+  /** True when the moves are the funds' pre-market ones. */
+  pre: boolean;
+  up: number;
+  down: number;
+  n: number;
+  /** Best to worst. */
+  sectors: { key: string; label: string; pct: number }[];
+  /** The index and its equal-weight twin, null before the bell. */
+  spy: number | null;
+  rsp: number | null;
+  /** Who carried the day, said when the two are far enough apart. */
+  breadth: string | null;
+}
+
+export interface BriefGammaNear {
+  kind: "put" | "call" | "flip";
+  price: number;
+  away: number;
+}
+
+/** One instrument's gamma map (server briefctx.gamma_data): every price to `dp` decimals. */
+export interface BriefGammaMap {
+  name: string;
+  last: number;
+  dp: number;
+  regime: "POS" | "NEG" | null;
+  flip: number | null;
+  to_flip: number | null;
+  below_flip: boolean | null;
+  /** High to low. */
+  puts: number[];
+  /** Low to high. */
+  calls: number[];
+  /** The level next to the price on each side. */
+  above: BriefGammaNear | null;
+  below: BriefGammaNear | null;
+  /** The expected move's low and high: a future's own, null for SPY. */
+  em: [number, number] | null;
+}
+
+export interface BriefMarketContext {
+  as_of: string | null;
+  /** The engine's line a panel: printed under a chart the model wrote nothing for. */
+  rows: { key: string; label: string; text: string }[];
+  /** Absent from the section's first reports (the morning of 2026-11-21), which are lines only. */
+  pulse?: BriefContextPulse;
+  rotation?: BriefContextRotation;
+  gamma?: BriefGammaMap[];
+}
+
+/** What the model says the Market Context means (server report._context). */
+export interface BriefContextWords {
+  lead?: string;
+  pulse?: string;
+  rotation?: string;
+  gamma?: string;
 }
 
 /**
